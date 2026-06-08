@@ -1,0 +1,7 @@
+#!/bin/sh
+# Installed into .git/hooks/ by cargo-husky on `cargo test`.
+# Full test suite gate before pushing (matches eval-runner's pre-push `bun test`).
+set -e
+
+echo "[pre-push] cargo test"
+cargo test --all-targets
