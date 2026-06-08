@@ -56,7 +56,7 @@ it, so it goes first. Port `context.test.ts`, `runtime.test.ts`. Establishes the
 serde-modeled types (`Eval`, `EvalsConfig`, `RunRecord`, `Assertion`,
 `GradingResult`, `ToolInvocation`, …) that every later phase consumes.
 
-### Phase 2 — `validation`
+### Phase 2 — `validation` ✅
 Smallest self-contained module (~144 LOC); proves the `jsonschema` +
 bundled-`schema/*.json` approach end-to-end. Port `validate.test.ts`,
 `validate-schema.test.ts`. Wires up the `validate` subcommand for real.
