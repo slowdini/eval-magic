@@ -61,10 +61,12 @@ Smallest self-contained module (~144 LOC); proves the `jsonschema` +
 bundled-`schema/*.json` approach end-to-end. Port `validate.test.ts`,
 `validate-schema.test.ts`. Wires up the `validate` subcommand for real.
 
-### Phase 3 — `adapters`
+### Phase 3 — `adapters` ✅
 Pure transcript-parsing and session-rendering functions — well-tested, no
 orchestration, low risk. Port the five adapter tests (Claude Code & Codex
-session + transcript, plugin-shadow).
+session + transcript, plugin-shadow). Added `chrono` (RFC3339 → epoch-millis for
+transcript `duration_ms`). No CLI subcommand wired — these are library functions
+consumed by `pipeline` (phase 5) and `run` (phase 7).
 
 ### Phase 4 — `sandbox`
 Write-boundary classification (`sandbox-policy`) and guard install/teardown.
