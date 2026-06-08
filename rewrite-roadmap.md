@@ -50,7 +50,7 @@ at a time. The rewrite is also where we pay down TS code-quality debt (notably
 - Dependencies chosen (see below). CI, git hooks, lint/format, and the
   version-bump release-PR workflow in place. Binary distribution deferred.
 
-### Phase 1 — `core`
+### Phase 1 — `core` ✅
 Domain types + `RunContext` + runtime/path helpers. Everything else depends on
 it, so it goes first. Port `context.test.ts`, `runtime.test.ts`. Establishes the
 serde-modeled types (`Eval`, `EvalsConfig`, `RunRecord`, `Assertion`,
