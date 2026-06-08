@@ -19,8 +19,9 @@ path = "src/lib.rs"
 anyhow = "1.0.102"
 clap = { version = "4.6.1", features = ["derive"] }
 # default features pull in reqwest/rustls/tokio for remote $ref resolution; our
-# schemas are local, so we keep only file-based resolution.
-jsonschema = { version = "0.46.5", default-features = false, features = ["resolve-file"] }
+# schemas are embedded (include_str!) and use only internal #/definitions refs,
+# so no resolver is needed at all.
+jsonschema = { version = "0.46.5", default-features = false }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 thiserror = "2.0.18"
