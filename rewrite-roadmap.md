@@ -106,12 +106,27 @@ summaries. Wired `snapshot`, `promote-baseline`, and `teardown` subcommands.
 workspace, but staged-skill removal (`cleanupStagedSkills`) is deferred to
 phase 7 with the `run` orchestrator (TODO at the call site).
 
-### Phase 7 — `cli` / `run`
-Subcommand dispatch is already scaffolded; this phase ports the `run`
-orchestrator and the `ingest`/`finalize` run-modes. Decompose `run.ts`
-(~1,593 LOC) into focused sub-orchestrators: skill staging, dispatch generation,
-subagent coordination, guard arming, and the run-mode variants. This is the
-highest-complexity phase and the main code-quality win.
+### Phase 7 — `cli` / `run` ✅
+Ported the `run` orchestrator and the `ingest`/`finalize` run-modes. The 1,593-LOC
+`run.ts` was **decomposed** into a nested `src/cli/run/` module (mirroring
+`pipeline/grade/`) rather than ported as one file — the main code-quality win:
+`staging` (staged-skill lifecycle + sibling manifest), `dispatch`
+(`build_dispatch_task`/`build_manifest`/`select_evals`/prompt assembly), `steps`
+(the `ingest`/`finalize` chains as inspectable data + `run_steps`), and
+`orchestrate` (`command_run`). Ported the 21 staging + 18 dispatch + 6 step unit
+tests and the 14 run/teardown end-to-end tests (`tests/run.rs`), plus the
+`staging_discovery_warning`/`next_iteration` helpers.
+
+`snapshot` was not re-ported (it landed in `workspace` in phase 6); `cli.ts`'s
+manual dispatch/help has no counterpart (clap owns both). The `--plan-mode`
+profile is a compile-time `include_str!` asset (`profiles/claude-code/plan-mode.md`),
+mirroring the schema embedding. The run nonce uses the sub-millisecond clock
+(no RNG crate); the sibling backup dir is an `mkdtemp`-style helper over
+`std::env::temp_dir()` (keeps the dev-only `tempfile` out of the binary).
+`ingest`/`finalize` reuse the existing per-stage cli handlers via a
+`StepKind`→handler runner. Resolved the phase-6 `cleanup_staged_skills` TODO in
+`teardown`. One deliberate divergence: a flagged invocation names the `run`
+subcommand (clap-idiomatic); a bare `skill-eval` still defaults to `run`.
 
 ### Phase 8 — Cutover & sunset
 - Validate the Rust binary subcommand-by-subcommand against the TS fixtures
