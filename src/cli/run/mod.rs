@@ -23,6 +23,7 @@ pub mod dispatch;
 pub mod orchestrate;
 pub mod staging;
 pub mod steps;
+mod util;
 
 /// A user-facing failure inside the `run` orchestrator. Mirrors
 /// [`crate::pipeline::PipelineError`] / `WorkspaceError`: `Message` carries the

@@ -1,0 +1,150 @@
+//! `command_run` — the top-level orchestrator that builds an iteration's
+//! workspace: validate the request, stage the skill(s), generate every
+//! `(eval, condition)` dispatch task, write `dispatch.json` /
+//! `dispatch-manifest.md` / `conditions.json`, optionally arm the write guard,
+//! and preflight plugin shadows.
+//!
+//! Ports `run.ts:566-957`. [`command_run`] is a thin coordinator over four
+//! phases, each in its own submodule: [`resolve`] (validate + resolve),
+//! [`stage`] (stage the skills), [`build`] (`write_dispatch` + `post_build`),
+//! and the two print steps below. The staging and dispatch mechanics live in the
+//! sibling [`super::staging`] / [`super::dispatch`] modules, and the small
+//! stateless helpers in [`super::util`].
+
+use std::path::PathBuf;
+
+use crate::core::{AvailableSkill, Eval, Harness, Mode, RunContext};
+
+use super::RunError;
+use super::util::mode_str;
+
+mod build;
+mod resolve;
+mod stage;
+
+/// Run options parsed from the `run` subcommand flags (everything beyond the
+/// shared skill/workspace/harness context, which lives in [`RunContext`]).
+#[derive(Debug, Clone, Default)]
+pub struct RunOptions<'a> {
+    pub mode: Option<&'a str>,
+    pub baseline: Option<&'a str>,
+    pub only: Option<&'a [String]>,
+    pub skip: Option<&'a [String]>,
+    pub iteration: Option<u32>,
+    pub dry_run: bool,
+    pub no_stage: bool,
+    pub guard: bool,
+    pub stage_name: Option<&'a str>,
+    pub plan_mode: bool,
+}
+
+/// Everything [`resolve::resolve_request`] works out before any filesystem
+/// mutation: the comparison mode, the selected evals, the iteration coordinates,
+/// and each condition's name + skill path.
+struct Resolved {
+    mode: Mode,
+    skill_md_path: PathBuf,
+    iteration: u32,
+    iteration_dir: PathBuf,
+    run_nonce: String,
+    run_tag: String,
+    cond_a: &'static str,
+    cond_b: &'static str,
+    skill_path_a: Option<String>,
+    skill_path_b: Option<String>,
+    selected_evals: Vec<Eval>,
+    total_evals: usize,
+}
+
+/// The product of [`stage::stage_conditions`]: the staged slugs plus the
+/// dispatch-prompt inputs shared across every task.
+struct Staged {
+    cond_a_slug: Option<String>,
+    cond_b_slug: Option<String>,
+    sibling_skills: Vec<AvailableSkill>,
+    bootstrap_content: Option<String>,
+    plan_mode_content: Option<String>,
+}
+
+/// Build the iteration workspace and dispatch plan for a run. Ports `commandRun`.
+pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
+    let resolved = resolve::resolve_request(ctx, opts)?;
+    print_run_plan(ctx, opts, &resolved);
+    let staged = stage::stage_conditions(ctx, opts, &resolved)?;
+    let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
+    build::post_build(ctx, opts, &resolved)?;
+    print_next_steps(ctx, opts, &resolved, num_tasks);
+    Ok(())
+}
+
+/// Print the run plan (conditions, selection, staging mode) to stdout. Ports
+/// `run.ts:649-678`.
+fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
+    println!(
+        "Preparing {} iteration-{} ({})",
+        ctx.skill_name,
+        r.iteration,
+        mode_str(r.mode)
+    );
+    println!(
+        "  {}: {}",
+        r.cond_a,
+        r.skill_path_a.as_deref().unwrap_or("(no skill)")
+    );
+    println!(
+        "  {}: {}",
+        r.cond_b,
+        r.skill_path_b.as_deref().unwrap_or("(no skill)")
+    );
+    if r.selected_evals.len() != r.total_evals {
+        let (flag, ids) = match (opts.only, opts.skip) {
+            (Some(ids), _) => ("--only", ids),
+            (_, skip) => ("--skip", skip.unwrap_or(&[])),
+        };
+        println!(
+            "  selection: {} of {} evals ({flag} {})",
+            r.selected_evals.len(),
+            r.total_evals,
+            ids.join(", ")
+        );
+    }
+    if opts.no_stage {
+        println!(
+            "  staging: disabled (--no-stage) — skills will be inlined into dispatch_prompt for harnesses without project-local skill discovery"
+        );
+    }
+}
+
+/// Print the workspace paths, dispatch count, and the harness-specific next-step
+/// instructions. Ports `run.ts:909-957`.
+fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks: usize) {
+    let iteration = r.iteration;
+    println!("\nWorkspace prepared: {}", r.iteration_dir.display());
+    println!(
+        "Dispatch manifest:  {}",
+        r.iteration_dir.join("dispatch-manifest.md").display()
+    );
+    println!(
+        "Dispatch tasks:     {}",
+        r.iteration_dir.join("dispatch.json").display()
+    );
+    println!(
+        "\n{} dispatches required ({} evals × 2 conditions).",
+        num_tasks,
+        r.selected_evals.len()
+    );
+
+    if opts.dry_run {
+        println!("\n--dry-run: stopping after workspace prep.");
+    } else if ctx.harness == Harness::Codex {
+        println!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest --iteration {iteration} --harness codex`."
+        );
+    } else {
+        println!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent. Then run:\n  skill-eval ingest --skill {} --skill-dir {} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)",
+            ctx.skill_name,
+            ctx.skill_dir.display()
+        );
+    }
+}
