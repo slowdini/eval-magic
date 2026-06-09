@@ -82,7 +82,7 @@ Wired `teardown-guard` as **cwd-only** (the guard lives at `<cwd>/.claude`), a
 deliberate simplification over the TS original's unused `--skill-dir`/`--skill`.
 Added `regex` (see below) for the Bash-mutation patterns.
 
-### Phase 5 — `pipeline`
+### Phase 5 — `pipeline` ✅
 The six stages, in chain order: `record-runs` → `fill-transcripts` →
 `detect-stray-writes` → `grade` → `aggregate`. Largest body (~1,809 LOC) but
 each stage is an independent JSON-in/JSON-out subcommand — port and validate one
