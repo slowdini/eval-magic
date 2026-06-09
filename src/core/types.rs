@@ -123,9 +123,12 @@ pub struct ToolInvocation {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Value>,
+    // `ordinal` is serialized before `result`: the adapters construct each
+    // invocation without a result and attach it when the matching tool_result
+    // arrives, so artifacts list the call before its outcome.
+    pub ordinal: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
-    pub ordinal: u32,
 }
 
 /// A single subagent run — the artifact bridging dispatch to grading.
@@ -166,9 +169,11 @@ pub enum Grader {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GradingResult {
     pub assertion_results: Vec<AssertionResult>,
+    // Substantive results + summary first, then the optional meta block —
+    // grading.json reads as "the verdict, then the validity check on it".
+    pub summary: GradingSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_results: Option<Vec<AssertionResult>>,
-    pub summary: GradingSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_summary: Option<MetaSummary>,
 }
