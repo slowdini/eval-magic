@@ -153,6 +153,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Guard { marker } => run_guard(marker),
         Commands::RecordRuns(args) => run_record_runs(args),
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
+        Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
@@ -160,7 +161,6 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::DetectStrayWrites(_) => "detect-stray-writes",
                 Commands::Grade(_) => "grade",
                 Commands::Aggregate(_) => "aggregate",
                 Commands::PromoteBaseline(_) => "promote-baseline",
@@ -168,7 +168,8 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 | Commands::TeardownGuard(_)
                 | Commands::Guard { .. }
                 | Commands::RecordRuns(_)
-                | Commands::FillTranscripts(_) => {
+                | Commands::FillTranscripts(_)
+                | Commands::DetectStrayWrites(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -294,6 +295,65 @@ fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
         "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
         result.filled, result.skipped, result.missing
     );
+    Ok(())
+}
+
+/// Report writes outside the sandbox output boundary (and live-source reads) for
+/// every run in the iteration. Ports eval-runner's `detect-stray-writes` `main`.
+fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let iteration = args
+        .iteration
+        .ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = iteration_dir(&ctx, Some(iteration))?;
+    let repo_root = std::env::current_dir()?;
+
+    let report =
+        pipeline::detect_stray_writes_report(&dir, iteration, &ctx.skill_subdir, &repo_root)?;
+    println!("Wrote {}", dir.join("stray-writes.json").display());
+
+    for r in &report.runs {
+        for v in &r.violations {
+            eprintln!(
+                "✗ {}/{}: {} wrote outside outputs dir → {} (ordinal {})",
+                r.eval_id,
+                r.condition,
+                v.tool,
+                v.path.as_deref().unwrap_or(""),
+                v.ordinal
+            );
+        }
+        for w in &r.warnings {
+            eprintln!(
+                "⚠ {}/{}: Bash {} (ordinal {}): {}",
+                r.eval_id,
+                r.condition,
+                w.reason,
+                w.ordinal,
+                w.command.as_deref().unwrap_or("")
+            );
+        }
+        for l in &r.live_source_reads {
+            eprintln!(
+                "⚠ {}/{}: {} read the live skill source (ordinal {}): {}",
+                r.eval_id,
+                r.condition,
+                l.tool,
+                l.ordinal,
+                l.path.as_deref().or(l.command.as_deref()).unwrap_or("")
+            );
+        }
+    }
+
+    let t = report.totals;
+    if t.violations == 0 && t.warnings == 0 && t.live_source_reads == 0 {
+        println!("✓ No out-of-bounds writes or live-source reads detected.");
+    } else {
+        eprintln!(
+            "\n{} violation(s), {} warning(s), {} live-source read(s). Runs with violations edited files outside their sandbox; runs with live-source reads saw the live skill instead of their staged copy — treat those data points as tainted.",
+            t.violations, t.warnings, t.live_source_reads
+        );
+    }
     Ok(())
 }
 

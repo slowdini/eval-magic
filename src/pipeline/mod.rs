@@ -6,11 +6,16 @@
 //! and writes JSON back; no stage pipes to another in-memory. Stages are ported
 //! one at a time against the same fixtures the TypeScript suite uses.
 
+pub mod detect_stray_writes;
 pub mod error;
 pub mod fill_transcripts;
 pub mod io;
 pub mod record_runs;
 
+pub use detect_stray_writes::{
+    StrayFinding, StrayWritesReport, detect_live_source_reads, detect_stray_writes,
+    detect_stray_writes_report,
+};
 pub use error::PipelineError;
 pub use fill_transcripts::{FillTranscriptsResult, fill_transcripts, resolve_agent_description};
 pub use record_runs::{RecordRunsResult, record_runs};
