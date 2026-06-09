@@ -9,11 +9,13 @@
 //! rewrite-roadmap.md). Flags are intentionally permissive (mostly optional)
 //! during the port and are tightened per-command as behavior lands.
 
-use std::path::Path;
+use std::io;
+use std::path::{Path, PathBuf};
 
 use anyhow::bail;
 use clap::{Args, Parser, Subcommand};
 
+use crate::sandbox;
 use crate::validation;
 
 /// Top-level CLI. With no subcommand, the default action is `run`.
@@ -108,6 +110,14 @@ enum Commands {
     PromoteBaseline(CommonArgs),
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),
+    /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
+    /// hook as `skill-eval guard <marker>`, not by users; hidden from help.
+    #[command(hide = true)]
+    Guard {
+        /// Path to the guard marker file. Defaults to
+        /// `<cwd>/.claude/skills/.slow-powers-eval-guard.json`.
+        marker: Option<String>,
+    },
 }
 
 /// Parse process arguments, dispatch to the selected subcommand, and return its
@@ -132,12 +142,13 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
 
     match command {
         Commands::Validate(args) => run_validate(args),
+        Commands::TeardownGuard(_) => run_teardown_guard(),
+        Commands::Guard { marker } => run_guard(marker),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
                 Commands::Snapshot(_) => "snapshot",
                 Commands::Teardown(_) => "teardown",
-                Commands::TeardownGuard(_) => "teardown-guard",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
                 Commands::RecordRuns(_) => "record-runs",
@@ -146,7 +157,9 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Grade(_) => "grade",
                 Commands::Aggregate(_) => "aggregate",
                 Commands::PromoteBaseline(_) => "promote-baseline",
-                Commands::Validate(_) => unreachable!("handled above"),
+                Commands::Validate(_) | Commands::TeardownGuard(_) | Commands::Guard { .. } => {
+                    unreachable!("handled above")
+                }
             };
             bail!("`{name}` is not yet implemented (see rewrite-roadmap.md)");
         }
@@ -192,4 +205,45 @@ fn run_validate(args: ValidateArgs) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+/// Disarm the write guard for the current directory. Ports eval-runner's
+/// `teardown-guard` command, but cwd-only: the guard lives at `<cwd>/.claude`, so
+/// (unlike the TS original) this needs no `--skill-dir`/`--skill` flags.
+fn run_teardown_guard() -> anyhow::Result<()> {
+    let torn = sandbox::teardown_guard(&std::env::current_dir()?);
+    println!(
+        "{}",
+        if torn {
+            "🛡 Write guard removed."
+        } else {
+            "No write guard was installed — nothing to remove."
+        }
+    );
+    Ok(())
+}
+
+/// The hidden PreToolUse hook entry point. Reads the hook payload from stdin and
+/// the marker path from argv, then prints a deny verdict for out-of-bounds calls.
+/// Ports eval-runner's `guard.ts`: it **fails open** — every error path allows the
+/// call and exits 0, so the guard can never brick a session.
+fn run_guard(marker: Option<String>) -> anyhow::Result<()> {
+    let marker_path = marker
+        .map(PathBuf::from)
+        .unwrap_or_else(default_marker_path);
+    let payload = io::read_to_string(io::stdin()).unwrap_or_default();
+    if let Some(verdict) = sandbox::guard_decision(&payload, sandbox::read_marker(&marker_path)) {
+        print!("{verdict}");
+    }
+    Ok(())
+}
+
+/// The marker path the guard reads when argv carries none:
+/// `<cwd>/.claude/skills/.slow-powers-eval-guard.json`.
+fn default_marker_path() -> PathBuf {
+    std::env::current_dir()
+        .unwrap_or_default()
+        .join(".claude")
+        .join("skills")
+        .join(sandbox::GUARD_MARKER)
 }

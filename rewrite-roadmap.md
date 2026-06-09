@@ -68,11 +68,19 @@ session + transcript, plugin-shadow). Added `chrono` (RFC3339 → epoch-millis f
 transcript `duration_ms`). No CLI subcommand wired — these are library functions
 consumed by `pipeline` (phase 5) and `run` (phase 7).
 
-### Phase 4 — `sandbox`
-Write-boundary classification (`sandbox-policy`) and guard install/teardown.
-Port `policy.test.ts`, `install.test.ts`. Wires up `teardown-guard`. Note: the
-TS `guard.ts` runs as a Node hook script invoked by path — decide during this
-phase how the Rust binary exposes the equivalent guard entry point.
+### Phase 4 — `sandbox` ✅
+Write-boundary classification (`sandbox-policy`/`policy`) and guard
+install/teardown. Ported `policy.test.ts` (15 cases) and `install.test.ts`.
+Modules: `policy` (primitives + `BASH_MUTATION_PATTERNS`), `decide` (the arbiter),
+`install` (arm/disarm + marker/manifest/settings), `guard` (hook evaluation).
+
+Guard entry point: the TS `guard.ts` Node script becomes a **hidden `guard`
+subcommand** — the installed PreToolUse hook runs `skill-eval guard <marker>`
+(pointed at `std::env::current_exe()`), eliminating the TS `.ts`/`.js` + bun/node
+interpreter-selection branch. `run_guard` **fails open** (always exits 0).
+Wired `teardown-guard` as **cwd-only** (the guard lives at `<cwd>/.claude`), a
+deliberate simplification over the TS original's unused `--skill-dir`/`--skill`.
+Added `regex` (see below) for the Bash-mutation patterns.
 
 ### Phase 5 — `pipeline`
 The six stages, in chain order: `record-runs` → `fill-transcripts` →
@@ -115,6 +123,7 @@ Chosen in Phase 0, kept lean and justified:
 | `anyhow` | Error propagation in the binary / command handlers |
 | `thiserror` | Typed error enums inside library modules |
 | `walkdir` | Recursive discovery of `evals.json` files |
+| `regex` (no default features, `std`+`perf`) | Bash write-mutation patterns in `sandbox` policy (Phase 4); Unicode tables dropped — patterns are ASCII |
 | `tempfile` (dev) | Fixture temp dirs (replaces TS `tmpdir()` pattern) |
 | `assert_cmd` + `predicates` (dev) | Subprocess integration tests (replaces `Bun.spawnSync`) |
 | `cargo-husky` (dev) | Installs git hooks on `cargo test` |
