@@ -90,9 +90,21 @@ stage at a time against shared fixtures. Decompose `grade.ts` (~616 LOC) into
 focused units (transcript-check grading vs. judge-task emission vs. finalize)
 while porting it.
 
-### Phase 6 — `workspace`
-Baseline promotion and workspace teardown. Port `promote-baseline.test.ts`,
-`workspace-teardown.test.ts`. Wires up `snapshot`, `teardown`, `promote-baseline`.
+### Phase 6 — `workspace` ✅
+Baseline promotion and workspace teardown. Ported `promote-baseline.test.ts`,
+`workspace-teardown.test.ts`. Modules: `teardown` (`cleanup_workspace` +
+`PROMOTED_MARKER`/`SNAPSHOT_META`), `promote` (`promote_baseline` + `BASELINE.md`
+provenance + `git rev-parse` HEAD via `core::run_git`), `snapshot`.
+
+The `snapshot` command — which lived in eval-runner's `cli/run.ts`, not its
+`workspace/` — was **ported into the `workspace` module** (`snapshot` submodule,
+working-tree + git-ref via `git show`/`ls-tree`), so the whole snapshot →
+promote → teardown artifact lifecycle lives in one place. `fs::read_dir` order is
+unspecified, so iteration/snapshot entries are **sorted** for deterministic
+summaries. Wired `snapshot`, `promote-baseline`, and `teardown` subcommands.
+`teardown` is **partial**: it disarms the guard (phase 4) and reclaims the
+workspace, but staged-skill removal (`cleanupStagedSkills`) is deferred to
+phase 7 with the `run` orchestrator (TODO at the call site).
 
 ### Phase 7 — `cli` / `run`
 Subcommand dispatch is already scaffolded; this phase ports the `run`

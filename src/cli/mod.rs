@@ -19,6 +19,7 @@ use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
+use crate::workspace;
 
 /// Top-level CLI. With no subcommand, the default action is `run`.
 #[derive(Debug, Parser)]
@@ -87,13 +88,44 @@ pub struct GradeArgs {
     pub finalize: bool,
 }
 
+/// `snapshot` adds a label and an optional git ref on top of the common set.
+#[derive(Debug, Args)]
+pub struct SnapshotArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// Label for the snapshot (its directory name under `snapshots/`).
+    #[arg(long)]
+    pub label: Option<String>,
+    /// Snapshot the skill as it existed at this git ref instead of the working
+    /// tree. (`ref` is a Rust keyword, so the field is `reference`.)
+    #[arg(long = "ref")]
+    pub reference: Option<String>,
+}
+
+/// `promote-baseline` adds provenance flags (label + operator-declared models)
+/// on top of the common set.
+#[derive(Debug, Args)]
+pub struct PromoteBaselineArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// Provenance label recorded in `BASELINE.md`.
+    #[arg(long)]
+    pub label: Option<String>,
+    /// Operator-declared agent model, recorded in `BASELINE.md`.
+    #[arg(long)]
+    pub agent_model: Option<String>,
+    /// Operator-declared judge model, recorded in `BASELINE.md`.
+    #[arg(long)]
+    pub judge_model: Option<String>,
+}
+
 /// Every subcommand ported from eval-runner. Names match the original CLI.
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Build dispatches and run evals (the default action).
     Run(CommonArgs),
     /// Snapshot a workspace baseline.
-    Snapshot(CommonArgs),
+    Snapshot(SnapshotArgs),
     /// Tear down a workspace.
     Teardown(CommonArgs),
     /// Disarm the write guard.
@@ -113,7 +145,7 @@ enum Commands {
     /// Aggregate before/after benchmark deltas.
     Aggregate(CommonArgs),
     /// Promote a benchmark + gradings into a committed baseline.
-    PromoteBaseline(CommonArgs),
+    PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),
     /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
@@ -156,14 +188,14 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         Commands::Grade(args) => run_grade(args),
         Commands::Aggregate(args) => run_aggregate(args),
+        Commands::Snapshot(args) => run_snapshot(args),
+        Commands::Teardown(args) => run_teardown(args),
+        Commands::PromoteBaseline(args) => run_promote_baseline(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
-                Commands::Snapshot(_) => "snapshot",
-                Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::PromoteBaseline(_) => "promote-baseline",
                 Commands::Validate(_)
                 | Commands::TeardownGuard(_)
                 | Commands::Guard { .. }
@@ -171,7 +203,10 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 | Commands::FillTranscripts(_)
                 | Commands::DetectStrayWrites(_)
                 | Commands::Grade(_)
-                | Commands::Aggregate(_) => {
+                | Commands::Aggregate(_)
+                | Commands::Snapshot(_)
+                | Commands::Teardown(_)
+                | Commands::PromoteBaseline(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -448,6 +483,115 @@ fn run_aggregate(args: CommonArgs) -> anyhow::Result<()> {
     }
     for w in &benchmark.validity_warnings {
         eprintln!("⚠ {w}");
+    }
+    Ok(())
+}
+
+/// Snapshot the skill (`SKILL.md` + sibling assets, excluding `evals/`) into
+/// `<workspace>/<skill>/snapshots/<label>/`, from the working tree or — with
+/// `--ref` — a git ref. Ports eval-runner's `commandSnapshot`.
+fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args.common)?;
+    let label = args
+        .label
+        .ok_or_else(|| anyhow!("snapshot requires --label <name>"))?;
+    let reference = args.reference.as_deref();
+
+    let dest = workspace::snapshot(
+        &ctx.workspace_root,
+        &ctx.skill_name,
+        &ctx.skill_subdir,
+        &label,
+        reference,
+    )?;
+
+    match reference {
+        Some(reference) => println!(
+            "Snapshotted {} at {reference} → {}",
+            ctx.skill_name,
+            dest.display()
+        ),
+        None => println!("Snapshotted {} → {}", ctx.skill_name, dest.display()),
+    }
+    Ok(())
+}
+
+/// Promote an iteration's `benchmark.json` + per-run gradings into the skill's
+/// committed `evals/baseline/`, dropping a `.promoted.json` marker. Ports
+/// eval-runner's `promote-baseline` `main`.
+fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args.common)?;
+    let iteration = args
+        .common
+        .iteration
+        .ok_or_else(|| anyhow!("missing --iteration <N>"))?;
+
+    let result = workspace::promote_baseline(&workspace::PromoteOptions {
+        workspace_root: &ctx.workspace_root,
+        skill_name: &ctx.skill_name,
+        skill_subdir: &ctx.skill_subdir,
+        iteration,
+        harness: ctx.harness,
+        label: args.label.as_deref(),
+        agent_model: args.agent_model.as_deref(),
+        judge_model: args.judge_model.as_deref(),
+        git_cwd: &ctx.skill_subdir,
+    })?;
+
+    let n = result.gradings_copied;
+    println!(
+        "Promoted baseline for {} → {} (benchmark.json + {n} grading file{} + BASELINE.md)",
+        ctx.skill_name,
+        result.baseline_dir.display(),
+        if n == 1 { "" } else { "s" }
+    );
+    Ok(())
+}
+
+/// End-of-run teardown: disarm the write guard, then reclaim the workspace,
+/// preserving any iteration with uncommitted results. Ports eval-runner's
+/// `teardown` command — partially: removing the staged skill set
+/// (`cleanupStagedSkills`) lives in the `run` orchestrator, ported in phase 7,
+/// so this does not yet claim to have removed it.
+fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    // The guard lives at `<cwd>/.claude` (cwd-only, matching `teardown-guard`).
+    let torn = sandbox::teardown_guard(&std::env::current_dir()?);
+    // TODO(phase 7): cleanup_staged_skills(&ctx.stage_root, ctx.harness) — staged
+    // skill removal lives in the `run` orchestrator module, ported in phase 7.
+    let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
+
+    println!(
+        "🧹 Eval teardown complete: workspace reclaimed{}.",
+        if torn {
+            " and write guard disarmed"
+        } else {
+            ""
+        }
+    );
+    let reclaimed = ws.removed_iterations.len() + ws.removed_snapshots.len();
+    if reclaimed > 0 {
+        println!(
+            "   Reclaimed {} workspace iteration(s) and {} reproducible snapshot(s).",
+            ws.removed_iterations.len(),
+            ws.removed_snapshots.len()
+        );
+    }
+    if !ws.kept_iterations.is_empty() {
+        let lines = ws
+            .kept_iterations
+            .iter()
+            .map(|k| format!("     - {} ({})", k.iteration, k.reason))
+            .collect::<Vec<_>>()
+            .join("\n");
+        eprintln!(
+            "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     skill-eval promote-baseline --skill {} --iteration <N>\n   or delete {}/ manually to discard.",
+            ws.kept_iterations.len(),
+            ctx.skill_name,
+            Path::new("skills-workspace")
+                .join(&ctx.skill_name)
+                .display()
+        );
     }
     Ok(())
 }
