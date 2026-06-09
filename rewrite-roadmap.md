@@ -138,6 +138,19 @@ subcommand (clap-idiomatic); a bare `skill-eval` still defaults to `run`.
 - Switch the shipped artifact to the Rust binary, then deprecate and sunset the
   `@slowdini/eval-runner` npm package.
 
+## Future work (post-cutover)
+
+Carried over from eval-runner's `docs/roadmap.md` — items not part of the rewrite
+itself, to revisit once `eval-magic` is the shipped artifact:
+
+- **`skill-eval init`** — an interactive scaffold that writes a first
+  `evals/evals.json` for a skill (a guided alternative to copying the example).
+- **Multi-run evals** — N runs per condition cell for variance reduction. The
+  run-record schema already allows it; today the runner is single-run only (the
+  aggregator means/deltas assume one run per cell).
+- **Windows support** — audit guard-hook command quoting and path handling so the
+  `--guard` PreToolUse hook and staging work on Windows, not just macOS/Linux.
+
 ## Dependencies
 
 Chosen in Phase 0, kept lean and justified:

@@ -17,6 +17,7 @@ use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
 mod args;
 mod commands;
+mod help;
 mod run;
 
 use args::{Cli, Commands, CommonArgs, RunArgs};
