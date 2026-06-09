@@ -12,9 +12,11 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 
+use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
+use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
 
@@ -48,10 +50,14 @@ pub struct CommonArgs {
     pub mode: Option<String>,
     /// Target harness.
     #[arg(long)]
-    pub harness: Option<String>,
+    pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).
     #[arg(long)]
     pub workspace_dir: Option<String>,
+    /// Subagents transcript dir (Claude Code only), e.g.
+    /// `~/.claude/projects/<slug>/<session-id>/subagents/`.
+    #[arg(long)]
+    pub subagents_dir: Option<String>,
     /// Restrict to these eval ids (comma-separated).
     #[arg(long)]
     pub only: Option<String>,
@@ -135,6 +141,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         mode: None,
         harness: None,
         workspace_dir: None,
+        subagents_dir: None,
         only: None,
         skip: None,
         overwrite: false,
@@ -144,6 +151,11 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Validate(args) => run_validate(args),
         Commands::TeardownGuard(_) => run_teardown_guard(),
         Commands::Guard { marker } => run_guard(marker),
+        Commands::RecordRuns(args) => run_record_runs(args),
+        Commands::FillTranscripts(args) => run_fill_transcripts(args),
+        Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
+        Commands::Grade(args) => run_grade(args),
+        Commands::Aggregate(args) => run_aggregate(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
@@ -151,13 +163,15 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::RecordRuns(_) => "record-runs",
-                Commands::FillTranscripts(_) => "fill-transcripts",
-                Commands::DetectStrayWrites(_) => "detect-stray-writes",
-                Commands::Grade(_) => "grade",
-                Commands::Aggregate(_) => "aggregate",
                 Commands::PromoteBaseline(_) => "promote-baseline",
-                Commands::Validate(_) | Commands::TeardownGuard(_) | Commands::Guard { .. } => {
+                Commands::Validate(_)
+                | Commands::TeardownGuard(_)
+                | Commands::Guard { .. }
+                | Commands::RecordRuns(_)
+                | Commands::FillTranscripts(_)
+                | Commands::DetectStrayWrites(_)
+                | Commands::Grade(_)
+                | Commands::Aggregate(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -204,6 +218,237 @@ fn run_validate(args: ValidateArgs) -> anyhow::Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Resolve a [`RunContext`] from the shared flags (skill dir/name, workspace,
+/// harness). Used by every post-dispatch stage handler.
+fn run_context_from(args: &CommonArgs) -> anyhow::Result<RunContext> {
+    Ok(detect_run_context(DetectInput {
+        skill_dir: args.skill_dir.clone(),
+        skill: args.skill.clone(),
+        bootstrap: None,
+        workspace_dir: args.workspace_dir.clone(),
+        harness: args.harness,
+    })?)
+}
+
+/// The iteration directory for a run: `<workspace>/<skill>/iteration-<n>`. Errors
+/// if `--iteration` is absent or the directory does not exist.
+fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow::Result<PathBuf> {
+    let iteration = iteration.ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"));
+    if !dir.is_dir() {
+        bail!("not found: {}", dir.display());
+    }
+    Ok(dir)
+}
+
+/// Claude Code reads subagent transcripts by description, so `--subagents-dir` is
+/// required and must exist; Codex reads `outputs/codex-events.jsonl`, so it's
+/// ignored there.
+fn check_subagents_dir(harness: Harness, subagents_dir: Option<&Path>) -> anyhow::Result<()> {
+    if harness == Harness::ClaudeCode {
+        match subagents_dir {
+            None => bail!(
+                "missing --subagents-dir (e.g. ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
+            ),
+            Some(dir) if !dir.exists() => bail!("subagents-dir not found: {}", dir.display()),
+            Some(_) => {}
+        }
+    }
+    Ok(())
+}
+
+/// Assemble `run.json` + `timing.json` for every task in the iteration's
+/// `dispatch.json`. Ports eval-runner's `record-runs` `main`.
+fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
+    check_subagents_dir(ctx.harness, subagents_dir)?;
+
+    let dir = iteration_dir(&ctx, args.iteration)?;
+    let result = pipeline::record_runs(&dir, ctx.harness, subagents_dir, args.overwrite)?;
+
+    println!(
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, missing transcript: {}",
+        result.recorded,
+        result.skipped_existing,
+        result.skipped_no_final_message,
+        result.missing_transcript
+    );
+    Ok(())
+}
+
+/// Populate `tool_invocations` from persisted transcripts for every `run.json` in
+/// the iteration. Ports eval-runner's `fill-transcripts` `main`.
+fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
+    check_subagents_dir(ctx.harness, subagents_dir)?;
+
+    let dir = iteration_dir(&ctx, args.iteration)?;
+    let result = pipeline::fill_transcripts(&dir, ctx.harness, subagents_dir, args.overwrite)?;
+
+    println!(
+        "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
+        result.filled, result.skipped, result.missing
+    );
+    Ok(())
+}
+
+/// Report writes outside the sandbox output boundary (and live-source reads) for
+/// every run in the iteration. Ports eval-runner's `detect-stray-writes` `main`.
+fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let iteration = args
+        .iteration
+        .ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = iteration_dir(&ctx, Some(iteration))?;
+    let repo_root = std::env::current_dir()?;
+
+    let report =
+        pipeline::detect_stray_writes_report(&dir, iteration, &ctx.skill_subdir, &repo_root)?;
+    println!("Wrote {}", dir.join("stray-writes.json").display());
+
+    for r in &report.runs {
+        for v in &r.violations {
+            eprintln!(
+                "✗ {}/{}: {} wrote outside outputs dir → {} (ordinal {})",
+                r.eval_id,
+                r.condition,
+                v.tool,
+                v.path.as_deref().unwrap_or(""),
+                v.ordinal
+            );
+        }
+        for w in &r.warnings {
+            eprintln!(
+                "⚠ {}/{}: Bash {} (ordinal {}): {}",
+                r.eval_id,
+                r.condition,
+                w.reason,
+                w.ordinal,
+                w.command.as_deref().unwrap_or("")
+            );
+        }
+        for l in &r.live_source_reads {
+            eprintln!(
+                "⚠ {}/{}: {} read the live skill source (ordinal {}): {}",
+                r.eval_id,
+                r.condition,
+                l.tool,
+                l.ordinal,
+                l.path.as_deref().or(l.command.as_deref()).unwrap_or("")
+            );
+        }
+    }
+
+    let t = report.totals;
+    if t.violations == 0 && t.warnings == 0 && t.live_source_reads == 0 {
+        println!("✓ No out-of-bounds writes or live-source reads detected.");
+    } else {
+        eprintln!(
+            "\n{} violation(s), {} warning(s), {} live-source read(s). Runs with violations edited files outside their sandbox; runs with live-source reads saw the live skill instead of their staged copy — treat those data points as tainted.",
+            t.violations, t.warnings, t.live_source_reads
+        );
+    }
+    Ok(())
+}
+
+/// Grade run records. Default mode emits LLM judge tasks (+ the skill-invocation
+/// meta-check); `--finalize` folds judge responses into `grading.json`. Ports
+/// eval-runner's `grade` `main`.
+fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
+    let common = args.common;
+    let ctx = run_context_from(&common)?;
+    let iteration = common
+        .iteration
+        .ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = iteration_dir(&ctx, Some(iteration))?;
+
+    let conditions_path = dir.join("conditions.json");
+    if !conditions_path.exists() {
+        bail!("missing: {}", conditions_path.display());
+    }
+    let conditions: crate::core::ConditionsRecord =
+        serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+
+    let evals_path = ctx.skill_subdir.join("evals").join("evals.json");
+    let evals_value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&evals_path)?)?;
+    let evals = validation::validate_evals_config(&evals_value, &evals_path.to_string_lossy())?;
+
+    let gctx = pipeline::GradeContext {
+        iteration_dir: &dir,
+        conditions: &conditions,
+        evals: &evals,
+    };
+
+    if args.finalize {
+        let s = pipeline::finalize(&gctx)?;
+        println!(
+            "\nFinalized: {} substantive assertion(s) graded, {} skill-invocation meta-check(s) graded, {} transcript_check unverifiable (empty tool_invocations).",
+            s.total_graded, s.total_meta_graded, s.total_unverifiable
+        );
+        if s.meta_failures > 0 {
+            eprintln!(
+                "\n⚠ {} run(s) failed the skill-invocation meta-check. Substantive results for those runs may be unreliable.",
+                s.meta_failures
+            );
+        }
+        println!(
+            "\nNext: skill-eval aggregate --skill {} --iteration {iteration}",
+            ctx.skill_name
+        );
+    } else {
+        let s = pipeline::emit_judge_tasks(&gctx)?;
+        println!("Wrote {}", dir.join("judge-tasks.json").display());
+        println!(
+            "Judge tasks: {} ({} skill-invocation meta-judge(s))",
+            s.total_tasks, s.meta_injected
+        );
+        if s.meta_code_checked > 0 {
+            println!(
+                "Skill-invocation code-checked: {} (transcript-based, no judge needed)",
+                s.meta_code_checked
+            );
+        }
+        println!(
+            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: skill-eval grade --skill {} --iteration {iteration} --finalize",
+            ctx.skill_name
+        );
+    }
+    Ok(())
+}
+
+/// Compute before/after benchmark deltas across the two conditions. Ports
+/// eval-runner's `aggregate` `main`.
+fn run_aggregate(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let dir = iteration_dir(&ctx, args.iteration)?;
+
+    let conditions_path = dir.join("conditions.json");
+    if !conditions_path.exists() {
+        bail!("missing: {}", conditions_path.display());
+    }
+    let conditions: crate::core::ConditionsRecord =
+        serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+
+    let benchmark = pipeline::aggregate(&dir, &conditions)?;
+    println!("Wrote {}", dir.join("benchmark.json").display());
+    if benchmark.missing_gradings > 0 {
+        eprintln!(
+            "note: {} grading.json file(s) were missing — benchmark is incomplete.",
+            benchmark.missing_gradings
+        );
+    }
+    for w in &benchmark.validity_warnings {
+        eprintln!("⚠ {w}");
+    }
     Ok(())
 }
 
