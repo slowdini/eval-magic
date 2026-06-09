@@ -155,6 +155,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         Commands::Grade(args) => run_grade(args),
+        Commands::Aggregate(args) => run_aggregate(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
@@ -162,7 +163,6 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::Aggregate(_) => "aggregate",
                 Commands::PromoteBaseline(_) => "promote-baseline",
                 Commands::Validate(_)
                 | Commands::TeardownGuard(_)
@@ -170,7 +170,8 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 | Commands::RecordRuns(_)
                 | Commands::FillTranscripts(_)
                 | Commands::DetectStrayWrites(_)
-                | Commands::Grade(_) => {
+                | Commands::Grade(_)
+                | Commands::Aggregate(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -420,6 +421,33 @@ fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: skill-eval grade --skill {} --iteration {iteration} --finalize",
             ctx.skill_name
         );
+    }
+    Ok(())
+}
+
+/// Compute before/after benchmark deltas across the two conditions. Ports
+/// eval-runner's `aggregate` `main`.
+fn run_aggregate(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let dir = iteration_dir(&ctx, args.iteration)?;
+
+    let conditions_path = dir.join("conditions.json");
+    if !conditions_path.exists() {
+        bail!("missing: {}", conditions_path.display());
+    }
+    let conditions: crate::core::ConditionsRecord =
+        serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+
+    let benchmark = pipeline::aggregate(&dir, &conditions)?;
+    println!("Wrote {}", dir.join("benchmark.json").display());
+    if benchmark.missing_gradings > 0 {
+        eprintln!(
+            "note: {} grading.json file(s) were missing — benchmark is incomplete.",
+            benchmark.missing_gradings
+        );
+    }
+    for w in &benchmark.validity_warnings {
+        eprintln!("⚠ {w}");
     }
     Ok(())
 }
