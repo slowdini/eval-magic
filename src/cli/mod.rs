@@ -12,9 +12,11 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 
+use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
+use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
 
@@ -48,10 +50,14 @@ pub struct CommonArgs {
     pub mode: Option<String>,
     /// Target harness.
     #[arg(long)]
-    pub harness: Option<String>,
+    pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).
     #[arg(long)]
     pub workspace_dir: Option<String>,
+    /// Subagents transcript dir (Claude Code only), e.g.
+    /// `~/.claude/projects/<slug>/<session-id>/subagents/`.
+    #[arg(long)]
+    pub subagents_dir: Option<String>,
     /// Restrict to these eval ids (comma-separated).
     #[arg(long)]
     pub only: Option<String>,
@@ -135,6 +141,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         mode: None,
         harness: None,
         workspace_dir: None,
+        subagents_dir: None,
         only: None,
         skip: None,
         overwrite: false,
@@ -144,6 +151,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Validate(args) => run_validate(args),
         Commands::TeardownGuard(_) => run_teardown_guard(),
         Commands::Guard { marker } => run_guard(marker),
+        Commands::RecordRuns(args) => run_record_runs(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
@@ -151,13 +159,15 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::RecordRuns(_) => "record-runs",
                 Commands::FillTranscripts(_) => "fill-transcripts",
                 Commands::DetectStrayWrites(_) => "detect-stray-writes",
                 Commands::Grade(_) => "grade",
                 Commands::Aggregate(_) => "aggregate",
                 Commands::PromoteBaseline(_) => "promote-baseline",
-                Commands::Validate(_) | Commands::TeardownGuard(_) | Commands::Guard { .. } => {
+                Commands::Validate(_)
+                | Commands::TeardownGuard(_)
+                | Commands::Guard { .. }
+                | Commands::RecordRuns(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -204,6 +214,62 @@ fn run_validate(args: ValidateArgs) -> anyhow::Result<()> {
         );
     }
 
+    Ok(())
+}
+
+/// Resolve a [`RunContext`] from the shared flags (skill dir/name, workspace,
+/// harness). Used by every post-dispatch stage handler.
+fn run_context_from(args: &CommonArgs) -> anyhow::Result<RunContext> {
+    Ok(detect_run_context(DetectInput {
+        skill_dir: args.skill_dir.clone(),
+        skill: args.skill.clone(),
+        bootstrap: None,
+        workspace_dir: args.workspace_dir.clone(),
+        harness: args.harness,
+    })?)
+}
+
+/// The iteration directory for a run: `<workspace>/<skill>/iteration-<n>`. Errors
+/// if `--iteration` is absent or the directory does not exist.
+fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow::Result<PathBuf> {
+    let iteration = iteration.ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"));
+    if !dir.is_dir() {
+        bail!("not found: {}", dir.display());
+    }
+    Ok(dir)
+}
+
+/// Assemble `run.json` + `timing.json` for every task in the iteration's
+/// `dispatch.json`. Ports eval-runner's `record-runs` `main`.
+fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
+
+    // Claude Code reads subagent transcripts; that dir is required and must exist.
+    if ctx.harness == Harness::ClaudeCode {
+        match subagents_dir {
+            None => bail!(
+                "missing --subagents-dir (e.g. ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
+            ),
+            Some(dir) if !dir.exists() => bail!("subagents-dir not found: {}", dir.display()),
+            Some(_) => {}
+        }
+    }
+
+    let dir = iteration_dir(&ctx, args.iteration)?;
+    let result = pipeline::record_runs(&dir, ctx.harness, subagents_dir, args.overwrite)?;
+
+    println!(
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, missing transcript: {}",
+        result.recorded,
+        result.skipped_existing,
+        result.skipped_no_final_message,
+        result.missing_transcript
+    );
     Ok(())
 }
 
