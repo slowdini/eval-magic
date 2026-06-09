@@ -47,15 +47,15 @@ fn help_uses_published_binary_name() {
         .stdout(contains("skill-eval"));
 }
 
-/// A recognized subcommand whose module hasn't been ported yet dispatches to a
-/// handler that reports "not yet implemented" and exits non-zero.
+/// Every subcommand is now ported, so `ingest` reaches its own context
+/// validation rather than a "not yet implemented" stub.
 #[test]
-fn unported_subcommand_reports_not_yet_implemented() {
+fn ingest_is_wired_and_validates_context() {
     skill_eval()
         .arg("ingest")
         .assert()
         .failure()
-        .stderr(contains("not yet implemented"));
+        .stderr(contains("--skill-dir"));
 }
 
 /// `validate` over a dir of valid evals succeeds and prints a ✓ per file.

@@ -21,6 +21,8 @@ use crate::sandbox;
 use crate::validation;
 use crate::workspace;
 
+mod run;
+
 /// Top-level CLI. With no subcommand, the default action is `run`.
 #[derive(Debug, Parser)]
 #[command(
@@ -119,11 +121,42 @@ pub struct PromoteBaselineArgs {
     pub judge_model: Option<String>,
 }
 
+/// `run` adds the build-time flags (mode/baseline selection, staging toggles,
+/// guard, plan-mode, bootstrap) on top of the common set.
+#[derive(Debug, Args)]
+pub struct RunArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// Baseline snapshot label (required in `--mode revision`).
+    #[arg(long)]
+    pub baseline: Option<String>,
+    /// SessionStart-equivalent bootstrap file inlined into each dispatch.
+    #[arg(long)]
+    pub bootstrap: Option<String>,
+    /// Build the workspace but skip guard install and stop before next steps.
+    #[arg(long)]
+    pub dry_run: bool,
+    /// Inline each condition's SKILL.md into the dispatch prompt instead of
+    /// staging it under the harness skills dir.
+    #[arg(long)]
+    pub no_stage: bool,
+    /// Arm the write guard (PreToolUse hook) for the dispatch window.
+    #[arg(long)]
+    pub guard: bool,
+    /// Stage the skill-under-test under this verbatim name instead of the
+    /// conspicuous `slow-powers-eval-…` slug.
+    #[arg(long)]
+    pub stage_name: Option<String>,
+    /// Inject the harness's plan-mode profile as an operating-context layer.
+    #[arg(long)]
+    pub plan_mode: bool,
+}
+
 /// Every subcommand ported from eval-runner. Names match the original CLI.
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Build dispatches and run evals (the default action).
-    Run(CommonArgs),
+    Run(RunArgs),
     /// Snapshot a workspace baseline.
     Snapshot(SnapshotArgs),
     /// Tear down a workspace.
@@ -166,20 +199,32 @@ pub fn run() -> anyhow::Result<()> {
 
 fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
     // No subcommand means the default `run` action.
-    let command = command.unwrap_or(Commands::Run(CommonArgs {
-        skill_dir: None,
-        skill: None,
-        iteration: None,
-        mode: None,
-        harness: None,
-        workspace_dir: None,
-        subagents_dir: None,
-        only: None,
-        skip: None,
-        overwrite: false,
+    let command = command.unwrap_or(Commands::Run(RunArgs {
+        common: CommonArgs {
+            skill_dir: None,
+            skill: None,
+            iteration: None,
+            mode: None,
+            harness: None,
+            workspace_dir: None,
+            subagents_dir: None,
+            only: None,
+            skip: None,
+            overwrite: false,
+        },
+        baseline: None,
+        bootstrap: None,
+        dry_run: false,
+        no_stage: false,
+        guard: false,
+        stage_name: None,
+        plan_mode: false,
     }));
 
     match command {
+        Commands::Run(args) => run_run(args),
+        Commands::Ingest(args) => run_ingest(args),
+        Commands::Finalize(args) => run_finalize(args),
         Commands::Validate(args) => run_validate(args),
         Commands::TeardownGuard(_) => run_teardown_guard(),
         Commands::Guard { marker } => run_guard(marker),
@@ -191,27 +236,6 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Snapshot(args) => run_snapshot(args),
         Commands::Teardown(args) => run_teardown(args),
         Commands::PromoteBaseline(args) => run_promote_baseline(args),
-        other => {
-            let name = match other {
-                Commands::Run(_) => "run",
-                Commands::Ingest(_) => "ingest",
-                Commands::Finalize(_) => "finalize",
-                Commands::Validate(_)
-                | Commands::TeardownGuard(_)
-                | Commands::Guard { .. }
-                | Commands::RecordRuns(_)
-                | Commands::FillTranscripts(_)
-                | Commands::DetectStrayWrites(_)
-                | Commands::Grade(_)
-                | Commands::Aggregate(_)
-                | Commands::Snapshot(_)
-                | Commands::Teardown(_)
-                | Commands::PromoteBaseline(_) => {
-                    unreachable!("handled above")
-                }
-            };
-            bail!("`{name}` is not yet implemented (see rewrite-roadmap.md)");
-        }
     }
 }
 
@@ -259,13 +283,167 @@ fn run_validate(args: ValidateArgs) -> anyhow::Result<()> {
 /// Resolve a [`RunContext`] from the shared flags (skill dir/name, workspace,
 /// harness). Used by every post-dispatch stage handler.
 fn run_context_from(args: &CommonArgs) -> anyhow::Result<RunContext> {
+    run_context_with_bootstrap(args, None)
+}
+
+/// Like [`run_context_from`], but threads an optional `--bootstrap` file (only
+/// the `run` orchestrator consumes it; post-dispatch stages pass `None`).
+fn run_context_with_bootstrap(
+    args: &CommonArgs,
+    bootstrap: Option<String>,
+) -> anyhow::Result<RunContext> {
     Ok(detect_run_context(DetectInput {
         skill_dir: args.skill_dir.clone(),
         skill: args.skill.clone(),
-        bootstrap: None,
+        bootstrap,
         workspace_dir: args.workspace_dir.clone(),
         harness: args.harness,
     })?)
+}
+
+/// Split a comma-separated `--only`/`--skip` value into trimmed, non-empty ids.
+fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
+    v.map(|s| {
+        s.split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect()
+    })
+}
+
+/// Build the iteration workspace and dispatch plan (the default action). Ports
+/// eval-runner's `commandRun`.
+fn run_run(args: RunArgs) -> anyhow::Result<()> {
+    let ctx = run_context_with_bootstrap(&args.common, args.bootstrap.clone())?;
+    let only = parse_id_list(args.common.only.as_deref());
+    let skip = parse_id_list(args.common.skip.as_deref());
+    run::orchestrate::command_run(
+        &ctx,
+        &run::orchestrate::RunOptions {
+            mode: args.common.mode.as_deref(),
+            baseline: args.baseline.as_deref(),
+            only: only.as_deref(),
+            skip: skip.as_deref(),
+            iteration: args.common.iteration,
+            dry_run: args.dry_run,
+            no_stage: args.no_stage,
+            guard: args.guard,
+            stage_name: args.stage_name.as_deref(),
+            plan_mode: args.plan_mode,
+        },
+    )?;
+    Ok(())
+}
+
+/// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
+/// handler. This is the production runner for [`run::steps::run_steps`]; it
+/// prints the `error: <msg>` contract on failure (matching eval-runner's default
+/// runner) before propagating, so the chain's halt-and-retry message still fires.
+fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
+    use run::steps::StepKind;
+    let common = CommonArgs {
+        skill_dir: Some(step.skill_dir.clone()),
+        skill: Some(step.skill.clone()),
+        iteration: Some(step.iteration),
+        mode: None,
+        harness: Some(step.harness),
+        workspace_dir: step.workspace_dir.clone(),
+        subagents_dir: step.subagents_dir.clone(),
+        only: None,
+        skip: None,
+        overwrite: false,
+    };
+    let result = match step.kind {
+        StepKind::RecordRuns => run_record_runs(common),
+        StepKind::FillTranscripts => run_fill_transcripts(common),
+        StepKind::DetectStrayWrites => run_detect_stray_writes(common),
+        StepKind::Grade { finalize } => run_grade(GradeArgs { common, finalize }),
+        StepKind::Aggregate => run_aggregate(common),
+    };
+    if let Err(e) = &result {
+        eprintln!("error: {e:#}");
+    }
+    result
+}
+
+/// Run the post-dispatch chain (record-runs → fill-transcripts →
+/// detect-stray-writes → grade) and stop at the judge hand-off. Ports
+/// eval-runner's `commandIngest`.
+fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let iteration = args
+        .iteration
+        .ok_or_else(|| anyhow!("ingest requires --iteration <N>"))?;
+    if ctx.harness == Harness::ClaudeCode && args.subagents_dir.is_none() {
+        bail!(
+            "ingest requires --subagents-dir <path> (Claude Code persists subagent transcripts under ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
+        );
+    }
+
+    let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
+        skill_dir: args.skill_dir.as_deref().unwrap_or_default(),
+        skill: args.skill.as_deref().unwrap_or_default(),
+        iteration,
+        harness: ctx.harness,
+        subagents_dir: args.subagents_dir.as_deref(),
+        workspace_dir: args.workspace_dir.as_deref(),
+    });
+    if let Some(failed) = run::steps::run_steps(&steps, run_step) {
+        bail!(
+            "ingest stopped at '{failed}'. Fix the failure and re-run ingest — completed steps skip work that's already done."
+        );
+    }
+
+    let judge_path = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"))
+        .join("judge-tasks.json");
+    let total_tasks = std::fs::read_to_string(&judge_path)
+        .ok()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("total_tasks").and_then(serde_json::Value::as_u64));
+    match total_tasks {
+        Some(0) => println!(
+            "\n✅ Ingest complete — no judge dispatches needed.\nNext: skill-eval finalize --skill {} --iteration {iteration}",
+            ctx.skill_name
+        ),
+        Some(n) => println!(
+            "\n✅ Ingest complete. Dispatch the {n} judge task(s) grade listed above (judge-tasks.json), then:\n  skill-eval finalize --skill {} --iteration {iteration}",
+            ctx.skill_name
+        ),
+        None => println!(
+            "\n✅ Ingest complete. Dispatch the judge task(s) grade listed above (judge-tasks.json), then:\n  skill-eval finalize --skill {} --iteration {iteration}",
+            ctx.skill_name
+        ),
+    }
+    Ok(())
+}
+
+/// Run the post-judge chain (grade --finalize → aggregate). Ports eval-runner's
+/// `commandFinalize`.
+fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let iteration = args
+        .iteration
+        .ok_or_else(|| anyhow!("finalize requires --iteration <N>"))?;
+
+    let steps = run::steps::build_finalize_commands(&run::steps::StepParams {
+        skill_dir: args.skill_dir.as_deref().unwrap_or_default(),
+        skill: args.skill.as_deref().unwrap_or_default(),
+        iteration,
+        harness: ctx.harness,
+        subagents_dir: None,
+        workspace_dir: args.workspace_dir.as_deref(),
+    });
+    if let Some(failed) = run::steps::run_steps(&steps, run_step) {
+        bail!("finalize stopped at '{failed}'. Fix the failure and re-run finalize.");
+    }
+    println!(
+        "\n✅ Finalize complete. Read the benchmark above, then tear down: skill-eval teardown --skill {}",
+        ctx.skill_name
+    );
+    Ok(())
 }
 
 /// The iteration directory for a run: `<workspace>/<skill>/iteration-<n>`. Errors
@@ -548,21 +726,19 @@ fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// End-of-run teardown: disarm the write guard, then reclaim the workspace,
-/// preserving any iteration with uncommitted results. Ports eval-runner's
-/// `teardown` command — partially: removing the staged skill set
-/// (`cleanupStagedSkills`) lives in the `run` orchestrator, ported in phase 7,
-/// so this does not yet claim to have removed it.
+/// End-of-run teardown: disarm the write guard, remove the staged skill set (and
+/// prune a `.claude` the runner emptied), then reclaim the workspace, preserving
+/// any iteration with uncommitted results. Ports eval-runner's `teardown`
+/// command.
 fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     // The guard lives at `<cwd>/.claude` (cwd-only, matching `teardown-guard`).
     let torn = sandbox::teardown_guard(&std::env::current_dir()?);
-    // TODO(phase 7): cleanup_staged_skills(&ctx.stage_root, ctx.harness) — staged
-    // skill removal lives in the `run` orchestrator module, ported in phase 7.
+    run::staging::cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
     let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
 
     println!(
-        "🧹 Eval teardown complete: workspace reclaimed{}.",
+        "🧹 Eval teardown complete: staged skill set removed{}.",
         if torn {
             " and write guard disarmed"
         } else {
