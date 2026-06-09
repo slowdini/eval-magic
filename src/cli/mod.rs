@@ -152,6 +152,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::TeardownGuard(_) => run_teardown_guard(),
         Commands::Guard { marker } => run_guard(marker),
         Commands::RecordRuns(args) => run_record_runs(args),
+        Commands::FillTranscripts(args) => run_fill_transcripts(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
@@ -159,7 +160,6 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::FillTranscripts(_) => "fill-transcripts",
                 Commands::DetectStrayWrites(_) => "detect-stray-writes",
                 Commands::Grade(_) => "grade",
                 Commands::Aggregate(_) => "aggregate",
@@ -167,7 +167,8 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Validate(_)
                 | Commands::TeardownGuard(_)
                 | Commands::Guard { .. }
-                | Commands::RecordRuns(_) => {
+                | Commands::RecordRuns(_)
+                | Commands::FillTranscripts(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -243,14 +244,11 @@ fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow::Result<Pat
     Ok(dir)
 }
 
-/// Assemble `run.json` + `timing.json` for every task in the iteration's
-/// `dispatch.json`. Ports eval-runner's `record-runs` `main`.
-fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
-    let ctx = run_context_from(&args)?;
-    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
-
-    // Claude Code reads subagent transcripts; that dir is required and must exist.
-    if ctx.harness == Harness::ClaudeCode {
+/// Claude Code reads subagent transcripts by description, so `--subagents-dir` is
+/// required and must exist; Codex reads `outputs/codex-events.jsonl`, so it's
+/// ignored there.
+fn check_subagents_dir(harness: Harness, subagents_dir: Option<&Path>) -> anyhow::Result<()> {
+    if harness == Harness::ClaudeCode {
         match subagents_dir {
             None => bail!(
                 "missing --subagents-dir (e.g. ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
@@ -259,6 +257,15 @@ fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
             Some(_) => {}
         }
     }
+    Ok(())
+}
+
+/// Assemble `run.json` + `timing.json` for every task in the iteration's
+/// `dispatch.json`. Ports eval-runner's `record-runs` `main`.
+fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
+    check_subagents_dir(ctx.harness, subagents_dir)?;
 
     let dir = iteration_dir(&ctx, args.iteration)?;
     let result = pipeline::record_runs(&dir, ctx.harness, subagents_dir, args.overwrite)?;
@@ -269,6 +276,23 @@ fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         result.skipped_existing,
         result.skipped_no_final_message,
         result.missing_transcript
+    );
+    Ok(())
+}
+
+/// Populate `tool_invocations` from persisted transcripts for every `run.json` in
+/// the iteration. Ports eval-runner's `fill-transcripts` `main`.
+fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args)?;
+    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
+    check_subagents_dir(ctx.harness, subagents_dir)?;
+
+    let dir = iteration_dir(&ctx, args.iteration)?;
+    let result = pipeline::fill_transcripts(&dir, ctx.harness, subagents_dir, args.overwrite)?;
+
+    println!(
+        "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
+        result.filled, result.skipped, result.missing
     );
     Ok(())
 }

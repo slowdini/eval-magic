@@ -7,8 +7,10 @@
 //! one at a time against the same fixtures the TypeScript suite uses.
 
 pub mod error;
+pub mod fill_transcripts;
 pub mod io;
 pub mod record_runs;
 
 pub use error::PipelineError;
+pub use fill_transcripts::{FillTranscriptsResult, fill_transcripts, resolve_agent_description};
 pub use record_runs::{RecordRunsResult, record_runs};
