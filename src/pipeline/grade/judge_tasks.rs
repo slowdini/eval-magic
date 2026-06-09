@@ -339,16 +339,19 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
     summary.skipped_transcript_checks = unverifiable;
 
     let tasks_path = ctx.iteration_dir.join("judge-tasks.json");
-    write_json(
-        &tasks_path,
-        &JudgeTasksFile {
-            generated: now_iso8601(),
-            total_tasks: tasks.len(),
-            meta_tasks_injected: summary.meta_injected,
-            skipped_transcript_checks: unverifiable,
-            tasks,
-        },
+    let file = JudgeTasksFile {
+        generated: now_iso8601(),
+        total_tasks: tasks.len(),
+        meta_tasks_injected: summary.meta_injected,
+        skipped_transcript_checks: unverifiable,
+        tasks,
+    };
+    validate_against_schema::<serde_json::Value>(
+        SchemaName::JudgeTasks,
+        &serde_json::to_value(&file)?,
+        &tasks_path.to_string_lossy(),
     )?;
+    write_json(&tasks_path, &file)?;
 
     Ok(summary)
 }

@@ -15,23 +15,28 @@ use serde_json::Value;
 
 use crate::validation::error::ValidationError;
 
-/// Names the four portable-artifact schemas. Mirrors the `SchemaName` string
-/// union in eval-runner's `validate-schema.ts`.
+/// Names the portable-artifact schemas. Extends eval-runner's `SchemaName` string
+/// union with `benchmark` and `judge-tasks` — artifacts the TypeScript original
+/// wrote unvalidated, now schema-gated like every other pipeline output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SchemaName {
     RunRecord,
     Evals,
     Grading,
     StrayWrites,
+    Benchmark,
+    JudgeTasks,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 4] = [
+    const ALL: [SchemaName; 6] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
+        SchemaName::Benchmark,
+        SchemaName::JudgeTasks,
     ];
 
     /// The schema's kebab-case name, as used in error messages and the on-disk
@@ -42,6 +47,8 @@ impl SchemaName {
             SchemaName::Evals => "evals",
             SchemaName::Grading => "grading",
             SchemaName::StrayWrites => "stray-writes",
+            SchemaName::Benchmark => "benchmark",
+            SchemaName::JudgeTasks => "judge-tasks",
         }
     }
 
@@ -52,6 +59,8 @@ impl SchemaName {
             SchemaName::Evals => include_str!("../../schema/evals.schema.json"),
             SchemaName::Grading => include_str!("../../schema/grading.schema.json"),
             SchemaName::StrayWrites => include_str!("../../schema/stray-writes.schema.json"),
+            SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
+            SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),
         }
     }
 }
@@ -204,6 +213,88 @@ mod tests {
         let mut data = valid_run_record();
         data["tool_invocations"] = json!([{ "name": "Bash", "ordinal": "zero" }]);
         let r: Result<Value, _> = validate_against_schema(SchemaName::RunRecord, &data, "run.json");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn validates_a_well_formed_benchmark() {
+        let benchmark = json!({
+            "generated": "2026-06-08T00:00:00.000Z",
+            "mode": "new-skill",
+            "conditions_compared": ["with_skill", "without_skill"],
+            "missing_gradings": 0,
+            "validity_warnings": [],
+            "run_summary": {
+                "with_skill": {
+                    "pass_rate": { "mean": 1.0, "stddev": 0.0, "n": 1 },
+                    "duration_ms": { "mean": 1000.0, "stddev": 0.0, "n": 1 },
+                    "total_tokens": { "mean": 5000.0, "stddev": 0.0, "n": 1 },
+                    "skill_invocation_n": 0,
+                    "skill_invocation_rate": null
+                },
+                "without_skill": {
+                    "pass_rate": { "mean": 0.0, "stddev": 0.0, "n": 1 },
+                    "duration_ms": { "mean": 1000.0, "stddev": 0.0, "n": 1 },
+                    "total_tokens": { "mean": 3000.0, "stddev": 0.0, "n": 1 }
+                }
+            },
+            "delta": { "direction": "with_skill - without_skill", "pass_rate": 1.0, "duration_ms": 0.0, "total_tokens": 2000.0 }
+        });
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Benchmark, &benchmark, "benchmark.json");
+        assert!(r.is_ok(), "benchmark should validate: {r:?}");
+    }
+
+    #[test]
+    fn rejects_a_benchmark_missing_delta() {
+        let mut benchmark = json!({
+            "generated": "t", "mode": "new-skill",
+            "conditions_compared": ["a", "b"], "missing_gradings": 0,
+            "validity_warnings": [], "run_summary": {},
+            "delta": { "direction": "a - b", "pass_rate": 0.0, "duration_ms": 0.0, "total_tokens": 0.0 }
+        });
+        benchmark.as_object_mut().unwrap().remove("delta");
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Benchmark, &benchmark, "benchmark.json");
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn validates_a_well_formed_judge_tasks_file() {
+        let tasks = json!({
+            "generated": "2026-06-08T00:00:00.000Z",
+            "total_tasks": 1,
+            "meta_tasks_injected": 1,
+            "skipped_transcript_checks": 0,
+            "tasks": [{
+                "eval_id": "e1", "condition": "with_skill", "assertion_id": "__skill_invoked",
+                "rubric": "did it apply the skill?", "model": null, "is_meta": true,
+                "run_record_path": "/w/run.json", "outputs_dir": "/w/outputs",
+                "response_path": "/w/judge-responses/__skill_invoked.json",
+                "dispatch_prompt_path": "/w/judge-prompts/__skill_invoked.txt"
+            }]
+        });
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::JudgeTasks, &tasks, "judge-tasks.json");
+        assert!(r.is_ok(), "judge-tasks should validate: {r:?}");
+    }
+
+    #[test]
+    fn rejects_a_judge_task_with_an_inlined_dispatch_prompt() {
+        // dispatch_prompt is stripped before write; the schema forbids extras.
+        let tasks = json!({
+            "generated": "t", "total_tasks": 1, "meta_tasks_injected": 0,
+            "skipped_transcript_checks": 0,
+            "tasks": [{
+                "eval_id": "e1", "condition": "with_skill", "assertion_id": "a1",
+                "rubric": "r", "model": null, "is_meta": false,
+                "run_record_path": "/w/run.json", "outputs_dir": "/w/outputs",
+                "response_path": "/w/r.json", "dispatch_prompt_path": "/w/p.txt",
+                "dispatch_prompt": "SHOULD NOT BE HERE"
+            }]
+        });
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::JudgeTasks, &tasks, "judge-tasks.json");
         assert!(r.is_err());
     }
 

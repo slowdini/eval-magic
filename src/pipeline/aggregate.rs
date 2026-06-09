@@ -18,6 +18,7 @@ use crate::adapters::{PluginShadowReport, shadow_validity_warnings};
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
+use crate::validation::{SchemaName, validate_against_schema};
 
 /// Mean of a series (0 for an empty series).
 fn mean(values: &[f64]) -> f64 {
@@ -289,7 +290,13 @@ pub fn aggregate(
         delta,
     };
 
-    write_json(&iteration_dir.join("benchmark.json"), &benchmark)?;
+    let out_path = iteration_dir.join("benchmark.json");
+    validate_against_schema::<Value>(
+        SchemaName::Benchmark,
+        &serde_json::to_value(&benchmark)?,
+        &out_path.to_string_lossy(),
+    )?;
+    write_json(&out_path, &benchmark)?;
     Ok(benchmark)
 }
 
