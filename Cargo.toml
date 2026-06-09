@@ -17,6 +17,10 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0.102"
+# RFC3339 timestamp -> epoch-millis for transcript duration. default-features
+# off drops clock/std/iana-time-zone — we only parse strings, never read the
+# wall clock or local timezone.
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 clap = { version = "4.6.1", features = ["derive"] }
 # default features pull in reqwest/rustls/tokio for remote $ref resolution; our
 # schemas are embedded (include_str!) and use only internal #/definitions refs,
