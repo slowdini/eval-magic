@@ -154,6 +154,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::RecordRuns(args) => run_record_runs(args),
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
+        Commands::Grade(args) => run_grade(args),
         other => {
             let name = match other {
                 Commands::Run(_) => "run",
@@ -161,7 +162,6 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 Commands::Teardown(_) => "teardown",
                 Commands::Ingest(_) => "ingest",
                 Commands::Finalize(_) => "finalize",
-                Commands::Grade(_) => "grade",
                 Commands::Aggregate(_) => "aggregate",
                 Commands::PromoteBaseline(_) => "promote-baseline",
                 Commands::Validate(_)
@@ -169,7 +169,8 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
                 | Commands::Guard { .. }
                 | Commands::RecordRuns(_)
                 | Commands::FillTranscripts(_)
-                | Commands::DetectStrayWrites(_) => {
+                | Commands::DetectStrayWrites(_)
+                | Commands::Grade(_) => {
                     unreachable!("handled above")
                 }
             };
@@ -352,6 +353,72 @@ fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
         eprintln!(
             "\n{} violation(s), {} warning(s), {} live-source read(s). Runs with violations edited files outside their sandbox; runs with live-source reads saw the live skill instead of their staged copy — treat those data points as tainted.",
             t.violations, t.warnings, t.live_source_reads
+        );
+    }
+    Ok(())
+}
+
+/// Grade run records. Default mode emits LLM judge tasks (+ the skill-invocation
+/// meta-check); `--finalize` folds judge responses into `grading.json`. Ports
+/// eval-runner's `grade` `main`.
+fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
+    let common = args.common;
+    let ctx = run_context_from(&common)?;
+    let iteration = common
+        .iteration
+        .ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = iteration_dir(&ctx, Some(iteration))?;
+
+    let conditions_path = dir.join("conditions.json");
+    if !conditions_path.exists() {
+        bail!("missing: {}", conditions_path.display());
+    }
+    let conditions: crate::core::ConditionsRecord =
+        serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+
+    let evals_path = ctx.skill_subdir.join("evals").join("evals.json");
+    let evals_value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&evals_path)?)?;
+    let evals = validation::validate_evals_config(&evals_value, &evals_path.to_string_lossy())?;
+
+    let gctx = pipeline::GradeContext {
+        iteration_dir: &dir,
+        conditions: &conditions,
+        evals: &evals,
+    };
+
+    if args.finalize {
+        let s = pipeline::finalize(&gctx)?;
+        println!(
+            "\nFinalized: {} substantive assertion(s) graded, {} skill-invocation meta-check(s) graded, {} transcript_check unverifiable (empty tool_invocations).",
+            s.total_graded, s.total_meta_graded, s.total_unverifiable
+        );
+        if s.meta_failures > 0 {
+            eprintln!(
+                "\n⚠ {} run(s) failed the skill-invocation meta-check. Substantive results for those runs may be unreliable.",
+                s.meta_failures
+            );
+        }
+        println!(
+            "\nNext: skill-eval aggregate --skill {} --iteration {iteration}",
+            ctx.skill_name
+        );
+    } else {
+        let s = pipeline::emit_judge_tasks(&gctx)?;
+        println!("Wrote {}", dir.join("judge-tasks.json").display());
+        println!(
+            "Judge tasks: {} ({} skill-invocation meta-judge(s))",
+            s.total_tasks, s.meta_injected
+        );
+        if s.meta_code_checked > 0 {
+            println!(
+                "Skill-invocation code-checked: {} (transcript-based, no judge needed)",
+                s.meta_code_checked
+            );
+        }
+        println!(
+            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: skill-eval grade --skill {} --iteration {iteration} --finalize",
+            ctx.skill_name
         );
     }
     Ok(())

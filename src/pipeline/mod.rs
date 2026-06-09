@@ -9,6 +9,7 @@
 pub mod detect_stray_writes;
 pub mod error;
 pub mod fill_transcripts;
+pub mod grade;
 pub mod io;
 pub mod record_runs;
 
@@ -18,4 +19,5 @@ pub use detect_stray_writes::{
 };
 pub use error::PipelineError;
 pub use fill_transcripts::{FillTranscriptsResult, fill_transcripts, resolve_agent_description};
+pub use grade::{GradeContext, emit_judge_tasks, finalize};
 pub use record_runs::{RecordRunsResult, record_runs};
