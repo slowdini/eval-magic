@@ -68,7 +68,7 @@ pub struct CommonArgs {
     ///
     /// Claude Code is the fully wired harness. Codex stages skills under
     /// `.agents/skills` and reads each task's `outputs/codex-events.jsonl` instead
-    /// of a subagents dir; `--guard` and `--plan-mode` are Claude-Code-only.
+    /// of a subagents dir; `--guard` is Claude-Code-only.
     #[arg(long)]
     pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).
@@ -206,9 +206,9 @@ pub struct RunArgs {
     ///
     /// Injects the harness's verbatim plan-mode procedure
     /// (`profiles/<harness>/plan-mode.md`) as a `<system-reminder>` in every
-    /// dispatch, identical across arms. Opt-in, for plan-mode-relevant skills; only
-    /// the Claude Code profile ships today, and a harness with no profile aborts.
-    /// It is text the subagent reads, not a real injected mode.
+    /// dispatch, identical across arms. Opt-in, for plan-mode-relevant skills.
+    /// A harness with no profile aborts. It is text the subagent reads, not a
+    /// real injected mode.
     #[arg(long)]
     pub plan_mode: bool,
 }

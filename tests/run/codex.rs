@@ -116,29 +116,62 @@ fn codex_supports_stage_name_when_staging() {
 }
 
 #[test]
+fn codex_plan_mode_injects_profile_and_records_flag() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--plan-mode",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(dispatch["plan_mode"], true);
+    for task in dispatch["tasks"].as_array().unwrap() {
+        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+        if task["condition"] == "with_skill" {
+            assert!(prompt.contains("## Skills"));
+        }
+        assert!(prompt.contains("<system-reminder>"));
+        assert!(prompt.contains("Codex plan mode is active"));
+        assert!(prompt.contains("<proposed_plan>"));
+        assert!(!prompt.contains("ExitPlanMode"));
+    }
+}
+
+#[test]
 fn codex_rejects_unsupported_parity_features() {
     let tmp = tempfile::TempDir::new().unwrap();
 
-    for extra in [["--guard"].as_slice(), ["--plan-mode"].as_slice()] {
-        let (skill_dir, cwd) = setup(&tmp.path().join(format!("c{}", extra[0])), DEFAULT_EVALS);
-        let mut cmd = skill_eval();
-        cmd.current_dir(&cwd)
-            .args(["run", "--skill-dir"])
-            .arg(&skill_dir)
-            .args([
-                "--skill",
-                "mr-review",
-                "--mode",
-                "new-skill",
-                "--harness",
-                "codex",
-                "--dry-run",
-            ])
-            .args(extra)
-            .assert()
-            .failure()
-            .stderr(contains("Codex"));
-    }
+    let (skill_dir, cwd) = setup(&tmp.path().join("c-guard"), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--guard",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("Codex"));
 
     let (skill_dir, cwd) = setup(&tmp.path().join("c-stage-name"), DEFAULT_EVALS);
     skill_eval()

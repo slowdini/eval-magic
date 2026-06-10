@@ -69,17 +69,12 @@ pub(crate) fn staging_discovery_warning(harness: Harness, no_stage: bool) -> Opt
 }
 
 /// Resolve the verbatim plan-mode procedure profile for a harness.
-/// The profile is a compile-time bundled asset (mirroring the schema embedding in
-/// `validation`); a harness without one gets a clear error rather than a silent
-/// no-op.
+/// The profile is a compile-time bundled asset, mirroring the schema embedding in
+/// `validation`.
 pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str, RunError> {
     match harness {
         Harness::ClaudeCode => Ok(include_str!("../../../profiles/claude-code/plan-mode.md")),
-        Harness::Codex => Err(RunError::msg(
-            "--plan-mode: no plan-mode profile exists for harness 'codex'. This is a Claude-tier \
-             fidelity layer; a harness without a profile leaves the portable dispatch contract \
-             unchanged.",
-        )),
+        Harness::Codex => Ok(include_str!("../../../profiles/codex/plan-mode.md")),
     }
 }
 
@@ -97,9 +92,6 @@ pub(crate) fn validate_harness_run_options(
     }
     if ctx.bootstrap_path.is_some() && opts.no_stage {
         unsupported.push("--bootstrap with --no-stage");
-    }
-    if opts.plan_mode {
-        unsupported.push("--plan-mode");
     }
     if opts.stage_name.is_some() && opts.no_stage {
         unsupported.push("--stage-name with --no-stage");
@@ -179,6 +171,14 @@ mod tests {
     #[test]
     fn silent_for_codex() {
         assert!(staging_discovery_warning(Harness::Codex, false).is_none());
+    }
+
+    #[test]
+    fn codex_plan_mode_profile_resolves() {
+        let profile = resolve_plan_mode_profile(Harness::Codex).unwrap();
+        assert!(profile.contains("Codex plan mode is active"));
+        assert!(profile.contains("<proposed_plan>"));
+        assert!(!profile.contains("ExitPlanMode"));
     }
 
     #[test]

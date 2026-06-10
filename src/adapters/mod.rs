@@ -15,7 +15,7 @@ pub use claude_code_transcript::{
     SubagentEntry, SubagentMeta, TranscriptSummary, find_by_description, list_subagents,
     parse_transcript, parse_transcript_full,
 };
-pub use codex_session::render_codex_available_skills_block;
+pub use codex_session::{render_codex_available_skills_block, render_codex_plan_mode_context};
 pub use codex_transcript::{parse_codex_events, parse_codex_events_full};
 pub use plugin_shadow::{
     PluginShadowReport, ShadowSource, detect_plugin_shadows, format_shadow_banner,

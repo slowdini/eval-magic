@@ -15,7 +15,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{
-    render_available_skills_block, render_codex_available_skills_block, render_plan_mode_context,
+    render_available_skills_block, render_codex_available_skills_block,
+    render_codex_plan_mode_context, render_plan_mode_context,
 };
 use crate::core::{AvailableSkill, Eval, Harness};
 
@@ -96,6 +97,13 @@ fn render_available_skills_block_for_harness(
     match harness {
         Harness::Codex => render_codex_available_skills_block(skills),
         Harness::ClaudeCode => render_available_skills_block(skills),
+    }
+}
+
+fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) -> String {
+    match harness {
+        Harness::Codex => render_codex_plan_mode_context(profile_text),
+        Harness::ClaudeCode => render_plan_mode_context(profile_text),
     }
 }
 
@@ -201,7 +209,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     // Plan-mode operating context: its own block after the session-start surfaces
     // and before the task framing. Skill-agnostic, so identical in both arms.
     let plan_mode_block = match opts.plan_mode_content {
-        Some(p) if !p.is_empty() => render_plan_mode_context(p),
+        Some(p) if !p.is_empty() => render_plan_mode_context_for_harness(harness, p),
         _ => String::new(),
     };
     if !plan_mode_block.is_empty() {
