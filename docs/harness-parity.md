@@ -6,6 +6,8 @@ This file covers the **`eval-magic` runner only** — the infrastructure in `eva
 
 Read the file end-to-end before acting. The categories in Step 4 are the source of truth for what "eval-magic parity" means today — when a new feature is added to the runner, that table is updated and this file stays evergreen.
 
+> **Run mode is a separate axis.** This file audits *feature-category* parity (transcript adapter, staging, write enforcement, plan mode). *How* an eval is dispatched — **headless** (`claude -p` / `codex exec`), **fully interactive** (in-session subagents), or **hybrid** — is an orthogonal axis tracked in the README's [Run modes](../README.md#run-modes) section, which holds the current support-and-cost matrix. A harness can have a rich transcript adapter (feature parity) yet support only some run modes, or vice versa.
+
 ---
 
 ## Step 1 — Identify your harness

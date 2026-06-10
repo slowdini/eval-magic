@@ -203,9 +203,35 @@ For the `without_skill` / baseline condition, the dispatch reflects "this skill 
 
 Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record means the same thing regardless of which harness produced it. **Claude Code** and **Codex** are wired harnesses, with harness-specific fidelity notes below. The parity-audit framework for bringing another harness up to the supported feature set is in [docs/harness-parity.md](docs/harness-parity.md).
 
+### Run modes
+
+*How* an eval gets dispatched is a separate axis from *which* harness runs it. There are three run modes — pick whichever fits your account and plan:
+
+- **Headless** — you never start an agent session. You run a series of `eval-magic` commands, and every eval test and judge is dispatched through the harness's one-shot CLI (`claude -p`, `codex exec`), writing transcripts to disk. The run ends in a written report.
+- **Fully interactive** — you start an agent session and ask it to run an eval. The agent runs the `eval-magic` commands and dispatches tests and judges as **in-session subagents**, then hands you the report.
+- **Hybrid** — like interactive, but the agent guides the process and issues headless CLI dispatches (`claude -p` / `codex exec`) for some or all tests and judges — useful for working through iterations.
+
+Support today:
+
+| Harness | Headless | Fully interactive | Hybrid |
+|---------|:--------:|:-----------------:|:------:|
+| **Claude Code** | ❌ not yet | ✅ | ❌ not yet |
+| **Codex** | ❌ not yet | ❔ likely N/A¹ | ✅ |
+| **OpenCode** | ❌ | ❌ | ❌² |
+
+¹ Codex dispatches via subprocess (`codex exec`), not in-session subagents, so a "fully interactive" Codex mode may not translate. ² OpenCode is not yet a wired harness.
+
+**Cost and billing.** Mode choice has billing consequences:
+
+- **Claude Code, fully interactive** (Task-tool subagents) — billed under normal interactive session usage/limits (your subscription's interactive pool, or your API key).
+- **Claude Code, headless / hybrid** (`claude -p`) — same token-based pricing, but on **subscription plans, starting June 15 2026**, `claude -p` (Agent SDK) usage draws from a **separate monthly Agent SDK credit pool**, distinct from interactive limits. Headless JSON output exposes `total_cost_usd` per invocation, so the runner can record per-task cost — something the in-session Task-tool path can't easily capture.
+- **Codex, hybrid** (`codex exec`) — billed under your Codex usage.
+
+**Intended end state:** all three modes first-class on Claude Code and Codex (where the mode translates), and OpenCode wired as a third harness. Progress is tracked in [GitHub issues](https://github.com/slowdini/eval-magic/issues).
+
 ### Claude Code (fully wired)
 
-The run loop above *is* the Claude Code loop. These are the Claude-Code-specific details:
+The run loop above *is* the Claude Code loop. Today this is the **fully-interactive** run mode (see [Run modes](#run-modes)) — subagents are dispatched in-session via the Task tool; the **headless** and **hybrid** (`claude -p`) modes are not yet wired. These are the Claude-Code-specific details:
 
 **Isolating from installed plugins.** Read this first if the skill you're evaluating shares a name with one an installed, enabled plugin provides. Subagents are dispatched via the **Task tool**, so they inherit *this session's* enabled plugins — the staging slug avoids an on-disk collision but does not stop the installed copy from being discoverable, contaminating both arms (the `without_skill` arm is then not truly skill-absent). Plugins load at session start and can't be unloaded mid-session, so the runner only *detects and warns* (the plugin-shadow banner). To actually isolate, launch the session you run the eval from one of these ways — subagents inherit it:
 
@@ -222,6 +248,8 @@ Project-local staged skills live in `<cwd>/.claude/skills/`, independent of inst
 **Dispatching via the Task tool.** `dispatch.json` is a top-level object (`{ skill_name, iteration, run_nonce, …, tasks: [...] }`); iterate `tasks[]`. For each task, dispatch a fresh subagent via the Task tool with the prompt `Read the file at <dispatch_prompt_path> and follow its instructions exactly.` (substituting the task's `dispatch_prompt_path`), and pass `agent_description` *verbatim* as the description — it's namespaced `<eval_id>:<condition>:i<N>-<nonce>`, and passing it unchanged is what lets transcript correlation work. (The Task tool documents `description` as "short", but pass the full string regardless — correlation depends on the exact value.) You do **not** write `run.json`/`timing.json` yourself; the subagent writes `outputs/final-message.md`, and `ingest` (`record-runs`) assembles both records from disk. For a plan-mode-relevant skill, add `--plan-mode` to inject Claude Code's verbatim plan-mode procedure as a `<system-reminder>` operating-context layer.
 
 ### Codex
+
+Codex's `codex exec --json` flow is the **hybrid** run mode today (see [Run modes](#run-modes)) — an agent session orchestrates while each dispatch shells out to the CLI. A fully **headless** Codex mode (eval-magic driving the whole loop with no session) is not yet wired, and a **fully-interactive** mode likely doesn't translate, since Codex dispatches via subprocess rather than in-session subagents.
 
 Pass `--harness codex`: skills stage under repo-local `.agents/skills/` (the staged skill-under-test's frontmatter `name:` is rewritten to the eval slug so Codex's repo-local discovery sees it), and `conditions.json` / `dispatch.json` record `"harness": "codex"`. Dispatch each task with a fresh `codex exec --json` execution, capturing the event stream:
 
