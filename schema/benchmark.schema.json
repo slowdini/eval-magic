@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/benchmark.schema.json",
   "title": "Benchmark",
-  "description": "Output of evals:aggregate. The before/after comparison across the two conditions, with per-condition stats, the a-b delta, and validity warnings. Lives at <workspace>/iteration-N/benchmark.json. (Schema added in the Rust port; the TypeScript original wrote this artifact unvalidated.)",
+  "description": "Output of evals:aggregate. The before/after comparison across the two conditions, with per-condition stats, the a-b delta, and validity warnings. Lives at <workspace>/iteration-N/benchmark.json.",
   "type": "object",
   "required": [
     "generated",

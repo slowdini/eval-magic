@@ -4,7 +4,7 @@
 //! `dispatch-manifest.md` / `conditions.json`, optionally arm the write guard,
 //! and preflight plugin shadows.
 //!
-//! Ports `run.ts:566-957`. [`command_run`] is a thin coordinator over four
+//! [`command_run`] is a thin coordinator over four
 //! phases, each in its own submodule: [`resolve`] (validate + resolve),
 //! [`stage`] (stage the skills), [`build`] (`write_dispatch` + `post_build`),
 //! and the two print steps below. The staging and dispatch mechanics live in the
@@ -66,7 +66,7 @@ struct Staged {
     plan_mode_content: Option<String>,
 }
 
-/// Build the iteration workspace and dispatch plan for a run. Ports `commandRun`.
+/// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
     let resolved = resolve::resolve_request(ctx, opts)?;
     print_run_plan(ctx, opts, &resolved);
@@ -77,8 +77,7 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     Ok(())
 }
 
-/// Print the run plan (conditions, selection, staging mode) to stdout. Ports
-/// `run.ts:649-678`.
+/// Print the run plan (conditions, selection, staging mode) to stdout.
 fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
     println!(
         "Preparing {} iteration-{} ({})",
@@ -116,7 +115,7 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
 }
 
 /// Print the workspace paths, dispatch count, and the harness-specific next-step
-/// instructions. Ports `run.ts:909-957`.
+/// instructions.
 fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks: usize) {
     let iteration = r.iteration;
     println!("\nWorkspace prepared: {}", r.iteration_dir.display());

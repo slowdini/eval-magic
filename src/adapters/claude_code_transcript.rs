@@ -1,6 +1,6 @@
 //! Claude Code transcript parsing.
 //!
-//! Ports `src/adapters/claude-code-transcript.ts`. Reads a JSONL session
+//! Reads a JSONL session
 //! transcript and extracts ordered [`ToolInvocation`]s (matching `tool_result`
 //! blocks back to their `tool_use` by id), plus a [`TranscriptSummary`] with
 //! deduped token totals, wall-clock duration, and the final assistant text.
@@ -40,7 +40,7 @@ struct TranscriptRecord {
 }
 
 /// Content blocks of a message: the array as-is, or empty for string/absent
-/// content (mirrors the TS `flattenContent`).
+/// content.
 fn content_blocks(message: &Option<Message>) -> &[Value] {
     match message.as_ref().and_then(|m| m.content.as_ref()) {
         Some(Value::Array(arr)) => arr,

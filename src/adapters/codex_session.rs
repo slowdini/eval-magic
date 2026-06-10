@@ -1,6 +1,6 @@
 //! Codex-specific rendering of the skills surface.
 //!
-//! Ports `src/adapters/codex-session.ts`. Codex exposes skills with a name,
+//! Codex exposes skills with a name,
 //! description, and file path in its initial skills list. Kept separate from
 //! Claude Code's Skill-tool wording so dispatch prompts mirror the harness being
 //! evaluated.

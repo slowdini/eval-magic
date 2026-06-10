@@ -2,9 +2,7 @@
 //! [`DispatchTask`] the orchestrator records in `dispatch.json`, plus the
 //! human-readable `dispatch-manifest.md`.
 //!
-//! Ports the dispatch half of `run.ts` (`buildDispatchTask`, `buildManifest`,
-//! `selectEvals`, `redactSkillFromBootstrap`, `copyFixtures`,
-//! `getSkillDescription`). The prompt mirrors a real session: an optional
+//! The prompt mirrors a real session: an optional
 //! `<session-start-context>` (the `--bootstrap` surface), the harness-native
 //! available-skills block, an optional plan-mode `<system-reminder>`, then the
 //! eval task framing.
@@ -25,8 +23,8 @@ use super::{RunError, copy_dir_recursive};
 
 /// One dispatchable task: the metadata the orchestrator persists per
 /// `(eval, condition)`. `dispatch_prompt` is held in memory (for manifest
-/// building and tests) but stripped from the serialized `dispatch.json`, exactly
-/// as the TS original drops it via object rest.
+/// building and tests) but stripped from the serialized `dispatch.json` — the
+/// prompt lives in its own file at `dispatch_prompt_path`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DispatchTask {
     pub eval_id: String,
@@ -101,7 +99,7 @@ fn render_available_skills_block_for_harness(
     }
 }
 
-/// Construct one dispatch task and its full prompt. Ports `run.ts:1117-1301`.
+/// Construct one dispatch task and its full prompt.
 pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunError> {
     let harness = opts.harness;
     let mut staged_skills = opts.available_skills.clone();
@@ -259,15 +257,15 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     })
 }
 
-/// JS truthiness for an optional string: `Some(non-empty)`. Mirrors the TS
-/// `if (str)` guards (`null` and `""` are both falsy).
+/// Truthiness for an optional string: `Some(non-empty)` — `None` and `""` are
+/// both falsy.
 fn is_truthy(s: Option<&str>) -> bool {
     s.is_some_and(|s| !s.is_empty())
 }
 
 /// Filter the eval list to the `--only` / `--skip` subset (mutually exclusive).
-/// Every requested id must exist; `--only` preserves config order. Ports
-/// `run.ts:991-1014`; errors map to [`RunError::Message`] for the caller's `die`.
+/// Every requested id must exist; `--only` preserves config order. Errors map
+/// to [`RunError::Message`].
 pub fn select_evals(
     evals: &[Eval],
     only: Option<&[String]>,
@@ -308,7 +306,7 @@ pub fn select_evals(
 
 /// Remove the skill-under-test's "Active Skills Directory" entry (its bullet +
 /// indented continuation lines) from bootstrap content, leaving siblings and the
-/// heading intact. Ports `run.ts:1080-1099`.
+/// heading intact.
 pub fn redact_skill_from_bootstrap(content: &str, skill_name: &str) -> String {
     let bullet = Regex::new(r"^[*-]\s").unwrap();
     let indented = Regex::new(r"^\s+\S").unwrap();
@@ -333,7 +331,7 @@ pub fn redact_skill_from_bootstrap(content: &str, skill_name: &str) -> String {
 }
 
 /// Copy an eval's fixture files into `<cond_dir>/inputs/`, returning the copied
-/// paths. Ports `run.ts:1016-1030`.
+/// paths.
 pub fn copy_fixtures(
     ev: &Eval,
     skill_dir: &Path,
@@ -366,7 +364,7 @@ pub fn copy_fixtures(
 }
 
 /// Read the `description:` frontmatter value (unquoted) from a skill's
-/// `SKILL.md`, falling back to a placeholder. Ports `run.ts:1053-1069`.
+/// `SKILL.md`, falling back to a placeholder.
 pub fn get_skill_description(skill_path: &Path) -> String {
     const FALLBACK: &str = "No description available.";
     let Ok(content) = fs::read_to_string(skill_path) else {
@@ -389,7 +387,7 @@ pub fn get_skill_description(skill_path: &Path) -> String {
 
 pub use crate::core::Mode;
 
-/// Build the human-readable `dispatch-manifest.md`. Ports `run.ts:1303-1351`.
+/// Build the human-readable `dispatch-manifest.md`.
 pub fn build_manifest(
     skill_name: &str,
     mode: Mode,

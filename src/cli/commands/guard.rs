@@ -8,8 +8,8 @@ use crate::sandbox;
 
 /// The hidden PreToolUse hook entry point. Reads the hook payload from stdin and
 /// the marker path from argv, then prints a deny verdict for out-of-bounds calls.
-/// Ports eval-runner's `guard.ts`: it **fails open** — every error path allows the
-/// call and exits 0, so the guard can never brick a session.
+/// It **fails open** — every error path allows the call and exits 0, so the
+/// guard can never brick a session.
 pub(crate) fn run_guard(marker: Option<String>) -> anyhow::Result<()> {
     let marker_path = marker
         .map(PathBuf::from)
@@ -21,9 +21,9 @@ pub(crate) fn run_guard(marker: Option<String>) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Disarm the write guard for the current directory. Ports eval-runner's
-/// `teardown-guard` command, but cwd-only: the guard lives at `<cwd>/.claude`, so
-/// (unlike the TS original) this needs no `--skill-dir`/`--skill` flags.
+/// Disarm the write guard for the current directory. Cwd-only by design: the
+/// guard lives at `<cwd>/.claude`, so this needs no `--skill-dir`/`--skill`
+/// flags.
 pub(crate) fn run_teardown_guard() -> anyhow::Result<()> {
     let torn = sandbox::teardown_guard(&std::env::current_dir()?);
     println!(

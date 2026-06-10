@@ -2,11 +2,11 @@
 name = "eval-magic"
 version = "0.1.0"
 edition = "2024"
-description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior. (Rust rewrite of @slowdini/eval-runner.)"
+description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior."
 license = "MIT"
 repository = "https://github.com/slowdini/eval-magic"
 
-# Preserve the published command name from the TypeScript original.
+# The published command name is `skill-eval`; the crate keeps its own name.
 [[bin]]
 name = "skill-eval"
 path = "src/main.rs"
@@ -45,3 +45,8 @@ tempfile = "3.27.0"
 version = "1"
 default-features = false
 features = ["user-hooks"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

@@ -1,6 +1,6 @@
 //! `ingest` / `finalize` — fixed-order chains over the post-dispatch stages.
 //!
-//! Ports `run.ts:1353-1538`. The eval loop has exactly two points where only the
+//! The eval loop has exactly two points where only the
 //! in-harness agent can act (dispatching eval subagents, dispatching judge
 //! subagents). Everything between them is mechanical, so each stretch is one
 //! command: `ingest` runs the post-dispatch chain and stops at the judge
@@ -16,8 +16,7 @@
 use crate::core::Harness;
 
 /// Which post-dispatch stage a [`StepCommand`] runs. The production runner
-/// matches on this to call the corresponding handler; tests assert on it instead
-/// of the TS original's `exec`-function identity.
+/// matches on this to call the corresponding handler; tests assert on it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepKind {
     RecordRuns,
@@ -29,7 +28,7 @@ pub enum StepKind {
 
 /// One chain step: a label (for logging + failure reporting), the stage to run,
 /// and the resolved flags to run it with. Pure data — no closure — so the flag
-/// wiring is inspectable in tests, mirroring the TS `argv` array.
+/// wiring is inspectable in tests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepCommand {
     pub label: &'static str,
@@ -39,7 +38,7 @@ pub struct StepCommand {
     pub iteration: u32,
     pub harness: Harness,
     /// Only the transcript-reading stages (record-runs, fill-transcripts) carry a
-    /// subagents dir; the others leave it `None`, mirroring the TS argv split.
+    /// subagents dir; the others leave it `None`.
     pub subagents_dir: Option<String>,
     pub workspace_dir: Option<String>,
 }
@@ -90,7 +89,7 @@ impl StepParams<'_> {
 
 /// The ingest chain: record-runs → fill-transcripts → detect-stray-writes →
 /// grade. Only the first two carry the subagents dir, and only on Claude Code
-/// (Codex reads `outputs/codex-events.jsonl`). Ports `buildIngestCommands`.
+/// (Codex reads `outputs/codex-events.jsonl`).
 pub fn build_ingest_commands(p: &StepParams) -> Vec<StepCommand> {
     let transcripts = match p.harness {
         Harness::ClaudeCode => p.subagents_dir.map(str::to_string),
@@ -104,8 +103,7 @@ pub fn build_ingest_commands(p: &StepParams) -> Vec<StepCommand> {
     ]
 }
 
-/// The finalize chain: grade --finalize → aggregate. Ports
-/// `buildFinalizeCommands`.
+/// The finalize chain: grade --finalize → aggregate.
 pub fn build_finalize_commands(p: &StepParams) -> Vec<StepCommand> {
     vec![
         p.step("grade --finalize", StepKind::Grade { finalize: true }, None),
@@ -117,7 +115,7 @@ pub fn build_finalize_commands(p: &StepParams) -> Vec<StepCommand> {
 /// its label (`None` = all succeeded). A failure must halt the chain: grade's
 /// `__skill_invoked` code-check silently degrades to an LLM judge when
 /// `tool_invocations` is missing, so grading after a failed record/fill step
-/// would quietly lose the deterministic check. Ports `runSteps`.
+/// would quietly lose the deterministic check.
 pub fn run_steps<E>(
     steps: &[StepCommand],
     mut run: impl FnMut(&StepCommand) -> Result<(), E>,

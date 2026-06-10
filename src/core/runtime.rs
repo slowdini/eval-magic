@@ -1,14 +1,9 @@
 //! Runtime helpers.
 //!
-//! Ports the parts of `src/core/runtime.ts` that have a Rust equivalent. The
-//! Bun-vs-Node portability shims (`argv`, `moduleDir`, `isMain`) and the
-//! `die`/`CliError`/`runCli` error contract do not carry over: `clap` owns
-//! argument parsing, and the `error: <msg>` + exit(1) contract already lives in
-//! `src/main.rs`. `packageRoot` is deliberately omitted — the schemas it located
-//! at runtime in the TS tree will be bundled into the binary at compile time
-//! (Phase 2, `include_str!`), so no runtime asset locator is needed.
-//!
-//! What remains is the synchronous git invocation helper.
+//! The synchronous git invocation helper. No runtime asset locator lives here:
+//! the schemas are bundled into the binary at compile time (`include_str!`),
+//! `clap` owns argument parsing, and the `error: <msg>` + exit(1) contract
+//! lives in `src/main.rs`.
 
 use std::path::Path;
 use std::process::Command;
@@ -17,7 +12,8 @@ use std::process::Command;
 ///
 /// `status` is `None` when git could not be spawned at all (e.g. ENOENT, a
 /// nonexistent cwd, permission denied); the reason is surfaced into `stderr`,
-/// matching the TS contract where callers read git's own stderr. `stdout` and
+/// so callers have one channel for both git's own errors and spawn failures.
+/// `stdout` and
 /// `stderr` are raw bytes — callers that read file contents out of git
 /// (`git show`) need the undecoded buffer, not a lossy UTF-8 string.
 #[derive(Debug)]
@@ -73,11 +69,9 @@ mod tests {
     }
 
     /// When git itself cannot be spawned (here, a nonexistent cwd), the status
-    /// is `None` and the spawn error is surfaced into stderr. The TS original
-    /// asserts the stderr contains "ENOENT"; Rust's `io::Error` Display reads
-    /// "No such file or directory" instead, so we assert on that — the behavior
-    /// (null status, spawn error in stderr) is what we're porting, not Node's
-    /// error-code spelling.
+    /// is `None` and the spawn error is surfaced into stderr — the contract is
+    /// the null status plus a readable reason, not any particular error-code
+    /// spelling.
     #[test]
     fn run_git_spawn_error_surfaced() {
         let res = run_git(

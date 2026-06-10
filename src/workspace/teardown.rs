@@ -1,6 +1,6 @@
 //! End-of-run workspace cleanup.
 //!
-//! Ports `src/workspace/workspace-teardown.ts`: reclaim a skill's ephemeral
+//! Reclaim a skill's ephemeral
 //! `skills-workspace/<skill>/` subtree without ever destroying results the user
 //! hasn't moved into version control.
 

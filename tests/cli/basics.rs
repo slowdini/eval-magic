@@ -16,7 +16,7 @@ fn write_evals(root: &std::path::Path, skill: &str, contents: &str) {
     fs::write(dir.join("evals.json"), contents).unwrap();
 }
 
-/// `--help` succeeds and lists the subcommands ported from eval-runner.
+/// `--help` succeeds and lists the subcommands.
 #[test]
 fn help_lists_subcommands() {
     skill_eval()
@@ -39,8 +39,7 @@ fn help_uses_published_binary_name() {
         .stdout(contains("skill-eval"));
 }
 
-/// Every subcommand is now ported, so `ingest` reaches its own context
-/// validation rather than a "not yet implemented" stub.
+/// `ingest` reaches its own context validation when invoked bare.
 #[test]
 fn ingest_is_wired_and_validates_context() {
     skill_eval()

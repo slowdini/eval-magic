@@ -1,6 +1,6 @@
 //! Grading finalize.
 //!
-//! Ports the `finalize` concern of eval-runner's `grade.ts`. For each
+//! For each
 //! `(eval, condition)` it grades `transcript_check` assertions directly, folds in
 //! the `llm_judge` responses written by the orchestrator (missing → FAIL),
 //! assembles the skill-invocation meta result, and writes a schema-valid

@@ -5,7 +5,6 @@ use std::fs;
 use tempfile::TempDir;
 
 /// `detect-stray-writes` reports a live-source read per run in stray-writes.json.
-/// Ports the subprocess CLI test in `detect-stray-writes.test.ts`.
 #[test]
 fn detect_stray_writes_reports_live_source_reads() {
     use serde_json::json;

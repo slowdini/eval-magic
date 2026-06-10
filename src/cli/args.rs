@@ -1,9 +1,8 @@
 //! The `clap` derive command tree: the top-level parser, the shared/per-command
 //! argument groups, and the subcommand enum.
 //!
-//! Mirrors the manual flag parsing of eval-runner's `run.ts`/`cli.ts`. Flags are
-//! intentionally permissive (mostly optional); each handler tightens them as
-//! behavior lands (see the handlers in [`super::commands`]).
+//! Flags are intentionally permissive (mostly optional); each handler tightens
+//! them to what it actually requires (see the handlers in [`super::commands`]).
 
 use clap::{Args, Parser, Subcommand};
 
@@ -39,8 +38,7 @@ pub(crate) struct Cli {
     pub command: Option<Commands>,
 }
 
-/// Flags shared by most subcommands. Ported from the manual `flag()` parsing in
-/// eval-runner's `run.ts`/`cli.ts`.
+/// Flags shared by most subcommands.
 #[derive(Debug, Args)]
 pub struct CommonArgs {
     /// Directory containing the skill(s) under evaluation (required).
@@ -215,7 +213,7 @@ pub struct RunArgs {
     pub plan_mode: bool,
 }
 
-/// Every subcommand ported from eval-runner. Names match the original CLI.
+/// Every subcommand on the CLI.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
     /// Build dispatches and run evals (the default action).

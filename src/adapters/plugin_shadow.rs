@@ -1,6 +1,6 @@
 //! Plugin-shadow detector (Claude Code).
 //!
-//! Ports `src/adapters/plugin-shadow.ts`. The runner stages eval skills into the
+//! The runner stages eval skills into the
 //! project-local `.claude/skills/` dir, but eval subagents are dispatched via the
 //! Task tool and run in-process — so they ALSO inherit whatever skills the
 //! orchestrator session loaded from installed plugins and the global skills dir.

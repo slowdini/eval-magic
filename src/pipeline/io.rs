@@ -1,9 +1,8 @@
 //! Shared JSON read/write helpers for the pipeline stages.
 //!
-//! Every stage serializes artifacts the same way eval-runner did:
-//! `JSON.stringify(value, null, 2) + "\n"` — pretty-printed, two-space indent,
-//! one trailing newline. `serde_json`'s `preserve_order` feature keeps object key
-//! order stable so outputs diff cleanly against the TypeScript original.
+//! Every stage serializes artifacts the same way: pretty-printed, two-space
+//! indent, one trailing newline. `serde_json`'s `preserve_order` feature keeps
+//! object key order stable so artifacts diff cleanly across runs.
 
 use std::fs;
 use std::path::Path;

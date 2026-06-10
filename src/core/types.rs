@@ -1,10 +1,10 @@
 //! Core domain types.
 //!
-//! Ports `src/core/types.ts`: the serde-modeled artifacts every later phase
-//! reads and writes. Field order matches the TS types so serialized JSON diffs
-//! cleanly against the TypeScript output. See the rewrite roadmap and the
-//! plan's strictness principle for the modeling decisions (honest/strict types,
-//! no `deny_unknown_fields`).
+//! The serde-modeled artifacts every pipeline stage reads and writes. Struct
+//! field order is the serialized key order, so changing it changes every
+//! artifact on disk; keep it stable so artifacts diff cleanly across runs.
+//! Types are honest and strict about what each artifact contains, but tolerate
+//! unknown fields (no `deny_unknown_fields`) so older artifacts stay readable.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -14,8 +14,7 @@ use crate::core::context::Harness;
 /// Meta-assertion id reserved for the skill-invocation check.
 pub const SKILL_INVOKED_META_ID: &str = "__skill_invoked";
 
-/// A single assertion attached to an eval. Tagged on `type`, mirroring the
-/// TypeScript discriminated union.
+/// A single assertion attached to an eval, tagged on `type`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Assertion {
@@ -123,9 +122,12 @@ pub struct ToolInvocation {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub args: Option<Value>,
+    // `ordinal` is serialized before `result`: the adapters construct each
+    // invocation without a result and attach it when the matching tool_result
+    // arrives, so artifacts list the call before its outcome.
+    pub ordinal: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result: Option<Value>,
-    pub ordinal: u32,
 }
 
 /// A single subagent run — the artifact bridging dispatch to grading.
@@ -166,9 +168,11 @@ pub enum Grader {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GradingResult {
     pub assertion_results: Vec<AssertionResult>,
+    // Substantive results + summary first, then the optional meta block —
+    // grading.json reads as "the verdict, then the validity check on it".
+    pub summary: GradingSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_results: Option<Vec<AssertionResult>>,
-    pub summary: GradingSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_summary: Option<MetaSummary>,
 }

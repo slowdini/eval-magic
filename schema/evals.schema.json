@@ -70,7 +70,7 @@
         "type": { "const": "transcript_check" },
         "check": {
           "type": "string",
-          "description": "Name of a transcript-check kind handled by the runner's grader (runner/grade.ts), e.g. tool_invocation_matches."
+          "description": "Name of a transcript-check kind handled by the runner's grader, e.g. tool_invocation_matches."
         },
         "pattern": {
           "type": "string",

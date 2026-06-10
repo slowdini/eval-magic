@@ -1,6 +1,5 @@
 //! Phase 1 — validate the request and resolve the iteration coordinates +
 //! per-condition skill paths, before any directory is created.
-//! Ports `run.ts:567-647`.
 
 use std::fs;
 

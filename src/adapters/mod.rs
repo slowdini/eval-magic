@@ -1,9 +1,8 @@
 //! Harness-specific session rendering and transcript parsing.
 //!
-//! Mirrors `src/adapters/` in eval-runner: Claude Code and Codex session
-//! renderers + transcript parsers, plus plugin-shadow detection. The submodules
-//! are re-exported flat so downstream code writes `crate::adapters::<fn>`,
-//! matching how the TypeScript original imported from the `adapters/` barrel.
+//! Claude Code and Codex session renderers + transcript parsers, plus
+//! plugin-shadow detection. The submodules are re-exported flat so downstream
+//! code writes `crate::adapters::<fn>`.
 
 pub mod claude_code_session;
 pub mod claude_code_transcript;

@@ -1,9 +1,8 @@
 //! Batch validation of every `<skill>/evals/evals.json` under a skills dir.
 //!
-//! Ports eval-runner's `validate-all.ts`, but as pure logic: it returns a
-//! [`ValidationReport`] instead of printing. The CLI handler renders the report
-//! (the `✓`/`✗` lines, the summary, the exit code), which keeps this batch logic
-//! unit-testable without capturing stdout.
+//! Pure logic: it returns a [`ValidationReport`] instead of printing. The CLI
+//! handler renders the report (the `✓`/`✗` lines, the summary, the exit code),
+//! which keeps this batch logic unit-testable without capturing stdout.
 
 use std::fs;
 use std::io;

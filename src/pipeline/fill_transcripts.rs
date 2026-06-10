@@ -1,6 +1,6 @@
 //! Stage 2 — `fill-transcripts`.
 //!
-//! Ports `src/pipeline/fill-transcripts.ts`. Walks the iteration's `eval-*`
+//! Walks the iteration's `eval-*`
 //! directories and, for each `(eval, condition)` `run.json`, populates
 //! `tool_invocations` from the persisted transcript (Claude Code subagent JSONL
 //! resolved by the task's `agent_description`, or Codex `codex-events.jsonl`).

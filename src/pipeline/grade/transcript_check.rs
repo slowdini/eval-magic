@@ -1,6 +1,6 @@
 //! Transcript-check grading.
 //!
-//! Ports the `gradeTranscriptCheck` concern of eval-runner's `grade.ts`. A
+//! A
 //! `transcript_check` assertion of kind `tool_invocation_matches` passes when its
 //! `pattern` regex matches the `"<name> <json-args>"` rendering of any tool
 //! invocation in the run.
@@ -10,7 +10,7 @@ use regex::Regex;
 use crate::core::{AssertionResult, AssertionTranscriptCheck, Grader, ToolInvocation};
 
 /// Render an invocation as `"<name> <compact-json-args>"` (args omitted when
-/// absent), matching the TS `describeInvocation`.
+/// absent) — the text the check's `pattern` regex runs against.
 fn describe_invocation(inv: &ToolInvocation) -> String {
     match &inv.args {
         Some(args) => format!(
@@ -33,9 +33,9 @@ fn fail(id: &str, evidence: String) -> AssertionResult {
     }
 }
 
-/// Grade a `transcript_check` assertion against a run's tool invocations. Ports
-/// `gradeTranscriptCheck`: the empty-invocations, unsupported-kind,
-/// missing-pattern, invalid-regex, match, and no-match branches verbatim.
+/// Grade a `transcript_check` assertion against a run's tool invocations,
+/// covering the empty-invocations, unsupported-kind, missing-pattern,
+/// invalid-regex, match, and no-match branches.
 pub fn grade_transcript_check(
     assertion: &AssertionTranscriptCheck,
     invocations: &[ToolInvocation],

@@ -1,6 +1,6 @@
 //! Codex transcript (event-stream) parsing.
 //!
-//! Ports `src/adapters/codex-transcript.ts`. Codex emits a JSONL event stream;
+//! Codex emits a JSONL event stream;
 //! `item.completed` events whose item type is not an agent message / reasoning /
 //! plan update become ordered [`ToolInvocation`]s. Produces the same
 //! [`TranscriptSummary`] shape as the Claude adapter, but with Codex's token

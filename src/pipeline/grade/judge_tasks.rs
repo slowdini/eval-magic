@@ -1,6 +1,6 @@
 //! Judge-task emission.
 //!
-//! Ports the `emitJudgeTasks` concern of eval-runner's `grade.ts`. For each
+//! For each
 //! `(eval, condition)` it builds judge prompts for `llm_judge` assertions and a
 //! skill-invocation meta-check (code-checked from the transcript when possible,
 //! else emitted as an LLM judge task), writing `judge-tasks.json` plus the
@@ -61,7 +61,7 @@ pub struct EmitSummary {
 }
 
 /// True when the transcript shows the `Skill` tool invoked with `input.skill`
-/// equal to the staged slug. Ports `checkSkillInvokedFromTranscript`.
+/// equal to the staged slug.
 pub fn check_skill_invoked_from_transcript(
     invocations: &[ToolInvocation],
     staged_slug: Option<&str>,
@@ -81,7 +81,7 @@ pub fn check_skill_invoked_from_transcript(
 }
 
 /// The meta-check rubric asking a judge whether the agent actually applied the
-/// skill (separate from correctness). Ports `skillInvokedRubric`.
+/// skill (separate from correctness).
 fn skill_invoked_rubric(skill_name: &str, skill_content: Option<&str>) -> String {
     let mut lines: Vec<String> = vec![
         format!(
@@ -124,7 +124,7 @@ fn skill_invoked_rubric(skill_name: &str, skill_content: Option<&str>) -> String
 }
 
 /// A directory listing for the judge prompt: visible entries, dirs suffixed `/`,
-/// sorted; `(empty)` when none. Ports `listOutputs`.
+/// sorted; `(empty)` when none.
 fn list_outputs(dir: &Path) -> String {
     let Ok(entries) = fs::read_dir(dir) else {
         return "(empty)".to_string();
@@ -149,7 +149,7 @@ fn list_outputs(dir: &Path) -> String {
 }
 
 /// Assemble the full judge prompt (rubric + run record + outputs listing +
-/// grading principles + where to write the verdict). Ports `buildJudgePrompt`.
+/// grading principles + where to write the verdict).
 fn build_judge_prompt(
     rubric: &str,
     run_record: &RunRecord,

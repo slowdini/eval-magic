@@ -1,10 +1,9 @@
 //! Schema embedding + the generic `validate_against_schema` entry point.
 //!
-//! The four portable-artifact schemas are the single source of truth for each
+//! The portable-artifact schemas are the single source of truth for each
 //! artifact's shape. They are embedded at compile time with `include_str!` (so
 //! the binary is self-contained, with no `schema/` directory to ship alongside)
-//! and compiled once into reusable `jsonschema` validators — the Rust analogue
-//! of eval-runner's lazily-populated AJV validator `Map`.
+//! and compiled once into reusable `jsonschema` validators.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -15,9 +14,8 @@ use serde_json::Value;
 
 use crate::validation::error::ValidationError;
 
-/// Names the portable-artifact schemas. Extends eval-runner's `SchemaName` string
-/// union with `benchmark` and `judge-tasks` — artifacts the TypeScript original
-/// wrote unvalidated, now schema-gated like every other pipeline output.
+/// Names the portable-artifact schemas. `benchmark` and `judge-tasks` are
+/// first-class here, schema-gated like every other pipeline output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SchemaName {
     RunRecord,
@@ -87,9 +85,8 @@ static VALIDATORS: LazyLock<HashMap<SchemaName, Validator>> = LazyLock::new(|| {
 /// success; on mismatch, returns a `source`-prefixed [`ValidationError`] listing
 /// every failure.
 ///
-/// Deserializing into `T` (rather than eval-runner's bare `data as T` cast) makes
-/// the typed result honest: the schema gate and the Rust type agree, or the call
-/// fails.
+/// Deserializing into `T` makes the typed result honest: the schema gate and
+/// the Rust type agree, or the call fails.
 pub fn validate_against_schema<T: DeserializeOwned>(
     name: SchemaName,
     data: &Value,
@@ -129,8 +126,7 @@ mod tests {
     use super::{SchemaName, validate_against_schema};
     use serde_json::{Value, json};
 
-    /// The canonical valid run-record used across these cases — mirrors the
-    /// `validRunRecord` fixture in eval-runner's `validate-schema.test.ts`.
+    /// The canonical valid run-record the cases below mutate.
     fn valid_run_record() -> Value {
         json!({
             "eval_id": "e1",

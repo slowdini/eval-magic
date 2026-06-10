@@ -1,6 +1,5 @@
 //! Phase 2 — create the iteration dir, (re)stage the condition skills + their
 //! siblings, and resolve the shared dispatch-prompt inputs.
-//! Ports `run.ts:680-771`.
 
 use std::fs;
 use std::path::Path;

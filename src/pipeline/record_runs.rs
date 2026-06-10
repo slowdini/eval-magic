@@ -1,6 +1,6 @@
 //! Stage 1 — `record-runs`.
 //!
-//! Ports `src/pipeline/record-runs.ts`. Assembles a schema-valid `run.json` (and
+//! Assembles a schema-valid `run.json` (and
 //! backfills `timing.json`) for every task in the iteration's `dispatch.json`,
 //! from sources already on disk: carry-over fields from the dispatch task, the
 //! `final_message` (from `<outputs_dir>/final-message.md`, falling back to the

@@ -2,7 +2,7 @@
 //! project-local skills dir so eval subagents can discover it, and tear that
 //! staging back down — restoring any pre-existing skills the runner displaced.
 //!
-//! Ports `run.ts:51-331`. The sibling-staging manifest
+//! The sibling-staging manifest
 //! (`.slow-powers-eval-manifest.json`) records what the runner created and what
 //! it backed up, so [`cleanup_staged_skills`] can surgically undo only its own
 //! changes and leave the user's own project skills intact.
@@ -114,7 +114,7 @@ pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> Path
 }
 
 /// Rewrite (or insert) the `name:` frontmatter field so a Codex-staged skill's
-/// declared name matches its staged slug. Ports `run.ts:122-138`.
+/// declared name matches its staged slug.
 fn rewrite_frontmatter_name(content: &str, name: &str) -> String {
     if !content.starts_with("---") {
         return format!("---\nname: {name}\ndescription: Staged eval skill.\n---\n\n{content}");
@@ -145,7 +145,7 @@ fn prune_if_empty(dir: &Path) -> Result<(), RunError> {
 }
 
 /// Stage one skill under the harness's skills dir and return its slug. For Codex
-/// the frontmatter `name:` is rewritten to the slug. Ports `run.ts:140-164`.
+/// the frontmatter `name:` is rewritten to the slug.
 pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError> {
     let slug = match opts.stage_name_override {
         Some(name) => name.to_string(),
@@ -180,8 +180,8 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
 }
 
 /// Stage a skill for Claude Code (`.claude/skills`). Convenience wrapper over
-/// [`stage_skill_for_harness`] — the orchestrator always passes an explicit
-/// harness, so this mirrors eval-runner's `stageSkillForCC` for the tests.
+/// [`stage_skill_for_harness`] for the tests — the orchestrator always passes
+/// an explicit harness.
 #[cfg(test)]
 pub fn stage_skill_for_cc(opts: &StageSkillOpts) -> Result<String, RunError> {
     stage_skill_for_harness(&StageSkillOpts {
@@ -193,7 +193,6 @@ pub fn stage_skill_for_cc(opts: &StageSkillOpts) -> Result<String, RunError> {
 /// Record a custom-named staged dir (one created via `stage_name_override`) in
 /// the sibling manifest so the next run's [`cleanup_staged_skills`] removes it —
 /// the prefix scan only catches `slow-powers-eval-…`. Idempotent.
-/// Ports `run.ts:176-197`.
 pub fn register_staged_skill_for_cleanup(
     repo_root: &Path,
     name: &str,
@@ -223,7 +222,7 @@ pub fn register_staged_skill_for_cleanup(
 
 /// Stage every non-test sibling skill (each `<name>/` with a `SKILL.md`, minus
 /// its `evals/`) into the harness skills dir, backing up any colliding
-/// pre-existing entry, and write the manifest. Ports `run.ts:217-276`.
+/// pre-existing entry, and write the manifest.
 pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, RunError> {
     let skills_dir = skills_dir_for_harness(opts.repo_root, opts.harness);
     let skills_dir_preexisting = skills_dir.exists();
@@ -264,8 +263,7 @@ pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, 
             entry.preexisting = true;
             // mkdtemp-style persistent backup dir (must outlive this call so
             // cleanup can restore from it). Built without the dev-only `tempfile`
-            // crate so it stays out of the shipped binary, mirroring the TS
-            // `mkdtempSync(tmpdir(), "slow-powers-eval-backup-")`.
+            // crate so it stays out of the shipped binary.
             let backup_root = make_backup_root()?;
             let backup_path = backup_root.join(&name);
             copy_dir_recursive(&dst_dir, &backup_path)?;
@@ -291,7 +289,7 @@ pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, 
 }
 
 /// Remove the staged skills (prefix-scanned + manifest-listed) and restore any
-/// pre-existing siblings the runner displaced. Ports `run.ts:287-331`.
+/// pre-existing siblings the runner displaced.
 pub fn cleanup_staged_skills(repo_root: &Path, harness: Harness) -> Result<(), RunError> {
     let harness_dir = match harness {
         Harness::Codex => repo_root.join(".agents"),
@@ -356,7 +354,7 @@ pub fn cleanup_staged_skills(repo_root: &Path, harness: Harness) -> Result<(), R
 
 /// Create a fresh, uniquely-named backup dir under the system temp dir, retrying
 /// on the (very unlikely) name collision. `create_dir` is atomic enough to claim
-/// the name. Replaces the TS `mkdtempSync` without a runtime dependency.
+/// the name.
 fn make_backup_root() -> Result<PathBuf, RunError> {
     let base = std::env::temp_dir();
     loop {

@@ -1,6 +1,6 @@
 //! Claude Code-specific rendering of session-start context.
 //!
-//! Ports `src/adapters/claude-code-session.ts`. The available-skills reminder is
+//! The available-skills reminder is
 //! a *harness-specific* surface: Claude Code presents discoverable skills to an
 //! agent as "The following skills are available for use with the Skill tool:"
 //! followed by `- name: description` bullets. Plan-mode context is injected as a

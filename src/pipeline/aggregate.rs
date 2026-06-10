@@ -1,6 +1,6 @@
 //! Stage 5 — `aggregate`.
 //!
-//! Ports `src/pipeline/aggregate.ts`. Compares exactly two conditions: collects
+//! Compares exactly two conditions: collects
 //! `pass_rate` (from `grading.json`), `total_tokens`/`duration_ms` (from
 //! `timing.json`), and the skill-invocation determination per condition; computes
 //! mean/stddev and the `a - b` delta; accumulates validity warnings (mixed timing
@@ -310,7 +310,8 @@ fn timing_source_label(source: Option<TimingSource>) -> String {
 }
 
 /// Add a warning per stray-write violation / live-source read. A malformed
-/// report is ignored rather than failing aggregation (mirrors the TS try/catch).
+/// report is ignored rather than failing aggregation — the warnings are
+/// advisory, not a gate.
 fn collect_stray_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
     let Ok(raw) = fs::read_to_string(iteration_dir.join("stray-writes.json")) else {
         return;

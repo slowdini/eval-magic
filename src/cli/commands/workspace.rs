@@ -13,7 +13,7 @@ use crate::workspace;
 
 /// Snapshot the skill (`SKILL.md` + sibling assets, excluding `evals/`) into
 /// `<workspace>/<skill>/snapshots/<label>/`, from the working tree or — with
-/// `--ref` — a git ref. Ports eval-runner's `commandSnapshot`.
+/// `--ref` — a git ref.
 pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
     let label = args
@@ -41,8 +41,7 @@ pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
 }
 
 /// Promote an iteration's `benchmark.json` + per-run gradings into the skill's
-/// committed `evals/baseline/`, dropping a `.promoted.json` marker. Ports
-/// eval-runner's `promote-baseline` `main`.
+/// committed `evals/baseline/`, dropping a `.promoted.json` marker.
 pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
     let iteration = args
@@ -74,8 +73,7 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
 
 /// End-of-run teardown: disarm the write guard, remove the staged skill set (and
 /// prune a `.claude` the runner emptied), then reclaim the workspace, preserving
-/// any iteration with uncommitted results. Ports eval-runner's `teardown`
-/// command.
+/// any iteration with uncommitted results.
 pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     // The guard lives at `<cwd>/.claude` (cwd-only, matching `teardown-guard`).

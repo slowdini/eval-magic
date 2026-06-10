@@ -1,7 +1,7 @@
 //! Phases 3 & 4 — build every `(eval, condition)` dispatch task and write
 //! `conditions.json` / `dispatch-manifest.md` / per-task prompts / `dispatch.json`
 //! ([`write_dispatch`]), then arm the opt-in write guard and run the plugin-shadow
-//! preflight ([`post_build`]). Ports `run.ts:773-907`.
+//! preflight ([`post_build`]).
 
 use std::fs;
 use std::path::Path;
