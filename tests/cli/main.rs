@@ -1,4 +1,4 @@
-//! Integration tests for the CLI surface, driving the built `skill-eval`
+//! Integration tests for the CLI surface, driving the built `eval-magic`
 //! binary. These pin the command tree and dispatch behavior; per-command
 //! behavior lives with each subcommand's submodule.
 //!

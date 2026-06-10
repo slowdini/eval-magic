@@ -2,7 +2,7 @@
 
 You are an agent running inside one of the eval runner's supported harnesses. This file walks you through auditing **which eval-magic features are wired up for your harness** and prepping to close one gap. Claude Code is the reference implementation; other harnesses adapt its patterns using their own native conventions.
 
-This file covers the **`skill-eval` runner only** — the infrastructure in `eval-magic` that dispatches, records, and grades skill evals.
+This file covers the **`eval-magic` runner only** — the infrastructure in `eval-magic` that dispatches, records, and grades skill evals.
 
 Read the file end-to-end before acting. The categories in Step 4 are the source of truth for what "eval-magic parity" means today — when a new feature is added to the runner, that table is updated and this file stays evergreen.
 
@@ -28,7 +28,7 @@ Read these in order. Each one teaches you something specific you will need in St
 
 | Source | What to look for |
 |--------|------------------|
-| `skill-eval --help` and the README's [Environment parity](../README.md#environment-parity) / [Harnesses](../README.md#harnesses) sections | The **cross-harness breadcrumbs** — sketches of how Codex and OpenCode implement environment parity, plus the flag-by-flag reference. Treat the breadcrumbs as starting points, not specifications |
+| `eval-magic --help` and the README's [Environment parity](../README.md#environment-parity) / [Harnesses](../README.md#harnesses) sections | The **cross-harness breadcrumbs** — sketches of how Codex and OpenCode implement environment parity, plus the flag-by-flag reference. Treat the breadcrumbs as starting points, not specifications |
 | `src/adapters/claude_code_transcript.rs` | The reference transcript adapter (`parse_transcript` / `parse_transcript_full`). A second harness adds its own adapter alongside this, translating that harness's transcript shape into the same `ToolInvocation` list |
 | The README's [Claude Code](../README.md#claude-code-fully-wired) section | The reference per-harness specifics (what's unique to Claude Code on top of the README's generic loop). Other harnesses each get their own section there, alongside this one |
 
@@ -56,7 +56,7 @@ For each category below, compare what Claude Code has against what your harness 
 | Skill-eval transcript adapter | `src/adapters/claude_code_transcript.rs` |
 | Skill-eval auto-record (run/timing assembly) | `src/pipeline/record_runs.rs` (`record_runs`) assembles each task's `run.json` + `timing.json` from disk after dispatches: carry-over fields from `dispatch.json`, `final_message` from `outputs/final-message.md`, `tool_invocations`/tokens/duration from the persisted transcript (`parse_transcript_full` — usage deduped by message id). Leans on transcript access, so it's a Claude-Code-tier acceleration like `fill-transcripts`; the portable contract (hand-authored records, `run-record.schema.json`) is unchanged. A harness closes this gap by extending its transcript adapter to supply the same three sources (final message, tool invocations, usage/timing) the recorder consumes |
 | Realistic eval environment (skill staging) | `src/cli/run/` (the `orchestrate` + `staging` submodules) stages skills under `<stageRoot>/.claude/skills/`, wraps any `--bootstrap` content in a `<session-start-context>` block, and emits a separate available-skills block. That block is rendered in the harness's **native** skill-list presentation — Claude Code's lives in `src/adapters/claude_code_session.rs` (`render_available_skills_block`: `The following skills are available for use with the Skill tool:` / `- name: description`). Another harness adds its own renderer there so its dispatches read like a real session in that harness, not an eval |
-| Eval subagent write enforcement | Opt-in `--guard` stages a `PreToolUse` hook (`src/sandbox/`) that *denies* subagent writes/installs outside the eval sandbox while dispatches run. Portable fallback for every harness: the `skill-eval detect-stray-writes` post-pass (`src/pipeline/detect_stray_writes.rs`, `detect_stray_writes`) flags out-of-bounds writes from the parsed transcript after the fact |
+| Eval subagent write enforcement | Opt-in `--guard` stages a `PreToolUse` hook (`src/sandbox/`) that *denies* subagent writes/installs outside the eval sandbox while dispatches run. Portable fallback for every harness: the `eval-magic detect-stray-writes` post-pass (`src/pipeline/detect_stray_writes.rs`, `detect_stray_writes`) flags out-of-bounds writes from the parsed transcript after the fact |
 | Eval plan-mode operating context | Opt-in `--plan-mode` injects a harness-specific plan-mode procedure profile (`profiles/<harness>/plan-mode.md`, embedded at compile time via `src/cli/run/util.rs`) as a `<system-reminder>` operating-context layer in every dispatch, rendered by the harness session adapter (`src/adapters/claude_code_session.rs`, `src/adapters/codex_session.rs`). Claude Code and Codex profiles exist today; another harness adds its own profile (its native plan/research-mode procedure) + renderer alongside those. A harness with no profile has no `--plan-mode` and an unchanged dispatch contract |
 | Harness-details operator guide | The README's [Claude Code](../README.md#claude-code-fully-wired) section |
 

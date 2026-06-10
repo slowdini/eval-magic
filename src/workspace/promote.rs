@@ -59,7 +59,7 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
     let benchmark_src = iteration_dir.join("benchmark.json");
     if !benchmark_src.exists() {
         return Err(WorkspaceError::Message(format!(
-            "missing benchmark.json in iteration-{} — run 'skill-eval aggregate' before promoting",
+            "missing benchmark.json in iteration-{} — run 'eval-magic aggregate' before promoting",
             opts.iteration
         )));
     }
@@ -191,11 +191,11 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         String::new(),
         "Committed reference output from a canonical eval run. Regenerate with".to_string(),
         format!(
-            "`skill-eval promote-baseline --skill {} --iteration <N>` after aggregating. The ephemeral workspace (run records, timing,",
+            "`eval-magic promote-baseline --skill {} --iteration <N>` after aggregating. The ephemeral workspace (run records, timing,",
             opts.skill_name
         ),
         "dispatch files, produced outputs) stays gitignored under `skills-workspace/`".to_string(),
-        "and is reclaimable by `skill-eval teardown` once promoted (this commit's marker)."
+        "and is reclaimable by `eval-magic teardown` once promoted (this commit's marker)."
             .to_string(),
         String::new(),
         "| Field | Value |".to_string(),

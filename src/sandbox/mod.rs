@@ -1,8 +1,8 @@
 //! Execution sandbox: write-guard install/teardown and write-boundary policy.
 //!
 //! The hook entry points are hidden subcommands on this binary (see [`guard`] and
-//! `cli`), so the installed PreToolUse hook invokes `skill-eval guard <marker>`
-//! or `skill-eval guard-codex <marker>` — no separate hook script to ship or
+//! `cli`), so the installed PreToolUse hook invokes `eval-magic guard <marker>`
+//! or `eval-magic guard-codex <marker>` — no separate hook script to ship or
 //! locate.
 
 pub mod decide;

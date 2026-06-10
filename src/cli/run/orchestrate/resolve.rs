@@ -78,7 +78,7 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
                 .join("SKILL.md");
             if !baseline_skill.exists() {
                 return Err(RunError::msg(format!(
-                    "baseline snapshot not found: {}\n  Run: skill-eval snapshot --skill {} --skill-dir {} --label {} (before editing)",
+                    "baseline snapshot not found: {}\n  Run: eval-magic snapshot --skill {} --skill-dir {} --label {} (before editing)",
                     baseline_skill.display(),
                     ctx.skill_name,
                     ctx.skill_dir.display(),

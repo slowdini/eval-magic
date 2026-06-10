@@ -105,7 +105,7 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join("\n");
         eprintln!(
-            "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     skill-eval promote-baseline --skill {} --iteration <N>\n   or delete {}/ manually to discard.",
+            "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     eval-magic promote-baseline --skill {} --iteration <N>\n   or delete {}/ manually to discard.",
             ws.kept_iterations.len(),
             ctx.skill_name,
             Path::new("skills-workspace")

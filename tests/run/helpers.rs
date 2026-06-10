@@ -10,7 +10,7 @@ pub const STAGED_MANIFEST: &str = ".slow-powers-eval-manifest.json";
 pub const DEFAULT_EVALS: &str = r#"{ "skill_name": "mr-review", "evals": [ { "id": "e1", "prompt": "review this MR", "expected_output": "a review" } ] }"#;
 
 pub fn skill_eval() -> Command {
-    Command::cargo_bin("skill-eval").expect("binary `skill-eval` should build")
+    Command::cargo_bin("eval-magic").expect("binary `eval-magic` should build")
 }
 
 /// Build `<root>/skill-dir/mr-review/{SKILL.md,evals/evals.json}` and a `work`

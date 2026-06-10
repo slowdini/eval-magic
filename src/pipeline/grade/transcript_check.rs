@@ -44,7 +44,7 @@ pub fn grade_transcript_check(
         return fail(
             &assertion.id,
             "tool_invocations is empty — run record was not filled by a transcript adapter. \
-             Run `skill-eval fill-transcripts` for Claude Code, or `skill-eval fill-transcripts \
+             Run `eval-magic fill-transcripts` for Claude Code, or `eval-magic fill-transcripts \
              --harness codex` when outputs/codex-events.jsonl is present; otherwise rely on \
              `llm_judge` assertions for harnesses without an adapter."
                 .to_string(),
