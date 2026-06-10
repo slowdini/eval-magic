@@ -1,6 +1,6 @@
 [package]
 name = "eval-magic"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior."
 license = "MIT"
