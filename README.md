@@ -4,27 +4,33 @@
 
 An eval dispatches a fresh subagent twice per test case — once with the skill loaded, once without (or old version vs. new) — and grades both outputs against assertions. The pass-rate delta tells you whether the skill is worth shipping or the change is worth landing. The runner builds the workspace, stages skills for discovery, generates dispatch prompts, assembles run records from transcripts, grades, and aggregates; your agent harness supplies the one thing the runner never does itself: dispatching the subagents.
 
-`eval-magic` is the Rust rewrite of [`@slowdini/eval-runner`](https://github.com/slowdini/eval-runner), distributed as a dependency-less prebuilt binary (no npm required) under the command name `skill-eval`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code is the fully wired harness today**; Codex has partial `--harness codex` parity — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
+`eval-magic` ships as a dependency-less prebuilt binary under the command name `skill-eval`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code is the fully wired harness today**; Codex has partial `--harness codex` parity — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
 This README is the complete operating guide: install, author cases, run both modes, drive the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `skill-eval --help` (and `skill-eval <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
 ## Install
 
-`eval-magic` ships as a standalone binary named `skill-eval`, with no runtime dependencies. Prebuilt cross-platform binaries and a `cargo install` channel are published with the release (Phase 8 of the [rewrite roadmap](./rewrite-roadmap.md)). Until then, build from source:
+`eval-magic` ships as a standalone binary named `skill-eval`, with no runtime dependencies. Each [GitHub Release](https://github.com/slowdini/eval-magic/releases) carries prebuilt binaries for macOS (Apple Silicon + Intel), Linux (x64 + ARM64), and Windows (x64), plus installer scripts.
+
+macOS / Linux:
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.ps1 | iex"
+```
+
+Or download the archive for your platform from the release page directly. To build from source instead:
 
 ```bash
 git clone https://github.com/slowdini/eval-magic
 cd eval-magic
 cargo build --release          # binary at target/release/skill-eval
 ./target/release/skill-eval --help
-```
-
-Once released:
-
-```bash
-cargo install eval-magic        # installs the `skill-eval` command
-# …or download the prebuilt binary for your platform from the GitHub Release.
-skill-eval --help
 ```
 
 ## How an eval works
@@ -240,7 +246,7 @@ skill-eval ingest --skill-dir <dir> --skill <name> --iteration <N> --harness cod
 |-------|--------------|
 | `skill-eval --help` / `skill-eval <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
 | [docs/harness-parity.md](docs/harness-parity.md) | The parity-audit framework for bringing a new harness up to the supported feature set |
-| [rewrite-roadmap.md](rewrite-roadmap.md) | The Rust rewrite plan, current progress, and post-cutover future work |
+| [GitHub issues](https://github.com/slowdini/eval-magic/issues) | Planned features and known limitations |
 
 ## Bundled assets
 
