@@ -1,12 +1,10 @@
-//! `eval-magic` — the Rust rewrite of `@slowdini/eval-runner`.
+//! `eval-magic` — a CLI for running skill evals: it measures whether an agent
+//! skill actually shifts behavior.
 //!
-//! A CLI for running skill evals: it measures whether an agent skill actually
-//! shifts behavior. The crate is organized into the same seven submodules as
-//! the TypeScript original so the port can proceed one module at a time. See
-//! `rewrite-roadmap.md` at the repo root for the phased plan.
-//!
-//! Each module below begins as a documented stub and is filled in during its
-//! roadmap phase.
+//! The crate is organized into seven submodules, ordered roughly by dependency:
+//! `core` (domain types) underpins everything; `validation`, `adapters`,
+//! `sandbox`, `pipeline`, and `workspace` each own one concern; `cli` dispatches
+//! the subcommands and orchestrates `run`.
 
 pub mod adapters;
 pub mod cli;

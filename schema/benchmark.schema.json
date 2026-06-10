@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/benchmark.schema.json",
+  "title": "Benchmark",
+  "description": "Output of evals:aggregate. The before/after comparison across the two conditions, with per-condition stats, the a-b delta, and validity warnings. Lives at <workspace>/iteration-N/benchmark.json.",
+  "type": "object",
+  "required": [
+    "generated",
+    "mode",
+    "conditions_compared",
+    "missing_gradings",
+    "validity_warnings",
+    "run_summary",
+    "delta"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "generated": { "type": "string", "description": "ISO timestamp" },
+    "mode": { "type": "string", "enum": ["new-skill", "revision"] },
+    "baseline": {
+      "type": ["string", "null"],
+      "description": "Baseline label for revision mode; omitted otherwise."
+    },
+    "conditions_compared": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 2,
+      "maxItems": 2
+    },
+    "missing_gradings": { "type": "integer" },
+    "validity_warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "run_summary": {
+      "type": "object",
+      "description": "Per-condition rollup, keyed by condition name.",
+      "additionalProperties": { "$ref": "#/definitions/conditionSummary" }
+    },
+    "delta": {
+      "type": "object",
+      "required": ["direction", "pass_rate", "duration_ms", "total_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "direction": { "type": "string" },
+        "pass_rate": { "type": "number" },
+        "duration_ms": { "type": "number" },
+        "total_tokens": { "type": "number" }
+      }
+    }
+  },
+  "definitions": {
+    "stats": {
+      "type": "object",
+      "required": ["mean", "stddev", "n"],
+      "additionalProperties": false,
+      "properties": {
+        "mean": { "type": "number" },
+        "stddev": { "type": "number" },
+        "n": { "type": "integer" }
+      }
+    },
+    "conditionSummary": {
+      "type": "object",
+      "required": ["pass_rate", "duration_ms", "total_tokens"],
+      "additionalProperties": false,
+      "properties": {
+        "pass_rate": { "$ref": "#/definitions/stats" },
+        "duration_ms": { "$ref": "#/definitions/stats" },
+        "total_tokens": { "$ref": "#/definitions/stats" },
+        "skill_invocation_n": { "type": "integer" },
+        "skill_invocation_rate": { "type": ["number", "null"] }
+      }
+    }
+  }
+}

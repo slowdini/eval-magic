@@ -1,12 +1,12 @@
 [package]
 name = "eval-magic"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
-description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior. (Rust rewrite of @slowdini/eval-runner.)"
+description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior."
 license = "MIT"
 repository = "https://github.com/slowdini/eval-magic"
 
-# Preserve the published command name from the TypeScript original.
+# The published command name is `skill-eval`; the crate keeps its own name.
 [[bin]]
 name = "skill-eval"
 path = "src/main.rs"
@@ -17,10 +17,19 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = "1.0.102"
+# RFC3339 timestamp -> epoch-millis for transcript duration. default-features
+# off drops clock/std/iana-time-zone — we only parse strings, never read the
+# wall clock or local timezone.
+chrono = { version = "0.4", default-features = false, features = ["alloc"] }
 clap = { version = "4.6.1", features = ["derive"] }
 # default features pull in reqwest/rustls/tokio for remote $ref resolution; our
-# schemas are local, so we keep only file-based resolution.
-jsonschema = { version = "0.46.5", default-features = false, features = ["resolve-file"] }
+# schemas are embedded (include_str!) and use only internal #/definitions refs,
+# so no resolver is needed at all.
+jsonschema = { version = "0.46.5", default-features = false }
+# Bash write-mutation patterns (sandbox policy). default-features off drops the
+# Unicode tables: the shell-command patterns are ASCII, and ASCII `\b`/`\s` is
+# the intended semantics, so `perf` (matching speed) is all we keep beyond `std`.
+regex = { version = "1.12.3", default-features = false, features = ["std", "perf"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
 thiserror = "2.0.18"
@@ -36,3 +45,8 @@ tempfile = "3.27.0"
 version = "1"
 default-features = false
 features = ["user-hooks"]
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

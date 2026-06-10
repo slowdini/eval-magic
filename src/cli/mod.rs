@@ -1,110 +1,25 @@
 //! CLI surface: command-tree definition and dispatch.
 //!
-//! Mirrors `src/cli/` in eval-runner (`cli.ts`, `run.ts`, `help.ts`). The
-//! manual flag parsing and hand-written help of the original are replaced by a
-//! `clap` derive tree, so `help.ts` has no counterpart here.
+//! A `clap` derive tree owns flag parsing and the generated help.
 //!
-//! The full subcommand surface is fixed here up front; each handler reports
-//! "not yet implemented" until its owning module is ported (see
-//! rewrite-roadmap.md). Flags are intentionally permissive (mostly optional)
-//! during the port and are tightened per-command as behavior lands.
+//! The command tree lives in [`args`]; the per-command handlers live in
+//! [`commands`], grouped by concern. This module is the thin coordinator: parse,
+//! dispatch, and the shared context/iteration helpers the handlers reuse.
 
-use anyhow::bail;
-use clap::{Args, Parser, Subcommand};
+use std::path::{Path, PathBuf};
 
-/// Top-level CLI. With no subcommand, the default action is `run`.
-#[derive(Debug, Parser)]
-#[command(
-    name = "skill-eval",
-    version,
-    about = "Run skill evals — measure whether an agent skill actually shifts behavior."
-)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Commands>,
-}
+use anyhow::{anyhow, bail};
+use clap::Parser;
 
-/// Flags shared by most subcommands. Ported from the manual `flag()` parsing in
-/// eval-runner's `run.ts`/`cli.ts`.
-#[derive(Debug, Args)]
-pub struct CommonArgs {
-    /// Directory containing the skill under evaluation.
-    #[arg(long)]
-    pub skill_dir: Option<String>,
-    /// Skill name under evaluation.
-    #[arg(long)]
-    pub skill: Option<String>,
-    /// Iteration number for post-dispatch steps.
-    #[arg(long)]
-    pub iteration: Option<u32>,
-    /// Comparison mode: `new-skill` (with vs. without) or `revision` (old vs. new).
-    #[arg(long)]
-    pub mode: Option<String>,
-    /// Target harness.
-    #[arg(long)]
-    pub harness: Option<String>,
-    /// Workspace directory (defaults to `<cwd>/skills-workspace`).
-    #[arg(long)]
-    pub workspace_dir: Option<String>,
-    /// Restrict to these eval ids (comma-separated).
-    #[arg(long)]
-    pub only: Option<String>,
-    /// Skip these eval ids (comma-separated).
-    #[arg(long)]
-    pub skip: Option<String>,
-    /// Replace existing records rather than erroring.
-    #[arg(long)]
-    pub overwrite: bool,
-}
+use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
-/// `validate` only needs to know where to look.
-#[derive(Debug, Args)]
-pub struct ValidateArgs {
-    /// Directory whose `evals.json` files should be validated.
-    #[arg(long)]
-    pub skill_dir: Option<String>,
-}
+mod args;
+mod commands;
+mod help;
+mod run;
 
-/// `grade` adds a finalize flag on top of the common set.
-#[derive(Debug, Args)]
-pub struct GradeArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    /// Merge judge responses instead of emitting judge tasks.
-    #[arg(long)]
-    pub finalize: bool,
-}
-
-/// Every subcommand ported from eval-runner. Names match the original CLI.
-#[derive(Debug, Subcommand)]
-enum Commands {
-    /// Build dispatches and run evals (the default action).
-    Run(CommonArgs),
-    /// Snapshot a workspace baseline.
-    Snapshot(CommonArgs),
-    /// Tear down a workspace.
-    Teardown(CommonArgs),
-    /// Disarm the write guard.
-    TeardownGuard(CommonArgs),
-    /// Ingest recorded transcripts into run records.
-    Ingest(CommonArgs),
-    /// Finalize grading after judge responses are in.
-    Finalize(CommonArgs),
-    /// Assemble run records from a dispatch and its transcripts.
-    RecordRuns(CommonArgs),
-    /// Populate tool invocations from persisted transcripts.
-    FillTranscripts(CommonArgs),
-    /// Detect writes outside the sandbox output boundary.
-    DetectStrayWrites(CommonArgs),
-    /// Grade run records (transcript checks + LLM-judge task emission).
-    Grade(GradeArgs),
-    /// Aggregate before/after benchmark deltas.
-    Aggregate(CommonArgs),
-    /// Promote a benchmark + gradings into a committed baseline.
-    PromoteBaseline(CommonArgs),
-    /// Validate `evals.json` files against the bundled schemas.
-    Validate(ValidateArgs),
-}
+use args::{Cli, Commands, CommonArgs, RunArgs};
+use commands::*;
 
 /// Parse process arguments, dispatch to the selected subcommand, and return its
 /// result. Called by the binary entry point.
@@ -114,33 +29,106 @@ pub fn run() -> anyhow::Result<()> {
 
 fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
     // No subcommand means the default `run` action.
-    let command = command.unwrap_or(Commands::Run(CommonArgs {
-        skill_dir: None,
-        skill: None,
-        iteration: None,
-        mode: None,
-        harness: None,
-        workspace_dir: None,
-        only: None,
-        skip: None,
-        overwrite: false,
+    let command = command.unwrap_or(Commands::Run(RunArgs {
+        common: CommonArgs {
+            skill_dir: None,
+            skill: None,
+            iteration: None,
+            mode: None,
+            harness: None,
+            workspace_dir: None,
+            subagents_dir: None,
+            only: None,
+            skip: None,
+            overwrite: false,
+        },
+        baseline: None,
+        bootstrap: None,
+        dry_run: false,
+        no_stage: false,
+        guard: false,
+        stage_name: None,
+        plan_mode: false,
     }));
 
-    let name = match command {
-        Commands::Run(_) => "run",
-        Commands::Snapshot(_) => "snapshot",
-        Commands::Teardown(_) => "teardown",
-        Commands::TeardownGuard(_) => "teardown-guard",
-        Commands::Ingest(_) => "ingest",
-        Commands::Finalize(_) => "finalize",
-        Commands::RecordRuns(_) => "record-runs",
-        Commands::FillTranscripts(_) => "fill-transcripts",
-        Commands::DetectStrayWrites(_) => "detect-stray-writes",
-        Commands::Grade(_) => "grade",
-        Commands::Aggregate(_) => "aggregate",
-        Commands::PromoteBaseline(_) => "promote-baseline",
-        Commands::Validate(_) => "validate",
-    };
+    match command {
+        Commands::Run(args) => run_run(args),
+        Commands::Ingest(args) => run_ingest(args),
+        Commands::Finalize(args) => run_finalize(args),
+        Commands::Validate(args) => run_validate(args),
+        Commands::TeardownGuard(_) => run_teardown_guard(),
+        Commands::Guard { marker } => run_guard(marker),
+        Commands::RecordRuns(args) => run_record_runs(args),
+        Commands::FillTranscripts(args) => run_fill_transcripts(args),
+        Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
+        Commands::Grade(args) => run_grade(args),
+        Commands::Aggregate(args) => run_aggregate(args),
+        Commands::Snapshot(args) => run_snapshot(args),
+        Commands::Teardown(args) => run_teardown(args),
+        Commands::PromoteBaseline(args) => run_promote_baseline(args),
+    }
+}
 
-    bail!("`{name}` is not yet implemented (see rewrite-roadmap.md)");
+/// Resolve a [`RunContext`] from the shared flags (skill dir/name, workspace,
+/// harness). Used by every post-dispatch stage handler.
+pub(crate) fn run_context_from(args: &CommonArgs) -> anyhow::Result<RunContext> {
+    run_context_with_bootstrap(args, None)
+}
+
+/// Like [`run_context_from`], but threads an optional `--bootstrap` file (only
+/// the `run` orchestrator consumes it; post-dispatch stages pass `None`).
+pub(crate) fn run_context_with_bootstrap(
+    args: &CommonArgs,
+    bootstrap: Option<String>,
+) -> anyhow::Result<RunContext> {
+    Ok(detect_run_context(DetectInput {
+        skill_dir: args.skill_dir.clone(),
+        skill: args.skill.clone(),
+        bootstrap,
+        workspace_dir: args.workspace_dir.clone(),
+        harness: args.harness,
+    })?)
+}
+
+/// Split a comma-separated `--only`/`--skip` value into trimmed, non-empty ids.
+pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
+    v.map(|s| {
+        s.split(',')
+            .map(|x| x.trim().to_string())
+            .filter(|x| !x.is_empty())
+            .collect()
+    })
+}
+
+/// The iteration directory for a run: `<workspace>/<skill>/iteration-<n>`. Errors
+/// if `--iteration` is absent or the directory does not exist.
+pub(crate) fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow::Result<PathBuf> {
+    let iteration = iteration.ok_or_else(|| anyhow!("missing --iteration"))?;
+    let dir = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"));
+    if !dir.is_dir() {
+        bail!("not found: {}", dir.display());
+    }
+    Ok(dir)
+}
+
+/// Claude Code reads subagent transcripts by description, so `--subagents-dir` is
+/// required and must exist; Codex reads `outputs/codex-events.jsonl`, so it's
+/// ignored there.
+pub(crate) fn check_subagents_dir(
+    harness: Harness,
+    subagents_dir: Option<&Path>,
+) -> anyhow::Result<()> {
+    if harness == Harness::ClaudeCode {
+        match subagents_dir {
+            None => bail!(
+                "missing --subagents-dir (e.g. ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
+            ),
+            Some(dir) if !dir.exists() => bail!("subagents-dir not found: {}", dir.display()),
+            Some(_) => {}
+        }
+    }
+    Ok(())
 }

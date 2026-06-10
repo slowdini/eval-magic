@@ -1,0 +1,61 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/judge-tasks.schema.json",
+  "title": "Judge Tasks",
+  "description": "Output of evals:grade (emit mode). The list of LLM judge tasks the orchestrator dispatches, plus the skill-invocation meta-checks. Lives at <workspace>/iteration-N/judge-tasks.json. The full prompt is written to dispatch_prompt_path and is NOT inlined here.",
+  "type": "object",
+  "required": [
+    "generated",
+    "total_tasks",
+    "meta_tasks_injected",
+    "skipped_transcript_checks",
+    "tasks"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "generated": { "type": "string", "description": "ISO timestamp" },
+    "total_tasks": { "type": "integer" },
+    "meta_tasks_injected": { "type": "integer" },
+    "skipped_transcript_checks": { "type": "integer" },
+    "tasks": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/task" }
+    }
+  },
+  "definitions": {
+    "task": {
+      "type": "object",
+      "required": [
+        "eval_id",
+        "condition",
+        "assertion_id",
+        "rubric",
+        "model",
+        "is_meta",
+        "run_record_path",
+        "outputs_dir",
+        "response_path",
+        "dispatch_prompt_path"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "eval_id": { "type": "string" },
+        "condition": { "type": "string" },
+        "assertion_id": { "type": "string" },
+        "rubric": { "type": "string" },
+        "model": {
+          "type": ["string", "null"],
+          "description": "Judge model override, or null for the default."
+        },
+        "is_meta": { "type": "boolean" },
+        "run_record_path": { "type": "string" },
+        "outputs_dir": { "type": "string" },
+        "response_path": { "type": "string" },
+        "dispatch_prompt_path": {
+          "type": "string",
+          "description": "Absolute path to the file holding the full judge prompt."
+        }
+      }
+    }
+  }
+}
