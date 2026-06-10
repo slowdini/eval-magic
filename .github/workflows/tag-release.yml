@@ -21,6 +21,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # Push the tag as the PAT, not the default GITHUB_TOKEN: tag pushes made
+          # with GITHUB_TOKEN do not trigger other workflows, so the dist
+          # release.yml (push: tags) would never fire. Same token release-pr.yml
+          # uses so the PRs it opens trigger CI.
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
 
       - name: Read version from Cargo.toml
         id: version
