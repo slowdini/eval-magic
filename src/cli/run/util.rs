@@ -87,9 +87,6 @@ pub(crate) fn validate_harness_run_options(
         return Ok(());
     }
     let mut unsupported: Vec<&str> = Vec::new();
-    if opts.guard {
-        unsupported.push("--guard");
-    }
     if ctx.bootstrap_path.is_some() && opts.no_stage {
         unsupported.push("--bootstrap with --no-stage");
     }

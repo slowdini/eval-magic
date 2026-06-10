@@ -1,5 +1,5 @@
-//! Codex-harness behavior: `.agents/skills` staging, inline fallback, and the
-//! parity-feature rejections.
+//! Codex-harness behavior: `.agents/skills` staging, inline fallback, guard
+//! wiring, and remaining parity-feature rejections.
 
 use crate::helpers::*;
 use predicates::str::contains;
@@ -151,10 +151,9 @@ fn codex_plan_mode_injects_profile_and_records_flag() {
 }
 
 #[test]
-fn codex_rejects_unsupported_parity_features() {
+fn codex_guard_installs_project_hook() {
     let tmp = tempfile::TempDir::new().unwrap();
-
-    let (skill_dir, cwd) = setup(&tmp.path().join("c-guard"), DEFAULT_EVALS);
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -167,12 +166,30 @@ fn codex_rejects_unsupported_parity_features() {
             "--harness",
             "codex",
             "--guard",
-            "--dry-run",
         ])
         .assert()
-        .failure()
-        .stderr(contains("Codex"));
+        .success()
+        .stdout(contains("--dangerously-bypass-hook-trust"));
 
+    let hooks_path = cwd.join(".codex/hooks.json");
+    assert!(hooks_path.exists());
+    let hooks = read_json(&hooks_path);
+    let hook = &hooks["hooks"]["PreToolUse"][0];
+    assert!(
+        hook["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("guard-codex")
+    );
+    assert!(
+        cwd.join(".agents/skills/.slow-powers-eval-guard.json")
+            .exists()
+    );
+}
+
+#[test]
+fn codex_rejects_unsupported_parity_features() {
+    let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(&tmp.path().join("c-stage-name"), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)

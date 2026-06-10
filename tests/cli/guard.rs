@@ -35,6 +35,24 @@ fn write_armed_marker(root: &std::path::Path, allowed: &std::path::Path) -> std:
     marker
 }
 
+fn write_codex_armed_marker(
+    root: &std::path::Path,
+    allowed: &std::path::Path,
+) -> std::path::PathBuf {
+    let skills = root.join(".agents").join("skills");
+    fs::create_dir_all(&skills).unwrap();
+    let marker = skills.join(".slow-powers-eval-guard.json");
+    fs::write(
+        &marker,
+        format!(
+            r#"{{ "active": true, "allowedRoots": ["{}"], "expiresAt": "2999-01-01T00:00:00.000Z" }}"#,
+            allowed.display()
+        ),
+    )
+    .unwrap();
+    marker
+}
+
 /// `guard` denies a Write outside the sandbox: it prints a PreToolUse deny verdict
 /// on stdout and still exits 0 (the hook must never fail the session).
 #[test]
@@ -68,6 +86,23 @@ fn guard_allows_in_bounds_write() {
         .assert()
         .success()
         .stdout("");
+}
+
+#[test]
+fn guard_codex_subcommand_blocks_with_codex_verdict_shape() {
+    let tmp = TempDir::new().unwrap();
+    let marker = write_codex_armed_marker(tmp.path(), &tmp.path().join("skills-workspace"));
+
+    skill_eval()
+        .arg("guard-codex")
+        .arg(&marker)
+        .write_stdin(
+            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+        )
+        .assert()
+        .success()
+        .stdout(contains(r#""decision":"block""#))
+        .stdout(contains("blocked Bash"));
 }
 
 /// `guard` fails open when the marker is absent: empty stdout, exit 0.

@@ -58,6 +58,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Validate(args) => run_validate(args),
         Commands::TeardownGuard(_) => run_teardown_guard(),
         Commands::Guard { marker } => run_guard(marker),
+        Commands::GuardCodex { marker } => run_guard_codex(marker),
         Commands::RecordRuns(args) => run_record_runs(args),
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),

@@ -1,9 +1,9 @@
 //! Arm / disarm the write guard.
 //!
 //! [`install_guard`] writes a marker listing the allowed roots and merges a
-//! `PreToolUse` hook into `.claude/settings.local.json` that runs this binary's
-//! hidden `guard` subcommand on every Write/Edit/Bash. The original settings file
-//! is backed up verbatim in a manifest so [`teardown_guard`] restores it exactly.
+//! `PreToolUse` hook into the target harness's project config. The original hook
+//! file is backed up verbatim in a manifest so [`teardown_guard`] restores it
+//! exactly.
 //!
 //! The hook command points at the running binary (`std::env::current_exe`), so
 //! there is no separate hook script to ship and no interpreter to select.
@@ -17,9 +17,11 @@ use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use crate::core::Harness;
+
 use super::now_ms;
 
-/// Marker file (under `<stageRoot>/.claude/skills/`) that arms the guard.
+/// Marker file (under the staged skills dir) that arms the guard.
 pub const GUARD_MARKER: &str = ".slow-powers-eval-guard.json";
 /// Manifest recording what install changed, so teardown can restore it.
 pub const GUARD_MANIFEST: &str = ".slow-powers-eval-guard-manifest.json";
@@ -28,8 +30,10 @@ pub const GUARD_MANIFEST: &str = ".slow-powers-eval-guard-manifest.json";
 /// linger before it is treated as expired (see `super::decide`).
 const GUARD_TTL: Duration = Duration::from_secs(6 * 60 * 60); // 6h
 
-/// Tool names the PreToolUse hook fires on.
-const HOOK_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
+/// Tool names the Claude Code PreToolUse hook fires on.
+const CLAUDE_HOOK_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
+/// Tool names the Codex PreToolUse hook fires on.
+const CODEX_HOOK_MATCHER: &str = "^Bash$|^apply_patch$|^Edit$|^Write$";
 
 /// Restoration record written beside the marker. The field names are the
 /// on-disk manifest format — keep them stable so older manifests stay readable.
@@ -65,6 +69,52 @@ fn write_json(path: &Path, value: &Value) -> io::Result<()> {
     fs::write(path, text)
 }
 
+fn marker_allowed_roots(workspace_root: &Path, skills_dir: &Path) -> Vec<String> {
+    vec![
+        absolutize(workspace_root).display().to_string(),
+        absolutize(skills_dir).display().to_string(),
+        absolutize(&std::env::temp_dir()).display().to_string(),
+    ]
+}
+
+fn write_marker(
+    marker_path: &Path,
+    workspace_root: &Path,
+    skills_dir: &Path,
+    ttl: Option<Duration>,
+) -> io::Result<()> {
+    let expires_ms = now_ms() + ttl.unwrap_or(GUARD_TTL).as_millis() as i64;
+    write_json(
+        marker_path,
+        &json!({
+            "active": true,
+            "allowedRoots": marker_allowed_roots(workspace_root, skills_dir),
+            "expiresAt": iso_millis(expires_ms),
+        }),
+    )
+}
+
+fn write_manifest(
+    manifest_path: &Path,
+    settings_path: &Path,
+    settings_existed: bool,
+    settings_backup: Option<String>,
+    marker_path: &Path,
+) -> io::Result<()> {
+    let manifest = GuardManifest {
+        created_at: iso_millis(now_ms()),
+        settings_path: settings_path.display().to_string(),
+        settings_existed,
+        settings_backup,
+        marker_path: marker_path.display().to_string(),
+    };
+    write_json(
+        manifest_path,
+        &serde_json::to_value(&manifest)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+    )
+}
+
 /// Arm the write guard for an eval run. Returns the marker path. The guard is a
 /// no-op until this marker exists and is unexpired, so the hook is inert outside
 /// an active run. `guard_exe` is the path the hook invokes (normally
@@ -75,24 +125,40 @@ pub fn install_guard(
     guard_exe: &Path,
     ttl: Option<Duration>,
 ) -> io::Result<PathBuf> {
+    install_guard_for_harness(
+        stage_root,
+        workspace_root,
+        guard_exe,
+        Harness::ClaudeCode,
+        ttl,
+    )
+}
+
+/// Arm the write guard using the target harness's native hook surface.
+pub fn install_guard_for_harness(
+    stage_root: &Path,
+    workspace_root: &Path,
+    guard_exe: &Path,
+    harness: Harness,
+    ttl: Option<Duration>,
+) -> io::Result<PathBuf> {
+    match harness {
+        Harness::ClaudeCode => install_claude_guard(stage_root, workspace_root, guard_exe, ttl),
+        Harness::Codex => install_codex_guard(stage_root, workspace_root, guard_exe, ttl),
+    }
+}
+
+fn install_claude_guard(
+    stage_root: &Path,
+    workspace_root: &Path,
+    guard_exe: &Path,
+    ttl: Option<Duration>,
+) -> io::Result<PathBuf> {
     let skills_dir = stage_root.join(".claude").join("skills");
     fs::create_dir_all(&skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    let allowed_roots = vec![
-        absolutize(workspace_root).display().to_string(),
-        absolutize(&skills_dir).display().to_string(),
-        absolutize(&std::env::temp_dir()).display().to_string(),
-    ];
-    let expires_ms = now_ms() + ttl.unwrap_or(GUARD_TTL).as_millis() as i64;
-    write_json(
-        &marker_path,
-        &json!({
-            "active": true,
-            "allowedRoots": allowed_roots,
-            "expiresAt": iso_millis(expires_ms),
-        }),
-    )?;
+    write_marker(&marker_path, workspace_root, &skills_dir, ttl)?;
 
     let settings_path = stage_root.join(".claude").join("settings.local.json");
     let settings_existed = settings_path.exists();
@@ -126,32 +192,101 @@ pub fn install_guard(
     pre.as_array_mut()
         .expect("PreToolUse is an array")
         .push(json!({
-            "matcher": HOOK_MATCHER,
+            "matcher": CLAUDE_HOOK_MATCHER,
             "hooks": [ { "type": "command", "command": command } ],
         }));
     write_json(&settings_path, &settings)?;
 
-    let manifest = GuardManifest {
-        created_at: iso_millis(now_ms()),
-        settings_path: settings_path.display().to_string(),
-        settings_existed,
-        settings_backup: backup,
-        marker_path: marker_path.display().to_string(),
-    };
-    write_json(
+    write_manifest(
         &skills_dir.join(GUARD_MANIFEST),
-        &serde_json::to_value(&manifest)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
+        &settings_path,
+        settings_existed,
+        backup,
+        &marker_path,
     )?;
 
     Ok(marker_path)
 }
 
-/// Disarm the guard: restore the original `settings.local.json` (or delete it if
-/// we created it) and remove the marker + manifest. Safe to call when no guard is
+fn install_codex_guard(
+    stage_root: &Path,
+    workspace_root: &Path,
+    guard_exe: &Path,
+    ttl: Option<Duration>,
+) -> io::Result<PathBuf> {
+    let skills_dir = stage_root.join(".agents").join("skills");
+    fs::create_dir_all(&skills_dir)?;
+
+    let marker_path = skills_dir.join(GUARD_MARKER);
+    write_marker(&marker_path, workspace_root, &skills_dir, ttl)?;
+
+    let hooks_path = stage_root.join(".codex").join("hooks.json");
+    if let Some(parent) = hooks_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let hooks_existed = hooks_path.exists();
+    let backup = if hooks_existed {
+        Some(fs::read_to_string(&hooks_path)?)
+    } else {
+        None
+    };
+
+    let mut hooks: Value = backup
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_else(|| json!({}));
+    let hooks_obj = hooks
+        .as_object_mut()
+        .expect("hooks.json root is a JSON object")
+        .entry("hooks")
+        .or_insert_with(|| json!({}));
+    let pre = hooks_obj
+        .as_object_mut()
+        .expect("hooks is a JSON object")
+        .entry("PreToolUse")
+        .or_insert_with(|| json!([]));
+    let command = format!(
+        "\"{}\" guard-codex \"{}\"",
+        guard_exe.display(),
+        marker_path.display()
+    );
+    pre.as_array_mut()
+        .expect("PreToolUse is an array")
+        .push(json!({
+            "matcher": CODEX_HOOK_MATCHER,
+            "hooks": [
+                {
+                    "type": "command",
+                    "command": command,
+                    "timeout": 30,
+                    "statusMessage": "Checking eval write boundary",
+                }
+            ],
+        }));
+    write_json(&hooks_path, &hooks)?;
+
+    write_manifest(
+        &skills_dir.join(GUARD_MANIFEST),
+        &hooks_path,
+        hooks_existed,
+        backup,
+        &marker_path,
+    )?;
+
+    Ok(marker_path)
+}
+
+/// Disarm the guard: restore the original harness hook file (or delete it if we
+/// created it) and remove the marker + manifest. Safe to call when no guard is
 /// installed. Returns true if a guard was found and torn down.
 pub fn teardown_guard(stage_root: &Path) -> bool {
-    let skills_dir = stage_root.join(".claude").join("skills");
+    let torn_claude = teardown_guard_from_skills_dir(&stage_root.join(".claude").join("skills"));
+    let torn_codex = teardown_guard_from_skills_dir(&stage_root.join(".agents").join("skills"));
+    let _ = prune_if_empty(&stage_root.join(".codex"));
+    torn_claude || torn_codex
+}
+
+fn teardown_guard_from_skills_dir(skills_dir: &Path) -> bool {
     let manifest_path = skills_dir.join(GUARD_MANIFEST);
     let marker_path = skills_dir.join(GUARD_MARKER);
 
@@ -184,9 +319,17 @@ pub fn teardown_guard(stage_root: &Path) -> bool {
     true
 }
 
+fn prune_if_empty(dir: &Path) -> io::Result<()> {
+    if dir.exists() && fs::read_dir(dir)?.next().is_none() {
+        fs::remove_dir_all(dir)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::Harness;
     use tempfile::TempDir;
 
     struct Case {
@@ -213,6 +356,10 @@ mod tests {
 
     fn settings_path(stage_root: &Path) -> PathBuf {
         stage_root.join(".claude").join("settings.local.json")
+    }
+
+    fn codex_hooks_path(stage_root: &Path) -> PathBuf {
+        stage_root.join(".codex").join("hooks.json")
     }
 
     fn read_json(path: &Path) -> Value {
@@ -324,5 +471,86 @@ mod tests {
         fs::write(skills_dir(&c.stage_root).join(GUARD_MARKER), "{}").unwrap();
         assert!(teardown_guard(&c.stage_root));
         assert!(!skills_dir(&c.stage_root).join(GUARD_MARKER).exists());
+    }
+
+    #[test]
+    fn codex_install_writes_project_hook_marker_and_manifest() {
+        let c = setup();
+        let exe = Path::new("/g/skill-eval");
+        install_guard_for_harness(&c.stage_root, &c.workspace_root, exe, Harness::Codex, None)
+            .unwrap();
+
+        let marker = read_json(
+            &c.stage_root
+                .join(".agents")
+                .join("skills")
+                .join(GUARD_MARKER),
+        );
+        assert_eq!(marker["active"], json!(true));
+        assert!(
+            marker["allowedRoots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r.as_str().unwrap().contains(".agents/skills"))
+        );
+
+        let hooks = read_json(&codex_hooks_path(&c.stage_root));
+        let hook = &hooks["hooks"]["PreToolUse"][0];
+        assert!(hook["matcher"].as_str().unwrap().contains("apply_patch"));
+        assert!(
+            hook["hooks"][0]["command"]
+                .as_str()
+                .unwrap()
+                .contains("guard-codex")
+        );
+        assert!(
+            c.stage_root
+                .join(".agents")
+                .join("skills")
+                .join(GUARD_MANIFEST)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn codex_teardown_restores_pre_existing_hooks_json_verbatim() {
+        let c = setup();
+        fs::create_dir_all(c.stage_root.join(".codex")).unwrap();
+        let original = format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({
+                "hooks": {
+                    "PostToolUse": [
+                        {
+                            "matcher": "Bash",
+                            "hooks": [{ "type": "command", "command": "echo ok" }]
+                        }
+                    ]
+                }
+            }))
+            .unwrap()
+        );
+        fs::write(codex_hooks_path(&c.stage_root), &original).unwrap();
+
+        install_guard_for_harness(
+            &c.stage_root,
+            &c.workspace_root,
+            Path::new("/g/skill-eval"),
+            Harness::Codex,
+            None,
+        )
+        .unwrap();
+        assert!(
+            fs::read_to_string(codex_hooks_path(&c.stage_root))
+                .unwrap()
+                .contains("guard-codex")
+        );
+
+        teardown_guard(&c.stage_root);
+        assert_eq!(
+            fs::read_to_string(codex_hooks_path(&c.stage_root)).unwrap(),
+            original
+        );
     }
 }

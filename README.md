@@ -4,7 +4,7 @@
 
 An eval dispatches a fresh subagent twice per test case — once with the skill loaded, once without (or old version vs. new) — and grades both outputs against assertions. The pass-rate delta tells you whether the skill is worth shipping or the change is worth landing. The runner builds the workspace, stages skills for discovery, generates dispatch prompts, assembles run records from transcripts, grades, and aggregates; your agent harness supplies the one thing the runner never does itself: dispatching the subagents.
 
-`eval-magic` ships as a dependency-less prebuilt binary under the command name `skill-eval`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code is the fully wired harness today**; Codex has partial `--harness codex` parity — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
+`eval-magic` ships as a dependency-less prebuilt binary under the command name `skill-eval`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are wired harnesses today**; Codex has a few lower-fidelity transcript, skill-invocation, and plan-mode caveats — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
 This README is the complete operating guide: install, author cases, run both modes, drive the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `skill-eval --help` (and `skill-eval <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
@@ -201,7 +201,7 @@ For the `without_skill` / baseline condition, the dispatch reflects "this skill 
 
 ## Harnesses
 
-Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record means the same thing regardless of which harness produced it. **Claude Code** is the fully wired harness; **Codex** has partial `--harness codex` parity. The parity-audit framework for bringing a new harness up to the supported feature set is in [docs/harness-parity.md](docs/harness-parity.md).
+Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record means the same thing regardless of which harness produced it. **Claude Code** and **Codex** are wired harnesses, with harness-specific fidelity notes below. The parity-audit framework for bringing another harness up to the supported feature set is in [docs/harness-parity.md](docs/harness-parity.md).
 
 ### Claude Code (fully wired)
 
@@ -221,12 +221,21 @@ Project-local staged skills live in `<cwd>/.claude/skills/`, independent of inst
 
 **Dispatching via the Task tool.** `dispatch.json` is a top-level object (`{ skill_name, iteration, run_nonce, …, tasks: [...] }`); iterate `tasks[]`. For each task, dispatch a fresh subagent via the Task tool with the prompt `Read the file at <dispatch_prompt_path> and follow its instructions exactly.` (substituting the task's `dispatch_prompt_path`), and pass `agent_description` *verbatim* as the description — it's namespaced `<eval_id>:<condition>:i<N>-<nonce>`, and passing it unchanged is what lets transcript correlation work. (The Task tool documents `description` as "short", but pass the full string regardless — correlation depends on the exact value.) You do **not** write `run.json`/`timing.json` yourself; the subagent writes `outputs/final-message.md`, and `ingest` (`record-runs`) assembles both records from disk. For a plan-mode-relevant skill, add `--plan-mode` to inject Claude Code's verbatim plan-mode procedure as a `<system-reminder>` operating-context layer.
 
-### Codex (partial)
+### Codex
 
 Pass `--harness codex`: skills stage under repo-local `.agents/skills/` (the staged skill-under-test's frontmatter `name:` is rewritten to the eval slug so Codex's repo-local discovery sees it), and `conditions.json` / `dispatch.json` record `"harness": "codex"`. Dispatch each task with a fresh `codex exec --json` execution, capturing the event stream:
 
 ```bash
 codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never --json \
+  --output-last-message <outputs_dir>/final-message.md \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
+  > <outputs_dir>/codex-events.jsonl
+```
+
+When the run was armed with `--guard`, add `--dangerously-bypass-hook-trust` to that `codex exec` command so the vetted project-local `PreToolUse` hook staged in `.codex/hooks.json` actually runs:
+
+```bash
+codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
   > <outputs_dir>/codex-events.jsonl
@@ -238,7 +247,7 @@ Then ingest **without** `--subagents-dir` — the transcript source is fixed to 
 skill-eval ingest --skill-dir <dir> --skill <name> --iteration <N> --harness codex
 ```
 
-`finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); there is no Codex-native pre-tool guard (`--guard` is rejected — review the output dir, the captured JSONL, `stray-writes.json`, and `git status` before trusting a run); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events. Remaining parity work is tracked in [docs/harness-parity.md](docs/harness-parity.md).
+`finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code in a few places: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. `--guard` stages a Codex `PreToolUse` hook that blocks out-of-sandbox `Bash` mutations and `apply_patch` targets before they run; `detect-stray-writes` remains the post-run audit. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events.
 
 ## Documentation
 
