@@ -66,9 +66,9 @@ pub struct CommonArgs {
     pub mode: Option<String>,
     /// Target harness: `claude-code` (default) or `codex`.
     ///
-    /// Claude Code is the fully wired harness. Codex stages skills under
-    /// `.agents/skills` and reads each task's `outputs/codex-events.jsonl` instead
-    /// of a subagents dir; `--guard` is Claude-Code-only.
+    /// Claude Code and Codex both support staged skills, transcript ingest, and
+    /// `--guard`. Codex stages skills under `.agents/skills` and reads each
+    /// task's `outputs/codex-events.jsonl` instead of a subagents dir.
     #[arg(long)]
     pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).
@@ -187,12 +187,13 @@ pub struct RunArgs {
     pub no_stage: bool,
     /// Arm the write guard (PreToolUse hook) for the dispatch window.
     ///
-    /// Stages a `PreToolUse` hook that *blocks* subagent writes/installs outside
-    /// the eval sandbox while dispatches run. Wired for Claude Code today and the
-    /// default posture there — arm it unless the user opts out. The marker
-    /// auto-expires after 6h and is torn down at the next run; while armed the hook
-    /// fires on your own tool calls too. Unguarded, stray writes are only *detected*
-    /// after the fact by `detect-stray-writes`, never blocked.
+    /// Stages a harness-native `PreToolUse` hook that *blocks* subagent
+    /// writes/installs outside the eval sandbox while dispatches run. Arm it
+    /// unless the user opts out. The marker auto-expires after 6h and is torn down
+    /// at the next run; while armed the hook fires on your own tool calls too.
+    /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
+    /// vetted project-local eval hook runs. Unguarded, stray writes are only
+    /// *detected* after the fact by `detect-stray-writes`, never blocked.
     #[arg(long)]
     pub guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the
@@ -307,6 +308,15 @@ pub(crate) enum Commands {
     Guard {
         /// Path to the guard marker file. Defaults to
         /// `<cwd>/.claude/skills/.slow-powers-eval-guard.json`.
+        marker: Option<String>,
+    },
+    /// Internal Codex PreToolUse hook entry point. Invoked by the installed
+    /// write-guard hook as `skill-eval guard-codex <marker>`, not by users;
+    /// hidden from help.
+    #[command(hide = true)]
+    GuardCodex {
+        /// Path to the guard marker file. Defaults to
+        /// `<cwd>/.agents/skills/.slow-powers-eval-guard.json`.
         marker: Option<String>,
     },
 }

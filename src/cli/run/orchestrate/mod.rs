@@ -136,8 +136,13 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     if opts.dry_run {
         println!("\n--dry-run: stopping after workspace prep.");
     } else if ctx.harness == Harness::Codex {
+        let hook_trust = if opts.guard {
+            " --dangerously-bypass-hook-trust"
+        } else {
+            ""
+        };
         println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest --iteration {iteration} --harness codex`."
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec{hook_trust} --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest --iteration {iteration} --harness codex`."
         );
     } else {
         println!(

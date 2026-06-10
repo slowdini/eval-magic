@@ -81,6 +81,67 @@ pub fn path_arg(args: &Value) -> Option<&str> {
         .find_map(|k| obj.get(*k).and_then(Value::as_str))
 }
 
+/// Extract file paths from a Codex `apply_patch` hook payload. Codex can expose
+/// patch targets as a structured `files` list or as freeform patch text; collect
+/// both so the guard can deny unknown or out-of-bounds patches before they run.
+pub fn apply_patch_paths(args: &Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let Some(obj) = args.as_object() else {
+        return out;
+    };
+
+    if let Some(files) = obj.get("files") {
+        collect_file_values(files, &mut out);
+    }
+
+    for key in ["patch", "input", "content"] {
+        if let Some(text) = obj.get(key).and_then(Value::as_str) {
+            collect_patch_header_paths(text, &mut out);
+        }
+    }
+
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_file_values(value: &Value, out: &mut Vec<String>) {
+    match value {
+        Value::String(path) => out.push(path.to_string()),
+        Value::Array(items) => {
+            for item in items {
+                collect_file_values(item, out);
+            }
+        }
+        Value::Object(obj) => {
+            for key in ["file_path", "path", "absolute_file_path", "move_path"] {
+                if let Some(path) = obj.get(key).and_then(Value::as_str) {
+                    out.push(path.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+fn collect_patch_header_paths(text: &str, out: &mut Vec<String>) {
+    for line in text.lines() {
+        for prefix in [
+            "*** Add File: ",
+            "*** Update File: ",
+            "*** Delete File: ",
+            "*** Move to: ",
+        ] {
+            if let Some(path) = line.strip_prefix(prefix) {
+                let path = path.trim();
+                if !path.is_empty() {
+                    out.push(path.to_string());
+                }
+            }
+        }
+    }
+}
+
 /// Lexically absolutize a path: join onto `repo_root` if relative, then normalize.
 /// Mirrors node's `resolve()` — no symlink resolution or existence requirement.
 fn absolutize(target: &str, repo_root: &Path) -> std::path::PathBuf {
@@ -155,6 +216,28 @@ mod tests {
         );
         assert_eq!(path_arg(&json!({ "command": "ls" })), None);
         assert_eq!(path_arg(&json!("not an object")), None);
+    }
+
+    #[test]
+    fn apply_patch_paths_collects_structured_and_freeform_targets() {
+        let paths = apply_patch_paths(&json!({
+            "files": [
+                "/tmp/out.md",
+                { "path": "src/lib.rs" },
+                { "move_path": "src/new.rs" }
+            ],
+            "patch": "*** Begin Patch\n*** Update File: docs/a.md\n*** Move to: docs/b.md\n*** End Patch\n"
+        }));
+        assert_eq!(
+            paths,
+            vec![
+                "/tmp/out.md".to_string(),
+                "docs/a.md".to_string(),
+                "docs/b.md".to_string(),
+                "src/lib.rs".to_string(),
+                "src/new.rs".to_string(),
+            ]
+        );
     }
 
     #[test]

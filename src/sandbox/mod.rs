@@ -1,8 +1,9 @@
 //! Execution sandbox: write-guard install/teardown and write-boundary policy.
 //!
-//! The hook entry point is the hidden `guard` subcommand on this binary (see
-//! [`guard`] and `cli`), so the installed PreToolUse hook invokes
-//! `skill-eval guard <marker>` — no separate hook script to ship or locate.
+//! The hook entry points are hidden subcommands on this binary (see [`guard`] and
+//! `cli`), so the installed PreToolUse hook invokes `skill-eval guard <marker>`
+//! or `skill-eval guard-codex <marker>` — no separate hook script to ship or
+//! locate.
 
 pub mod decide;
 pub mod guard;
@@ -10,8 +11,10 @@ pub mod install;
 pub mod policy;
 
 pub use decide::{GuardDecision, GuardMarker, decide};
-pub use guard::{guard_decision, read_marker};
-pub use install::{GUARD_MANIFEST, GUARD_MARKER, install_guard, teardown_guard};
+pub use guard::{codex_guard_decision, guard_decision, read_marker};
+pub use install::{
+    GUARD_MANIFEST, GUARD_MARKER, install_guard, install_guard_for_harness, teardown_guard,
+};
 pub use policy::{WRITE_TOOLS, classify_bash, is_under, is_under_any, is_write_tool, path_arg};
 
 use std::time::{SystemTime, UNIX_EPOCH};
