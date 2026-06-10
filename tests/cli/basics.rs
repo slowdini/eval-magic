@@ -36,7 +36,7 @@ fn help_uses_published_binary_name() {
         .arg("--help")
         .assert()
         .success()
-        .stdout(contains("skill-eval"));
+        .stdout(contains("eval-magic"));
 }
 
 /// `ingest` reaches its own context validation when invoked bare.

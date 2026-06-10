@@ -82,15 +82,15 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         .and_then(|v| v.get("total_tasks").and_then(serde_json::Value::as_u64));
     match total_tasks {
         Some(0) => println!(
-            "\n✅ Ingest complete — no judge dispatches needed.\nNext: skill-eval finalize --skill {} --iteration {iteration}",
+            "\n✅ Ingest complete — no judge dispatches needed.\nNext: eval-magic finalize --skill {} --iteration {iteration}",
             ctx.skill_name
         ),
         Some(n) => println!(
-            "\n✅ Ingest complete. Dispatch the {n} judge task(s) grade listed above (judge-tasks.json), then:\n  skill-eval finalize --skill {} --iteration {iteration}",
+            "\n✅ Ingest complete. Dispatch the {n} judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize --skill {} --iteration {iteration}",
             ctx.skill_name
         ),
         None => println!(
-            "\n✅ Ingest complete. Dispatch the judge task(s) grade listed above (judge-tasks.json), then:\n  skill-eval finalize --skill {} --iteration {iteration}",
+            "\n✅ Ingest complete. Dispatch the judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize --skill {} --iteration {iteration}",
             ctx.skill_name
         ),
     }
@@ -116,7 +116,7 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
         bail!("finalize stopped at '{failed}'. Fix the failure and re-run finalize.");
     }
     println!(
-        "\n✅ Finalize complete. Read the benchmark above, then tear down: skill-eval teardown --skill {}",
+        "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown --skill {}",
         ctx.skill_name
     );
     Ok(())
@@ -259,7 +259,7 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             );
         }
         println!(
-            "\nNext: skill-eval aggregate --skill {} --iteration {iteration}",
+            "\nNext: eval-magic aggregate --skill {} --iteration {iteration}",
             ctx.skill_name
         );
     } else {
@@ -276,7 +276,7 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             );
         }
         println!(
-            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: skill-eval grade --skill {} --iteration {iteration} --finalize",
+            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: eval-magic grade --skill {} --iteration {iteration} --finalize",
             ctx.skill_name
         );
     }

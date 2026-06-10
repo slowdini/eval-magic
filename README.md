@@ -4,13 +4,13 @@
 
 An eval dispatches a fresh subagent twice per test case — once with the skill loaded, once without (or old version vs. new) — and grades both outputs against assertions. The pass-rate delta tells you whether the skill is worth shipping or the change is worth landing. The runner builds the workspace, stages skills for discovery, generates dispatch prompts, assembles run records from transcripts, grades, and aggregates; your agent harness supplies the one thing the runner never does itself: dispatching the subagents.
 
-`eval-magic` ships as a dependency-less prebuilt binary under the command name `skill-eval`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are wired harnesses today**; Codex has a few lower-fidelity transcript, skill-invocation, and plan-mode caveats — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
+`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are wired harnesses today**; Codex has a few lower-fidelity transcript, skill-invocation, and plan-mode caveats — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
-This README is the complete operating guide: install, author cases, run both modes, drive the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `skill-eval --help` (and `skill-eval <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
+This README is the complete operating guide: install, author cases, run both modes, drive the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `eval-magic --help` (and `eval-magic <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
 ## Install
 
-`eval-magic` ships as a standalone binary named `skill-eval`, with no runtime dependencies. Each [GitHub Release](https://github.com/slowdini/eval-magic/releases) carries prebuilt binaries for macOS (Apple Silicon + Intel), Linux (x64 + ARM64), and Windows (x64), plus installer scripts.
+`eval-magic` ships as a standalone binary named `eval-magic`, with no runtime dependencies. Each [GitHub Release](https://github.com/slowdini/eval-magic/releases) carries prebuilt binaries for macOS (Apple Silicon + Intel), Linux (x64 + ARM64), and Windows (x64), plus installer scripts.
 
 macOS / Linux:
 
@@ -29,8 +29,8 @@ Or download the archive for your platform from the release page directly. To bui
 ```bash
 git clone https://github.com/slowdini/eval-magic
 cd eval-magic
-cargo build --release          # binary at target/release/skill-eval
-./target/release/skill-eval --help
+cargo build --release          # binary at target/release/eval-magic
+./target/release/eval-magic --help
 ```
 
 ## How an eval works
@@ -59,26 +59,26 @@ Your skill lives in a folder with a `SKILL.md`. Test cases live next to it in `e
 }
 ```
 
-Every command takes two required flags: `--skill-dir` (the directory *holding* skill folders — it is the eval's test environment; every skill in it gets staged) and `--skill` (which folder to evaluate). Run `skill-eval --help` for why the directory is the environment.
+Every command takes two required flags: `--skill-dir` (the directory *holding* skill folders — it is the eval's test environment; every skill in it gets staged) and `--skill` (which folder to evaluate). Run `eval-magic --help` for why the directory is the environment.
 
 ### Mode A — new skill (with vs. without)
 
 ```bash
 # 1. Build the iteration workspace (arm --guard — see Cost & confirmation).
-skill-eval run --skill-dir ./skills --skill my-skill --mode new-skill --guard
+eval-magic run --skill-dir ./skills --skill my-skill --mode new-skill --guard
 
 # 2. Your agent dispatches each task in skills-workspace/my-skill/iteration-1/dispatch.json
 #    as a fresh subagent (each reads its dispatch_prompt_path and follows it).
 
 # 3. Assemble records, detect stray writes, grade:
-skill-eval ingest --skill-dir ./skills --skill my-skill --iteration 1 \
+eval-magic ingest --skill-dir ./skills --skill my-skill --iteration 1 \
   --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/
 
 # 4. Dispatch the judge tasks ingest lists, then:
-skill-eval finalize --skill-dir ./skills --skill my-skill --iteration 1
+eval-magic finalize --skill-dir ./skills --skill my-skill --iteration 1
 
 # 5. Read skills-workspace/my-skill/iteration-1/benchmark.json, then clean up:
-skill-eval teardown --skill-dir ./skills --skill my-skill
+eval-magic teardown --skill-dir ./skills --skill my-skill
 ```
 
 ### Mode B — revision (old vs. new) — the common case
@@ -86,8 +86,8 @@ skill-eval teardown --skill-dir ./skills --skill my-skill
 You've already edited the skill; snapshot the old version straight from git (`--ref` reads the object database without touching the working tree):
 
 ```bash
-skill-eval snapshot --skill-dir ./skills --skill my-skill --label baseline --ref HEAD
-skill-eval run --skill-dir ./skills --skill my-skill --mode revision --baseline baseline --guard
+eval-magic snapshot --skill-dir ./skills --skill my-skill --label baseline --ref HEAD
+eval-magic run --skill-dir ./skills --skill my-skill --mode revision --baseline baseline --guard
 # …then steps 2–5 as above.
 ```
 
@@ -125,7 +125,7 @@ After you've seen what iteration 1 produces, add **assertions** to `evals.json` 
 - **`transcript_check` — mechanical.** Regex matched against a run's tool invocations. Fast, deterministic, cheap. Use for "did the agent run X" or "did file Y get written." Requires a transcript adapter (wired for Claude Code and Codex event streams today).
 - **`llm_judge` — judged.** Soft criteria a model evaluates. Use for "did the response quote actual evidence." Graded by a dispatched judge subagent. Harness-independent.
 
-Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading output are detailed in `skill-eval grade --help`. Every with-skill run also gets an automatic **skill-invocation meta-check** — did the skill actually influence behavior? — surfaced as an `invocation_rate` per condition; a run where the skill wasn't invoked is a non-data-point, not evidence the skill is bad. Guidance on *what makes a good assertion* lives in the slow-powers `evaluating-skills` skill.
+Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading output are detailed in `eval-magic grade --help`. Every with-skill run also gets an automatic **skill-invocation meta-check** — did the skill actually influence behavior? — surfaced as an `invocation_rate` per condition; a run where the skill wasn't invoked is a non-data-point, not evidence the skill is bad. Guidance on *what makes a good assertion* lives in the slow-powers `evaluating-skills` skill.
 
 ## Reading results
 
@@ -174,7 +174,7 @@ The only file you author by hand is `<skill>/evals/evals.json`. Keep `skills-wor
 The workspace tree is ephemeral, but two parts of a *canonical* run are worth committing: the `benchmark.json` delta (the "this skill earns its place" number) and the per-run `grading.json` rationales (why each assertion passed or failed). Promote them into the skill's tracked `evals/baseline/`:
 
 ```bash
-skill-eval promote-baseline --skill-dir <dir> --skill <name> --iteration <N> \
+eval-magic promote-baseline --skill-dir <dir> --skill <name> --iteration <N> \
   [--label <tag>] [--agent-model <id>] [--judge-model <id>]
 ```
 
@@ -244,7 +244,7 @@ codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -
 Then ingest **without** `--subagents-dir` — the transcript source is fixed to each task's `codex-events.jsonl`:
 
 ```bash
-skill-eval ingest --skill-dir <dir> --skill <name> --iteration <N> --harness codex
+eval-magic ingest --skill-dir <dir> --skill <name> --iteration <N> --harness codex
 ```
 
 `finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code in a few places: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. `--guard` stages a Codex `PreToolUse` hook that blocks out-of-sandbox `Bash` mutations and `apply_patch` targets before they run; `detect-stray-writes` remains the post-run audit. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events.
@@ -253,7 +253,7 @@ skill-eval ingest --skill-dir <dir> --skill <name> --iteration <N> --harness cod
 
 | Where | What's in it |
 |-------|--------------|
-| `skill-eval --help` / `skill-eval <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
+| `eval-magic --help` / `eval-magic <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
 | [docs/harness-parity.md](docs/harness-parity.md) | The parity-audit framework for bringing a new harness up to the supported feature set |
 | [GitHub issues](https://github.com/slowdini/eval-magic/issues) | Planned features and known limitations |
 

@@ -28,7 +28,7 @@ use crate::core::Harness;
 /// default action is `run`.
 #[derive(Debug, Parser)]
 #[command(
-    name = "skill-eval",
+    name = "eval-magic",
     version,
     about = "Run skill evals — measure whether an agent skill actually shifts behavior.",
     after_help = super::help::AFTER_HELP
@@ -303,7 +303,7 @@ pub(crate) enum Commands {
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),
     /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
-    /// hook as `skill-eval guard <marker>`, not by users; hidden from help.
+    /// hook as `eval-magic guard <marker>`, not by users; hidden from help.
     #[command(hide = true)]
     Guard {
         /// Path to the guard marker file. Defaults to
@@ -311,7 +311,7 @@ pub(crate) enum Commands {
         marker: Option<String>,
     },
     /// Internal Codex PreToolUse hook entry point. Invoked by the installed
-    /// write-guard hook as `skill-eval guard-codex <marker>`, not by users;
+    /// write-guard hook as `eval-magic guard-codex <marker>`, not by users;
     /// hidden from help.
     #[command(hide = true)]
     GuardCodex {

@@ -146,7 +146,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         );
     } else {
         println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent. Then run:\n  skill-eval ingest --skill {} --skill-dir {} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)",
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent. Then run:\n  eval-magic ingest --skill {} --skill-dir {} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)",
             ctx.skill_name,
             ctx.skill_dir.display()
         );

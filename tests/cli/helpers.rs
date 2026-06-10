@@ -5,9 +5,9 @@ use std::fs;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
-/// Build a `Command` for the built `skill-eval` binary.
+/// Build a `Command` for the built `eval-magic` binary.
 pub fn skill_eval() -> Command {
-    Command::cargo_bin("skill-eval").expect("binary `skill-eval` should build")
+    Command::cargo_bin("eval-magic").expect("binary `eval-magic` should build")
 }
 
 /// A canonicalized temp root (resolves macOS /var → /private/var so the binary's

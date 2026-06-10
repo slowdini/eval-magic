@@ -369,7 +369,7 @@ mod tests {
     #[test]
     fn install_writes_an_active_marker_hook_and_manifest() {
         let c = setup();
-        let exe = Path::new("/g/skill-eval");
+        let exe = Path::new("/g/eval-magic");
         install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
 
         let marker = read_json(&skills_dir(&c.stage_root).join(GUARD_MARKER));
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn hook_command_invokes_the_binary_guard_subcommand() {
         let c = setup();
-        let exe = Path::new("/g/skill-eval");
+        let exe = Path::new("/g/eval-magic");
         let marker = install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
         let settings = read_json(&settings_path(&c.stage_root));
         let command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
@@ -412,14 +412,14 @@ mod tests {
             .to_string();
         assert_eq!(
             command,
-            format!("\"/g/skill-eval\" guard \"{}\"", marker.display())
+            format!("\"/g/eval-magic\" guard \"{}\"", marker.display())
         );
     }
 
     #[test]
     fn teardown_deletes_settings_it_created() {
         let c = setup();
-        let exe = Path::new("/g/skill-eval");
+        let exe = Path::new("/g/eval-magic");
         install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
         assert!(settings_path(&c.stage_root).exists());
 
@@ -442,7 +442,7 @@ mod tests {
         );
         fs::write(settings_path(&c.stage_root), &original).unwrap();
 
-        let exe = Path::new("/g/skill-eval");
+        let exe = Path::new("/g/eval-magic");
         install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
         // hook present while armed
         assert!(
@@ -476,7 +476,7 @@ mod tests {
     #[test]
     fn codex_install_writes_project_hook_marker_and_manifest() {
         let c = setup();
-        let exe = Path::new("/g/skill-eval");
+        let exe = Path::new("/g/eval-magic");
         install_guard_for_harness(&c.stage_root, &c.workspace_root, exe, Harness::Codex, None)
             .unwrap();
 
@@ -536,7 +536,7 @@ mod tests {
         install_guard_for_harness(
             &c.stage_root,
             &c.workspace_root,
-            Path::new("/g/skill-eval"),
+            Path::new("/g/eval-magic"),
             Harness::Codex,
             None,
         )
