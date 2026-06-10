@@ -1,9 +1,8 @@
 //! Execution sandbox: write-guard install/teardown and write-boundary policy.
 //!
-//! Mirrors `src/sandbox/` in eval-runner (`sandbox-policy.ts`, `policy.ts`,
-//! `install.ts`, `guard.ts`). The Node hook script `guard.ts` becomes the hidden
-//! `guard` subcommand on this binary (see [`guard`] and `cli`), so the installed
-//! PreToolUse hook invokes `skill-eval guard <marker>` instead of a script path.
+//! The hook entry point is the hidden `guard` subcommand on this binary (see
+//! [`guard`] and `cli`), so the installed PreToolUse hook invokes
+//! `skill-eval guard <marker>` — no separate hook script to ship or locate.
 
 pub mod decide;
 pub mod guard;

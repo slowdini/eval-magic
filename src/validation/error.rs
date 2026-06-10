@@ -1,8 +1,7 @@
 //! The error type shared by every validator in this module.
 
 /// A validation failure. Each variant carries the `path` of the artifact under
-/// inspection so messages are actionable — mirroring the source-prefixed errors
-/// eval-runner's validators threw.
+/// inspection so messages are actionable.
 ///
 /// (The field is named `path` rather than `source` because `thiserror` reserves
 /// a field named `source` for the underlying `std::error::Error` cause.)

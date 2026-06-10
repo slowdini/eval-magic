@@ -1,13 +1,12 @@
-//! Arm / disarm the write guard. Ports `src/sandbox/install.ts`.
+//! Arm / disarm the write guard.
 //!
 //! [`install_guard`] writes a marker listing the allowed roots and merges a
 //! `PreToolUse` hook into `.claude/settings.local.json` that runs this binary's
 //! hidden `guard` subcommand on every Write/Edit/Bash. The original settings file
 //! is backed up verbatim in a manifest so [`teardown_guard`] restores it exactly.
 //!
-//! Unlike eval-runner — which invoked a `guard.ts`/`guard.js` script under
-//! bun/node — the Rust port points the hook at the running binary
-//! (`std::env::current_exe`), so there is no interpreter to select.
+//! The hook command points at the running binary (`std::env::current_exe`), so
+//! there is no separate hook script to ship and no interpreter to select.
 
 use std::fs;
 use std::io;
@@ -32,8 +31,8 @@ const GUARD_TTL: Duration = Duration::from_secs(6 * 60 * 60); // 6h
 /// Tool names the PreToolUse hook fires on.
 const HOOK_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
 
-/// Restoration record written beside the marker. Field names match eval-runner's
-/// manifest JSON so the two implementations are wire-compatible.
+/// Restoration record written beside the marker. The field names are the
+/// on-disk manifest format — keep them stable so older manifests stay readable.
 #[derive(Debug, Serialize, Deserialize)]
 struct GuardManifest {
     created_at: String,
@@ -43,22 +42,22 @@ struct GuardManifest {
     marker_path: String,
 }
 
-/// Format epoch milliseconds as `2026-06-08T12:00:00.000Z`, matching JS
-/// `Date#toISOString()` (the format eval-runner wrote).
+/// Format epoch milliseconds as `2026-06-08T12:00:00.000Z` — RFC 3339 with
+/// millisecond precision, the timestamp format every artifact uses.
 fn iso_millis(ms: i64) -> String {
     DateTime::from_timestamp_millis(ms)
         .unwrap_or_default()
         .to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-/// Lexically absolutize a path (no disk access, no symlink resolution). Mirrors
-/// node's `resolve()` used by eval-runner when listing allowed roots.
+/// Lexically absolutize a path (no disk access, no symlink resolution) for the
+/// allowed-roots list.
 fn absolutize(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// Write `value` as 2-space-pretty JSON with a trailing newline — byte-for-byte
-/// what eval-runner's `JSON.stringify(value, null, 2) + "\n"` produced.
+/// Write `value` as 2-space-pretty JSON with a trailing newline — the stable
+/// on-disk format for every artifact this binary writes.
 fn write_json(path: &Path, value: &Value) -> io::Result<()> {
     let mut text = serde_json::to_string_pretty(value)
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;

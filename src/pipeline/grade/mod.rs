@@ -1,7 +1,6 @@
 //! Stage 4 — `grade`.
 //!
-//! Ports `src/pipeline/grade.ts`, decomposed into focused units (the file was the
-//! largest in the TypeScript pipeline):
+//! Decomposed into focused units:
 //!
 //! - [`transcript_check`] — grade a `transcript_check` assertion (regex over the
 //!   run's tool invocations).

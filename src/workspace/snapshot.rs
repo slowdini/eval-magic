@@ -1,10 +1,9 @@
 //! Skill snapshotting.
 //!
-//! Ports the `snapshot` command logic from eval-runner's `cli/run.ts`
-//! (`commandSnapshot` / `snapshotFromRef`): capture a skill's `SKILL.md` plus
+//! Capture a skill's `SKILL.md` plus
 //! sibling assets into `skills-workspace/<skill>/snapshots/<label>/`, either from
 //! the working tree or — read straight from the git object database without
-//! touching the working tree (issue #122) — as it existed at a git ref. The
+//! touching the working tree — as it existed at a git ref. The
 //! `evals/` directory is always excluded; a `.snapshot-meta.json` records the
 //! source so `teardown` knows whether the snapshot is reproducible.
 

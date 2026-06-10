@@ -9,7 +9,6 @@ use crate::validation;
 
 /// Validate every `<skill>/evals/evals.json` under `--skill-dir`, printing a
 /// `✓`/`✗` line per file and a summary. Exits non-zero if any file failed.
-/// Ports eval-runner's `validate-all.ts` `main`.
 pub(crate) fn run_validate(args: ValidateArgs) -> anyhow::Result<()> {
     let skill_dir = args
         .skill_dir

@@ -1,6 +1,6 @@
 //! Stage 3 — `detect-stray-writes`.
 //!
-//! Ports `src/pipeline/detect-stray-writes.ts`. Classifies a run's tool
+//! Classifies a run's tool
 //! invocations against its allowed outputs dir:
 //!
 //! - **violations**: file-write tools (Write/Edit/MultiEdit/NotebookEdit/Codex
@@ -129,21 +129,21 @@ fn path_relative(from: &Path, to: &Path) -> String {
 }
 
 /// Leading boundary before a bare `rel` reference: start-of-string or one of
-/// `\s'"=:(/` (ports the TS `(^|[\s'"=:(/])` group).
+/// `\s'"=:(/`.
 fn is_leading_boundary(b: u8) -> bool {
     b.is_ascii_whitespace() || matches!(b, b'\'' | b'"' | b'=' | b':' | b'(' | b'/')
 }
 
 /// Trailing boundary after a bare `rel` reference: end-of-string or one of
-/// `/\s'")` (ports the TS `(/|[\s'")]|$)` group).
+/// `/\s'")`.
 fn is_trailing_boundary(b: u8) -> bool {
     b == b'/' || b.is_ascii_whitespace() || matches!(b, b'\'' | b'"' | b')')
 }
 
 /// True if `command` references `rel` as a bare path token — bounded as a path
-/// segment and **not** prefixed by a `.claude`/`.agents` staging dir. Replicates
-/// the TS lookbehind regex (the `regex` crate has no lookbehind) by scanning each
-/// occurrence and checking the boundary + preceding-segment conditions directly.
+/// segment and **not** prefixed by a `.claude`/`.agents` staging dir. The
+/// `regex` crate has no lookbehind, so each occurrence is scanned directly for
+/// the boundary + preceding-segment conditions.
 fn references_bare_rel(command: &str, rel: &str) -> bool {
     if rel.is_empty() {
         return false;

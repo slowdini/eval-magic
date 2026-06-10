@@ -1,13 +1,11 @@
 //! Shared kernel used by nearly every other module.
 //!
-//! Mirrors `src/core/` in eval-runner:
 //! - [`types`]   — domain types (`Eval`, `RunRecord`, `Assertion`, `GradingResult`, …)
 //! - [`context`] — `RunContext` detection from parsed flags / environment
 //! - [`runtime`] — runtime helpers (git spawning)
 //!
 //! The submodules are re-exported flat here so downstream code writes
-//! `crate::core::Eval` rather than `crate::core::types::Eval`, matching how the
-//! TypeScript original imported from the `core/` barrel.
+//! `crate::core::Eval` rather than `crate::core::types::Eval`.
 
 pub mod context;
 pub mod runtime;

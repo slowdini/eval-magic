@@ -1,18 +1,14 @@
 //! The `run` orchestrator and its run-mode variants.
 //!
-//! Ports eval-runner's `src/cli/run.ts` (~1,593 LOC) — the single largest file
-//! in the TypeScript original — split into focused sub-orchestrators rather than
-//! ported as one module (the main code-quality win of the rewrite):
+//! Split into focused sub-orchestrators:
 //!
 //! - [`staging`] — staged-skill lifecycle (install/cleanup + sibling manifest).
 //! - [`dispatch`] — dispatch-task and prompt assembly (`dispatch.json`).
 //! - [`steps`] — the `ingest` / `finalize` fixed-order chains.
 //! - [`orchestrate`] — `command_run`, the top-level orchestrator.
 //!
-//! The `snapshot` subcommand lived in `run.ts` but was ported to
-//! [`crate::workspace::snapshot`] in phase 6, so it has no home here. `cli.ts`'s
-//! manual dispatch/help has no counterpart — `clap` owns both (see
-//! [`crate::cli`]).
+//! The `snapshot` subcommand lives in [`crate::workspace::snapshot`] with the
+//! rest of the workspace-artifact lifecycle, so it has no home here.
 
 use std::fs;
 use std::path::Path;
@@ -26,9 +22,9 @@ pub mod steps;
 mod util;
 
 /// A user-facing failure inside the `run` orchestrator. Mirrors
-/// [`crate::pipeline::PipelineError`] / `WorkspaceError`: `Message` carries the
-/// bespoke strings the TS original passed to `die(...)`, and the transparent
-/// variants forward the underlying I/O, JSON, and schema-validation errors.
+/// [`crate::pipeline::PipelineError`] / `WorkspaceError`: `Message` carries
+/// bespoke ready-to-display strings, and the transparent variants forward the
+/// underlying I/O, JSON, and schema-validation errors.
 #[derive(Debug, thiserror::Error)]
 pub enum RunError {
     #[error("{0}")]
@@ -42,16 +38,14 @@ pub enum RunError {
 }
 
 impl RunError {
-    /// Construct a [`RunError::Message`] from anything string-like — the Rust
-    /// equivalent of the TS `die("...")` call sites.
+    /// Construct a [`RunError::Message`] from anything string-like.
     pub fn msg(text: impl Into<String>) -> Self {
         RunError::Message(text.into())
     }
 }
 
-/// Write `value` as 2-space-pretty JSON with a trailing newline — byte-for-byte
-/// what eval-runner's `JSON.stringify(value, null, 2) + "\n"` produced, matching
-/// the shared writer used across the other modules (`sandbox`/`pipeline`).
+/// Write `value` as 2-space-pretty JSON with a trailing newline, matching the
+/// shared writer used across the other modules (`sandbox`/`pipeline`).
 pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), RunError> {
     let mut text = serde_json::to_string_pretty(value)?;
     text.push('\n');

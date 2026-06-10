@@ -4,8 +4,7 @@ use crate::cli::args::RunArgs;
 use crate::cli::run;
 use crate::cli::{parse_id_list, run_context_with_bootstrap};
 
-/// Build the iteration workspace and dispatch plan (the default action). Ports
-/// eval-runner's `commandRun`.
+/// Build the iteration workspace and dispatch plan (the default action).
 pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
     let ctx = run_context_with_bootstrap(&args.common, args.bootstrap.clone())?;
     let only = parse_id_list(args.common.only.as_deref());

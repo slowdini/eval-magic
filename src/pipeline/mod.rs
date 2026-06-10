@@ -1,10 +1,10 @@
 //! The post-dispatch processing chain: stateless JSON-in/JSON-out stages.
 //!
-//! Mirrors `src/pipeline/` in eval-runner. Chain order:
+//! Chain order:
 //! `record-runs` → `fill-transcripts` → `detect-stray-writes` → `grade` →
 //! `aggregate`. Each stage reads JSON/JSONL artifacts from an iteration directory
-//! and writes JSON back; no stage pipes to another in-memory. Stages are ported
-//! one at a time against the same fixtures the TypeScript suite uses.
+//! and writes JSON back; no stage pipes to another in-memory, so any stage can
+//! be run (and re-run) standalone.
 
 pub mod aggregate;
 pub mod detect_stray_writes;

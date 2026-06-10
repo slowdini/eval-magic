@@ -1,8 +1,6 @@
 //! CLI surface: command-tree definition and dispatch.
 //!
-//! Mirrors `src/cli/` in eval-runner (`cli.ts`, `run.ts`, `help.ts`). The
-//! manual flag parsing and hand-written help of the original are replaced by a
-//! `clap` derive tree, so `help.ts` has no counterpart here.
+//! A `clap` derive tree owns flag parsing and the generated help.
 //!
 //! The command tree lives in [`args`]; the per-command handlers live in
 //! [`commands`], grouped by concern. This module is the thin coordinator: parse,

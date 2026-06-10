@@ -15,8 +15,8 @@ use crate::validation;
 
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
 /// handler. This is the production runner for [`run::steps::run_steps`]; it
-/// prints the `error: <msg>` contract on failure (matching eval-runner's default
-/// runner) before propagating, so the chain's halt-and-retry message still fires.
+/// prints the `error: <msg>` contract on failure before propagating, so the
+/// chain's halt-and-retry message still fires.
 fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
     use run::steps::StepKind;
     let common = CommonArgs {
@@ -45,8 +45,7 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
 }
 
 /// Run the post-dispatch chain (record-runs → fill-transcripts →
-/// detect-stray-writes → grade) and stop at the judge hand-off. Ports
-/// eval-runner's `commandIngest`.
+/// detect-stray-writes → grade) and stop at the judge hand-off.
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = args
@@ -98,8 +97,7 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Run the post-judge chain (grade --finalize → aggregate). Ports eval-runner's
-/// `commandFinalize`.
+/// Run the post-judge chain (grade --finalize → aggregate).
 pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = args
@@ -125,7 +123,7 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
 }
 
 /// Assemble `run.json` + `timing.json` for every task in the iteration's
-/// `dispatch.json`. Ports eval-runner's `record-runs` `main`.
+/// `dispatch.json`.
 pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
@@ -145,7 +143,7 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
 }
 
 /// Populate `tool_invocations` from persisted transcripts for every `run.json` in
-/// the iteration. Ports eval-runner's `fill-transcripts` `main`.
+/// the iteration.
 pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
@@ -162,7 +160,7 @@ pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
 }
 
 /// Report writes outside the sandbox output boundary (and live-source reads) for
-/// every run in the iteration. Ports eval-runner's `detect-stray-writes` `main`.
+/// every run in the iteration.
 pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = args
@@ -221,8 +219,7 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
 }
 
 /// Grade run records. Default mode emits LLM judge tasks (+ the skill-invocation
-/// meta-check); `--finalize` folds judge responses into `grading.json`. Ports
-/// eval-runner's `grade` `main`.
+/// meta-check); `--finalize` folds judge responses into `grading.json`.
 pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
     let common = args.common;
     let ctx = run_context_from(&common)?;
@@ -286,8 +283,7 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Compute before/after benchmark deltas across the two conditions. Ports
-/// eval-runner's `aggregate` `main`.
+/// Compute before/after benchmark deltas across the two conditions.
 pub(crate) fn run_aggregate(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let dir = iteration_dir(&ctx, args.iteration)?;

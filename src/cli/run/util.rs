@@ -2,9 +2,6 @@
 //! per-run nonce, condition naming, plan-mode profile resolution, and display
 //! formatting. Extracted from [`super::orchestrate`] so the coordinator stays
 //! focused on the build sequence.
-//!
-//! Ports the `run.ts` helpers `validateHarnessRunOptions`, `nextIteration`,
-//! `conditionNamesFor`, `stagingDiscoveryWarning`, and `resolvePlanModeProfile`.
 
 use std::fs;
 use std::path::Path;
@@ -15,7 +12,7 @@ use crate::core::{Harness, Mode, RunContext};
 use super::RunError;
 use super::orchestrate::RunOptions;
 
-/// The two condition names for a comparison mode. Ports `conditionNamesFor`.
+/// The two condition names for a comparison mode.
 pub(crate) fn condition_names_for(mode: Mode) -> (&'static str, &'static str) {
     match mode {
         Mode::NewSkill => ("with_skill", "without_skill"),
@@ -24,7 +21,7 @@ pub(crate) fn condition_names_for(mode: Mode) -> (&'static str, &'static str) {
 }
 
 /// The next iteration number for a skill's workspace dir: the explicit override,
-/// else one past the highest existing `iteration-<n>`. Ports `nextIteration`.
+/// else one past the highest existing `iteration-<n>`.
 pub(crate) fn next_iteration(workspace_skill_dir: &Path, override_n: Option<u32>) -> u32 {
     if let Some(n) = override_n {
         return n;
@@ -44,11 +41,11 @@ pub(crate) fn next_iteration(workspace_skill_dir: &Path, override_n: Option<u32>
     max.map_or(1, |m| m + 1)
 }
 
-/// Build-time heads-up for the same-session staging limitation on Claude Code
-/// (issue #7): `run` stages mid-session, but in-process Task subagents inherit a
-/// skill registry fixed at session start, so they never discover the staged
-/// skills. Returns the warning, or `None` when it does not apply (staging off, or
-/// Codex's fresh-process path). Ports `stagingDiscoveryWarning`.
+/// Build-time heads-up for the same-session staging limitation on Claude Code:
+/// `run` stages mid-session, but in-process Task subagents inherit a skill
+/// registry fixed at session start, so they never discover the staged skills.
+/// Returns the warning, or `None` when it does not apply (staging off, or
+/// Codex's fresh-process path).
 pub(crate) fn staging_discovery_warning(harness: Harness, no_stage: bool) -> Option<String> {
     if no_stage || harness != Harness::ClaudeCode {
         return None;
@@ -71,10 +68,10 @@ pub(crate) fn staging_discovery_warning(harness: Harness, no_stage: bool) -> Opt
     )
 }
 
-/// Resolve the verbatim plan-mode procedure profile for a harness (issue #142).
+/// Resolve the verbatim plan-mode procedure profile for a harness.
 /// The profile is a compile-time bundled asset (mirroring the schema embedding in
 /// `validation`); a harness without one gets a clear error rather than a silent
-/// no-op. Ports `resolvePlanModeProfile`.
+/// no-op.
 pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str, RunError> {
     match harness {
         Harness::ClaudeCode => Ok(include_str!("../../../profiles/claude-code/plan-mode.md")),
@@ -86,8 +83,7 @@ pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str
     }
 }
 
-/// Reject the Claude-tier features Codex support does not yet cover. Ports
-/// `validateHarnessRunOptions`.
+/// Reject the Claude-tier features Codex support does not yet cover.
 pub(crate) fn validate_harness_run_options(
     opts: &RunOptions,
     ctx: &RunContext,
@@ -121,9 +117,9 @@ pub(crate) fn validate_harness_run_options(
 
 /// A per-run nonce (`<millis-base36>-<6 hex>`) that namespaces dispatch
 /// descriptions so transcripts can't collide across iterations sharing one parent
-/// session's subagents dir. The TS original uses `crypto.randomBytes`; with no
-/// RNG crate, the low bits of the sub-millisecond clock supply the entropy —
-/// enough, since the base36 millis prefix already differs between runs.
+/// session's subagents dir. With no RNG crate, the low bits of the
+/// sub-millisecond clock supply the entropy — enough, since the base36 millis
+/// prefix already differs between runs.
 pub(crate) fn make_run_nonce() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)

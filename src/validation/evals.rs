@@ -34,8 +34,7 @@ mod tests {
     use super::validate_evals_config;
     use serde_json::{Value, json};
 
-    /// The minimal valid config the cases below mutate — mirrors the `base`
-    /// fixture in eval-runner's `validate.test.ts`.
+    /// The minimal valid config the cases below mutate.
     fn base() -> Value {
         json!({
             "skill_name": "demo",

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/judge-tasks.schema.json",
   "title": "Judge Tasks",
-  "description": "Output of evals:grade (emit mode). The list of LLM judge tasks the orchestrator dispatches, plus the skill-invocation meta-checks. Lives at <workspace>/iteration-N/judge-tasks.json. The full prompt is written to dispatch_prompt_path and is NOT inlined here. (Schema added in the Rust port; the TypeScript original wrote this artifact unvalidated.)",
+  "description": "Output of evals:grade (emit mode). The list of LLM judge tasks the orchestrator dispatches, plus the skill-invocation meta-checks. Lives at <workspace>/iteration-N/judge-tasks.json. The full prompt is written to dispatch_prompt_path and is NOT inlined here.",
   "type": "object",
   "required": [
     "generated",

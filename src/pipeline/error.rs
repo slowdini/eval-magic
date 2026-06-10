@@ -3,14 +3,12 @@
 //! The stages orchestrate filesystem IO, JSON (de)serialization, and schema
 //! validation, so a stage failure can originate in any of those. `PipelineError`
 //! unifies them behind one `thiserror` enum (the library-side convention; the CLI
-//! boundary maps it to `anyhow`). `Message` carries the handful of bespoke
-//! `die(...)`-style failures the TypeScript original raised as plain `Error`s.
+//! boundary maps it to `anyhow`).
 
 /// A recoverable failure while running a pipeline stage.
 #[derive(Debug, thiserror::Error)]
 pub enum PipelineError {
-    /// A stage-specific failure with a ready-to-display message (ports the
-    /// `throw new Error(...)` / `die(...)` strings from eval-runner).
+    /// A stage-specific failure with a ready-to-display message.
     #[error("{0}")]
     Message(String),
     /// Filesystem IO failure.

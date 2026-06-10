@@ -1,11 +1,10 @@
-//! Guard hook evaluation. Ports the logic of `src/sandbox/guard.ts`.
+//! Guard hook evaluation.
 //!
-//! eval-runner shipped this as a standalone Node script that the PreToolUse hook
-//! invoked by path. Here it is library logic behind the binary's hidden `guard`
-//! subcommand: the CLI handler reads the hook payload from stdin and the marker
-//! path from argv, calls [`guard_decision`], and writes any deny verdict to
-//! stdout. Both layers fail open — a malformed payload or unreadable marker
-//! yields "allow", so the guard can never brick a session.
+//! Library logic behind the binary's hidden `guard` subcommand: the CLI handler
+//! reads the hook payload from stdin and the marker path from argv, calls
+//! [`guard_decision`], and writes any deny verdict to stdout. Both layers fail
+//! open — a malformed payload or unreadable marker yields "allow", so the guard
+//! can never brick a session.
 
 use std::path::Path;
 
@@ -15,7 +14,7 @@ use super::decide::{GuardMarker, decide};
 use super::now_ms;
 
 /// Read and parse the guard marker. Missing or unparseable → `None` (the guard
-/// then allows everything), matching eval-runner's fail-open `readMarker`.
+/// then allows everything — fail open).
 pub fn read_marker(path: &Path) -> Option<GuardMarker> {
     let text = std::fs::read_to_string(path).ok()?;
     serde_json::from_str(&text).ok()

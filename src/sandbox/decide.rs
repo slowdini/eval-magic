@@ -1,4 +1,4 @@
-//! The guard arbiter. Ports `src/sandbox/policy.ts`.
+//! The guard arbiter.
 //!
 //! [`decide`] is the single decision point the armed PreToolUse hook consults:
 //! given a tool call and the on-disk guard marker, it allows or denies. Writes

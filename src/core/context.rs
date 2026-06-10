@@ -1,9 +1,8 @@
 //! `RunContext` detection.
 //!
-//! Ports `src/core/context.ts`. The manual `flag()` argv parsing of the TS
-//! original is gone — `clap` owns flag parsing — so `detect_run_context` takes
-//! already-parsed values (a [`DetectInput`]) and performs the filesystem
-//! validation, sibling-skill enumeration, and path defaulting that produce a
+//! `clap` owns flag parsing, so `detect_run_context` takes already-parsed
+//! values (a [`DetectInput`]) and performs the filesystem validation,
+//! sibling-skill enumeration, and path defaulting that produce a
 //! [`RunContext`].
 
 use std::path::{Path, PathBuf};

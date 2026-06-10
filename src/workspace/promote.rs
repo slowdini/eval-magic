@@ -1,6 +1,6 @@
 //! Baseline promotion.
 //!
-//! Ports `src/workspace/promote-baseline.ts`: copy the durable, reference-worthy
+//! Copy the durable, reference-worthy
 //! subset of a workspace iteration (`benchmark.json`, per-run `grading.json`, a
 //! `BASELINE.md` provenance file) into the skill's version-controlled
 //! `evals/baseline/`, and drop a `.promoted.json` marker so `teardown` can

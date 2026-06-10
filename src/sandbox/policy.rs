@@ -1,9 +1,9 @@
-//! Write-boundary primitives. Ports `src/sandbox/sandbox-policy.ts`.
+//! Write-boundary primitives.
 //!
-//! Stateless classifiers shared by the armed guard ([`super::decide`]) and, in a
-//! later phase, `pipeline::detect-stray-writes`: which tools write, which Bash
-//! commands mutate state outside a sandbox, and whether a path falls under an
-//! allowed root.
+//! Stateless classifiers shared by the armed guard ([`super::decide`]) and
+//! `pipeline::detect-stray-writes`: which tools write, which Bash commands
+//! mutate state outside a sandbox, and whether a path falls under an allowed
+//! root.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -11,8 +11,7 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-/// Tools that mutate the filesystem and carry a target path argument. Mirrors the
-/// `WRITE_TOOLS` set in eval-runner.
+/// Tools that mutate the filesystem and carry a target path argument.
 pub const WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
 
 /// True for a tool name that writes the filesystem with a path argument.
@@ -25,8 +24,8 @@ pub fn is_write_tool(tool_name: &str) -> bool {
 /// as warnings; the opt-in guard denies them. Each is meaningful only when the
 /// command does not reference an allowed root (see [`classify_bash`]).
 ///
-/// Compiled once. Patterns are ported verbatim from eval-runner; they are
-/// known-valid, so a compile failure here is a programmer error and panics.
+/// Compiled once. The patterns are known-valid, so a compile failure here is a
+/// programmer error and panics.
 static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
     [
         (
