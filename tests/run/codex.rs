@@ -1,5 +1,5 @@
-//! Codex-harness behavior: `.agents/skills` staging, inline fallback, and the
-//! parity-feature rejections.
+//! Codex-harness behavior: `.agents/skills` staging, inline fallback, guard
+//! wiring, and remaining parity-feature rejections.
 
 use crate::helpers::*;
 use predicates::str::contains;
@@ -116,30 +116,80 @@ fn codex_supports_stage_name_when_staging() {
 }
 
 #[test]
+fn codex_plan_mode_injects_profile_and_records_flag() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--plan-mode",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(dispatch["plan_mode"], true);
+    for task in dispatch["tasks"].as_array().unwrap() {
+        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+        if task["condition"] == "with_skill" {
+            assert!(prompt.contains("## Skills"));
+        }
+        assert!(prompt.contains("<system-reminder>"));
+        assert!(prompt.contains("Codex plan mode is active"));
+        assert!(prompt.contains("<proposed_plan>"));
+        assert!(!prompt.contains("ExitPlanMode"));
+    }
+}
+
+#[test]
+fn codex_guard_installs_project_hook() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--guard",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("--dangerously-bypass-hook-trust"));
+
+    let hooks_path = cwd.join(".codex/hooks.json");
+    assert!(hooks_path.exists());
+    let hooks = read_json(&hooks_path);
+    let hook = &hooks["hooks"]["PreToolUse"][0];
+    assert!(
+        hook["hooks"][0]["command"]
+            .as_str()
+            .unwrap()
+            .contains("guard-codex")
+    );
+    assert!(
+        cwd.join(".agents/skills/.slow-powers-eval-guard.json")
+            .exists()
+    );
+}
+
+#[test]
 fn codex_rejects_unsupported_parity_features() {
     let tmp = tempfile::TempDir::new().unwrap();
-
-    for extra in [["--guard"].as_slice(), ["--plan-mode"].as_slice()] {
-        let (skill_dir, cwd) = setup(&tmp.path().join(format!("c{}", extra[0])), DEFAULT_EVALS);
-        let mut cmd = skill_eval();
-        cmd.current_dir(&cwd)
-            .args(["run", "--skill-dir"])
-            .arg(&skill_dir)
-            .args([
-                "--skill",
-                "mr-review",
-                "--mode",
-                "new-skill",
-                "--harness",
-                "codex",
-                "--dry-run",
-            ])
-            .args(extra)
-            .assert()
-            .failure()
-            .stderr(contains("Codex"));
-    }
-
     let (skill_dir, cwd) = setup(&tmp.path().join("c-stage-name"), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)

@@ -26,6 +26,17 @@ pub fn render_codex_available_skills_block(skills: &[AvailableSkill]) -> String 
     out
 }
 
+/// Render a Codex plan-mode profile as an operating-context reminder. Codex's
+/// non-interactive `exec` surface has no documented real plan-mode switch, so
+/// this mirrors the portable approximation: text injected ahead of the task.
+pub fn render_codex_plan_mode_context(profile_text: &str) -> String {
+    let trimmed = profile_text.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    format!("<system-reminder>\n{trimmed}\n</system-reminder>")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -59,5 +70,14 @@ mod tests {
     #[test]
     fn empty_list_renders_empty_string() {
         assert_eq!(render_codex_available_skills_block(&[]), "");
+    }
+
+    #[test]
+    fn plan_mode_wraps_in_system_reminder_with_codex_profile_text() {
+        let block = render_codex_plan_mode_context("Codex plan mode is active.");
+        assert_eq!(
+            block,
+            "<system-reminder>\nCodex plan mode is active.\n</system-reminder>"
+        );
     }
 }

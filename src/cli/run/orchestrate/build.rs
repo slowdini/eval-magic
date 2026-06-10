@@ -11,7 +11,7 @@ use serde_json::json;
 use crate::adapters::{detect_plugin_shadows, format_shadow_banner, resolve_config_dir};
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, Harness, RunContext};
 use crate::pipeline::io::now_iso8601;
-use crate::sandbox::install_guard;
+use crate::sandbox::install_guard_for_harness;
 
 use super::super::dispatch::{
     DispatchTaskOpts, build_dispatch_task, build_manifest, copy_fixtures, get_skill_description,
@@ -178,15 +178,21 @@ pub(super) fn post_build(
         if opts.no_stage {
             eprintln!("\n⚠ --guard requires staging enabled; skipping guard install.");
         } else {
-            install_guard(
+            install_guard_for_harness(
                 &ctx.stage_root,
                 &ctx.workspace_root,
                 &std::env::current_exe()?,
+                ctx.harness,
                 None,
             )?;
-            println!(
-                "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     skill-eval teardown-guard --skill <name>"
-            );
+            match ctx.harness {
+                Harness::ClaudeCode => println!(
+                    "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     skill-eval teardown-guard"
+                ),
+                Harness::Codex => println!(
+                    "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     skill-eval teardown-guard"
+                ),
+            }
         }
     }
 

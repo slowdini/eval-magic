@@ -10,12 +10,12 @@ use chrono::DateTime;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::policy::{classify_bash, is_under_any, is_write_tool, path_arg};
+use super::policy::{apply_patch_paths, classify_bash, is_under_any, is_write_tool, path_arg};
 
-/// The marker file (`<stageRoot>/.claude/skills/.slow-powers-eval-guard.json`)
-/// that arms the guard. The guard is a no-op unless this file exists, is active,
-/// and has not expired — so a crashed run that never tore the hook down can't
-/// silently block writes in the user's next interactive session.
+/// The staged marker file that arms the guard. The guard is a no-op unless this
+/// file exists, is active, and has not expired — so a crashed run that never tore
+/// the hook down can't silently block writes in the user's next interactive
+/// session.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GuardMarker {
@@ -95,6 +95,23 @@ pub fn decide(
         {
             return GuardDecision::deny(format!(
                 "eval guard: {tool_name} to {p} is outside the eval sandbox (allowed: {})",
+                roots.join(", ")
+            ));
+        }
+        return GuardDecision::allow();
+    }
+
+    if tool_name == "apply_patch" {
+        let paths = apply_patch_paths(tool_input);
+        if paths.is_empty() {
+            return GuardDecision::deny(
+                "eval guard: blocked apply_patch because no patch target path could be determined"
+                    .to_string(),
+            );
+        }
+        if let Some(path) = paths.iter().find(|p| !is_under_any(p, &roots, &repo_root)) {
+            return GuardDecision::deny(format!(
+                "eval guard: apply_patch target {path} is outside the eval sandbox (allowed: {})",
                 roots.join(", ")
             ));
         }
@@ -252,6 +269,34 @@ mod tests {
         );
         assert!(!d.allow);
         assert!(d.reason.unwrap().to_lowercase().contains("worktree"));
+    }
+
+    #[test]
+    fn denies_apply_patch_outside_allowed_roots() {
+        let d = decide_now(
+            "apply_patch",
+            json!({ "files": ["/work/runner/src/lib.rs"] }),
+            Some(&marker()),
+        );
+        assert!(!d.allow);
+        assert!(d.reason.unwrap().contains("apply_patch"));
+    }
+
+    #[test]
+    fn allows_apply_patch_inside_allowed_roots() {
+        let d = decide_now(
+            "apply_patch",
+            json!({ "files": ["/work/skills-workspace/eval/outputs/out.md"] }),
+            Some(&marker()),
+        );
+        assert!(d.allow);
+    }
+
+    #[test]
+    fn denies_apply_patch_without_a_known_target() {
+        let d = decide_now("apply_patch", json!({}), Some(&marker()));
+        assert!(!d.allow);
+        assert!(d.reason.unwrap().contains("no patch target"));
     }
 
     #[test]

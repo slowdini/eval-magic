@@ -10,7 +10,7 @@ mod run;
 mod validate;
 mod workspace;
 
-pub(crate) use guard::{run_guard, run_teardown_guard};
+pub(crate) use guard::{run_guard, run_guard_codex, run_teardown_guard};
 pub(crate) use pipeline::{
     run_aggregate, run_detect_stray_writes, run_fill_transcripts, run_finalize, run_grade,
     run_ingest, run_record_runs,
