@@ -2,6 +2,7 @@
 //! bootstrap framing, and `--only` filtering.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 use std::path::Path;
@@ -36,6 +37,58 @@ fn guard_installs_pretooluse_hook_and_teardown_guard_removes_it() {
         .assert()
         .success();
     assert!(!settings.exists());
+}
+
+#[test]
+fn finalize_warns_when_guard_is_still_armed() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let marker = cwd.join(".claude/skills/.slow-powers-eval-guard.json");
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--guard"])
+        .assert()
+        .success();
+    assert!(marker.exists());
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["finalize", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .success()
+        .stdout(contains("Guard still armed"))
+        .stdout(contains("eval-magic teardown-guard"));
+
+    assert!(marker.exists());
+}
+
+#[test]
+fn finalize_does_not_warn_when_guard_is_not_armed() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .assert()
+        .success();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["finalize", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .success()
+        .stdout(contains("Finalize complete"))
+        .stdout(contains("Guard still armed").not());
 }
 
 #[test]

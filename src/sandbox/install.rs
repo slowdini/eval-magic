@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 use crate::core::Harness;
 
 use super::now_ms;
+use super::{guard::read_marker, marker_is_armed};
 
 /// Marker file (under the staged skills dir) that arms the guard.
 pub const GUARD_MARKER: &str = ".slow-powers-eval-guard.json";
@@ -286,6 +287,17 @@ pub fn teardown_guard(stage_root: &Path) -> bool {
     torn_claude || torn_codex
 }
 
+/// True when either harness has a live guard marker under `stage_root`.
+pub(crate) fn guard_is_armed(stage_root: &Path) -> bool {
+    let now = now_ms();
+    [
+        stage_root.join(".claude").join("skills").join(GUARD_MARKER),
+        stage_root.join(".agents").join("skills").join(GUARD_MARKER),
+    ]
+    .iter()
+    .any(|path| marker_is_armed(read_marker(path).as_ref(), now))
+}
+
 fn teardown_guard_from_skills_dir(skills_dir: &Path) -> bool {
     let manifest_path = skills_dir.join(GUARD_MANIFEST);
     let marker_path = skills_dir.join(GUARD_MARKER);
@@ -462,6 +474,61 @@ mod tests {
     fn teardown_is_a_safe_no_op_when_nothing_is_installed() {
         let c = setup();
         assert!(!teardown_guard(&c.stage_root));
+    }
+
+    #[test]
+    fn guard_is_armed_detects_claude_or_codex_marker() {
+        let c = setup();
+        install_guard(
+            &c.stage_root,
+            &c.workspace_root,
+            Path::new("/g/eval-magic"),
+            None,
+        )
+        .unwrap();
+        assert!(guard_is_armed(&c.stage_root));
+        teardown_guard(&c.stage_root);
+        assert!(!guard_is_armed(&c.stage_root));
+
+        install_guard_for_harness(
+            &c.stage_root,
+            &c.workspace_root,
+            Path::new("/g/eval-magic"),
+            Harness::Codex,
+            None,
+        )
+        .unwrap();
+        assert!(guard_is_armed(&c.stage_root));
+    }
+
+    #[test]
+    fn guard_is_armed_ignores_missing_inactive_expired_and_malformed_markers() {
+        let c = setup();
+        let marker_path = skills_dir(&c.stage_root).join(GUARD_MARKER);
+        fs::create_dir_all(skills_dir(&c.stage_root)).unwrap();
+
+        assert!(!guard_is_armed(&c.stage_root));
+
+        fs::write(
+            &marker_path,
+            serde_json::to_string(&json!({ "active": false })).unwrap(),
+        )
+        .unwrap();
+        assert!(!guard_is_armed(&c.stage_root));
+
+        fs::write(
+            &marker_path,
+            serde_json::to_string(&json!({
+                "active": true,
+                "expiresAt": iso_millis(now_ms() - 60_000),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!guard_is_armed(&c.stage_root));
+
+        fs::write(&marker_path, "not json").unwrap();
+        assert!(!guard_is_armed(&c.stage_root));
     }
 
     #[test]

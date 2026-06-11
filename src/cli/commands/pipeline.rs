@@ -12,6 +12,7 @@ use crate::cli::run;
 use crate::cli::{check_subagents_dir, iteration_dir, resolve_iteration, run_context_from};
 use crate::core::Harness;
 use crate::pipeline;
+use crate::sandbox;
 use crate::validation;
 
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
@@ -114,6 +115,9 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     println!(
         "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown{target_args}"
     );
+    if sandbox::guard_is_armed(&ctx.stage_root) {
+        println!("⚠ Guard still armed — run `eval-magic teardown-guard` before editing source.");
+    }
     Ok(())
 }
 

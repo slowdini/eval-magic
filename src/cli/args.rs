@@ -252,6 +252,8 @@ pub struct RunArgs {
     /// writes/installs outside the eval sandbox while dispatches run. Arm it
     /// unless the user opts out. The marker auto-expires after 6h and is torn down
     /// at the next run; while armed the hook fires on your own tool calls too.
+    /// If it remains armed after `finalize`, `finalize` reminds you to run
+    /// `teardown-guard` before editing source.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
@@ -326,7 +328,8 @@ pub(crate) enum Commands {
     /// Finalize grading after judge responses are in.
     ///
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges the judge verdicts
-    /// and writes `benchmark.json`. Requires `--iteration`.
+    /// and writes `benchmark.json`. If a live guard remains armed, prints a
+    /// `teardown-guard` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
