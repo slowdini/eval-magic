@@ -91,7 +91,8 @@ eval-magic run --guard
 eval-magic ingest \
   --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/
 
-# 4. Dispatch the judge tasks ingest lists, then:
+# 4. Dispatch the judge tasks ingest lists, then finalize. If --guard is still
+#    armed, finalize reminds you to run teardown-guard before editing source.
 eval-magic finalize
 
 # 5. Read skills-workspace/my-skill/iteration-1/benchmark.json, then clean up:
@@ -122,7 +123,7 @@ run  →  dispatch agents  →  ingest  →  dispatch judges  →  finalize  →
 2. **Dispatch agents.** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), an `agent_description` to pass through *verbatim* as the dispatch description, and the exact `run_record_path` / `timing_path`. For each task, dispatch a fresh subagent told to read the file at `dispatch_prompt_path` and follow it exactly. The `agent_description` is namespaced with the iteration and a per-run nonce (`<eval_id>:<condition>[:r<k>]:i<N>-<nonce>`; the `r<k>` segment appears only in multi-run cells, see `run --help` on `--runs`) — passing it through unchanged is what lets transcripts correlate to runs.
 3. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json` from `dispatch.json` + the subagent's `outputs/final-message.md` + the persisted transcript, scans for stray writes, and grades the `transcript_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion.
 4. **Dispatch judges.** Same pattern as step 2: dispatch a fresh subagent for each judge task to read its prompt file and write its verdict back.
-5. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json`. Read it.
+5. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json`. Read it. If a `--guard` marker is still live, it also reminds you to run `teardown-guard` before editing source.
 6. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
 
 The chains run in-process and stop at the first failure; re-running after a fix is safe — every sub-step skips work that's already done. The individual steps (`record-runs`, `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`) remain callable for inspection or recovery. Codex uses the same chain with `--harness codex` after each task captures `outputs/codex-events.jsonl`; un-wired harnesses still write records by hand until their adapters land.
