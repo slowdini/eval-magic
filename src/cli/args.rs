@@ -22,10 +22,11 @@ use crate::core::Harness;
 ///
 ///   run → dispatch agents → ingest → dispatch judges → finalize → teardown
 ///
-/// Every command takes two required flags: `--skill-dir` (the directory *holding*
-/// skill folders — it is the eval's test environment; every skill in it gets
-/// staged) and `--skill` (which folder to evaluate). With no subcommand, the
-/// default action is `run`.
+/// The default target is the skill in the current directory. Pass
+/// `--skill <path-or-name>` to select one skill from elsewhere. Pass
+/// `--skill-dir <dir>` only when you want every other skill in that directory
+/// staged as part of the eval environment. With no subcommand, the default
+/// action is `run`.
 #[derive(Debug, Parser)]
 #[command(
     name = "eval-magic",
@@ -41,27 +42,34 @@ pub(crate) struct Cli {
 /// Flags shared by most subcommands.
 #[derive(Debug, Args)]
 pub struct CommonArgs {
-    /// Directory containing the skill(s) under evaluation (required).
+    /// Optional directory of skills to stage as the eval environment.
     ///
-    /// This directory IS the eval's test environment: the skill-under-test is
-    /// staged under a unique slug, and every *other* skill folder inside it is
-    /// staged under its natural name so cross-references resolve. If it holds only
-    /// your skill, the eval runs in isolation — copy or symlink siblings in to
-    /// stage them.
+    /// Use this when the skill under test needs sibling skills available. The
+    /// skill-under-test is staged under a unique slug, and every *other* skill
+    /// folder inside this directory is staged under its natural name so
+    /// cross-references resolve. Omit it for the default single-skill isolated
+    /// run.
     #[arg(long)]
     pub skill_dir: Option<String>,
-    /// Skill name under evaluation — the subdirectory of `--skill-dir` (required).
+    /// Skill under evaluation.
+    ///
+    /// With `--skill-dir`, this is the child folder name, inferred when the
+    /// directory contains exactly one skill. Without `--skill-dir`, this is a
+    /// skill directory path, or a child directory name relative to the current
+    /// directory. Omit it when running from inside the skill directory.
     #[arg(long)]
     pub skill: Option<String>,
-    /// Iteration number for post-dispatch steps.
+    /// Iteration number for post-dispatch steps (defaults to latest existing).
     #[arg(long)]
     pub iteration: Option<u32>,
-    /// Comparison mode: `new-skill` (with vs. without) or `revision` (old vs. new).
+    /// Comparison mode: `new-skill` (default, with vs. without) or `revision`
+    /// (old vs. new).
     ///
     /// Mode A (`new-skill`) validates a brand-new skill against baseline behavior
     /// with no skill loaded. Mode B (`revision`) tests a language change to an
     /// existing skill: snapshot the old `SKILL.md` (see `snapshot`), then run both
-    /// variants against the same prompts. `revision` requires `--baseline`.
+    /// variants against the same prompts. `revision` defaults `--baseline` to
+    /// `baseline`.
     #[arg(long)]
     pub mode: Option<String>,
     /// Target harness: `claude-code` (default) or `codex`.
@@ -103,26 +111,30 @@ pub struct CommonArgs {
 /// `validate` only needs to know where to look.
 #[derive(Debug, Args)]
 pub struct ValidateArgs {
-    /// Directory whose `evals.json` files should be validated.
+    /// Directory whose child skills' `evals.json` files should be batch validated.
     #[arg(long)]
     pub skill_dir: Option<String>,
+    /// Skill directory to validate when `--skill-dir` is omitted.
+    #[arg(long)]
+    pub skill: Option<String>,
 }
 
 /// `init` writes the first eval scaffold for a skill.
 #[derive(Debug, Args)]
 pub struct InitArgs {
-    /// Directory containing the skill(s) under evaluation (required).
+    /// Optional directory containing the skill under evaluation.
     ///
-    /// The skill named by `--skill` must be an immediate child of this directory
-    /// and must already contain `SKILL.md`. `init` creates only the eval scaffold
-    /// under that skill; it does not create the skill itself.
+    /// Use this when the skill is an immediate child of a skills directory. If
+    /// omitted, `init` uses `--skill <path-or-name>` or the current directory.
+    /// `init` creates only the eval scaffold; it does not create the skill itself.
     #[arg(long)]
     pub skill_dir: Option<String>,
-    /// Skill name under evaluation -- the subdirectory of `--skill-dir` (required).
+    /// Skill under evaluation.
     ///
-    /// This value becomes the generated `skill_name` and should match the skill
-    /// folder name used by later `run`, `ingest`, `finalize`, and
-    /// `promote-baseline` commands.
+    /// With `--skill-dir`, this is the child folder name, inferred when the
+    /// directory contains exactly one skill. Without `--skill-dir`, this is a
+    /// skill directory path, or a child directory name relative to the current
+    /// directory. This value becomes the generated `skill_name`.
     #[arg(long)]
     pub skill: Option<String>,
     /// Stable kebab-case id for the first eval case.
@@ -208,7 +220,7 @@ pub struct PromoteBaselineArgs {
 pub struct RunArgs {
     #[command(flatten)]
     pub common: CommonArgs,
-    /// Baseline snapshot label (required in `--mode revision`).
+    /// Baseline snapshot label (defaults to `baseline` in `--mode revision`).
     ///
     /// The snapshot label to use as the `old_skill` arm in revision mode (see
     /// `snapshot`).

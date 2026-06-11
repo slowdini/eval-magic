@@ -47,7 +47,8 @@ Each subagent's output is graded against the case's assertions, and the per-cond
 Your skill lives in a folder with a `SKILL.md`. Test cases live next to it in `evals/evals.json`:
 
 ```bash
-eval-magic init --skill-dir ./skills --skill my-skill
+cd ./skills/my-skill
+eval-magic init
 ```
 
 `init` prompts for a first eval id, prompt, and expected output, then writes:
@@ -69,7 +70,11 @@ You can also script it with `--id`, `--prompt`, and `--expected-output`. If
 `evals/evals.json` already exists, `init` refuses to overwrite it unless you pass
 `--force`.
 
-Every command takes two required flags: `--skill-dir` (the directory *holding* skill folders — it is the eval's test environment; every skill in it gets staged) and `--skill` (which folder to evaluate). Run `eval-magic --help` for why the directory is the environment.
+By default, commands target the skill in the current directory and run it in
+isolation. From elsewhere, pass `--skill ./skills/my-skill` to select one skill
+without staging siblings. Pass `--skill-dir ./skills --skill my-skill` only when
+you want sibling skills from that directory staged as part of the eval
+environment.
 
 ### Mode A — new skill (with vs. without)
 
@@ -77,20 +82,20 @@ Every command takes two required flags: `--skill-dir` (the directory *holding* s
 # 1. Build the iteration workspace (arm --guard — see Cost & confirmation).
 #    Add --runs <N> to dispatch every eval N times per condition for variance
 #    reduction (a per-eval "runs" field in evals.json overrides the flag).
-eval-magic run --skill-dir ./skills --skill my-skill --mode new-skill --guard
+eval-magic run --guard
 
 # 2. Your agent dispatches each task in skills-workspace/my-skill/iteration-1/dispatch.json
 #    as a fresh subagent (each reads its dispatch_prompt_path and follows it).
 
 # 3. Assemble records, detect stray writes, grade:
-eval-magic ingest --skill-dir ./skills --skill my-skill --iteration 1 \
+eval-magic ingest \
   --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/
 
 # 4. Dispatch the judge tasks ingest lists, then:
-eval-magic finalize --skill-dir ./skills --skill my-skill --iteration 1
+eval-magic finalize
 
 # 5. Read skills-workspace/my-skill/iteration-1/benchmark.json, then clean up:
-eval-magic teardown --skill-dir ./skills --skill my-skill
+eval-magic teardown
 ```
 
 ### Mode B — revision (old vs. new) — the common case
@@ -98,8 +103,8 @@ eval-magic teardown --skill-dir ./skills --skill my-skill
 You've already edited the skill; snapshot the old version straight from git (`--ref` reads the object database without touching the working tree):
 
 ```bash
-eval-magic snapshot --skill-dir ./skills --skill my-skill --label baseline --ref HEAD
-eval-magic run --skill-dir ./skills --skill my-skill --mode revision --baseline baseline --guard
+eval-magic snapshot --ref HEAD
+eval-magic run --mode revision --guard
 # …then steps 2–5 as above.
 ```
 
@@ -196,7 +201,7 @@ The only source file you author for evals is `<skill>/evals/evals.json` (or crea
 The workspace tree is ephemeral, but two parts of a *canonical* run are worth committing: the `benchmark.json` delta (the "this skill earns its place" number) and the per-run `grading.json` rationales (why each assertion passed or failed). Promote them into the skill's tracked `evals/baseline/`:
 
 ```bash
-eval-magic promote-baseline --skill-dir <dir> --skill <name> --iteration <N> \
+eval-magic promote-baseline \
   [--label <tag>] [--agent-model <id>] [--judge-model <id>]
 ```
 
@@ -214,10 +219,10 @@ The runner never dispatches the agent or judge itself, so it can't observe which
 
 A subagent that runs an eval should start in an environment that mirrors a real install — otherwise the result depends on the operator's local install state rather than the skill being measured. Unless `--no-stage` is set, the runner produces this parity explicitly, in two parts:
 
-1. **An available-skills block is built into every dispatch prompt**, listing the skills actually staged — the skill-under-test plus the siblings found in `--skill-dir` — rendered the way the harness surfaces discoverable skills to a real session, not in an eval-specific format.
-2. **Every skill in `--skill-dir` is staged.** The skill-under-test goes under a unique slug; every *other* skill is copied at its natural name (excluding each skill's `evals/`) so cross-references resolve.
+1. **An available-skills block is built into every dispatch prompt**, listing the skills actually staged — normally just the skill-under-test, plus siblings only when `--skill-dir` is passed — rendered the way the harness surfaces discoverable skills to a real session, not in an eval-specific format.
+2. **The skill-under-test is always staged.** It goes under a unique slug. When `--skill-dir` is passed, every *other* skill in that directory is copied at its natural name (excluding each skill's `evals/`) so cross-references resolve.
 
-For the `without_skill` / baseline condition, the dispatch reflects "this skill is unavailable, others remain" — it measures the *incremental* value of the skill on top of the rest of the environment, not its absolute value vs. no skills at all. `--bootstrap` is separate from parity: it injects product-specific framing inside the `<session-start-context>` block and does not enumerate skills.
+For the `without_skill` / baseline condition, the dispatch reflects "this skill is unavailable, others remain" when siblings were opted in with `--skill-dir`; otherwise it measures the skill against a clean no-skill baseline. `--bootstrap` is separate from parity: it injects product-specific framing inside the `<session-start-context>` block and does not enumerate skills.
 
 **Parity is only as clean as your session.** Staging controls what the runner *adds*, not what your session already *loaded*. Subagents dispatched in-process share the parent session's plugins, so an installed plugin exposing a same-named skill is still discoverable and contaminates both arms — the staging slug stops an on-disk collision, not runtime discovery. The runner can't unload a live plugin; on Claude Code it emits a build-time *plugin-shadow* warning (also surfaced in `benchmark.json`'s `validity_warnings`). Closing it is a launch-time step — see [Claude Code](#claude-code-fully-wired) below.
 
@@ -294,7 +299,7 @@ codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -
 Then ingest **without** `--subagents-dir` — the transcript source is fixed to each task's `codex-events.jsonl`:
 
 ```bash
-eval-magic ingest --skill-dir <dir> --skill <name> --iteration <N> --harness codex
+eval-magic ingest --harness codex
 ```
 
 `finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code in a few places: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. `--guard` stages a Codex `PreToolUse` hook that blocks out-of-sandbox `Bash` mutations and `apply_patch` targets before they run; `detect-stray-writes` remains the post-run audit. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events.

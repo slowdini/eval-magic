@@ -5,6 +5,7 @@ use std::fs;
 
 use serde_json::Value;
 
+use crate::cli::command_target_args;
 use crate::core::{Mode, RunContext};
 use crate::validation::validate_evals_config;
 
@@ -20,11 +21,10 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
         Some("new-skill") => Mode::NewSkill,
         Some("revision") => Mode::Revision,
         Some(other) => return Err(RunError::msg(format!("unknown --mode: {other}"))),
-        None => return Err(RunError::msg("--mode required: new-skill | revision")),
+        None => Mode::NewSkill,
     };
-    if mode == Mode::Revision && opts.baseline.is_none() {
-        return Err(RunError::msg("revision mode requires --baseline <label>"));
-    }
+    let baseline =
+        (mode == Mode::Revision).then(|| opts.baseline.unwrap_or("baseline").to_string());
     if opts.runs == 0 {
         return Err(RunError::msg("--runs must be at least 1"));
     }
@@ -74,17 +74,16 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     let (skill_path_a, skill_path_b): (Option<String>, Option<String>) = match mode {
         Mode::NewSkill => (Some(skill_md.clone()), None),
         Mode::Revision => {
-            let baseline = opts.baseline.expect("checked above");
+            let baseline = baseline.as_deref().expect("revision baseline set above");
             let baseline_skill = workspace_skill_dir
                 .join("snapshots")
                 .join(baseline)
                 .join("SKILL.md");
             if !baseline_skill.exists() {
+                let target_args = command_target_args(ctx);
                 return Err(RunError::msg(format!(
-                    "baseline snapshot not found: {}\n  Run: eval-magic snapshot --skill {} --skill-dir {} --label {} (before editing)",
+                    "baseline snapshot not found: {}\n  Run: eval-magic snapshot{target_args} --label {} (before editing)",
                     baseline_skill.display(),
-                    ctx.skill_name,
-                    ctx.skill_dir.display(),
                     baseline
                 )));
             }
@@ -97,6 +96,7 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
 
     Ok(Resolved {
         mode,
+        baseline,
         skill_md_path,
         iteration,
         iteration_dir,

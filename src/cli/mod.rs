@@ -90,6 +90,7 @@ pub(crate) fn run_context_with_bootstrap(
         bootstrap,
         workspace_dir: args.workspace_dir.clone(),
         harness: args.harness,
+        cwd: None,
     })?)
 }
 
@@ -103,10 +104,59 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
     })
 }
 
-/// The iteration directory for a run: `<workspace>/<skill>/iteration-<n>`. Errors
-/// if `--iteration` is absent or the directory does not exist.
+/// Render the shortest target selector that will resolve the same skill from
+/// the current command context.
+pub(crate) fn command_target_args(ctx: &RunContext) -> String {
+    if ctx.stage_siblings {
+        return format!(
+            " --skill-dir {} --skill {}",
+            ctx.skill_dir.display(),
+            ctx.skill_name
+        );
+    }
+    if ctx.stage_root == ctx.skill_subdir {
+        String::new()
+    } else {
+        format!(" --skill {}", ctx.skill_subdir.display())
+    }
+}
+
+/// Resolve the explicit iteration, or default to the latest existing
+/// `iteration-<n>` under `<workspace>/<skill>`.
+pub(crate) fn resolve_iteration(ctx: &RunContext, iteration: Option<u32>) -> anyhow::Result<u32> {
+    if let Some(iteration) = iteration {
+        return Ok(iteration);
+    }
+
+    let skill_workspace = ctx.workspace_root.join(&ctx.skill_name);
+    let entries = std::fs::read_dir(&skill_workspace).map_err(|_| {
+        anyhow!(
+            "missing --iteration (no iterations found for {})",
+            ctx.skill_name
+        )
+    })?;
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .strip_prefix("iteration-")
+                .and_then(|n| n.parse::<u32>().ok())
+        })
+        .max()
+        .ok_or_else(|| {
+            anyhow!(
+                "missing --iteration (no iterations found for {})",
+                ctx.skill_name
+            )
+        })
+}
+
+/// The iteration directory for a run: `<workspace>/<skill>/iteration-<n>`.
+/// Defaults to the latest existing iteration when `--iteration` is absent.
 pub(crate) fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow::Result<PathBuf> {
-    let iteration = iteration.ok_or_else(|| anyhow!("missing --iteration"))?;
+    let iteration = resolve_iteration(ctx, iteration)?;
     let dir = ctx
         .workspace_root
         .join(&ctx.skill_name)

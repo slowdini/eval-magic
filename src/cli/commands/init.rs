@@ -7,6 +7,7 @@ use anyhow::{anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::cli::args::InitArgs;
+use crate::cli::command_target_args;
 use crate::core::{DetectInput, detect_run_context};
 use crate::validation::validate_evals_config;
 
@@ -56,26 +57,14 @@ pub(crate) fn run_init(args: InitArgs) -> anyhow::Result<()> {
     );
     println!();
     println!("Next:");
+    let target_args = command_target_args(&ctx);
+    println!("  eval-magic run{} --guard", target_args);
     println!(
-        "  eval-magic run --skill-dir {} --skill {} --mode new-skill --guard",
-        ctx.skill_dir.display(),
-        ctx.skill_name
+        "  eval-magic ingest{} --subagents-dir <subagents-dir>",
+        target_args
     );
-    println!(
-        "  eval-magic ingest --skill-dir {} --skill {} --iteration 1 --subagents-dir <subagents-dir>",
-        ctx.skill_dir.display(),
-        ctx.skill_name
-    );
-    println!(
-        "  eval-magic finalize --skill-dir {} --skill {} --iteration 1",
-        ctx.skill_dir.display(),
-        ctx.skill_name
-    );
-    println!(
-        "  eval-magic promote-baseline --skill-dir {} --skill {} --iteration 1",
-        ctx.skill_dir.display(),
-        ctx.skill_name
-    );
+    println!("  eval-magic finalize{}", target_args);
+    println!("  eval-magic promote-baseline{}", target_args);
 
     Ok(())
 }

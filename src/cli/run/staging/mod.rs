@@ -170,7 +170,16 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
         for entry in fs::read_dir(assets_dir)? {
             let entry = entry?;
             let name = entry.file_name();
-            if name == "SKILL.md" || name == "evals" || name == SNAPSHOT_META {
+            if matches!(
+                name.to_string_lossy().as_ref(),
+                "SKILL.md"
+                    | "evals"
+                    | SNAPSHOT_META
+                    | "skills-workspace"
+                    | ".claude"
+                    | ".agents"
+                    | ".codex"
+            ) {
                 continue;
             }
             copy_entry(&assets_dir.join(&name), &skill_dir.join(&name))?;

@@ -13,6 +13,7 @@
 
 use std::path::PathBuf;
 
+use crate::cli::command_target_args;
 use crate::core::{AvailableSkill, Eval, Harness, Mode, RunContext};
 
 use super::RunError;
@@ -45,6 +46,7 @@ pub struct RunOptions<'a> {
 /// and each condition's name + skill path.
 struct Resolved {
     mode: Mode,
+    baseline: Option<String>,
     skill_md_path: PathBuf,
     iteration: u32,
     iteration_dir: PathBuf,
@@ -163,14 +165,14 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         } else {
             ""
         };
+        let target_args = command_target_args(ctx);
         println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec{hook_trust} --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest --iteration {iteration} --harness codex`."
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec{hook_trust} --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest{target_args} --iteration {iteration} --harness codex`."
         );
     } else {
+        let target_args = command_target_args(ctx);
         println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent. Then run:\n  eval-magic ingest --skill {} --skill-dir {} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)",
-            ctx.skill_name,
-            ctx.skill_dir.display()
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent. Then run:\n  eval-magic ingest{target_args} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)"
         );
     }
 }

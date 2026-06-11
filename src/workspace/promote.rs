@@ -191,8 +191,8 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         String::new(),
         "Committed reference output from a canonical eval run. Regenerate with".to_string(),
         format!(
-            "`eval-magic promote-baseline --skill {} --iteration <N>` after aggregating. The ephemeral workspace (run records, timing,",
-            opts.skill_name
+            "`eval-magic promote-baseline --iteration {}` after aggregating. The ephemeral workspace (run records, timing,",
+            opts.iteration
         ),
         "dispatch files, produced outputs) stays gitignored under `skills-workspace/`".to_string(),
         "and is reclaimable by `eval-magic teardown` once promoted (this commit's marker)."

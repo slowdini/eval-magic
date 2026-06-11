@@ -8,30 +8,36 @@
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
 EXAMPLES:
-  # Scaffold a first evals/evals.json for a raw skill directory
-  eval-magic init --skill-dir <dir> --skill <name>
+  # Scaffold a first evals/evals.json from inside a skill directory
+  eval-magic init
 
   # Mode A — evaluate a new skill (with vs. without)
-  eval-magic run --skill-dir <dir> --skill <name> --mode new-skill --guard
+  eval-magic run --guard
   # …dispatch each task in dispatch.json as a fresh subagent…
-  eval-magic ingest --skill-dir <dir> --skill <name> --iteration 1 \\
+  eval-magic ingest \\
     --subagents-dir ~/.claude/projects/<slug>/<session-id>/subagents/
   # …dispatch each judge task ingest listed…
-  eval-magic finalize --skill-dir <dir> --skill <name> --iteration 1
-  eval-magic promote-baseline --skill-dir <dir> --skill <name> --iteration 1   # optional
-  eval-magic teardown --skill-dir <dir> --skill <name>
+  eval-magic finalize
+  eval-magic promote-baseline   # optional
+  eval-magic teardown
 
   # Mode B — evaluate a language change (edit-first)
-  eval-magic snapshot --skill-dir <dir> --skill <name> --label baseline --ref HEAD
-  eval-magic run --skill-dir <dir> --skill <name> --mode revision --baseline baseline --guard
+  eval-magic snapshot --ref HEAD
+  eval-magic run --mode revision --guard
   # …then the same ingest → finalize → teardown steps as Mode A.
 
   # Reduced-set / dry runs
-  eval-magic run --skill-dir <dir> --skill <name> --mode new-skill --dry-run
-  eval-magic run --skill-dir <dir> --skill <name> --mode new-skill --only case-a,case-b
-  eval-magic run --skill-dir <dir> --skill <name> --mode new-skill --skip slow-case
+  eval-magic run --dry-run
+  eval-magic run --only case-a,case-b
+  eval-magic run --skip slow-case
+
+  # Evaluate one skill from elsewhere, without staging sibling skills
+  eval-magic run --skill ./skills/my-skill --guard
+
+  # Opt in to seeded environment parity: stage sibling skills from a skills dir
+  eval-magic run --skill-dir ./skills --skill my-skill --guard
 
   # Codex harness: dispatch with `codex exec --json`, then ingest without --subagents-dir
-  eval-magic run --skill-dir <dir> --skill <name> --mode new-skill --harness codex
-  eval-magic ingest --skill-dir <dir> --skill <name> --iteration 1 --harness codex
+  eval-magic run --harness codex
+  eval-magic ingest --harness codex
 ";

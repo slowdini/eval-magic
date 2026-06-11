@@ -8,7 +8,7 @@ pub mod error;
 pub mod evals;
 pub mod schema;
 
-pub use batch::{FileOutcome, ValidationReport, validate_all};
+pub use batch::{FileOutcome, ValidationReport, validate_all, validate_one};
 pub use error::ValidationError;
 pub use evals::validate_evals_config;
 pub use schema::{SchemaName, validate_against_schema};

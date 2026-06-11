@@ -4,11 +4,12 @@
 
 use std::path::Path;
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 
 use crate::cli::args::{CommonArgs, GradeArgs};
+use crate::cli::command_target_args;
 use crate::cli::run;
-use crate::cli::{check_subagents_dir, iteration_dir, run_context_from};
+use crate::cli::{check_subagents_dir, iteration_dir, resolve_iteration, run_context_from};
 use crate::core::Harness;
 use crate::pipeline;
 use crate::validation;
@@ -20,8 +21,8 @@ use crate::validation;
 fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
     use run::steps::StepKind;
     let common = CommonArgs {
-        skill_dir: Some(step.skill_dir.clone()),
-        skill: Some(step.skill.clone()),
+        skill_dir: step.skill_dir.clone(),
+        skill: step.skill.clone(),
         iteration: Some(step.iteration),
         mode: None,
         harness: Some(step.harness),
@@ -48,9 +49,7 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
 /// detect-stray-writes → grade) and stop at the judge hand-off.
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let iteration = args
-        .iteration
-        .ok_or_else(|| anyhow!("ingest requires --iteration <N>"))?;
+    let iteration = resolve_iteration(&ctx, args.iteration)?;
     if ctx.harness == Harness::ClaudeCode && args.subagents_dir.is_none() {
         bail!(
             "ingest requires --subagents-dir <path> (Claude Code persists subagent transcripts under ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
@@ -58,8 +57,8 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     }
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
-        skill_dir: args.skill_dir.as_deref().unwrap_or_default(),
-        skill: args.skill.as_deref().unwrap_or_default(),
+        skill_dir: args.skill_dir.as_deref(),
+        skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
         subagents_dir: args.subagents_dir.as_deref(),
@@ -80,18 +79,16 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get("total_tasks").and_then(serde_json::Value::as_u64));
+    let target_args = command_target_args(&ctx);
     match total_tasks {
         Some(0) => println!(
-            "\n✅ Ingest complete — no judge dispatches needed.\nNext: eval-magic finalize --skill {} --iteration {iteration}",
-            ctx.skill_name
+            "\n✅ Ingest complete — no judge dispatches needed.\nNext: eval-magic finalize{target_args} --iteration {iteration}"
         ),
         Some(n) => println!(
-            "\n✅ Ingest complete. Dispatch the {n} judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize --skill {} --iteration {iteration}",
-            ctx.skill_name
+            "\n✅ Ingest complete. Dispatch the {n} judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize{target_args} --iteration {iteration}"
         ),
         None => println!(
-            "\n✅ Ingest complete. Dispatch the judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize --skill {} --iteration {iteration}",
-            ctx.skill_name
+            "\n✅ Ingest complete. Dispatch the judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize{target_args} --iteration {iteration}"
         ),
     }
     Ok(())
@@ -100,13 +97,11 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
 /// Run the post-judge chain (grade --finalize → aggregate).
 pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let iteration = args
-        .iteration
-        .ok_or_else(|| anyhow!("finalize requires --iteration <N>"))?;
+    let iteration = resolve_iteration(&ctx, args.iteration)?;
 
     let steps = run::steps::build_finalize_commands(&run::steps::StepParams {
-        skill_dir: args.skill_dir.as_deref().unwrap_or_default(),
-        skill: args.skill.as_deref().unwrap_or_default(),
+        skill_dir: args.skill_dir.as_deref(),
+        skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
         subagents_dir: None,
@@ -115,9 +110,9 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     if let Some(failed) = run::steps::run_steps(&steps, run_step) {
         bail!("finalize stopped at '{failed}'. Fix the failure and re-run finalize.");
     }
+    let target_args = command_target_args(&ctx);
     println!(
-        "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown --skill {}",
-        ctx.skill_name
+        "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown{target_args}"
     );
     Ok(())
 }
@@ -163,9 +158,7 @@ pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
 /// every run in the iteration.
 pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let iteration = args
-        .iteration
-        .ok_or_else(|| anyhow!("missing --iteration"))?;
+    let iteration = resolve_iteration(&ctx, args.iteration)?;
     let dir = iteration_dir(&ctx, Some(iteration))?;
     let repo_root = std::env::current_dir()?;
 
@@ -223,9 +216,7 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
 pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
     let common = args.common;
     let ctx = run_context_from(&common)?;
-    let iteration = common
-        .iteration
-        .ok_or_else(|| anyhow!("missing --iteration"))?;
+    let iteration = resolve_iteration(&ctx, common.iteration)?;
     let dir = iteration_dir(&ctx, Some(iteration))?;
 
     let conditions_path = dir.join("conditions.json");
@@ -258,10 +249,8 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
                 s.meta_failures
             );
         }
-        println!(
-            "\nNext: eval-magic aggregate --skill {} --iteration {iteration}",
-            ctx.skill_name
-        );
+        let target_args = command_target_args(&ctx);
+        println!("\nNext: eval-magic aggregate{target_args} --iteration {iteration}");
     } else {
         let s = pipeline::emit_judge_tasks(&gctx)?;
         println!("Wrote {}", dir.join("judge-tasks.json").display());
@@ -275,9 +264,9 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
                 s.meta_code_checked
             );
         }
+        let target_args = command_target_args(&ctx);
         println!(
-            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: eval-magic grade --skill {} --iteration {iteration} --finalize",
-            ctx.skill_name
+            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: eval-magic grade{target_args} --iteration {iteration} --finalize"
         );
     }
     Ok(())
