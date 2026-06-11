@@ -75,6 +75,11 @@
     "duration_ms": {
       "type": ["integer", "null"],
       "description": "From the harness's task completion event, or derived from the persisted transcript by record-runs (wall clock between the first and last transcript timestamps). Canonical timing lives in the sibling timing.json. May be null if neither source is available."
+    },
+    "run_index": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "1-based run index within a multi-run (eval, condition) cell; absent for single-run cells."
     }
   }
 }

@@ -39,6 +39,8 @@ struct DispatchFile {
 struct DispatchTask {
     eval_id: String,
     condition: String,
+    #[serde(default)]
+    run_index: Option<u32>,
     skill_path: Option<String>,
     user_prompt: String,
     fixtures: Vec<String>,
@@ -116,6 +118,7 @@ pub fn record_runs(
                 // Timing lives in timing.json; run.json never carries it.
                 total_tokens: None,
                 duration_ms: None,
+                run_index: task.run_index,
             };
             validate_against_schema::<RunRecord>(
                 SchemaName::RunRecord,
@@ -387,6 +390,54 @@ mod tests {
         assert_eq!(timing["total_tokens"], json!(TRANSCRIPT_TOKENS));
         assert_eq!(timing["duration_ms"], json!(TRANSCRIPT_DURATION_MS));
         assert_eq!(timing["source"], json!("transcript"));
+    }
+
+    #[test]
+    fn carries_run_index_from_dispatch_task_into_each_run_record() {
+        let root = TempDir::new().unwrap();
+        let (iter, _sub) = dirs(&root);
+        let cond_dir = iter.join("eval-crash").join("with_skill");
+        let mut serialized = Vec::new();
+        for k in [1u32, 2] {
+            let run_dir = cond_dir.join(format!("run-{k}"));
+            let outputs_dir = run_dir.join("outputs");
+            fs::create_dir_all(&outputs_dir).unwrap();
+            fs::write(
+                outputs_dir.join("final-message.md"),
+                format!("Fixed it in run {k}."),
+            )
+            .unwrap();
+            write_codex_events(&outputs_dir, "unused");
+            serialized.push(json!({
+                "eval_id": "crash",
+                "condition": "with_skill",
+                "run_index": k,
+                "skill_path": "/staged/skill/SKILL.md",
+                "user_prompt": "Do the crash task",
+                "fixtures": [],
+                "outputs_dir": outputs_dir.to_string_lossy(),
+                "run_record_path": run_dir.join("run.json").to_string_lossy(),
+                "timing_path": run_dir.join("timing.json").to_string_lossy(),
+                "agent_description": format!("crash:with_skill:r{k}:i1-nonce1"),
+            }));
+        }
+        fs::write(
+            iter.join("dispatch.json"),
+            serde_json::to_string_pretty(&json!({"run_nonce": "nonce1", "tasks": serialized}))
+                .unwrap(),
+        )
+        .unwrap();
+
+        let result = record_runs(&iter, Harness::Codex, None, false).unwrap();
+        assert_eq!(result.recorded, 2);
+
+        for k in [1u32, 2] {
+            let raw =
+                fs::read_to_string(cond_dir.join(format!("run-{k}")).join("run.json")).unwrap();
+            let run: RunRecord = serde_json::from_str(&raw).unwrap();
+            assert_eq!(run.run_index, Some(k), "wrong run_index for run-{k}");
+            assert_eq!(run.final_message, format!("Fixed it in run {k}."));
+        }
     }
 
     #[test]

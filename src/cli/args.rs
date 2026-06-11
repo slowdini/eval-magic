@@ -261,6 +261,18 @@ pub struct RunArgs {
     /// real injected mode.
     #[arg(long)]
     pub plan_mode: bool,
+    /// Runs per condition cell, for variance reduction (default: 1).
+    ///
+    /// Dispatches every eval N times per condition, so an iteration needs
+    /// `evals × 2 conditions × N` dispatches. Each run gets its own
+    /// `run-<k>/` directory under the condition (own `inputs/`, `outputs/`,
+    /// `run.json`, `timing.json`, `grading.json`) and a unique
+    /// `agent_description` carrying an `r<k>` segment. With N=1 the layout is
+    /// unchanged (artifacts sit directly in the condition directory). The
+    /// benchmark's per-condition `mean`/`stddev`/`n` then reflect all runs. A
+    /// per-eval `runs` field in evals.json overrides this flag for that eval.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub runs: u32,
 }
 
 /// Every subcommand on the CLI.

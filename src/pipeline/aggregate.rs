@@ -271,6 +271,16 @@ pub fn aggregate(
              one side or read the delta as a rough signal only."
         ));
     }
+    let (n_a, n_b) = (
+        by_condition[a].pass_rates.len(),
+        by_condition[b].pass_rates.len(),
+    );
+    if n_a != n_b {
+        validity_warnings.push(format!(
+            "conditions have uneven run counts ({a}: {n_a}, {b}: {n_b}) — the delta compares \
+             differently-sized samples, weakening the comparison."
+        ));
+    }
     for cond in &condition_names {
         if let Some(Some(rate)) = summaries[cond].skill_invocation_rate
             && rate < 1.0

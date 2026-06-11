@@ -22,6 +22,7 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
             guard: args.guard,
             stage_name: args.stage_name.as_deref(),
             plan_mode: args.plan_mode,
+            runs: args.runs,
         },
     )?;
     Ok(())
