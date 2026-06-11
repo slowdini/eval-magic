@@ -18,6 +18,7 @@ use crate::adapters::{PluginShadowReport, shadow_validity_warnings};
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
 /// Mean of a series (0 for an empty series).
@@ -174,36 +175,43 @@ pub fn aggregate(
     for eval_dir in &eval_dirs {
         for cond in &condition_names {
             let cond_dir = iteration_dir.join(eval_dir).join(cond);
-            let grading_path = cond_dir.join("grading.json");
-            let timing_path = cond_dir.join("timing.json");
+            for slot in run_slots(&cond_dir) {
+                let grading_path = slot.dir.join("grading.json");
+                let timing_path = slot.dir.join("timing.json");
 
-            if !grading_path.exists() {
-                eprintln!("warn: missing grading for {eval_dir}/{cond}");
-                missing_gradings += 1;
-                continue;
-            }
-            let grading: GradingResult = serde_json::from_str(&fs::read_to_string(&grading_path)?)?;
-            let bucket = by_condition.get_mut(cond).expect("condition bucket");
-            bucket.pass_rates.push(grading.summary.pass_rate);
-            if let Some(meta) = &grading.meta_summary
-                && let Some(invoked) = meta.skill_invoked
-            {
-                bucket.skill_invoked.push(invoked);
-            }
+                if !grading_path.exists() {
+                    let run = slot
+                        .run_index
+                        .map(|k| format!("/run-{k}"))
+                        .unwrap_or_default();
+                    eprintln!("warn: missing grading for {eval_dir}/{cond}{run}");
+                    missing_gradings += 1;
+                    continue;
+                }
+                let grading: GradingResult =
+                    serde_json::from_str(&fs::read_to_string(&grading_path)?)?;
+                let bucket = by_condition.get_mut(cond).expect("condition bucket");
+                bucket.pass_rates.push(grading.summary.pass_rate);
+                if let Some(meta) = &grading.meta_summary
+                    && let Some(invoked) = meta.skill_invoked
+                {
+                    bucket.skill_invoked.push(invoked);
+                }
 
-            if timing_path.exists() {
-                let timing: TimingRecord =
-                    serde_json::from_str(&fs::read_to_string(&timing_path)?)?;
-                let has_tokens = matches!(timing.total_tokens, Some(Some(_)));
-                let has_duration = matches!(timing.duration_ms, Some(Some(_)));
-                if let Some(Some(tokens)) = timing.total_tokens {
-                    bucket.tokens.push(tokens as f64);
-                }
-                if let Some(Some(duration)) = timing.duration_ms {
-                    bucket.durations.push(duration as f64);
-                }
-                if has_tokens || has_duration {
-                    timing_sources.insert(timing_source_label(timing.source));
+                if timing_path.exists() {
+                    let timing: TimingRecord =
+                        serde_json::from_str(&fs::read_to_string(&timing_path)?)?;
+                    let has_tokens = matches!(timing.total_tokens, Some(Some(_)));
+                    let has_duration = matches!(timing.duration_ms, Some(Some(_)));
+                    if let Some(Some(tokens)) = timing.total_tokens {
+                        bucket.tokens.push(tokens as f64);
+                    }
+                    if let Some(Some(duration)) = timing.duration_ms {
+                        bucket.durations.push(duration as f64);
+                    }
+                    if has_tokens || has_duration {
+                        timing_sources.insert(timing_source_label(timing.source));
+                    }
                 }
             }
         }

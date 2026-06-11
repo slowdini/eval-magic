@@ -16,6 +16,7 @@ use serde_json::json;
 use crate::core::{Assertion, Harness, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::GradeContext;
@@ -230,106 +231,116 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
 
         for (cond, cond_skill_path, staged_slug) in &conds {
             let cond_dir = ctx.iteration_dir.join(format!("eval-{}", ev.id)).join(cond);
-            let run_record_path = cond_dir.join("run.json");
-            let outputs_dir = cond_dir.join("outputs");
-            let judge_responses_dir = cond_dir.join("judge-responses");
-            let judge_prompts_dir = cond_dir.join("judge-prompts");
+            for slot in run_slots(&cond_dir) {
+                let run_record_path = slot.dir.join("run.json");
+                let outputs_dir = slot.dir.join("outputs");
+                let judge_responses_dir = slot.dir.join("judge-responses");
+                let judge_prompts_dir = slot.dir.join("judge-prompts");
 
-            if !run_record_path.exists() {
-                eprintln!("warn: missing run.json for {}/{cond} — skipping", ev.id);
-                if has_assertions {
-                    summary.skipped_missing += assertions.len();
-                }
-                continue;
-            }
-
-            fs::create_dir_all(&judge_responses_dir)?;
-            fs::create_dir_all(&judge_prompts_dir)?;
-            let run_record: RunRecord = validate_against_schema(
-                SchemaName::RunRecord,
-                &serde_json::from_str(&fs::read_to_string(&run_record_path)?)?,
-                &run_record_path.to_string_lossy(),
-            )?;
-
-            for assertion in assertions {
-                let Assertion::LlmJudge(j) = assertion else {
-                    // transcript_check is graded in finalize, not dispatched here.
-                    unverifiable += 1;
-                    continue;
-                };
-                let response_path = judge_responses_dir.join(format!("{}.json", j.id));
-                let dispatch_prompt =
-                    build_judge_prompt(&j.rubric, &run_record, &outputs_dir, &response_path);
-                let prompt_path = judge_prompts_dir.join(format!("{}.txt", j.id));
-                fs::write(&prompt_path, &dispatch_prompt)?;
-                tasks.push(JudgeTask {
-                    eval_id: ev.id.clone(),
-                    condition: cond.clone(),
-                    assertion_id: j.id.clone(),
-                    rubric: j.rubric.clone(),
-                    model: j.model.clone(),
-                    is_meta: false,
-                    run_record_path: run_record_path.to_string_lossy().into_owned(),
-                    outputs_dir: outputs_dir.to_string_lossy().into_owned(),
-                    response_path: response_path.to_string_lossy().into_owned(),
-                    dispatch_prompt_path: prompt_path.to_string_lossy().into_owned(),
-                    dispatch_prompt,
-                });
-            }
-
-            // Skill-invocation meta-check. Negative evals (skill_should_trigger:
-            // false) expect non-invocation, so they carry no meta-check.
-            if cond_skill_path.is_some() && ev.skill_should_trigger != Some(false) {
-                let response_path =
-                    judge_responses_dir.join(format!("{SKILL_INVOKED_META_ID}.json"));
-                let transcript_filled = !run_record.tool_invocations.is_empty();
-
-                if staged_slug.is_some() && transcript_filled && code_check_available {
-                    let invoked = check_skill_invoked_from_transcript(
-                        &run_record.tool_invocations,
-                        staged_slug.as_deref(),
+                if !run_record_path.exists() {
+                    let run = slot
+                        .run_index
+                        .map(|k| format!("/run-{k}"))
+                        .unwrap_or_default();
+                    eprintln!(
+                        "warn: missing run.json for {}/{cond}{run} — skipping",
+                        ev.id
                     );
-                    let evidence = if invoked {
-                        "Skill invocation verified from transcript.".to_string()
-                    } else {
-                        format!(
-                            "No skill invocation found in transcript across {} transcript invocation(s).",
-                            run_record.tool_invocations.len()
-                        )
+                    if has_assertions {
+                        summary.skipped_missing += assertions.len();
+                    }
+                    continue;
+                }
+
+                fs::create_dir_all(&judge_responses_dir)?;
+                fs::create_dir_all(&judge_prompts_dir)?;
+                let run_record: RunRecord = validate_against_schema(
+                    SchemaName::RunRecord,
+                    &serde_json::from_str(&fs::read_to_string(&run_record_path)?)?,
+                    &run_record_path.to_string_lossy(),
+                )?;
+
+                for assertion in assertions {
+                    let Assertion::LlmJudge(j) = assertion else {
+                        // transcript_check is graded in finalize, not dispatched here.
+                        unverifiable += 1;
+                        continue;
                     };
-                    write_json(
-                        &response_path,
-                        &json!({
-                            "passed": invoked,
-                            "evidence": evidence,
-                            "confidence": 1.0,
-                            "grader": "transcript_check",
-                        }),
-                    )?;
-                    summary.meta_code_checked += 1;
-                } else {
-                    let skill_content =
-                        fs::read_to_string(cond_skill_path.as_deref().unwrap_or(""))?;
-                    let rubric = skill_invoked_rubric(&ctx.evals.skill_name, Some(&skill_content));
+                    let response_path = judge_responses_dir.join(format!("{}.json", j.id));
                     let dispatch_prompt =
-                        build_judge_prompt(&rubric, &run_record, &outputs_dir, &response_path);
-                    let prompt_path =
-                        judge_prompts_dir.join(format!("{SKILL_INVOKED_META_ID}.txt"));
+                        build_judge_prompt(&j.rubric, &run_record, &outputs_dir, &response_path);
+                    let prompt_path = judge_prompts_dir.join(format!("{}.txt", j.id));
                     fs::write(&prompt_path, &dispatch_prompt)?;
                     tasks.push(JudgeTask {
                         eval_id: ev.id.clone(),
                         condition: cond.clone(),
-                        assertion_id: SKILL_INVOKED_META_ID.to_string(),
-                        rubric,
-                        model: None,
-                        is_meta: true,
+                        assertion_id: j.id.clone(),
+                        rubric: j.rubric.clone(),
+                        model: j.model.clone(),
+                        is_meta: false,
                         run_record_path: run_record_path.to_string_lossy().into_owned(),
                         outputs_dir: outputs_dir.to_string_lossy().into_owned(),
                         response_path: response_path.to_string_lossy().into_owned(),
                         dispatch_prompt_path: prompt_path.to_string_lossy().into_owned(),
                         dispatch_prompt,
                     });
-                    summary.meta_injected += 1;
+                }
+
+                // Skill-invocation meta-check. Negative evals (skill_should_trigger:
+                // false) expect non-invocation, so they carry no meta-check.
+                if cond_skill_path.is_some() && ev.skill_should_trigger != Some(false) {
+                    let response_path =
+                        judge_responses_dir.join(format!("{SKILL_INVOKED_META_ID}.json"));
+                    let transcript_filled = !run_record.tool_invocations.is_empty();
+
+                    if staged_slug.is_some() && transcript_filled && code_check_available {
+                        let invoked = check_skill_invoked_from_transcript(
+                            &run_record.tool_invocations,
+                            staged_slug.as_deref(),
+                        );
+                        let evidence = if invoked {
+                            "Skill invocation verified from transcript.".to_string()
+                        } else {
+                            format!(
+                                "No skill invocation found in transcript across {} transcript invocation(s).",
+                                run_record.tool_invocations.len()
+                            )
+                        };
+                        write_json(
+                            &response_path,
+                            &json!({
+                                "passed": invoked,
+                                "evidence": evidence,
+                                "confidence": 1.0,
+                                "grader": "transcript_check",
+                            }),
+                        )?;
+                        summary.meta_code_checked += 1;
+                    } else {
+                        let skill_content =
+                            fs::read_to_string(cond_skill_path.as_deref().unwrap_or(""))?;
+                        let rubric =
+                            skill_invoked_rubric(&ctx.evals.skill_name, Some(&skill_content));
+                        let dispatch_prompt =
+                            build_judge_prompt(&rubric, &run_record, &outputs_dir, &response_path);
+                        let prompt_path =
+                            judge_prompts_dir.join(format!("{SKILL_INVOKED_META_ID}.txt"));
+                        fs::write(&prompt_path, &dispatch_prompt)?;
+                        tasks.push(JudgeTask {
+                            eval_id: ev.id.clone(),
+                            condition: cond.clone(),
+                            assertion_id: SKILL_INVOKED_META_ID.to_string(),
+                            rubric,
+                            model: None,
+                            is_meta: true,
+                            run_record_path: run_record_path.to_string_lossy().into_owned(),
+                            outputs_dir: outputs_dir.to_string_lossy().into_owned(),
+                            response_path: response_path.to_string_lossy().into_owned(),
+                            dispatch_prompt_path: prompt_path.to_string_lossy().into_owned(),
+                            dispatch_prompt,
+                        });
+                        summary.meta_injected += 1;
+                    }
                 }
             }
         }
