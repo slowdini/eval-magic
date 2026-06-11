@@ -12,5 +12,6 @@ mod aggregate;
 mod basics;
 mod grade;
 mod guard;
+mod init;
 mod stray_writes;
 mod workspace;

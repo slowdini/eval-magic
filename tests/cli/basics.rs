@@ -23,6 +23,7 @@ fn help_lists_subcommands() {
         .arg("--help")
         .assert()
         .success()
+        .stdout(contains("init"))
         .stdout(contains("record-runs"))
         .stdout(contains("grade"))
         .stdout(contains("validate"))

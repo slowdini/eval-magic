@@ -8,6 +8,9 @@
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
 EXAMPLES:
+  # Scaffold a first evals/evals.json for a raw skill directory
+  eval-magic init --skill-dir <dir> --skill <name>
+
   # Mode A — evaluate a new skill (with vs. without)
   eval-magic run --skill-dir <dir> --skill <name> --mode new-skill --guard
   # …dispatch each task in dispatch.json as a fresh subagent…
