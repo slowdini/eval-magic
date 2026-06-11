@@ -33,8 +33,8 @@ pub enum StepKind {
 pub struct StepCommand {
     pub label: &'static str,
     pub kind: StepKind,
-    pub skill_dir: String,
-    pub skill: String,
+    pub skill_dir: Option<String>,
+    pub skill: Option<String>,
     pub iteration: u32,
     pub harness: Harness,
     /// Only the transcript-reading stages (record-runs, fill-transcripts) carry a
@@ -46,8 +46,8 @@ pub struct StepCommand {
 /// Resolved inputs shared by every step of a chain.
 #[derive(Debug, Clone)]
 pub struct StepParams<'a> {
-    pub skill_dir: &'a str,
-    pub skill: &'a str,
+    pub skill_dir: Option<&'a str>,
+    pub skill: Option<&'a str>,
     pub iteration: u32,
     pub harness: Harness,
     pub subagents_dir: Option<&'a str>,
@@ -57,8 +57,8 @@ pub struct StepParams<'a> {
 impl Default for StepParams<'_> {
     fn default() -> Self {
         Self {
-            skill_dir: "",
-            skill: "",
+            skill_dir: None,
+            skill: None,
             iteration: 0,
             harness: Harness::ClaudeCode,
             subagents_dir: None,
@@ -77,8 +77,8 @@ impl StepParams<'_> {
         StepCommand {
             label,
             kind,
-            skill_dir: self.skill_dir.to_string(),
-            skill: self.skill.to_string(),
+            skill_dir: self.skill_dir.map(str::to_string),
+            skill: self.skill.map(str::to_string),
             iteration: self.iteration,
             harness: self.harness,
             subagents_dir,
@@ -135,8 +135,8 @@ mod tests {
 
     fn params() -> StepParams<'static> {
         StepParams {
-            skill_dir: "/skills",
-            skill: "mr-review",
+            skill_dir: Some("/skills"),
+            skill: Some("mr-review"),
             iteration: 2,
             subagents_dir: Some("/subagents"),
             ..Default::default()
@@ -166,8 +166,8 @@ mod tests {
         );
         // Every step carries the shared flags.
         for s in &steps {
-            assert_eq!(s.skill_dir, "/skills");
-            assert_eq!(s.skill, "mr-review");
+            assert_eq!(s.skill_dir.as_deref(), Some("/skills"));
+            assert_eq!(s.skill.as_deref(), Some("mr-review"));
             assert_eq!(s.iteration, 2);
         }
         // The transcript-reading steps get the subagents dir; the others must not.
@@ -180,8 +180,8 @@ mod tests {
     #[test]
     fn ingest_omits_subagents_for_codex() {
         let steps = build_ingest_commands(&StepParams {
-            skill_dir: "/skills",
-            skill: "mr-review",
+            skill_dir: Some("/skills"),
+            skill: Some("mr-review"),
             iteration: 2,
             harness: Harness::Codex,
             ..Default::default()
@@ -203,8 +203,8 @@ mod tests {
     #[test]
     fn finalize_runs_grade_finalize_then_aggregate() {
         let steps = build_finalize_commands(&StepParams {
-            skill_dir: "/skills",
-            skill: "mr-review",
+            skill_dir: Some("/skills"),
+            skill: Some("mr-review"),
             iteration: 2,
             ..Default::default()
         });
@@ -220,8 +220,8 @@ mod tests {
         StepCommand {
             label,
             kind: StepKind::Aggregate,
-            skill_dir: String::new(),
-            skill: String::new(),
+            skill_dir: None,
+            skill: None,
             iteration: 0,
             harness: Harness::ClaudeCode,
             subagents_dir: None,
@@ -246,5 +246,37 @@ mod tests {
         let steps = [synthetic("a"), synthetic("b")];
         let failed = run_steps(&steps, |_| Ok::<(), ()>(()));
         assert_eq!(failed, None);
+    }
+
+    #[test]
+    fn direct_skill_context_keeps_skill_dir_absent() {
+        let steps = build_ingest_commands(&StepParams {
+            skill: Some("/skills/mr-review"),
+            iteration: 1,
+            ..Default::default()
+        });
+
+        assert!(steps.iter().all(|s| s.skill_dir.is_none()));
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.skill.as_deref() == Some("/skills/mr-review"))
+        );
+    }
+
+    #[test]
+    fn inferred_seeded_context_keeps_skill_absent() {
+        let steps = build_finalize_commands(&StepParams {
+            skill_dir: Some("/skills"),
+            iteration: 1,
+            ..Default::default()
+        });
+
+        assert!(steps.iter().all(|s| s.skill.as_deref().is_none()));
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.skill_dir.as_deref() == Some("/skills"))
+        );
     }
 }

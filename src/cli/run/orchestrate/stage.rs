@@ -30,12 +30,14 @@ pub(super) fn stage_conditions(
 
     if !opts.no_stage {
         cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
-        stage_sibling_skills(&StageSiblingOpts {
-            skill_under_test: &ctx.skill_name,
-            skills_source_dir: &ctx.skill_dir,
-            repo_root: &ctx.stage_root,
-            harness: ctx.harness,
-        })?;
+        if ctx.stage_siblings {
+            stage_sibling_skills(&StageSiblingOpts {
+                skill_under_test: &ctx.skill_name,
+                skills_source_dir: &ctx.skill_dir,
+                repo_root: &ctx.stage_root,
+                harness: ctx.harness,
+            })?;
+        }
     }
 
     if let Some(warning) = staging_discovery_warning(ctx.harness, opts.no_stage) {

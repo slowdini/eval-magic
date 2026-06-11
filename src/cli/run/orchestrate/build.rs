@@ -31,7 +31,7 @@ pub(super) fn write_dispatch(
 ) -> Result<usize, RunError> {
     let conditions = ConditionsRecord {
         mode: r.mode,
-        baseline: opts.baseline.map(str::to_string),
+        baseline: r.baseline.clone(),
         conditions: vec![
             ConditionEntry {
                 name: r.cond_a.to_string(),
@@ -148,7 +148,7 @@ pub(super) fn write_dispatch(
         build_manifest(
             &ctx.skill_name,
             r.mode,
-            opts.baseline,
+            r.baseline.as_deref(),
             r.iteration,
             &now_iso8601(),
             &tasks,
@@ -167,7 +167,7 @@ pub(super) fn write_dispatch(
         "run_nonce": r.run_nonce,
         "iteration_dir": r.iteration_dir.to_string_lossy(),
         "mode": r.mode,
-        "baseline": opts.baseline,
+        "baseline": r.baseline,
         "plan_mode": opts.plan_mode,
         "runs": opts.runs,
         "conditions": conditions.conditions,

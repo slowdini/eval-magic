@@ -1,9 +1,39 @@
 //! Staging, plan-mode injection, `--stage-name`, and dispatch-prompt rendering.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
+use predicates::str::contains;
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+fn setup_direct_skill(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
+    let skills = root.join("skills");
+    let skill_sub = skills.join("mr-review");
+    let helper = skills.join("helper-skill");
+    fs::create_dir_all(skill_sub.join("evals")).unwrap();
+    fs::create_dir_all(&helper).unwrap();
+    fs::write(
+        skill_sub.join("SKILL.md"),
+        "---\nname: mr-review\ndescription: review merge requests\n---\n\nbody\n",
+    )
+    .unwrap();
+    fs::write(skill_sub.join("evals").join("evals.json"), DEFAULT_EVALS).unwrap();
+    fs::write(
+        helper.join("SKILL.md"),
+        "---\nname: helper-skill\ndescription: helper\n---\n\nhelper\n",
+    )
+    .unwrap();
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+    (skills, skill_sub, cwd)
+}
+
+fn direct_iteration_dir(cwd: &Path) -> PathBuf {
+    cwd.join("skills-workspace")
+        .join("mr-review")
+        .join("iteration-1")
+}
 
 #[test]
 fn stages_only_sut_and_writes_workspace_under_cwd() {
@@ -18,6 +48,64 @@ fn stages_only_sut_and_writes_workspace_under_cwd() {
         .success();
 
     assert!(iteration_dir(&cwd).join("dispatch.json").exists());
+    assert_eq!(
+        staged_entries(&cwd.join(".claude/skills")),
+        vec!["slow-powers-eval-1-with_skill__mr-review"]
+    );
+}
+
+#[test]
+fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_skills, skill_sub, _cwd) = setup_direct_skill(tmp.path());
+
+    skill_eval()
+        .current_dir(&skill_sub)
+        .arg("run")
+        .assert()
+        .success()
+        .stdout(contains("Preparing mr-review iteration-1 (new-skill)"))
+        .stdout(contains("eval-magic ingest --iteration 1"))
+        .stdout(predicates::str::contains("--skill mr-review").not());
+
+    assert!(
+        direct_iteration_dir(&skill_sub)
+            .join("dispatch.json")
+            .exists()
+    );
+    assert_eq!(
+        staged_entries(&skill_sub.join(".claude/skills")),
+        vec!["slow-powers-eval-1-with_skill__mr-review"]
+    );
+
+    let dispatch = read_json(&direct_iteration_dir(&skill_sub).join("dispatch.json"));
+    let task = dispatch["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["condition"] == "with_skill")
+        .unwrap();
+    let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+    assert!(prompt.contains("- mr-review:"));
+    assert!(!prompt.contains("helper-skill"));
+}
+
+#[test]
+fn run_with_skill_path_defaults_to_single_skill_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_skills, skill_sub, cwd) = setup_direct_skill(tmp.path());
+
+    skill_eval()
+        .current_dir(&cwd)
+        .arg("run")
+        .arg("--skill")
+        .arg(&skill_sub)
+        .args(["--dry-run"])
+        .assert()
+        .success()
+        .stdout(contains("Preparing mr-review iteration-1 (new-skill)"));
+
+    assert!(direct_iteration_dir(&cwd).join("dispatch.json").exists());
     assert_eq!(
         staged_entries(&cwd.join(".claude/skills")),
         vec!["slow-powers-eval-1-with_skill__mr-review"]

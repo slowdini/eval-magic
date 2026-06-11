@@ -120,6 +120,29 @@ fn snapshot_working_tree_copies_and_records_provenance() {
     assert_eq!(meta["source"], "working-tree");
 }
 
+#[test]
+fn snapshot_defaults_to_baseline_label() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, _skill_sub) = write_skill_md(&root, "v2 working tree\n");
+    let cwd = root.join("work");
+    fs::create_dir_all(&cwd).unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["snapshot", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review"])
+        .assert()
+        .success()
+        .stdout(contains("Snapshotted mr-review"));
+
+    assert_eq!(
+        fs::read_to_string(cwd.join("skills-workspace/mr-review/snapshots/baseline/SKILL.md"))
+            .unwrap(),
+        "v2 working tree\n"
+    );
+}
+
 /// `snapshot --ref`: reads the committed content from a git ref, leaving the
 /// working tree untouched, and records ref provenance.
 #[test]

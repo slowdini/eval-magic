@@ -139,6 +139,39 @@ fn aggregate_computes_benchmark_from_graded_workspace() {
     assert_eq!(b["delta"]["total_tokens"].as_f64().unwrap(), 2000.0);
 }
 
+#[test]
+fn aggregate_defaults_to_latest_iteration() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_1, cwd) = setup_agg(&root);
+    let iteration_2 = iteration_1.parent().unwrap().join("iteration-2");
+    fs::create_dir_all(&iteration_2).unwrap();
+    new_skill_conditions(&iteration_2, &skill_md);
+    write_grading(&iteration_2, "with_skill", 1.0);
+    write_timing(
+        &iteration_2,
+        "with_skill",
+        serde_json::json!({"total_tokens": 5000, "duration_ms": 1000}),
+    );
+    write_grading(&iteration_2, "without_skill", 0.0);
+    write_timing(
+        &iteration_2,
+        "without_skill",
+        serde_json::json!({"total_tokens": 3000, "duration_ms": 1000}),
+    );
+
+    let mut cmd = skill_eval();
+    cmd.current_dir(&cwd)
+        .arg("aggregate")
+        .arg("--skill-dir")
+        .arg(&skill_dir)
+        .arg("--skill")
+        .arg("mr-review");
+    cmd.assert().success();
+
+    assert!(iteration_2.join("benchmark.json").exists());
+    assert!(!iteration_1.join("benchmark.json").exists());
+}
+
 /// `aggregate`: every `run-<k>` subdirectory of a condition cell contributes a
 /// sample, so `n` reflects runs and the mean averages across them.
 #[test]

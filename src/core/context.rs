@@ -29,6 +29,7 @@ pub struct RunContext {
     pub skill_name: String,
     pub skill_subdir: PathBuf,
     pub sibling_skill_names: Vec<String>,
+    pub stage_siblings: bool,
     pub workspace_root: PathBuf,
     pub stage_root: PathBuf,
     pub bootstrap_path: Option<PathBuf>,
@@ -45,6 +46,7 @@ pub struct DetectInput {
     pub bootstrap: Option<String>,
     pub workspace_dir: Option<String>,
     pub harness: Option<Harness>,
+    pub cwd: Option<PathBuf>,
 }
 
 /// A user-facing failure while detecting the run context. Display strings carry
@@ -52,10 +54,14 @@ pub struct DetectInput {
 /// actionable.
 #[derive(Debug, thiserror::Error)]
 pub enum ContextError {
-    #[error("missing required flag --skill-dir <path>")]
-    MissingSkillDir,
-    #[error("missing required flag --skill <name>")]
+    #[error(
+        "missing skill. Run from a skill directory containing SKILL.md, pass --skill <path-or-name>, or pass --skill-dir <dir> --skill <name>"
+    )]
     MissingSkill,
+    #[error("--skill-dir contains multiple skills; pass --skill <name>. Candidates: {0}")]
+    AmbiguousSkillSelection(String),
+    #[error("no skills found under --skill-dir: {0}")]
+    NoSkillsInSkillDir(String),
     #[error("--skill-dir is not a directory: {0}")]
     SkillDirNotDirectory(String),
     #[error("skill not found: {0}")]
@@ -69,48 +75,107 @@ pub enum ContextError {
 /// Lexically absolutize a path (join onto cwd if relative; normalize `.`/`..`).
 /// Mirrors node's `resolve()` — it does NOT resolve symlinks or require
 /// existence, unlike `std::fs::canonicalize`.
-fn absolutize(p: &str) -> Result<PathBuf, ContextError> {
-    Ok(std::path::absolute(p)?)
+fn absolutize(cwd: &Path, p: &str) -> Result<PathBuf, ContextError> {
+    let path = Path::new(p);
+    let joined = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    };
+    Ok(std::path::absolute(joined)?)
 }
 
-/// Other dirs in `skill_dir` (excluding the skill-under-test) that contain a
-/// `SKILL.md`. Sorted for deterministic output.
-fn enumerate_siblings(skill_dir: &Path, skill_name: &str) -> Result<Vec<String>, ContextError> {
+fn skill_name_from_dir(skill_subdir: &Path) -> Result<String, ContextError> {
+    skill_subdir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .filter(|name| !name.is_empty())
+        .ok_or(ContextError::MissingSkill)
+}
+
+fn parent_dir(skill_subdir: &Path) -> PathBuf {
+    skill_subdir
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| skill_subdir.to_path_buf())
+}
+
+fn enumerate_skill_children(skill_dir: &Path) -> Result<Vec<String>, ContextError> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(skill_dir)? {
         let entry = entry?;
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if name == skill_name {
-            continue;
-        }
         let sub = entry.path();
-        if !sub.is_dir() {
+        if !sub.is_dir() || !sub.join("SKILL.md").exists() {
             continue;
         }
-        if !sub.join("SKILL.md").exists() {
-            continue;
-        }
-        out.push(name);
+        out.push(entry.file_name().to_string_lossy().into_owned());
     }
     out.sort();
     Ok(out)
 }
 
+/// Other dirs in `skill_dir` (excluding the skill-under-test) that contain a
+/// `SKILL.md`. Sorted for deterministic output.
+fn enumerate_siblings(skill_dir: &Path, skill_name: &str) -> Result<Vec<String>, ContextError> {
+    Ok(enumerate_skill_children(skill_dir)?
+        .into_iter()
+        .filter(|name| name != skill_name)
+        .collect())
+}
+
+fn infer_only_skill_name(skill_dir: &Path) -> Result<String, ContextError> {
+    let skills = enumerate_skill_children(skill_dir)?;
+    match skills.as_slice() {
+        [only] => Ok(only.clone()),
+        [] => Err(ContextError::NoSkillsInSkillDir(
+            skill_dir.display().to_string(),
+        )),
+        _ => Err(ContextError::AmbiguousSkillSelection(skills.join(", "))),
+    }
+}
+
 /// Validate the parsed flags against the filesystem and assemble a
-/// [`RunContext`]: requires an existing `--skill-dir`, a `--skill` whose
-/// `SKILL.md` exists, an optional existing `--bootstrap`, and defaults the
+/// [`RunContext`]: resolves either a seeded `--skill-dir` environment or a direct
+/// single skill selected from `--skill <path-or-name>` / the current directory,
+/// validates `SKILL.md`, an optional existing `--bootstrap`, and defaults the
 /// workspace/stage roots from the current directory.
 pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError> {
-    let skill_dir_raw = input.skill_dir.ok_or(ContextError::MissingSkillDir)?;
-    let skill_dir = absolutize(&skill_dir_raw)?;
-    if !skill_dir.is_dir() {
-        return Err(ContextError::SkillDirNotDirectory(
-            skill_dir.display().to_string(),
-        ));
-    }
-
-    let skill_name = input.skill.ok_or(ContextError::MissingSkill)?;
-    let skill_subdir = skill_dir.join(&skill_name);
+    let cwd = input.cwd.unwrap_or(std::env::current_dir()?);
+    let cwd = std::path::absolute(cwd)?;
+    let (skill_dir, skill_name, skill_subdir, sibling_skill_names, stage_siblings) =
+        match input.skill_dir {
+            Some(skill_dir_raw) => {
+                let skill_dir = absolutize(&cwd, &skill_dir_raw)?;
+                if !skill_dir.is_dir() {
+                    return Err(ContextError::SkillDirNotDirectory(
+                        skill_dir.display().to_string(),
+                    ));
+                }
+                let skill_name = match input.skill {
+                    Some(skill) => skill,
+                    None => infer_only_skill_name(&skill_dir)?,
+                };
+                let skill_subdir = skill_dir.join(&skill_name);
+                let sibling_skill_names = enumerate_siblings(&skill_dir, &skill_name)?;
+                (
+                    skill_dir,
+                    skill_name,
+                    skill_subdir,
+                    sibling_skill_names,
+                    true,
+                )
+            }
+            None => {
+                let skill_subdir = match input.skill {
+                    Some(skill_raw) => absolutize(&cwd, &skill_raw)?,
+                    None if cwd.join("SKILL.md").exists() => cwd.clone(),
+                    None => return Err(ContextError::MissingSkill),
+                };
+                let skill_name = skill_name_from_dir(&skill_subdir)?;
+                let skill_dir = parent_dir(&skill_subdir);
+                (skill_dir, skill_name, skill_subdir, Vec::new(), false)
+            }
+        };
     let skill_md = skill_subdir.join("SKILL.md");
     if !skill_md.exists() {
         return Err(ContextError::SkillNotFound(skill_md.display().to_string()));
@@ -118,7 +183,7 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
 
     let bootstrap_path = match input.bootstrap {
         Some(raw) => {
-            let resolved = absolutize(&raw)?;
+            let resolved = absolutize(&cwd, &raw)?;
             if !resolved.exists() {
                 return Err(ContextError::BootstrapNotFound(
                     resolved.display().to_string(),
@@ -130,19 +195,19 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
     };
 
     let workspace_root = match input.workspace_dir {
-        Some(raw) => absolutize(&raw)?,
-        None => std::env::current_dir()?.join("skills-workspace"),
+        Some(raw) => absolutize(&cwd, &raw)?,
+        None => cwd.join("skills-workspace"),
     };
-    let stage_root = std::env::current_dir()?;
+    let stage_root = cwd;
 
     let harness = input.harness.unwrap_or_default();
-    let sibling_skill_names = enumerate_siblings(&skill_dir, &skill_name)?;
 
     Ok(RunContext {
         skill_dir,
         skill_name,
         skill_subdir,
         sibling_skill_names,
+        stage_siblings,
         workspace_root,
         stage_root,
         bootstrap_path,
@@ -182,28 +247,110 @@ mod tests {
         }
     }
 
-    #[test]
-    fn missing_skill_dir_errors() {
-        let err = detect_run_context(DetectInput {
-            skill: Some("foo".into()),
+    fn input_from(cwd: &Path) -> DetectInput {
+        DetectInput {
+            cwd: Some(cwd.to_path_buf()),
             ..Default::default()
-        })
-        .unwrap_err();
-        assert!(matches!(err, ContextError::MissingSkillDir));
-        assert!(err.to_string().contains("--skill-dir"));
+        }
     }
 
     #[test]
-    fn missing_skill_errors() {
+    fn cwd_skill_dir_is_the_default_single_skill() {
         let tmp = TempDir::new().unwrap();
-        let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
+        let skill_subdir = tmp.path().join("mr-review");
+        fs::create_dir_all(&skill_subdir).unwrap();
+        fs::write(
+            skill_subdir.join("SKILL.md"),
+            "---\nname: mr-review\n---\n\nbody\n",
+        )
+        .unwrap();
+
+        let ctx = detect_run_context(input_from(&skill_subdir)).unwrap();
+
+        assert_eq!(ctx.skill_name, "mr-review");
+        assert_eq!(
+            ctx.skill_subdir,
+            std::path::absolute(&skill_subdir).unwrap()
+        );
+        assert!(ctx.sibling_skill_names.is_empty());
+        assert!(!ctx.stage_siblings);
+    }
+
+    #[test]
+    fn skill_path_selects_one_skill_without_siblings() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["alpha", "beta"]);
+
+        let ctx = detect_run_context(DetectInput {
+            skill: Some(skill_dir.join("beta").to_string_lossy().into_owned()),
+            cwd: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(ctx.skill_name, "beta");
+        assert_eq!(
+            ctx.skill_subdir,
+            std::path::absolute(skill_dir.join("beta")).unwrap()
+        );
+        assert!(ctx.sibling_skill_names.is_empty());
+        assert!(!ctx.stage_siblings);
+    }
+
+    #[test]
+    fn skill_dir_with_one_skill_infers_the_skill_name_and_stages_siblings_mode() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["only-skill"]);
+
+        let ctx = detect_run_context(DetectInput {
+            skill_dir: Some(skill_dir.to_string_lossy().into_owned()),
+            cwd: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        assert_eq!(ctx.skill_name, "only-skill");
+        assert!(ctx.sibling_skill_names.is_empty());
+        assert!(ctx.stage_siblings);
+    }
+
+    #[test]
+    fn skill_dir_with_multiple_skills_requires_a_skill_name() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["alpha", "beta"]);
+
+        let err = detect_run_context(DetectInput {
+            skill_dir: Some(skill_dir.to_string_lossy().into_owned()),
+            cwd: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap_err();
+
+        assert!(matches!(err, ContextError::AmbiguousSkillSelection(_)));
+        assert!(err.to_string().contains("alpha"));
+        assert!(err.to_string().contains("beta"));
+    }
+
+    #[test]
+    fn missing_skill_errors_when_cwd_is_not_a_skill() {
+        let tmp = TempDir::new().unwrap();
+        let err = detect_run_context(input_from(tmp.path())).unwrap_err();
+        assert!(matches!(err, ContextError::MissingSkill));
+        assert!(err.to_string().contains("--skill"));
+    }
+
+    #[test]
+    fn empty_skill_dir_errors_when_skill_is_not_named() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill-dir");
+        fs::create_dir_all(&skill_dir).unwrap();
         let err = detect_run_context(DetectInput {
             skill_dir: Some(skill_dir.to_string_lossy().into_owned()),
             ..Default::default()
         })
         .unwrap_err();
-        assert!(matches!(err, ContextError::MissingSkill));
-        assert!(err.to_string().contains("--skill"));
+        assert!(matches!(err, ContextError::NoSkillsInSkillDir(_)));
+        assert!(err.to_string().contains("no skills found"));
     }
 
     #[test]

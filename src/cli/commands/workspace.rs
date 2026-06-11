@@ -3,11 +3,9 @@
 
 use std::path::Path;
 
-use anyhow::anyhow;
-
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
 use crate::cli::run;
-use crate::cli::run_context_from;
+use crate::cli::{command_target_args, resolve_iteration, run_context_from};
 use crate::sandbox;
 use crate::workspace;
 
@@ -16,9 +14,7 @@ use crate::workspace;
 /// `--ref` — a git ref.
 pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
-    let label = args
-        .label
-        .ok_or_else(|| anyhow!("snapshot requires --label <name>"))?;
+    let label = args.label.unwrap_or_else(|| "baseline".to_string());
     let reference = args.reference.as_deref();
 
     let dest = workspace::snapshot(
@@ -44,10 +40,7 @@ pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
 /// committed `evals/baseline/`, dropping a `.promoted.json` marker.
 pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
-    let iteration = args
-        .common
-        .iteration
-        .ok_or_else(|| anyhow!("missing --iteration <N>"))?;
+    let iteration = resolve_iteration(&ctx, args.common.iteration)?;
 
     let result = workspace::promote_baseline(&workspace::PromoteOptions {
         workspace_root: &ctx.workspace_root,
@@ -98,6 +91,7 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
         );
     }
     if !ws.kept_iterations.is_empty() {
+        let target_args = command_target_args(&ctx);
         let lines = ws
             .kept_iterations
             .iter()
@@ -105,9 +99,8 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
             .collect::<Vec<_>>()
             .join("\n");
         eprintln!(
-            "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     eval-magic promote-baseline --skill {} --iteration <N>\n   or delete {}/ manually to discard.",
+            "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     eval-magic promote-baseline{target_args} --iteration <N>\n   or delete {}/ manually to discard.",
             ws.kept_iterations.len(),
-            ctx.skill_name,
             Path::new("skills-workspace")
                 .join(&ctx.skill_name)
                 .display()
