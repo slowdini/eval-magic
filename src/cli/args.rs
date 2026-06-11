@@ -108,6 +108,55 @@ pub struct ValidateArgs {
     pub skill_dir: Option<String>,
 }
 
+/// `init` writes the first eval scaffold for a skill.
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Directory containing the skill(s) under evaluation (required).
+    ///
+    /// The skill named by `--skill` must be an immediate child of this directory
+    /// and must already contain `SKILL.md`. `init` creates only the eval scaffold
+    /// under that skill; it does not create the skill itself.
+    #[arg(long)]
+    pub skill_dir: Option<String>,
+    /// Skill name under evaluation -- the subdirectory of `--skill-dir` (required).
+    ///
+    /// This value becomes the generated `skill_name` and should match the skill
+    /// folder name used by later `run`, `ingest`, `finalize`, and
+    /// `promote-baseline` commands.
+    #[arg(long)]
+    pub skill: Option<String>,
+    /// Stable kebab-case id for the first eval case.
+    ///
+    /// If omitted, prompts interactively. The id is used as the workspace eval
+    /// directory name, so it must satisfy the eval schema's kebab-case pattern.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// User-facing prompt the eval subagent receives.
+    ///
+    /// If omitted, prompts interactively. Write this like a realistic user
+    /// request, not like an instruction to satisfy the eval.
+    #[arg(long)]
+    pub prompt: Option<String>,
+    /// Human-readable description of a successful response.
+    ///
+    /// If omitted, prompts interactively. This seeds `expected_output`; add
+    /// concrete assertions after seeing iteration 1 outputs.
+    #[arg(long = "expected-output")]
+    pub expected_output: Option<String>,
+    /// Whether the skill is expected to trigger for this eval.
+    ///
+    /// Defaults to true and is omitted from the generated JSON. Set false for
+    /// negative evals where correct behavior is not invoking the skill.
+    #[arg(long)]
+    pub skill_should_trigger: Option<bool>,
+    /// Overwrite an existing `<skill>/evals/evals.json`.
+    ///
+    /// Refuses to overwrite existing evals by default and checks that before
+    /// prompting for seed fields.
+    #[arg(long)]
+    pub force: bool,
+}
+
 /// `grade` adds a finalize flag on top of the common set.
 #[derive(Debug, Args)]
 pub struct GradeArgs {
@@ -298,6 +347,14 @@ pub(crate) enum Commands {
     /// pass-rate / duration / token stats per condition, the delta, and
     /// `validity_warnings`.
     Aggregate(CommonArgs),
+    /// Scaffold a first `evals/evals.json` for a skill.
+    ///
+    /// Creates `<skill>/evals/evals.json` with one schema-valid seed eval, then
+    /// prints the next run/ingest/finalize/promote commands. Prompts
+    /// interactively for any missing seed fields, and refuses to overwrite an
+    /// existing eval file unless `--force` is passed. This is scaffold-only: it
+    /// does not run agents, ingest transcripts, finalize, or promote results.
+    Init(InitArgs),
     /// Promote a benchmark + gradings into a committed baseline.
     PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.

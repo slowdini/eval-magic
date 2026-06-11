@@ -46,6 +46,12 @@ Each subagent's output is graded against the case's assertions, and the per-cond
 
 Your skill lives in a folder with a `SKILL.md`. Test cases live next to it in `evals/evals.json`:
 
+```bash
+eval-magic init --skill-dir ./skills --skill my-skill
+```
+
+`init` prompts for a first eval id, prompt, and expected output, then writes:
+
 ```json
 {
   "skill_name": "my-skill",
@@ -58,6 +64,10 @@ Your skill lives in a folder with a `SKILL.md`. Test cases live next to it in `e
   ]
 }
 ```
+
+You can also script it with `--id`, `--prompt`, and `--expected-output`. If
+`evals/evals.json` already exists, `init` refuses to overwrite it unless you pass
+`--force`.
 
 Every command takes two required flags: `--skill-dir` (the directory *holding* skill folders — it is the eval's test environment; every skill in it gets staged) and `--skill` (which folder to evaluate). Run `eval-magic --help` for why the directory is the environment.
 
@@ -167,7 +177,7 @@ skills-workspace/<skill>/                # outside the skill directory, gitignor
     skill-snapshot.md                    # frozen SKILL.md at run time
 ```
 
-The only file you author by hand is `<skill>/evals/evals.json`. Keep `skills-workspace/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.
+The only source file you author for evals is `<skill>/evals/evals.json` (or create it with `eval-magic init`). Keep `skills-workspace/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.
 
 ## Version-controlled baselines
 
