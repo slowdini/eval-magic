@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::slots::{run_key, run_slots};
 use crate::sandbox::{WRITE_TOOLS, classify_bash, is_under, path_arg};
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -222,11 +223,14 @@ pub fn detect_live_source_reads(
 
 // --- CLI report ---
 
-/// Per-(eval, condition) findings, emitted only for runs with ≥1 finding.
+/// Per-(eval, condition, run) findings, emitted only for runs with ≥1 finding.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RunReport {
     pub eval_id: String,
     pub condition: String,
+    /// 1-based run index within a multi-run cell; absent for single-run cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_index: Option<u32>,
     pub violations: Vec<StrayFinding>,
     pub warnings: Vec<StrayFinding>,
     pub live_source_reads: Vec<StrayFinding>,
@@ -259,6 +263,8 @@ struct DispatchEnvelope {
 struct DispatchRef {
     eval_id: String,
     condition: String,
+    #[serde(default)]
+    run_index: Option<u32>,
     #[serde(default)]
     outputs_dir: Option<String>,
 }
@@ -309,41 +315,44 @@ pub fn detect_stray_writes_report(
         let eval_id = dir_name.strip_prefix("eval-").unwrap_or(dir_name);
         for cond in &condition_names {
             let cond_dir = iteration_dir.join(dir_name).join(cond);
-            let run_path = cond_dir.join("run.json");
-            if !run_path.exists() {
-                continue;
-            }
-            let source = run_path.to_string_lossy();
-            let run: RunRecord = validate_against_schema(
-                SchemaName::RunRecord,
-                &serde_json::from_str(&std::fs::read_to_string(&run_path)?)?,
-                &source,
-            )?;
+            for slot in run_slots(&cond_dir) {
+                let run_path = slot.dir.join("run.json");
+                if !run_path.exists() {
+                    continue;
+                }
+                let source = run_path.to_string_lossy();
+                let run: RunRecord = validate_against_schema(
+                    SchemaName::RunRecord,
+                    &serde_json::from_str(&std::fs::read_to_string(&run_path)?)?,
+                    &source,
+                )?;
 
-            let outputs_dir = outputs_by_key
-                .get(&format!("{eval_id}:{cond}"))
-                .cloned()
-                .unwrap_or_else(|| cond_dir.join("outputs").to_string_lossy().into_owned());
+                let outputs_dir = outputs_by_key
+                    .get(&run_key(eval_id, cond, slot.run_index))
+                    .cloned()
+                    .unwrap_or_else(|| slot.dir.join("outputs").to_string_lossy().into_owned());
 
-            let findings = detect_stray_writes(&run.tool_invocations, &outputs_dir, repo_root);
-            let live_reads =
-                detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root);
+                let findings = detect_stray_writes(&run.tool_invocations, &outputs_dir, repo_root);
+                let live_reads =
+                    detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root);
 
-            totals.violations += findings.violations.len();
-            totals.warnings += findings.warnings.len();
-            totals.live_source_reads += live_reads.len();
+                totals.violations += findings.violations.len();
+                totals.warnings += findings.warnings.len();
+                totals.live_source_reads += live_reads.len();
 
-            if !findings.violations.is_empty()
-                || !findings.warnings.is_empty()
-                || !live_reads.is_empty()
-            {
-                runs.push(RunReport {
-                    eval_id: eval_id.to_string(),
-                    condition: cond.clone(),
-                    violations: findings.violations,
-                    warnings: findings.warnings,
-                    live_source_reads: live_reads,
-                });
+                if !findings.violations.is_empty()
+                    || !findings.warnings.is_empty()
+                    || !live_reads.is_empty()
+                {
+                    runs.push(RunReport {
+                        eval_id: eval_id.to_string(),
+                        condition: cond.clone(),
+                        run_index: slot.run_index,
+                        violations: findings.violations,
+                        warnings: findings.warnings,
+                        live_source_reads: live_reads,
+                    });
+                }
             }
         }
     }
@@ -366,8 +375,9 @@ pub fn detect_stray_writes_report(
     Ok(report)
 }
 
-/// Map `"<eval_id>:<condition>"` → the task's `outputs_dir` from `dispatch.json`.
-/// Empty when the file is absent or malformed (callers fall back to convention).
+/// Map `"<eval_id>:<condition>[:r<k>]"` → the task's `outputs_dir` from
+/// `dispatch.json`. Empty when the file is absent or malformed (callers fall
+/// back to convention).
 fn outputs_dirs_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     if let Ok(raw) = std::fs::read_to_string(iteration_dir.join("dispatch.json"))
@@ -375,7 +385,7 @@ fn outputs_dirs_by_key(iteration_dir: &Path) -> std::collections::HashMap<String
     {
         for t in env.tasks.unwrap_or_default() {
             if let Some(dir) = t.outputs_dir {
-                out.insert(format!("{}:{}", t.eval_id, t.condition), dir);
+                out.insert(run_key(&t.eval_id, &t.condition, t.run_index), dir);
             }
         }
     }

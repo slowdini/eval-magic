@@ -181,6 +181,111 @@ fn grade_omits_meta_check_for_negative_evals() {
     assert_eq!(meta_eval_ids, vec!["pos-eval"]);
 }
 
+/// `grade` (emit + `--finalize`): each `run-<k>` subdirectory of a condition
+/// cell is graded independently — judge tasks point into the run dir and
+/// grading.json lands beside each run.json.
+#[test]
+fn grade_emits_and_finalizes_per_nested_run_dir() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let skill_dir = root.join("skill-dir");
+    let skill_sub = skill_dir.join("mr-review");
+    write_skill(
+        &skill_sub,
+        "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
+        &json!({"skill_name": "mr-review", "evals": [
+            {"id": "pos-eval", "prompt": "Fix it.", "expected_output": "debugs",
+             "assertions": [{"id": "a1", "type": "llm_judge", "rubric": "Did it debug?"}]}
+        ]}),
+    );
+    let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join("skills-workspace")
+        .join("mr-review")
+        .join("iteration-1");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("conditions.json"),
+        serde_json::to_string(&json!({
+            "mode": "new-skill",
+            "conditions": [
+                {"name": "with_skill", "skill_path": skill_md},
+                {"name": "without_skill", "skill_path": null},
+            ],
+            "timestamp": "2026-06-08T00:00:00.000Z",
+            "harness": "claude-code",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let cond_dir = iteration_dir.join("eval-pos-eval").join("with_skill");
+    for k in [1, 2] {
+        let run_dir = cond_dir.join(format!("run-{k}"));
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("run.json"),
+            serde_json::to_string(&json!({
+                "eval_id": "pos-eval", "condition": "with_skill", "skill_path": skill_md,
+                "prompt": "p", "files": [], "final_message": format!("done in run {k}"),
+                "tool_invocations": [], "total_tokens": 100, "duration_ms": 1000,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    grade_cmd(&cwd, &skill_dir, None).assert().success();
+
+    let tasks: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(iteration_dir.join("judge-tasks.json")).unwrap())
+            .unwrap();
+    let a1_response_paths: Vec<&str> = tasks["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|t| t["assertion_id"] == json!("a1"))
+        .map(|t| t["response_path"].as_str().unwrap())
+        .collect();
+    assert_eq!(a1_response_paths.len(), 2, "one judge task per run");
+    for k in [1, 2] {
+        let expected = cond_dir
+            .join(format!("run-{k}"))
+            .join("judge-responses")
+            .join("a1.json");
+        assert!(
+            a1_response_paths
+                .iter()
+                .any(|p| *p == expected.to_string_lossy()),
+            "missing judge task for run-{k}"
+        );
+        fs::write(
+            &expected,
+            serde_json::to_string(&json!({"passed": k == 1, "evidence": "e", "confidence": 0.9}))
+                .unwrap(),
+        )
+        .unwrap();
+    }
+
+    grade_cmd(&cwd, &skill_dir, None)
+        .arg("--finalize")
+        .assert()
+        .success();
+
+    for (k, expected_rate) in [(1, 1.0), (2, 0.0)] {
+        let grading: serde_json::Value = serde_json::from_str(
+            &fs::read_to_string(cond_dir.join(format!("run-{k}")).join("grading.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            grading["summary"]["pass_rate"],
+            json!(expected_rate),
+            "wrong pass rate for run-{k}"
+        );
+    }
+}
+
 /// `grade` (emit): a malformed run.json fails fast with a run-record schema error.
 #[test]
 fn grade_fails_fast_on_malformed_run_record() {

@@ -35,6 +35,11 @@
         "properties": {
           "eval_id": { "type": "string" },
           "condition": { "type": "string" },
+          "run_index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based run index within the (eval, condition) cell; absent for single-run cells."
+          },
           "violations": {
             "type": "array",
             "description": "High-confidence: a write tool targeted a path outside the run's outputs dir.",
