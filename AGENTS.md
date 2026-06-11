@@ -17,6 +17,11 @@ parity notes in `docs/`. Integration tests are split by surface area under `test
 - `cargo fmt --check` verifies formatting without rewriting files.
 - `cargo clippy --all-targets -- -D warnings` catches common Rust issues before review.
 
+## Documentation is a first-class citizen
+
+CLI `--help` docs are the primary way that usage is discovered. Any new feature that has
+user-facing elements must be thoroughly described in the shipped documentation.
+
 ## Coding Style & Naming Conventions
 
 This repo uses Rust 2024 with `rustfmt` configured for `max_width = 100`. Keep modules, functions,
