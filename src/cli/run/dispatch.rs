@@ -30,6 +30,9 @@ use super::{RunError, copy_dir_recursive};
 pub struct DispatchTask {
     pub eval_id: String,
     pub condition: String,
+    /// 1-based run index within a multi-run cell; absent for single-run cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_index: Option<u32>,
     pub skill_path: Option<String>,
     pub staged_skill_slug: Option<String>,
     pub user_prompt: String,
@@ -66,6 +69,9 @@ pub struct DispatchTaskOpts<'a> {
     /// Per-run uniqueness suffix (`i<iteration>-<nonce>`) appended to the dispatch
     /// description; omitted in unit tests that exercise prompt assembly directly.
     pub run_tag: Option<&'a str>,
+    /// 1-based run index within a multi-run cell (adds an `r<k>` segment to the
+    /// dispatch description); `None` for single-run cells.
+    pub run_index: Option<u32>,
 }
 
 impl Default for DispatchTaskOpts<'_> {
@@ -86,6 +92,7 @@ impl Default for DispatchTaskOpts<'_> {
             available_skills: Vec::new(),
             harness: Harness::ClaudeCode,
             run_tag: None,
+            run_index: None,
         }
     }
 }
@@ -241,14 +248,19 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     sections.push(task_lines.join("\n"));
 
     let cond_dir = Path::new(opts.cond_dir);
+    let run_seg = match opts.run_index {
+        Some(k) => format!(":r{k}"),
+        None => String::new(),
+    };
     let agent_description = match opts.run_tag {
-        Some(tag) => format!("{}:{}:{tag}", opts.eval_id, opts.condition),
-        None => format!("{}:{}", opts.eval_id, opts.condition),
+        Some(tag) => format!("{}:{}{run_seg}:{tag}", opts.eval_id, opts.condition),
+        None => format!("{}:{}{run_seg}", opts.eval_id, opts.condition),
     };
 
     Ok(DispatchTask {
         eval_id: opts.eval_id.to_string(),
         condition: opts.condition.to_string(),
+        run_index: opts.run_index,
         skill_path: opts.skill_path.map(str::to_string),
         staged_skill_slug: opts.staged_skill_slug.map(str::to_string),
         user_prompt: opts.user_prompt.to_string(),
@@ -423,7 +435,7 @@ pub fn build_manifest(
         String::new(),
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the subagent with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
-        "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>:i<N>-<nonce>`. When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition)` slot without collisions.".to_string(),
+        "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>[:r<k>]:i<N>-<nonce>` (the `r<k>` segment appears only in multi-run cells, naming the 1-based run index). When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition, run)` slot without collisions.".to_string(),
         String::new(),
         "After all dispatches (Claude Code):".to_string(),
         String::new(),
@@ -440,8 +452,12 @@ pub fn build_manifest(
     let entries = tasks
         .iter()
         .map(|t| {
+            let run_seg = t
+                .run_index
+                .map(|k| format!(" / run-{k}"))
+                .unwrap_or_default();
             [
-                format!("### {} / {}", t.eval_id, t.condition),
+                format!("### {} / {}{run_seg}", t.eval_id, t.condition),
                 String::new(),
                 format!("- run.json:    {}", t.run_record_path),
                 format!("- timing.json: {}", t.timing_path),
@@ -472,8 +488,39 @@ mod tests {
                 files: None,
                 assertions: None,
                 skill_should_trigger: None,
+                runs: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn run_index_adds_r_segment_to_agent_description() {
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            eval_id: "e1",
+            condition: "with_skill",
+            cond_dir: "/work/eval-e1/with_skill/run-2",
+            run_tag: Some("i1-abc"),
+            run_index: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(task.agent_description, "e1:with_skill:r2:i1-abc");
+        assert_eq!(task.run_index, Some(2));
+        assert_eq!(
+            task.run_record_path,
+            "/work/eval-e1/with_skill/run-2/run.json"
+        );
+
+        let flat = build_dispatch_task(&DispatchTaskOpts {
+            eval_id: "e1",
+            condition: "with_skill",
+            cond_dir: "/work/eval-e1/with_skill",
+            run_tag: Some("i1-abc"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(flat.agent_description, "e1:with_skill:i1-abc");
+        assert_eq!(flat.run_index, None);
     }
 
     fn skill(name: &str, description: &str) -> AvailableSkill {

@@ -75,6 +75,8 @@ Every command takes two required flags: `--skill-dir` (the directory *holding* s
 
 ```bash
 # 1. Build the iteration workspace (arm --guard — see Cost & confirmation).
+#    Add --runs <N> to dispatch every eval N times per condition for variance
+#    reduction (a per-eval "runs" field in evals.json overrides the flag).
 eval-magic run --skill-dir ./skills --skill my-skill --mode new-skill --guard
 
 # 2. Your agent dispatches each task in skills-workspace/my-skill/iteration-1/dispatch.json
@@ -112,7 +114,7 @@ run  →  dispatch agents  →  ingest  →  dispatch judges  →  finalize  →
 ```
 
 1. **`run`** builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable).
-2. **Dispatch agents.** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), an `agent_description` to pass through *verbatim* as the dispatch description, and the exact `run_record_path` / `timing_path`. For each task, dispatch a fresh subagent told to read the file at `dispatch_prompt_path` and follow it exactly. The `agent_description` is namespaced with the iteration and a per-run nonce (`<eval_id>:<condition>:i<N>-<nonce>`) — passing it through unchanged is what lets transcripts correlate to runs.
+2. **Dispatch agents.** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), an `agent_description` to pass through *verbatim* as the dispatch description, and the exact `run_record_path` / `timing_path`. For each task, dispatch a fresh subagent told to read the file at `dispatch_prompt_path` and follow it exactly. The `agent_description` is namespaced with the iteration and a per-run nonce (`<eval_id>:<condition>[:r<k>]:i<N>-<nonce>`; the `r<k>` segment appears only in multi-run cells, see `run --help` on `--runs`) — passing it through unchanged is what lets transcripts correlate to runs.
 3. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json` from `dispatch.json` + the subagent's `outputs/final-message.md` + the persisted transcript, scans for stray writes, and grades the `transcript_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion.
 4. **Dispatch judges.** Same pattern as step 2: dispatch a fresh subagent for each judge task to read its prompt file and write its verdict back.
 5. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json`. Read it.
@@ -175,6 +177,16 @@ skills-workspace/<skill>/                # outside the skill directory, gitignor
     conditions.json                      # what each condition is, which SKILL.md it loaded
     benchmark.json                       # aggregate stats
     skill-snapshot.md                    # frozen SKILL.md at run time
+```
+
+With `--runs <N>` (or a per-eval `runs` field in evals.json) above 1, each condition
+nests its runs instead of holding the artifacts directly — every run is graded
+independently and the benchmark's per-condition `mean`/`stddev`/`n` cover all of them:
+
+```
+      <condition-a>/
+        run-1/  outputs/  run.json  timing.json  grading.json
+        run-2/  outputs/  run.json  timing.json  grading.json
 ```
 
 The only source file you author for evals is `<skill>/evals/evals.json` (or create it with `eval-magic init`). Keep `skills-workspace/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.

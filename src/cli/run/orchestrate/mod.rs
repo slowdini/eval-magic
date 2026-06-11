@@ -36,6 +36,8 @@ pub struct RunOptions<'a> {
     pub guard: bool,
     pub stage_name: Option<&'a str>,
     pub plan_mode: bool,
+    /// Runs per condition cell; per-eval `runs` overrides take precedence.
+    pub runs: u32,
 }
 
 /// Everything [`resolve::resolve_request`] works out before any filesystem
@@ -127,11 +129,31 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         "Dispatch tasks:     {}",
         r.iteration_dir.join("dispatch.json").display()
     );
-    println!(
-        "\n{} dispatches required ({} evals × 2 conditions).",
-        num_tasks,
-        r.selected_evals.len()
-    );
+    let run_counts: Vec<u32> = r
+        .selected_evals
+        .iter()
+        .map(|e| e.runs.unwrap_or(opts.runs))
+        .collect();
+    let uniform_runs = run_counts
+        .first()
+        .filter(|&&n| run_counts.iter().all(|&m| m == n));
+    match uniform_runs {
+        Some(1) => println!(
+            "\n{} dispatches required ({} evals × 2 conditions).",
+            num_tasks,
+            r.selected_evals.len()
+        ),
+        Some(n) => println!(
+            "\n{} dispatches required ({} evals × 2 conditions × {n} runs).",
+            num_tasks,
+            r.selected_evals.len()
+        ),
+        None => println!(
+            "\n{} dispatches required ({} evals × 2 conditions, per-eval run counts).",
+            num_tasks,
+            r.selected_evals.len()
+        ),
+    }
 
     if opts.dry_run {
         println!("\n--dry-run: stopping after workspace prep.");

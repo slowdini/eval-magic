@@ -25,6 +25,9 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     if mode == Mode::Revision && opts.baseline.is_none() {
         return Err(RunError::msg("revision mode requires --baseline <label>"));
     }
+    if opts.runs == 0 {
+        return Err(RunError::msg("--runs must be at least 1"));
+    }
     validate_harness_run_options(opts, ctx)?;
 
     let skill_md_path = ctx.skill_subdir.join("SKILL.md");

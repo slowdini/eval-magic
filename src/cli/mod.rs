@@ -49,6 +49,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         guard: false,
         stage_name: None,
         plan_mode: false,
+        runs: 1,
     }));
 
     match command {

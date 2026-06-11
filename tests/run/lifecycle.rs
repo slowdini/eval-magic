@@ -172,6 +172,149 @@ fn bootstrap_content_prepended_before_available_skills() {
 }
 
 #[test]
+fn runs_flag_expands_dispatches_into_run_dirs() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review MR 1", "expected_output": "a review" },
+        { "id": "e2", "prompt": "review MR 2", "expected_output": "a review" } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "2",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(contains(
+            "8 dispatches required (2 evals × 2 conditions × 2 runs)",
+        ));
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(dispatch["runs"], serde_json::json!(2));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 8);
+
+    let mut descriptions = std::collections::HashSet::new();
+    for task in tasks {
+        let k = task["run_index"].as_u64().unwrap();
+        assert!(k == 1 || k == 2);
+        let run_seg = format!("/run-{k}/");
+        assert!(
+            task["run_record_path"].as_str().unwrap().contains(&run_seg),
+            "run.json not under its run dir: {}",
+            task["run_record_path"]
+        );
+        assert!(task["outputs_dir"].as_str().unwrap().contains(&run_seg));
+        let desc = task["agent_description"].as_str().unwrap();
+        assert!(
+            desc.contains(&format!(":r{k}:")),
+            "missing run segment in description: {desc}"
+        );
+        assert!(descriptions.insert(desc.to_string()), "duplicate: {desc}");
+    }
+    for eval in ["e1", "e2"] {
+        for cond in ["with_skill", "without_skill"] {
+            for k in [1, 2] {
+                let run_dir = iteration_dir(&cwd)
+                    .join(format!("eval-{eval}"))
+                    .join(cond)
+                    .join(format!("run-{k}"));
+                assert!(run_dir.join("outputs").is_dir(), "missing {run_dir:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn runs_one_keeps_flat_single_run_layout() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "1",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    for task in dispatch["tasks"].as_array().unwrap() {
+        assert!(task.get("run_index").is_none(), "run_index on single run");
+        assert!(!task["run_record_path"].as_str().unwrap().contains("/run-"));
+    }
+    let cond_dir = iteration_dir(&cwd).join("eval-e1").join("with_skill");
+    assert!(cond_dir.join("outputs").is_dir());
+    assert!(!cond_dir.join("run-1").exists());
+}
+
+#[test]
+fn runs_zero_is_rejected() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "0",
+            "--dry-run",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn per_eval_runs_overrides_the_flag() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review MR 1", "expected_output": "a review", "runs": 3 },
+        { "id": "e2", "prompt": "review MR 2", "expected_output": "a review" } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 8, "3 runs × 2 conds for e1 + 1 run × 2 for e2");
+    let e1_indices: Vec<u64> = tasks
+        .iter()
+        .filter(|t| t["eval_id"] == "e1" && t["condition"] == "with_skill")
+        .map(|t| t["run_index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(e1_indices, vec![1, 2, 3]);
+    for task in tasks.iter().filter(|t| t["eval_id"] == "e2") {
+        assert!(task.get("run_index").is_none());
+        assert!(!task["run_record_path"].as_str().unwrap().contains("/run-"));
+    }
+}
+
+#[test]
 fn only_restricts_dispatches_to_named_ids() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [

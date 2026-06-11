@@ -47,6 +47,7 @@ pub(super) fn write_dispatch(
         timestamp: now_iso8601(),
         harness: Some(ctx.harness),
         run_nonce: Some(r.run_nonce.clone()),
+        runs: Some(opts.runs),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
 
@@ -100,32 +101,44 @@ pub(super) fn write_dispatch(
             ),
         ] {
             let cond_dir = eval_dir.join(cond_name);
-            let outputs_dir = cond_dir.join("outputs");
-            fs::create_dir_all(&outputs_dir)?;
-
-            let fixtures = copy_fixtures(ev, &ctx.skill_subdir, &cond_dir)?;
+            let runs = ev.runs.unwrap_or(opts.runs);
             let staged_path = staged_skill_path_for(cond_slug);
-            let available_skills = available_skills_for(cond_skill_path, cond_slug);
-            let outputs_dir_str = outputs_dir.to_string_lossy().into_owned();
-            let cond_dir_str = cond_dir.to_string_lossy().into_owned();
 
-            tasks.push(build_dispatch_task(&DispatchTaskOpts {
-                eval_id: &ev.id,
-                condition: cond_name,
-                skill_path: cond_skill_path,
-                staged_skill_slug: cond_slug,
-                staged_skill_path: staged_path.as_deref(),
-                user_prompt: &ev.prompt,
-                fixtures,
-                outputs_dir: &outputs_dir_str,
-                cond_dir: &cond_dir_str,
-                bootstrap_content: staged.bootstrap_content.as_deref(),
-                plan_mode_content: staged.plan_mode_content.as_deref(),
-                skill_name: &ctx.skill_name,
-                available_skills,
-                harness: ctx.harness,
-                run_tag: Some(&r.run_tag),
-            })?);
+            for run_idx in 1..=runs {
+                // A single-run cell keeps the flat legacy layout; multi-run
+                // cells nest each run under run-<k>/.
+                let (run_dir, run_index) = if runs == 1 {
+                    (cond_dir.clone(), None)
+                } else {
+                    (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
+                };
+                let outputs_dir = run_dir.join("outputs");
+                fs::create_dir_all(&outputs_dir)?;
+
+                let fixtures = copy_fixtures(ev, &ctx.skill_subdir, &run_dir)?;
+                let available_skills = available_skills_for(cond_skill_path, cond_slug);
+                let outputs_dir_str = outputs_dir.to_string_lossy().into_owned();
+                let run_dir_str = run_dir.to_string_lossy().into_owned();
+
+                tasks.push(build_dispatch_task(&DispatchTaskOpts {
+                    eval_id: &ev.id,
+                    condition: cond_name,
+                    skill_path: cond_skill_path,
+                    staged_skill_slug: cond_slug,
+                    staged_skill_path: staged_path.as_deref(),
+                    user_prompt: &ev.prompt,
+                    fixtures,
+                    outputs_dir: &outputs_dir_str,
+                    cond_dir: &run_dir_str,
+                    bootstrap_content: staged.bootstrap_content.as_deref(),
+                    plan_mode_content: staged.plan_mode_content.as_deref(),
+                    skill_name: &ctx.skill_name,
+                    available_skills,
+                    harness: ctx.harness,
+                    run_tag: Some(&r.run_tag),
+                    run_index,
+                })?);
+            }
         }
     }
 
@@ -156,6 +169,7 @@ pub(super) fn write_dispatch(
         "mode": r.mode,
         "baseline": opts.baseline,
         "plan_mode": opts.plan_mode,
+        "runs": opts.runs,
         "conditions": conditions.conditions,
         "harness": ctx.harness,
         "tasks": tasks,

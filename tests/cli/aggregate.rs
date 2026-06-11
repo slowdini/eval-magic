@@ -170,6 +170,41 @@ fn aggregate_collects_all_runs_from_nested_run_dirs() {
     assert_eq!(b["delta"]["pass_rate"].as_f64().unwrap(), 0.5);
 }
 
+/// `aggregate`: uneven run counts across the two conditions weaken the delta,
+/// so they surface as a validity warning.
+#[test]
+fn aggregate_warns_on_uneven_run_counts_across_conditions() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for k in [1, 2] {
+        let run_dir = iteration_dir
+            .join("eval-e1")
+            .join("with_skill")
+            .join(format!("run-{k}"));
+        write_grading_in(&run_dir, 1.0);
+        write_timing_in(&run_dir, json!({"total_tokens": 1000, "duration_ms": 100}));
+    }
+    write_grading(&iteration_dir, "without_skill", 1.0);
+    write_timing(
+        &iteration_dir,
+        "without_skill",
+        json!({"total_tokens": 1000, "duration_ms": 100}),
+    );
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    assert!(
+        warns
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("uneven run counts")),
+        "expected an uneven-run-counts warning, got: {warns:?}"
+    );
+}
+
 /// `aggregate`: stray-write violations surface as validity_warnings.
 #[test]
 fn aggregate_surfaces_stray_write_violations() {

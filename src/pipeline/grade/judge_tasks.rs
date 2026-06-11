@@ -29,6 +29,9 @@ use super::GradeContext;
 pub struct JudgeTask {
     pub eval_id: String,
     pub condition: String,
+    /// 1-based run index within a multi-run cell; absent for single-run cells.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_index: Option<u32>,
     pub assertion_id: String,
     pub rubric: String,
     pub model: Option<String>,
@@ -274,6 +277,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                     tasks.push(JudgeTask {
                         eval_id: ev.id.clone(),
                         condition: cond.clone(),
+                        run_index: slot.run_index,
                         assertion_id: j.id.clone(),
                         rubric: j.rubric.clone(),
                         model: j.model.clone(),
@@ -329,6 +333,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                         tasks.push(JudgeTask {
                             eval_id: ev.id.clone(),
                             condition: cond.clone(),
+                            run_index: slot.run_index,
                             assertion_id: SKILL_INVOKED_META_ID.to_string(),
                             rubric,
                             model: None,
