@@ -204,12 +204,23 @@ pub struct PromoteBaselineArgs {
     #[command(flatten)]
     pub common: CommonArgs,
     /// Provenance label recorded in `BASELINE.md`.
+    ///
+    /// Overrides a `label` recorded in the iteration's `conditions.json` (set via
+    /// `run --label`); when both are absent, `BASELINE.md` shows `(none)`.
     #[arg(long)]
     pub label: Option<String>,
     /// Operator-declared agent model, recorded in `BASELINE.md`.
+    ///
+    /// Overrides an `agent_model` recorded in the iteration's `conditions.json`
+    /// (set via `run --agent-model`); when both are absent, `BASELINE.md` shows
+    /// `unspecified`.
     #[arg(long)]
     pub agent_model: Option<String>,
     /// Operator-declared judge model, recorded in `BASELINE.md`.
+    ///
+    /// Overrides a `judge_model` recorded in the iteration's `conditions.json`
+    /// (set via `run --judge-model`); when both are absent, `BASELINE.md` shows
+    /// `unspecified`.
     #[arg(long)]
     pub judge_model: Option<String>,
 }
@@ -287,6 +298,27 @@ pub struct RunArgs {
     /// per-eval `runs` field in evals.json overrides this flag for that eval.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     pub runs: u32,
+    /// Operator-declared agent model, persisted into `conditions.json`.
+    ///
+    /// The runner never dispatches the under-test agent itself, so it cannot
+    /// observe the model — declare it here while it's fresh and
+    /// `promote-baseline` records it in `BASELINE.md` automatically (its own
+    /// `--agent-model` flag still overrides).
+    #[arg(long)]
+    pub agent_model: Option<String>,
+    /// Operator-declared judge model, persisted into `conditions.json`.
+    ///
+    /// Like `--agent-model`, but for the grading judge; surfaced in
+    /// `BASELINE.md` by `promote-baseline` (its own `--judge-model` flag still
+    /// overrides).
+    #[arg(long)]
+    pub judge_model: Option<String>,
+    /// Provenance label for this run, persisted into `conditions.json`.
+    ///
+    /// Surfaced in `BASELINE.md` by `promote-baseline` (its own `--label` flag
+    /// still overrides).
+    #[arg(long)]
+    pub label: Option<String>,
 }
 
 /// Every subcommand on the CLI.

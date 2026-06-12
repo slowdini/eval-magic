@@ -114,6 +114,16 @@ pub struct ConditionsRecord {
     /// `runs` overrides may raise or lower individual cells).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u32>,
+    /// Operator-declared agent model (provenance; the runner never dispatches
+    /// the agent itself, so it cannot observe this).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_model: Option<String>,
+    /// Operator-declared judge model (provenance, like `agent_model`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_model: Option<String>,
+    /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Comparison mode for a run.
@@ -353,6 +363,9 @@ mod tests {
             harness: Some(Harness::ClaudeCode),
             run_nonce: None,
             runs: None,
+            agent_model: None,
+            judge_model: None,
+            label: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));

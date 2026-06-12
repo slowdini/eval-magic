@@ -23,6 +23,9 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
             stage_name: args.stage_name.as_deref(),
             plan_mode: args.plan_mode,
             runs: args.runs,
+            agent_model: args.agent_model.as_deref(),
+            judge_model: args.judge_model.as_deref(),
+            label: args.label.as_deref(),
         },
     )?;
     Ok(())

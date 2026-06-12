@@ -50,6 +50,9 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         stage_name: None,
         plan_mode: false,
         runs: 1,
+        agent_model: None,
+        judge_model: None,
+        label: None,
     }));
 
     match command {

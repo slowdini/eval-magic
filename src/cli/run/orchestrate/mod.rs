@@ -39,6 +39,11 @@ pub struct RunOptions<'a> {
     pub plan_mode: bool,
     /// Runs per condition cell; per-eval `runs` overrides take precedence.
     pub runs: u32,
+    /// Operator-declared models + label, persisted into `conditions.json` for
+    /// provenance (the runner cannot observe them itself).
+    pub agent_model: Option<&'a str>,
+    pub judge_model: Option<&'a str>,
+    pub label: Option<&'a str>,
 }
 
 /// Everything [`resolve::resolve_request`] works out before any filesystem
