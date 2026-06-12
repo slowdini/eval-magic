@@ -74,6 +74,78 @@ fn promote_baseline_copies_artifacts_and_reports() {
     assert!(iteration_dir.join(".promoted.json").exists());
 }
 
+/// `promote-baseline`: a fresh promotion (no prior NOTES.md) writes a stub and
+/// says so on stdout, keeping stderr clean.
+#[test]
+fn promote_baseline_writes_notes_stub_and_reports_it() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join("skills-workspace")
+        .join("mr-review")
+        .join("iteration-1");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0}}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["promote-baseline", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .success()
+        .stderr("")
+        .stdout(contains("NOTES.md stub"));
+
+    let notes =
+        fs::read_to_string(skill_sub.join("evals").join("baseline").join("NOTES.md")).unwrap();
+    assert!(notes.contains("iteration-1"));
+}
+
+/// `promote-baseline`: a pre-existing NOTES.md is kept byte-identical, and a
+/// warning on stderr says it was retained from the prior baseline.
+#[test]
+fn promote_baseline_warns_when_prior_notes_retained() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+
+    let baseline = skill_sub.join("evals").join("baseline");
+    fs::create_dir_all(&baseline).unwrap();
+    fs::write(baseline.join("NOTES.md"), "notes from iteration-1\n").unwrap();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join("skills-workspace")
+        .join("mr-review")
+        .join("iteration-2");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0}}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["promote-baseline", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "2"])
+        .assert()
+        .success()
+        .stderr(contains("NOTES.md retained from prior baseline"));
+
+    assert_eq!(
+        fs::read_to_string(baseline.join("NOTES.md")).unwrap(),
+        "notes from iteration-1\n"
+    );
+}
+
 /// `promote-baseline`: a missing iteration fails non-zero, naming the iteration.
 #[test]
 fn promote_baseline_fails_clearly_when_iteration_missing() {

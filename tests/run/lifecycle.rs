@@ -193,6 +193,59 @@ fn namespaces_agent_description_and_records_run_nonce() {
 }
 
 #[test]
+fn records_operator_declared_models_and_label_in_manifests() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .args(["--agent-model", "claude-haiku-4-5-20251001"])
+        .args(["--judge-model", "claude-opus-4-8"])
+        .args(["--label", "canonical-run"])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert_eq!(
+        conditions["agent_model"].as_str().unwrap(),
+        "claude-haiku-4-5-20251001"
+    );
+    assert_eq!(
+        conditions["judge_model"].as_str().unwrap(),
+        "claude-opus-4-8"
+    );
+    assert_eq!(conditions["label"].as_str().unwrap(), "canonical-run");
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(
+        dispatch["agent_model"].as_str().unwrap(),
+        "claude-haiku-4-5-20251001"
+    );
+    assert_eq!(dispatch["judge_model"].as_str().unwrap(), "claude-opus-4-8");
+    assert_eq!(dispatch["label"].as_str().unwrap(), "canonical-run");
+}
+
+#[test]
+fn omitted_models_and_label_are_absent_from_conditions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert!(conditions.get("agent_model").is_none());
+    assert!(conditions.get("judge_model").is_none());
+    assert!(conditions.get("label").is_none());
+}
+
+#[test]
 fn bootstrap_content_prepended_before_available_skills() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);

@@ -48,6 +48,9 @@ pub(super) fn write_dispatch(
         harness: Some(ctx.harness),
         run_nonce: Some(r.run_nonce.clone()),
         runs: Some(opts.runs),
+        agent_model: opts.agent_model.map(str::to_owned),
+        judge_model: opts.judge_model.map(str::to_owned),
+        label: opts.label.map(str::to_owned),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
 
@@ -170,6 +173,9 @@ pub(super) fn write_dispatch(
         "baseline": r.baseline,
         "plan_mode": opts.plan_mode,
         "runs": opts.runs,
+        "agent_model": conditions.agent_model,
+        "judge_model": conditions.judge_model,
+        "label": conditions.label,
         "conditions": conditions.conditions,
         "harness": ctx.harness,
         "tasks": tasks,

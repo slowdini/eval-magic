@@ -61,6 +61,17 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
         result.baseline_dir.display(),
         if n == 1 { "" } else { "s" }
     );
+    match result.notes {
+        workspace::NotesStatus::StubWritten => {
+            println!("+ NOTES.md stub — fill in observations for this iteration.");
+        }
+        workspace::NotesStatus::RetainedFromPrior => {
+            eprintln!(
+                "⚠ NOTES.md retained from prior baseline — update {} for this iteration.",
+                result.baseline_dir.join("NOTES.md").display()
+            );
+        }
+    }
     Ok(())
 }
 

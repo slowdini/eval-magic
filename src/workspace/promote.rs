@@ -38,6 +38,20 @@ pub struct PromoteOptions<'a> {
 pub struct PromoteResult {
     pub baseline_dir: PathBuf,
     pub gradings_copied: usize,
+    pub notes: NotesStatus,
+}
+
+/// How `NOTES.md` in the baseline dir was handled during promotion.
+///
+/// Promotion never overwrites operator-authored notes, but a baseline whose
+/// notes describe a *previous* iteration is easy to ship by accident — the
+/// caller should surface `RetainedFromPrior` as a warning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotesStatus {
+    /// A `NOTES.md` already existed and was left untouched.
+    RetainedFromPrior,
+    /// No `NOTES.md` existed; a stub was written for the operator to fill in.
+    StubWritten,
 }
 
 /// Copy the durable subset of `iteration-<n>` into `<skill>/evals/baseline/` and
@@ -85,6 +99,8 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
         provenance(opts, conditions.as_ref(), &head),
     )?;
 
+    let notes = write_or_retain_notes(&baseline_dir, opts)?;
+
     // Mark the iteration as committed so `teardown` can safely reclaim its
     // workspace — without this marker teardown preserves it as uncommitted.
     write_json(
@@ -99,7 +115,31 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
     Ok(PromoteResult {
         baseline_dir,
         gradings_copied,
+        notes,
     })
+}
+
+/// Leave an existing `NOTES.md` untouched (operator-authored), or write a stub
+/// naming the promoted iteration so the convention is visible from the start.
+fn write_or_retain_notes(
+    baseline_dir: &Path,
+    opts: &PromoteOptions,
+) -> Result<NotesStatus, WorkspaceError> {
+    let notes_path = baseline_dir.join("NOTES.md");
+    if notes_path.exists() {
+        return Ok(NotesStatus::RetainedFromPrior);
+    }
+    fs::write(
+        &notes_path,
+        format!(
+            "# Notes — {}\n\nPromoted from iteration-{} at {}.\n\nRecord operator observations \
+             for this baseline here (judge quirks, flaky evals, context for the deltas).\n",
+            opts.skill_name,
+            opts.iteration,
+            now_iso8601(),
+        ),
+    )?;
+    Ok(NotesStatus::StubWritten)
 }
 
 /// Copy every `eval-<id>/<condition>/grading.json` into
@@ -186,6 +226,21 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
     };
     let harness = label(&opts.harness);
 
+    // Provenance precedence: explicit promote-baseline flag → value recorded in
+    // the iteration's conditions.json (set via `run`) → placeholder.
+    let agent_model = opts
+        .agent_model
+        .or_else(|| conditions.and_then(|c| c.agent_model.as_deref()))
+        .unwrap_or("unspecified");
+    let judge_model = opts
+        .judge_model
+        .or_else(|| conditions.and_then(|c| c.judge_model.as_deref()))
+        .unwrap_or("unspecified");
+    let run_label = opts
+        .label
+        .or_else(|| conditions.and_then(|c| c.label.as_deref()))
+        .unwrap_or("(none)");
+
     let lines = [
         format!("# Baseline — {}", opts.skill_name),
         String::new(),
@@ -203,22 +258,18 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Mode | {mode} |"),
         format!("| Iteration | iteration-{} |", opts.iteration),
         format!("| Harness | {harness} |"),
-        format!(
-            "| Agent model | {} |",
-            opts.agent_model.unwrap_or("unspecified")
-        ),
-        format!(
-            "| Judge model | {} |",
-            opts.judge_model.unwrap_or("unspecified")
-        ),
+        format!("| Agent model | {agent_model} |"),
+        format!("| Judge model | {judge_model} |"),
         format!("| Conditions | {conditions_cell} |"),
         format!("| Run timestamp | {timestamp} |"),
-        format!("| Label | {} |", opts.label.unwrap_or("(none)")),
+        format!("| Label | {run_label} |"),
         format!("| Promoted from commit | {head} |"),
         String::new(),
         "Files:".to_string(),
         "- `benchmark.json` — aggregate pass-rate / duration / token deltas.".to_string(),
         "- `grading/<eval-id>__<condition>.json` — per-run assertion results and judge rationales."
+            .to_string(),
+        "- `NOTES.md` — operator-authored observations for this baseline (never overwritten by promote)."
             .to_string(),
         String::new(),
     ];
@@ -370,6 +421,103 @@ mod tests {
             fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
         assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
         assert!(provenance.contains("Judge model | claude-opus-4-7"));
+    }
+
+    const CONDITIONS_WITH_PROVENANCE: &str = r#"{
+      "mode": "new-skill",
+      "conditions": [
+        { "name": "with_skill", "skill_path": "/x/SKILL.md" },
+        { "name": "without_skill", "skill_path": null }
+      ],
+      "timestamp": "2026-05-27T00:00:00.000Z",
+      "harness": "claude-code",
+      "agent_model": "claude-haiku-4-5-20251001",
+      "judge_model": "claude-opus-4-8",
+      "label": "canonical-run"
+    }"#;
+
+    #[test]
+    fn provenance_falls_back_to_manifest_models_and_label() {
+        let f = fixture(1);
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            CONDITIONS_WITH_PROVENANCE,
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        promote_baseline(&opts(&f, 1)).unwrap();
+
+        let provenance =
+            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+        assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
+        assert!(provenance.contains("Judge model | claude-opus-4-8"));
+        assert!(provenance.contains("Label | canonical-run"));
+    }
+
+    #[test]
+    fn promote_flags_override_manifest_values() {
+        let f = fixture(1);
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            CONDITIONS_WITH_PROVENANCE,
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        let mut o = opts(&f, 1);
+        o.agent_model = Some("claude-fable-5");
+        o.label = Some("override-label");
+        promote_baseline(&o).unwrap();
+
+        let provenance =
+            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+        assert!(provenance.contains("Agent model | claude-fable-5"));
+        // Judge model not overridden — manifest value still wins over "unspecified".
+        assert!(provenance.contains("Judge model | claude-opus-4-8"));
+        assert!(provenance.contains("Label | override-label"));
+    }
+
+    #[test]
+    fn writes_notes_stub_when_absent() {
+        let f = fixture(2);
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        let res = promote_baseline(&opts(&f, 2)).unwrap();
+
+        assert_eq!(res.notes, NotesStatus::StubWritten);
+        let notes = fs::read_to_string(res.baseline_dir.join("NOTES.md")).unwrap();
+        assert!(notes.contains("mr-review"));
+        assert!(notes.contains("iteration-2"));
+    }
+
+    #[test]
+    fn retains_existing_notes_untouched() {
+        let f = fixture(3);
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+        let notes_path = f.skill_subdir.join("evals/baseline/NOTES.md");
+        write(
+            &notes_path,
+            "human-authored observations from iteration-2\n",
+        );
+
+        let res = promote_baseline(&opts(&f, 3)).unwrap();
+
+        assert_eq!(res.notes, NotesStatus::RetainedFromPrior);
+        assert_eq!(
+            fs::read_to_string(&notes_path).unwrap(),
+            "human-authored observations from iteration-2\n"
+        );
     }
 
     #[test]
