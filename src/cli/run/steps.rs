@@ -93,7 +93,7 @@ impl StepParams<'_> {
 pub fn build_ingest_commands(p: &StepParams) -> Vec<StepCommand> {
     let transcripts = match p.harness {
         Harness::ClaudeCode => p.subagents_dir.map(str::to_string),
-        Harness::Codex => None,
+        Harness::Codex | Harness::OpenCode => None,
     };
     vec![
         p.step("record-runs", StepKind::RecordRuns, transcripts.clone()),

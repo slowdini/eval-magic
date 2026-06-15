@@ -174,6 +174,11 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         println!(
             "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec{hook_trust} --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest{target_args} --iteration {iteration} --harness codex`."
         );
+    } else if ctx.harness == Harness::OpenCode {
+        let target_args = command_target_args(ctx);
+        println!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`. OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`."
+        );
     } else {
         let target_args = command_target_args(ctx);
         println!(
