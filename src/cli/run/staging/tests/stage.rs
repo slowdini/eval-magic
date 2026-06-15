@@ -208,6 +208,79 @@ fn codex_stage_name_override_is_dir_and_frontmatter_name() {
     assert!(staged.contains("name: mr-review"));
 }
 
+// ── stage_skill_for_harness (opencode) ────────────────────────────────
+
+#[test]
+fn opencode_slug_sanitizes_underscores_and_special_characters() {
+    assert_eq!(
+        opencode_slug(1, "with_skill", "My_Skill!"),
+        "slow-powers-eval-1-with-skill-my-skill"
+    );
+    assert_eq!(
+        opencode_slug(2, "without_skill", "snake_case"),
+        "slow-powers-eval-2-without-skill-snake-case"
+    );
+}
+
+#[test]
+fn opencode_slug_truncates_to_valid_max_length() {
+    let very_long = "a".repeat(200);
+    let slug = opencode_slug(1, "with_skill", &very_long);
+    assert!(slug.len() <= 64);
+    assert!(is_valid_opencode_name(&slug));
+    assert!(slug.starts_with("slow-powers-eval-1-with-skill-"));
+}
+
+#[test]
+fn opencode_stages_under_opencode_skills_and_rewrites_frontmatter_name() {
+    let tmp = TempDir::new().unwrap();
+    let content = "---\nname: my-skill\ndescription: my skill\n---\n\nbody\n";
+    let slug = stage_skill_for_harness(&StageSkillOpts {
+        content,
+        iteration: 1,
+        condition: "with_skill",
+        skill_name: "my-skill",
+        repo_root: tmp.path(),
+        harness: Harness::OpenCode,
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert_eq!(slug, "slow-powers-eval-1-with-skill-my-skill");
+    let staged = tmp
+        .path()
+        .join(".opencode/skills")
+        .join(&slug)
+        .join("SKILL.md");
+    assert!(staged.exists());
+    let body = read(&staged);
+    assert!(body.contains(&format!("name: {slug}")));
+    assert!(body.contains("description: my skill"));
+    assert!(body.contains("body"));
+    assert!(!tmp.path().join(".claude/skills").exists());
+    assert!(!tmp.path().join(".agents/skills").exists());
+}
+
+#[test]
+fn opencode_rejects_invalid_stage_name_override() {
+    let tmp = TempDir::new().unwrap();
+    let err = stage_skill_for_harness(&StageSkillOpts {
+        content: "---\nname: my-skill\ndescription: my skill\n---\n\nbody\n",
+        iteration: 1,
+        condition: "with_skill",
+        skill_name: "my-skill",
+        repo_root: tmp.path(),
+        harness: Harness::OpenCode,
+        stage_name_override: Some("invalid_name"),
+        ..Default::default()
+    })
+    .unwrap_err();
+
+    let msg = format!("{err}");
+    assert!(msg.contains("invalid"));
+    assert!(msg.contains("OpenCode"));
+}
+
 // ── register_staged_skill_for_cleanup ─────────────────────────────────
 
 #[test]

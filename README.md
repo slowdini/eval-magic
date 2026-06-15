@@ -4,7 +4,7 @@
 
 An eval dispatches a fresh subagent twice per test case — once with the skill loaded, once without (or old version vs. new) — and grades both outputs against assertions. The pass-rate delta tells you whether the skill is worth shipping or the change is worth landing. The runner builds the workspace, stages skills for discovery, generates dispatch prompts, assembles run records from transcripts, grades, and aggregates; your agent harness supplies the one thing the runner never does itself: dispatching the subagents.
 
-`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are wired harnesses today**; Codex has a few lower-fidelity transcript, skill-invocation, and plan-mode caveats — see [Harnesses](#harnesses). From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
+`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are wired harnesses today**; OpenCode has foundational harness selection and staging support; see [Harnesses](#harnesses) for per-harness fidelity and caveats. From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
 This README is the complete operating guide: install, author cases, run both modes, drive the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `eval-magic --help` (and `eval-magic <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
@@ -247,7 +247,7 @@ Support today:
 | **Codex** | ❌ not yet | ❔ likely N/A¹ | ✅ |
 | **OpenCode** | ❌ | ❌ | ❌² |
 
-¹ Codex dispatches via subprocess (`codex exec`), not in-session subagents, so a "fully interactive" Codex mode may not translate. ² OpenCode is not yet a wired harness.
+¹ Codex dispatches via subprocess (`codex exec`), not in-session subagents, so a "fully interactive" Codex mode may not translate. ² OpenCode foundational harness support is wired: `--harness opencode` stages skills under `.opencode/skills/` and emits native dispatch prompts. Transcript ingest, auto-record, and `--guard` are pending.
 
 **Cost and billing.** Mode choice has billing consequences:
 
@@ -304,6 +304,16 @@ eval-magic ingest --harness codex
 ```
 
 `finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code in a few places: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. `--guard` stages a Codex `PreToolUse` hook that blocks out-of-sandbox `Bash` mutations and `apply_patch` targets before they run; `detect-stray-writes` remains the post-run audit. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events.
+
+### OpenCode
+
+OpenCode is wired for **foundational harness selection and staging**. Pass `--harness opencode`: skills stage under repo-local `.opencode/skills/` (OpenCode's native project-local skills directory), the staged skill-under-test's frontmatter `name:` is rewritten to a sanitized OpenCode-valid slug, and `conditions.json` / `dispatch.json` record `"harness": "opencode"`. The dispatch prompt renders OpenCode's native `<available_skills>` XML block and a plan-mode approximation via `<system-reminder>`.
+
+OpenCode skill names must be lowercase alphanumeric with single-hyphen separators, match the containing directory name, and be 1–64 characters. The runner sanitizes the eval-generated slug for the staged copy; sibling skills are staged at their natural names and must already satisfy OpenCode's naming rules.
+
+**Dispatching.** Eval-magic does not yet drive OpenCode dispatches automatically. Iterate `tasks[]` in `dispatch.json` and dispatch each task with `opencode run`, passing the prompt at `dispatch_prompt_path`. Capture the result and assemble `run.json`/`timing.json` manually, or record `opencode run --format json` / `opencode export` output for the upcoming transcript adapter.
+
+**Fidelity notes.** Transcript ingest, auto-record, and `--guard` are not yet wired for OpenCode. The automatic `__skill_invoked` meta-check uses the LLM-judge fallback until a transcript adapter lands, and `transcript_check` assertions grade as *unverifiable*. `detect-stray-writes` still audits out-of-bounds writes from any parsed transcript. `--guard` is rejected with a clear message for OpenCode; use `detect-stray-writes` as the audit fallback.
 
 ## Documentation
 

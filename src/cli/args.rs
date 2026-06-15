@@ -72,11 +72,13 @@ pub struct CommonArgs {
     /// `baseline`.
     #[arg(long)]
     pub mode: Option<String>,
-    /// Target harness: `claude-code` (default) or `codex`.
+    /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
     /// Claude Code and Codex both support staged skills, transcript ingest, and
     /// `--guard`. Codex stages skills under `.agents/skills` and reads each
     /// task's `outputs/codex-events.jsonl` instead of a subagents dir.
+    /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
+    /// `--guard` are not yet wired for OpenCode.
     #[arg(long)]
     pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).

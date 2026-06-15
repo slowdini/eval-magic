@@ -212,6 +212,9 @@ pub(super) fn post_build(
                 Harness::Codex => println!(
                     "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard"
                 ),
+                Harness::OpenCode => unreachable!(
+                    "install_guard_for_harness rejects OpenCode before this message prints"
+                ),
             }
         }
     }

@@ -146,6 +146,10 @@ pub fn install_guard_for_harness(
     match harness {
         Harness::ClaudeCode => install_claude_guard(stage_root, workspace_root, guard_exe, ttl),
         Harness::Codex => install_codex_guard(stage_root, workspace_root, guard_exe, ttl),
+        Harness::OpenCode => Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "--guard is not yet supported for the opencode harness",
+        )),
     }
 }
 

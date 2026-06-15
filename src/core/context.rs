@@ -18,6 +18,9 @@ pub enum Harness {
     #[default]
     ClaudeCode,
     Codex,
+    #[serde(rename = "opencode")]
+    #[value(name = "opencode")]
+    OpenCode,
 }
 
 /// The resolved environment for a run: validated skill location, sibling skills,
@@ -483,5 +486,17 @@ mod tests {
         })
         .unwrap();
         assert_eq!(ctx.harness, Harness::Codex);
+    }
+
+    #[test]
+    fn harness_opencode_accepted() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
+        let ctx = detect_run_context(DetectInput {
+            harness: Some(Harness::OpenCode),
+            ..input(&skill_dir, "foo")
+        })
+        .unwrap();
+        assert_eq!(ctx.harness, Harness::OpenCode);
     }
 }

@@ -40,4 +40,9 @@ EXAMPLES:
   # Codex harness: dispatch with `codex exec --json`, then ingest without --subagents-dir
   eval-magic run --harness codex
   eval-magic ingest --harness codex
+
+  # OpenCode harness: stages under `.opencode/skills/`
+  eval-magic run --harness opencode
+  # ...dispatch each task with `opencode run`, then assemble records manually
+  # until OpenCode transcript ingest is wired.
 ";

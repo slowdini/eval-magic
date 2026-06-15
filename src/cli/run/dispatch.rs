@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::{
     render_available_skills_block, render_codex_available_skills_block,
-    render_codex_plan_mode_context, render_plan_mode_context,
+    render_codex_plan_mode_context, render_opencode_available_skills_block,
+    render_opencode_plan_mode_context, render_plan_mode_context,
 };
 use crate::core::{AvailableSkill, Eval, Harness};
 
@@ -104,6 +105,7 @@ fn render_available_skills_block_for_harness(
     match harness {
         Harness::Codex => render_codex_available_skills_block(skills),
         Harness::ClaudeCode => render_available_skills_block(skills),
+        Harness::OpenCode => render_opencode_available_skills_block(skills),
     }
 }
 
@@ -111,6 +113,7 @@ fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) ->
     match harness {
         Harness::Codex => render_codex_plan_mode_context(profile_text),
         Harness::ClaudeCode => render_plan_mode_context(profile_text),
+        Harness::OpenCode => render_opencode_plan_mode_context(profile_text),
     }
 }
 
@@ -124,20 +127,20 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         // Neutral slug disambiguation only — surface the staged identifier so a
         // deliberate invocation hits the staged copy (and the meta-check finds
         // it), without instructing invocation or implying a global plugin.
-        let surface = if harness == Harness::Codex {
-            "as a Codex skill"
-        } else {
-            "via the Skill tool"
+        let surface = match harness {
+            Harness::Codex => "as a Codex skill",
+            Harness::OpenCode => "as an OpenCode skill",
+            Harness::ClaudeCode => "via the Skill tool",
         };
         let mut lines = vec![format!(
             "The `{}` skill is registered under the identifier `{slug}` and is discoverable {surface}. If you invoke it, use that identifier.",
             opts.skill_name
         )];
         if let Some(staged_path) = opts.staged_skill_path {
-            let cannot_resolve = if harness == Harness::Codex {
-                "If it does not load as a Codex skill"
-            } else {
-                "If the Skill tool cannot resolve that identifier"
+            let cannot_resolve = match harness {
+                Harness::Codex => "If it does not load as a Codex skill",
+                Harness::OpenCode => "If it does not load as an OpenCode skill",
+                Harness::ClaudeCode => "If the Skill tool cannot resolve that identifier",
             };
             lines.push(format!(
                 "{cannot_resolve}, read the skill from `{staged_path}` instead."
@@ -771,6 +774,44 @@ mod tests {
             task.dispatch_prompt
                 .contains(&format!("read the skill from `{staged}` instead."))
         );
+    }
+
+    #[test]
+    fn opencode_flavored_fallback_wording() {
+        let staged = "/repo/.opencode/skills/slow-powers-eval-1-with-skill-foo/SKILL.md";
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            harness: Harness::OpenCode,
+            staged_skill_path: Some(staged),
+            ..base_opts()
+        })
+        .unwrap();
+        assert!(
+            task.dispatch_prompt
+                .contains("discoverable as an OpenCode skill")
+        );
+        assert!(
+            task.dispatch_prompt
+                .contains("If it does not load as an OpenCode skill")
+        );
+        assert!(
+            task.dispatch_prompt
+                .contains(&format!("read the skill from `{staged}` instead."))
+        );
+    }
+
+    #[test]
+    fn opencode_available_skills_block_uses_xml() {
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            harness: Harness::OpenCode,
+            available_skills: vec![skill("foo", "the foo skill")],
+            ..base_opts()
+        })
+        .unwrap();
+        let p = &task.dispatch_prompt;
+        assert!(p.contains("<available_skills>"));
+        assert!(p.contains("<name>foo</name>"));
+        assert!(p.contains("<description>the foo skill</description>"));
+        assert!(!p.contains("The following skills are available for use with the Skill tool:"));
     }
 
     #[test]

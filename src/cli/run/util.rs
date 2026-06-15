@@ -75,6 +75,7 @@ pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str
     match harness {
         Harness::ClaudeCode => Ok(include_str!("../../../profiles/claude-code/plan-mode.md")),
         Harness::Codex => Ok(include_str!("../../../profiles/codex/plan-mode.md")),
+        Harness::OpenCode => Ok(include_str!("../../../profiles/opencode/plan-mode.md")),
     }
 }
 
@@ -145,6 +146,7 @@ pub(crate) fn harness_label(harness: Harness) -> &'static str {
     match harness {
         Harness::ClaudeCode => "claude-code",
         Harness::Codex => "codex",
+        Harness::OpenCode => "opencode",
     }
 }
 
@@ -168,6 +170,23 @@ mod tests {
     #[test]
     fn silent_for_codex() {
         assert!(staging_discovery_warning(Harness::Codex, false).is_none());
+    }
+
+    #[test]
+    fn silent_for_opencode() {
+        assert!(staging_discovery_warning(Harness::OpenCode, false).is_none());
+    }
+
+    #[test]
+    fn opencode_plan_mode_profile_resolves() {
+        let profile = resolve_plan_mode_profile(Harness::OpenCode).unwrap();
+        assert!(profile.contains("OpenCode plan mode is active"));
+        assert!(profile.contains("plan agent"));
+    }
+
+    #[test]
+    fn harness_label_opencode() {
+        assert_eq!(harness_label(Harness::OpenCode), "opencode");
     }
 
     #[test]
