@@ -14,11 +14,7 @@ use std::path::Path;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::{
-    render_available_skills_block, render_codex_available_skills_block,
-    render_codex_plan_mode_context, render_opencode_available_skills_block,
-    render_opencode_plan_mode_context, render_plan_mode_context,
-};
+use crate::adapters::adapter_for;
 use crate::core::{AvailableSkill, Eval, Harness};
 
 use super::codex_dispatch::{codex_exec_command_template, codex_parallel_dispatch_recipe};
@@ -104,19 +100,11 @@ fn render_available_skills_block_for_harness(
     harness: Harness,
     skills: &[AvailableSkill],
 ) -> String {
-    match harness {
-        Harness::Codex => render_codex_available_skills_block(skills),
-        Harness::ClaudeCode => render_available_skills_block(skills),
-        Harness::OpenCode => render_opencode_available_skills_block(skills),
-    }
+    adapter_for(harness).render_available_skills_block(skills)
 }
 
 fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) -> String {
-    match harness {
-        Harness::Codex => render_codex_plan_mode_context(profile_text),
-        Harness::ClaudeCode => render_plan_mode_context(profile_text),
-        Harness::OpenCode => render_opencode_plan_mode_context(profile_text),
-    }
+    adapter_for(harness).render_plan_mode_context(profile_text)
 }
 
 /// Construct one dispatch task and its full prompt.
@@ -129,21 +117,14 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         // Neutral slug disambiguation only — surface the staged identifier so a
         // deliberate invocation hits the staged copy (and the meta-check finds
         // it), without instructing invocation or implying a global plugin.
-        let surface = match harness {
-            Harness::Codex => "as a Codex skill",
-            Harness::OpenCode => "as an OpenCode skill",
-            Harness::ClaudeCode => "via the Skill tool",
-        };
+        let adapter = adapter_for(harness);
+        let surface = adapter.skill_surface_phrase();
         let mut lines = vec![format!(
             "The `{}` skill is registered under the identifier `{slug}` and is discoverable {surface}. If you invoke it, use that identifier.",
             opts.skill_name
         )];
         if let Some(staged_path) = opts.staged_skill_path {
-            let cannot_resolve = match harness {
-                Harness::Codex => "If it does not load as a Codex skill",
-                Harness::OpenCode => "If it does not load as an OpenCode skill",
-                Harness::ClaudeCode => "If the Skill tool cannot resolve that identifier",
-            };
+            let cannot_resolve = adapter.skill_unresolved_phrase();
             lines.push(format!(
                 "{cannot_resolve}, read the skill from `{staged_path}` instead."
             ));

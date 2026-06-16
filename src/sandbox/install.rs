@@ -17,8 +17,6 @@ use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::core::Harness;
-
 use super::now_ms;
 use super::{guard::read_marker, marker_is_armed};
 
@@ -126,34 +124,10 @@ pub fn install_guard(
     guard_exe: &Path,
     ttl: Option<Duration>,
 ) -> io::Result<PathBuf> {
-    install_guard_for_harness(
-        stage_root,
-        workspace_root,
-        guard_exe,
-        Harness::ClaudeCode,
-        ttl,
-    )
+    install_claude_guard(stage_root, workspace_root, guard_exe, ttl)
 }
 
-/// Arm the write guard using the target harness's native hook surface.
-pub fn install_guard_for_harness(
-    stage_root: &Path,
-    workspace_root: &Path,
-    guard_exe: &Path,
-    harness: Harness,
-    ttl: Option<Duration>,
-) -> io::Result<PathBuf> {
-    match harness {
-        Harness::ClaudeCode => install_claude_guard(stage_root, workspace_root, guard_exe, ttl),
-        Harness::Codex => install_codex_guard(stage_root, workspace_root, guard_exe, ttl),
-        Harness::OpenCode => Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "--guard is not yet supported for the opencode harness",
-        )),
-    }
-}
-
-fn install_claude_guard(
+pub(crate) fn install_claude_guard(
     stage_root: &Path,
     workspace_root: &Path,
     guard_exe: &Path,
@@ -213,7 +187,7 @@ fn install_claude_guard(
     Ok(marker_path)
 }
 
-fn install_codex_guard(
+pub(crate) fn install_codex_guard(
     stage_root: &Path,
     workspace_root: &Path,
     guard_exe: &Path,
@@ -345,7 +319,6 @@ fn prune_if_empty(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Harness;
     use tempfile::TempDir;
 
     struct Case {
@@ -494,11 +467,10 @@ mod tests {
         teardown_guard(&c.stage_root);
         assert!(!guard_is_armed(&c.stage_root));
 
-        install_guard_for_harness(
+        install_codex_guard(
             &c.stage_root,
             &c.workspace_root,
             Path::new("/g/eval-magic"),
-            Harness::Codex,
             None,
         )
         .unwrap();
@@ -548,8 +520,7 @@ mod tests {
     fn codex_install_writes_project_hook_marker_and_manifest() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        install_guard_for_harness(&c.stage_root, &c.workspace_root, exe, Harness::Codex, None)
-            .unwrap();
+        install_codex_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
 
         let marker = read_json(
             &c.stage_root
@@ -604,11 +575,10 @@ mod tests {
         );
         fs::write(codex_hooks_path(&c.stage_root), &original).unwrap();
 
-        install_guard_for_harness(
+        install_codex_guard(
             &c.stage_root,
             &c.workspace_root,
             Path::new("/g/eval-magic"),
-            Harness::Codex,
             None,
         )
         .unwrap();

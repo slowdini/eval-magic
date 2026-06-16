@@ -8,10 +8,11 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::adapters::{config_dir_from_env, detect_plugin_shadows, format_shadow_banner};
+use crate::adapters::{
+    adapter_for, config_dir_from_env, detect_plugin_shadows, format_shadow_banner,
+};
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, Harness, RunContext};
 use crate::pipeline::io::now_iso8601;
-use crate::sandbox::install_guard_for_harness;
 
 use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, copy_fixtures,
@@ -75,8 +76,10 @@ pub(super) fn write_dispatch(
             }
             let mut skills = staged.sibling_skills.clone();
             if let Some(csp) = cond_skill_path {
-                let name = match (ctx.harness, cond_slug) {
-                    (Harness::Codex, Some(slug)) => slug.to_string(),
+                let name = match cond_slug {
+                    Some(slug) if adapter_for(ctx.harness).advertises_staged_slug_name() => {
+                        slug.to_string()
+                    }
                     _ => ctx.skill_name.clone(),
                 };
                 skills.push(AvailableSkill {
@@ -205,11 +208,10 @@ pub(super) fn post_build(
         if opts.no_stage {
             eprintln!("\n⚠ --guard requires staging enabled; skipping guard install.");
         } else {
-            install_guard_for_harness(
+            adapter_for(ctx.harness).install_guard(
                 &ctx.stage_root,
                 &ctx.workspace_root,
                 &std::env::current_exe()?,
-                ctx.harness,
                 None,
             )?;
             match ctx.harness {

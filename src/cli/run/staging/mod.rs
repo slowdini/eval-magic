@@ -15,6 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::adapter_for;
 use crate::core::Harness;
 use crate::pipeline::io::now_iso8601;
 use crate::workspace::SNAPSHOT_META;
@@ -107,11 +108,7 @@ impl Default for StageSiblingOpts<'_> {
 
 /// `<repo_root>/.agents/skills` (Codex) or `<repo_root>/.claude/skills`.
 pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> PathBuf {
-    match harness {
-        Harness::Codex => repo_root.join(".agents").join("skills"),
-        Harness::ClaudeCode => repo_root.join(".claude").join("skills"),
-        Harness::OpenCode => repo_root.join(".opencode").join("skills"),
-    }
+    adapter_for(harness).skills_dir(repo_root)
 }
 
 /// Rewrite (or insert) the `name:` frontmatter field so a Codex-staged skill's
@@ -242,7 +239,7 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
     let skill_dir = skills_dir_for_harness(opts.repo_root, opts.harness).join(&slug);
     fs::create_dir_all(&skill_dir)?;
 
-    let content = if opts.harness == Harness::Codex || opts.harness == Harness::OpenCode {
+    let content = if adapter_for(opts.harness).rewrites_frontmatter_name() {
         rewrite_frontmatter_name(opts.content, &slug)
     } else {
         opts.content.to_string()
