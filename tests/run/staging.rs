@@ -1,7 +1,6 @@
 //! Staging, plan-mode injection, `--stage-name`, and dispatch-prompt rendering.
 
 use crate::helpers::*;
-use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use serde_json::Value;
 use std::fs;
@@ -65,8 +64,8 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
         .assert()
         .success()
         .stdout(contains("Preparing mr-review iteration-1 (new-skill)"))
-        .stdout(contains("eval-magic ingest --iteration 1"))
-        .stdout(predicates::str::contains("--skill mr-review").not());
+        .stdout(contains("eval-magic ingest --skill-dir"))
+        .stdout(contains("--skill mr-review --iteration 1"));
 
     assert!(
         direct_iteration_dir(&skill_sub)

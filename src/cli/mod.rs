@@ -107,21 +107,17 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
     })
 }
 
-/// Render the shortest target selector that will resolve the same skill from
-/// the current command context.
+/// Render a fully self-sufficient target selector for the current run context.
+///
+/// Always names both `--skill-dir` and `--skill` (both are always populated in
+/// [`RunContext`] and always re-resolve), so the printed "Next:" commands are
+/// copy-pasteable from any cwd — not just the one `run` happened to start in.
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
-    if ctx.stage_siblings {
-        return format!(
-            " --skill-dir {} --skill {}",
-            ctx.skill_dir.display(),
-            ctx.skill_name
-        );
-    }
-    if ctx.stage_root == ctx.skill_subdir {
-        String::new()
-    } else {
-        format!(" --skill {}", ctx.skill_subdir.display())
-    }
+    format!(
+        " --skill-dir {} --skill {}",
+        ctx.skill_dir.display(),
+        ctx.skill_name
+    )
 }
 
 /// Resolve the explicit iteration, or default to the latest existing
@@ -187,4 +183,64 @@ pub(crate) fn check_subagents_dir(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    /// Create `<root>/<parent>/<name>/SKILL.md` and return the skill subdir.
+    fn make_skill(root: &Path, parent: &str, name: &str) -> PathBuf {
+        let subdir = root.join(parent).join(name);
+        fs::create_dir_all(&subdir).unwrap();
+        fs::write(
+            subdir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: test\n---\n\nbody\n"),
+        )
+        .unwrap();
+        subdir
+    }
+
+    /// The selector must be copy-pasteable: even when `run` was invoked from
+    /// inside the skill dir (the case that used to render an empty selector), it
+    /// must name both `--skill-dir` and `--skill`, and re-resolve to the same
+    /// skill from an unrelated cwd.
+    #[test]
+    fn target_args_are_self_sufficient_when_run_from_inside_skill_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        let skill_subdir = make_skill(&root, "skills", "mr-review");
+
+        // Mimic `run` started from inside the skill dir: no --skill-dir/--skill.
+        let ctx = detect_run_context(DetectInput {
+            cwd: Some(skill_subdir.clone()),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let args = command_target_args(&ctx);
+        assert!(
+            args.contains("--skill-dir"),
+            "selector names --skill-dir: {args}"
+        );
+        assert!(
+            args.contains("--skill mr-review"),
+            "selector names --skill: {args}"
+        );
+
+        // Round-trip: feeding the rendered selector back from an unrelated cwd
+        // resolves the same skill.
+        let other = root.join("elsewhere");
+        fs::create_dir_all(&other).unwrap();
+        let resolved = detect_run_context(DetectInput {
+            skill_dir: Some(ctx.skill_dir.display().to_string()),
+            skill: Some(ctx.skill_name.clone()),
+            cwd: Some(other),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(resolved.skill_subdir, ctx.skill_subdir);
+    }
 }

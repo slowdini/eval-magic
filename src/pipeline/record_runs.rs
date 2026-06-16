@@ -59,6 +59,41 @@ pub struct RecordRunsResult {
     pub missing_transcript: usize,
 }
 
+impl RecordRunsResult {
+    /// A loud, actionable warning when runs were recorded from `final-message.md`
+    /// but their transcripts didn't link — leaving `tool_invocations`/tokens/
+    /// duration empty so `transcript_check` assertions silently grade
+    /// unverifiable. `None` when every run matched its transcript. The hint is
+    /// tailored to how the harness correlates transcripts (description match vs.
+    /// the Codex events file).
+    pub fn transcript_warning(&self, harness: Harness) -> Option<String> {
+        if self.missing_transcript == 0 {
+            return None;
+        }
+        let n = self.missing_transcript;
+        let plural = if n == 1 { "" } else { "s" };
+        let all = self.recorded > 0 && self.missing_transcript >= self.recorded;
+        let lead = if all {
+            format!("⚠ {n} run{plural} recorded but NONE matched a transcript")
+        } else {
+            format!("⚠ {n} run{plural} missing a transcript")
+        };
+        let cause = match harness {
+            Harness::Codex => "expected `outputs/codex-events.jsonl` was not found".to_string(),
+            Harness::ClaudeCode | Harness::OpenCode => {
+                "did you pass each task's `agent_description` verbatim as the subagent \
+                 description? If so, confirm `--subagents-dir` points at the parent session's \
+                 subagents dir"
+                    .to_string()
+            }
+        };
+        Some(format!(
+            "{lead} — {cause}; tool_invocations/tokens/duration are empty, so transcript_check \
+             assertions will grade unverifiable."
+        ))
+    }
+}
+
 /// Assemble `run.json` + `timing.json` for every task in
 /// `<iteration_dir>/dispatch.json`. See the module docs for the field sources and
 /// the existing-record precedence rules.
@@ -646,6 +681,68 @@ mod tests {
         assert!(
             err.to_string().contains("dispatch.json"),
             "error was: {err}"
+        );
+    }
+
+    #[test]
+    fn no_transcript_warning_when_all_transcripts_matched() {
+        let result = RecordRunsResult {
+            recorded: 4,
+            missing_transcript: 0,
+            ..Default::default()
+        };
+        assert!(result.transcript_warning(Harness::ClaudeCode).is_none());
+    }
+
+    #[test]
+    fn claude_code_warning_names_agent_description_when_all_runs_miss() {
+        let result = RecordRunsResult {
+            recorded: 8,
+            missing_transcript: 8,
+            ..Default::default()
+        };
+        let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
+        assert!(warning.contains("8"), "names the count: {warning}");
+        assert!(
+            warning.contains("agent_description"),
+            "points at the load-bearing key: {warning}"
+        );
+        assert!(
+            warning.to_lowercase().contains("verbatim"),
+            "says pass it verbatim: {warning}"
+        );
+        assert!(
+            warning.contains("--subagents-dir"),
+            "offers the other likely cause: {warning}"
+        );
+    }
+
+    #[test]
+    fn claude_code_warning_fires_on_partial_miss() {
+        let result = RecordRunsResult {
+            recorded: 4,
+            missing_transcript: 1,
+            ..Default::default()
+        };
+        let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
+        assert!(warning.contains('1'), "names the count: {warning}");
+    }
+
+    #[test]
+    fn codex_warning_points_at_events_file() {
+        let result = RecordRunsResult {
+            recorded: 2,
+            missing_transcript: 2,
+            ..Default::default()
+        };
+        let warning = result.transcript_warning(Harness::Codex).unwrap();
+        assert!(
+            warning.contains("codex-events.jsonl"),
+            "names the Codex source: {warning}"
+        );
+        assert!(
+            !warning.contains("agent_description"),
+            "Codex doesn't use agent_description: {warning}"
         );
     }
 }

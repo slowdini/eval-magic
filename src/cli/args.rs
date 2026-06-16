@@ -255,8 +255,11 @@ pub struct RunArgs {
     /// staging it under the harness skills dir.
     ///
     /// For harnesses without project-local skill discovery. Forces the LLM-judge
-    /// meta-check tier and does not inline sibling skills or sibling asset files,
-    /// so multi-file skills need the staged (default) path.
+    /// meta-check tier and inlines only SKILL.md (not sibling skills or sibling
+    /// asset files); use the staged (default) path when the measured behavior
+    /// depends on sibling files. Also disables `--guard` — the write guard
+    /// requires staging — so no-stage runs are unguarded and rely on
+    /// `detect-stray-writes` after the fact.
     #[arg(long)]
     pub no_stage: bool,
     /// Arm the write guard (PreToolUse hook) for the dispatch window.
@@ -266,7 +269,9 @@ pub struct RunArgs {
     /// unless the user opts out. The marker auto-expires after 6h and is torn down
     /// at the next run; while armed the hook fires on your own tool calls too.
     /// If it remains armed after `finalize`, `finalize` reminds you to run
-    /// `teardown-guard` before editing source.
+    /// `teardown-guard` before editing source. Requires staging — incompatible
+    /// with `--no-stage`, under which guard install is skipped and the run is
+    /// unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.

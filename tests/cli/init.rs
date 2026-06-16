@@ -1,7 +1,6 @@
 //! `init` subcommand: scaffold a first evals/evals.json for a skill.
 
 use crate::helpers::{canonical_root, skill_eval};
-use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use serde_json::json;
 use std::fs;
@@ -62,8 +61,11 @@ fn init_with_flags_writes_valid_seed_evals() {
     );
 }
 
+/// Even when `init` runs from inside the skill dir, the printed "Next:" commands
+/// must be copy-pasteable: each carries `--skill-dir`/`--skill` so it resolves
+/// from any cwd.
 #[test]
-fn init_from_skill_dir_prints_slim_next_steps() {
+fn init_from_skill_dir_prints_copy_pasteable_next_steps() {
     let (_tmp, root) = canonical_root();
     let (_skill_dir, skill_sub) = write_skill(&root);
 
@@ -80,13 +82,13 @@ fn init_from_skill_dir_prints_slim_next_steps() {
         ])
         .assert()
         .success()
-        .stdout(contains("  eval-magic run --guard"))
+        .stdout(contains("  eval-magic run --skill-dir"))
+        .stdout(contains("--skill mr-review --guard"))
         .stdout(contains(
-            "  eval-magic ingest --subagents-dir <subagents-dir>",
+            "--skill mr-review --subagents-dir <subagents-dir>",
         ))
-        .stdout(contains("  eval-magic finalize"))
-        .stdout(contains("  eval-magic promote-baseline"))
-        .stdout(predicates::str::contains("--skill-dir").not());
+        .stdout(contains("  eval-magic finalize --skill-dir"))
+        .stdout(contains("  eval-magic promote-baseline --skill-dir"));
 }
 
 #[test]

@@ -68,6 +68,51 @@ pub(crate) fn staging_discovery_warning(harness: Harness, no_stage: bool) -> Opt
     )
 }
 
+/// The combined "what to do now" upshot when *both* build-time hazards apply at
+/// once: staged skills won't be discovered by in-process subagents
+/// ([`staging_discovery_warning`]'s condition) AND an installed plugin shadows
+/// the control arm. Each warning is clear alone, but together the only valid
+/// recovery takes some reasoning — so spell it out. `None` unless both hold.
+pub(crate) fn staging_plugin_shadow_action(
+    harness: Harness,
+    no_stage: bool,
+    has_shadows: bool,
+) -> Option<String> {
+    // Mirror the staging-discovery gate: this only bites staged Claude Code runs.
+    let staging_bites = !no_stage && harness == Harness::ClaudeCode;
+    if !staging_bites || !has_shadows {
+        return None;
+    }
+    Some(
+        [
+            "\n▶ Bottom line: both hazards above apply to this run — in-process subagents won't",
+            "  discover the staged skill (so with-skill arms fall back to no skill), AND an",
+            "  installed plugin shadows the staged copy (so the control arm isn't skill-absent).",
+            "  Two clean ways out:",
+            "    1. dispatch from a fresh, isolated Claude Code session with the shadowing plugin",
+            "       disabled — staging is discovered at session start and the control arm is clean; or",
+            "    2. re-run with --no-stage AND disable the shadowing plugin — inlines SKILL.md into",
+            "       the prompt and leaves nothing for the plugin to shadow.",
+            "  Until then, treat with-skill arms as fallen-back and the control arm as contaminated.",
+        ]
+        .join("\n"),
+    )
+}
+
+/// Run-summary heads-up that a `--no-stage` run is unguarded: the write guard
+/// requires staging, so `--no-stage` can't arm it, and stray writes are only
+/// *detected* after the fact by `detect-stray-writes`. `None` for staged runs.
+pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
+    if !no_stage {
+        return None;
+    }
+    Some(
+        "\nℹ --no-stage run is unguarded — the write guard requires staging, so stray writes are \
+         only detected after the fact by detect-stray-writes (folded into `ingest`), never blocked."
+            .to_string(),
+    )
+}
+
 /// Resolve the verbatim plan-mode procedure profile for a harness.
 /// The profile is a compile-time bundled asset, mirroring the schema embedding in
 /// `validation`.
@@ -175,6 +220,51 @@ mod tests {
     #[test]
     fn silent_for_opencode() {
         assert!(staging_discovery_warning(Harness::OpenCode, false).is_none());
+    }
+
+    #[test]
+    fn combined_action_when_staging_and_shadow_both_apply() {
+        let action = staging_plugin_shadow_action(Harness::ClaudeCode, false, true).unwrap();
+        // Names both clean ways out: a fresh isolated session, or --no-stage + disable.
+        assert!(action.contains("fresh"), "offers a fresh session: {action}");
+        assert!(action.contains("--no-stage"), "offers --no-stage: {action}");
+        assert!(
+            action.to_lowercase().contains("disable"),
+            "says to disable the plugin: {action}"
+        );
+    }
+
+    #[test]
+    fn no_combined_action_without_shadow() {
+        assert!(staging_plugin_shadow_action(Harness::ClaudeCode, false, false).is_none());
+    }
+
+    #[test]
+    fn no_combined_action_under_no_stage() {
+        assert!(staging_plugin_shadow_action(Harness::ClaudeCode, true, true).is_none());
+    }
+
+    #[test]
+    fn no_combined_action_for_codex() {
+        assert!(staging_plugin_shadow_action(Harness::Codex, false, true).is_none());
+    }
+
+    #[test]
+    fn unguarded_notice_when_no_stage() {
+        let notice = unguarded_notice(true).unwrap();
+        assert!(
+            notice.to_lowercase().contains("unguarded"),
+            "calls the run unguarded: {notice}"
+        );
+        assert!(
+            notice.contains("detect-stray-writes"),
+            "names the after-the-fact backstop: {notice}"
+        );
+    }
+
+    #[test]
+    fn no_unguarded_notice_when_staging() {
+        assert!(unguarded_notice(false).is_none());
     }
 
     #[test]
