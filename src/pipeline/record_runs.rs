@@ -181,9 +181,11 @@ pub fn record_runs(
     Ok(result)
 }
 
-/// Resolve a task's transcript summary: a Codex `codex-events.jsonl` under the
-/// task's outputs dir, or the Claude Code subagent transcript matched by the
-/// task's `agent_description`. Returns `None` when no transcript is found.
+/// Resolve a task's transcript summary, keyed on the dispatch mechanism: a
+/// `Cli`-mechanism harness reads the events file its CLI wrote under the task's
+/// outputs dir (e.g. Codex's `codex-events.jsonl`); an `InSession` harness reads
+/// the subagent transcript matched by the task's `agent_description`. Returns
+/// `None` when no transcript is found.
 fn transcript_summary_for_task(
     harness: Harness,
     subagents_dir: Option<&Path>,
