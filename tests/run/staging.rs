@@ -1,6 +1,7 @@
 //! Staging, plan-mode injection, `--stage-name`, and dispatch-prompt rendering.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use serde_json::Value;
 use std::fs;
@@ -293,4 +294,42 @@ fn writes_each_prompt_to_file_and_drops_inline() {
         assert!(!contents.is_empty());
         assert!(contents.contains("User request:"));
     }
+}
+
+#[test]
+fn discovery_warning_fires_when_claude_skills_dir_created_fresh() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No .claude/skills/ in cwd when the session started: `run` creates it, so Claude Code's
+    // watcher won't pick it up until the session re-scans — the actionable warning should fire.
+    assert!(!cwd.join(".claude/skills").exists());
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("did not exist when your session started"))
+        .stderr(contains("--no-stage"))
+        .stderr(contains("live change detection").not());
+}
+
+#[test]
+fn discovery_note_when_claude_skills_dir_preexists() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // .claude/skills/ already exists when the session starts: it is watched, so live change
+    // detection surfaces the staged skill in-session — emit the confirmation note, not the
+    // fallback warning.
+    fs::create_dir_all(cwd.join(".claude/skills")).unwrap();
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("live change detection"))
+        .stderr(contains("did not exist when your session started").not());
 }
