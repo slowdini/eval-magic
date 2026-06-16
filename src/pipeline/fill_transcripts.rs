@@ -12,7 +12,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::adapters::{find_by_description, parse_codex_events, parse_transcript};
+use crate::adapters::{adapter_for, find_by_description};
 use crate::core::{ConditionsRecord, Harness, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
@@ -186,13 +186,15 @@ fn invocations_for_run(
         if !events_path.exists() {
             return None;
         }
-        return parse_codex_events(&events_path).ok();
+        return adapter_for(harness).parse_transcript(&events_path).ok();
     }
 
     let description = resolve_agent_description(iteration_dir, eval_id, condition, run_index);
     let subagent =
         find_by_description(subagents_dir.unwrap_or_else(|| Path::new("")), &description)?;
-    parse_transcript(&subagent.jsonl_path).ok()
+    adapter_for(harness)
+        .parse_transcript(&subagent.jsonl_path)
+        .ok()
 }
 
 #[cfg(test)]

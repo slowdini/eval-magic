@@ -7,6 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::adapters::adapter_for;
 use crate::core::{Harness, Mode, RunContext};
 
 use super::RunError;
@@ -144,11 +145,7 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
 /// The profile is a compile-time bundled asset, mirroring the schema embedding in
 /// `validation`.
 pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str, RunError> {
-    match harness {
-        Harness::ClaudeCode => Ok(include_str!("../../../profiles/claude-code/plan-mode.md")),
-        Harness::Codex => Ok(include_str!("../../../profiles/codex/plan-mode.md")),
-        Harness::OpenCode => Ok(include_str!("../../../profiles/opencode/plan-mode.md")),
-    }
+    Ok(adapter_for(harness).plan_mode_profile())
 }
 
 /// Reject the Claude-tier features Codex support does not yet cover.
@@ -215,11 +212,7 @@ pub(crate) fn mode_str(mode: Mode) -> &'static str {
 }
 
 pub(crate) fn harness_label(harness: Harness) -> &'static str {
-    match harness {
-        Harness::ClaudeCode => "claude-code",
-        Harness::Codex => "codex",
-        Harness::OpenCode => "opencode",
-    }
+    adapter_for(harness).label()
 }
 
 #[cfg(test)]

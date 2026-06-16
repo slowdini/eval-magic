@@ -14,9 +14,7 @@ pub(crate) use decide::marker_is_armed;
 pub use decide::{GuardDecision, GuardMarker, decide};
 pub use guard::{codex_guard_decision, guard_decision, read_marker};
 pub(crate) use install::guard_is_armed;
-pub use install::{
-    GUARD_MANIFEST, GUARD_MARKER, install_guard, install_guard_for_harness, teardown_guard,
-};
+pub use install::{GUARD_MANIFEST, GUARD_MARKER, install_guard, teardown_guard};
 pub use policy::{WRITE_TOOLS, classify_bash, is_under, is_under_any, is_write_tool, path_arg};
 
 use std::time::{SystemTime, UNIX_EPOCH};

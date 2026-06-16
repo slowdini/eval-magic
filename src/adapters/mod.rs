@@ -1,15 +1,20 @@
-//! Harness-specific session rendering and transcript parsing.
+//! The harness adapter layer.
 //!
-//! Claude Code and Codex session renderers + transcript parsers, plus
-//! plugin-shadow detection. The submodules are re-exported flat so downstream
-//! code writes `crate::adapters::<fn>`.
+//! [`harness`] defines the [`HarnessAdapter`] trait — the single API generic
+//! run-mode code uses to reach harness-specific behavior. The per-harness
+//! session renderers + transcript parsers it delegates to live in the sibling
+//! submodules, plus plugin-shadow detection. The submodules are re-exported
+//! flat so downstream code writes `crate::adapters::<fn>`.
 
 pub mod claude_code_session;
 pub mod claude_code_transcript;
 pub mod codex_session;
 pub mod codex_transcript;
+pub mod harness;
 pub mod opencode_session;
 pub mod plugin_shadow;
+
+pub use harness::{ClaudeCodeAdapter, CodexAdapter, HarnessAdapter, OpenCodeAdapter, adapter_for};
 
 pub use claude_code_session::{
     render_available_skills_block, render_plan_mode_context, resolve_subagents_dir_for_session,

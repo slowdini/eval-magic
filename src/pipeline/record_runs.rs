@@ -18,9 +18,7 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::adapters::{
-    TranscriptSummary, find_by_description, parse_codex_events_full, parse_transcript_full,
-};
+use crate::adapters::{TranscriptSummary, adapter_for, find_by_description};
 use crate::core::{Harness, RunRecord, TimingRecord, TimingSource};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
@@ -194,14 +192,18 @@ fn transcript_summary_for_task(
         if !events_path.exists() {
             return None;
         }
-        return parse_codex_events_full(&events_path).ok();
+        return adapter_for(harness)
+            .parse_transcript_full(&events_path)
+            .ok();
     }
 
     let subagent = find_by_description(
         subagents_dir.unwrap_or_else(|| Path::new("")),
         &task.agent_description,
     )?;
-    parse_transcript_full(&subagent.jsonl_path).ok()
+    adapter_for(harness)
+        .parse_transcript_full(&subagent.jsonl_path)
+        .ok()
 }
 
 #[cfg(test)]
