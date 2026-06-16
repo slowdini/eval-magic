@@ -138,6 +138,9 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         result.skipped_no_final_message,
         result.missing_transcript
     );
+    if let Some(warning) = result.transcript_warning(ctx.harness) {
+        eprintln!("{warning}");
+    }
     Ok(())
 }
 
@@ -204,7 +207,12 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     }
 
     let t = report.totals;
-    if t.violations == 0 && t.warnings == 0 && t.live_source_reads == 0 {
+    let clean = t.violations == 0 && t.warnings == 0 && t.live_source_reads == 0;
+    if clean && report.invocations_inspected == 0 {
+        eprintln!(
+            "⚠ Unverifiable — 0 transcript tool-calls inspected. Stray-write detection had nothing to check (every run's tool_invocations is empty); link transcripts first, then re-run (see the record-runs warning about passing agent_description verbatim / pointing --subagents-dir at the right session)."
+        );
+    } else if clean {
         println!("✓ No out-of-bounds writes or live-source reads detected.");
     } else {
         eprintln!(

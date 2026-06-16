@@ -17,6 +17,7 @@ use super::super::dispatch::{
     DispatchTaskOpts, build_dispatch_task, build_manifest, copy_fixtures, get_skill_description,
 };
 use super::super::staging::skills_dir_for_harness;
+use super::super::util::{staging_plugin_shadow_action, unguarded_notice};
 use super::super::{RunError, write_json};
 use super::{Resolved, RunOptions, Staged};
 
@@ -219,6 +220,14 @@ pub(super) fn post_build(
         }
     }
 
+    // No-stage runs can't arm the guard at all — say so in the summary, whether
+    // or not --guard was passed, so the operator knows the run is unguarded.
+    if !opts.dry_run
+        && let Some(notice) = unguarded_notice(opts.no_stage)
+    {
+        eprintln!("{notice}");
+    }
+
     // Plugin-shadow preflight (Claude Code): a staged skill name also discoverable
     // from an enabled plugin or the global skills dir contaminates the run.
     if ctx.harness == Harness::ClaudeCode {
@@ -228,6 +237,13 @@ pub(super) fn post_build(
         if !report.shadowed.is_empty() {
             write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
             eprintln!("{}", format_shadow_banner(&report));
+        }
+        // When the staging-discovery miss and a plugin shadow both bite, the
+        // individual warnings don't add up to an obvious action — summarize it.
+        if let Some(action) =
+            staging_plugin_shadow_action(ctx.harness, opts.no_stage, !report.shadowed.is_empty())
+        {
+            eprintln!("{action}");
         }
     }
     Ok(())

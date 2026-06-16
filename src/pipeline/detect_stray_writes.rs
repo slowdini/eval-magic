@@ -251,6 +251,11 @@ pub struct StrayWritesReport {
     pub iteration: u32,
     pub totals: Totals,
     pub runs: Vec<RunReport>,
+    /// How many transcript tool-calls were actually examined across every run.
+    /// Zero means nothing was inspected — a clean `totals` is then *unverifiable*,
+    /// not a pass. In-memory only; never serialized into `stray-writes.json`.
+    #[serde(skip)]
+    pub invocations_inspected: usize,
 }
 
 /// `dispatch.json` fields the report builder reads (outputs-dir override).
@@ -301,6 +306,7 @@ pub fn detect_stray_writes_report(
         warnings: 0,
         live_source_reads: 0,
     };
+    let mut invocations_inspected = 0usize;
 
     let mut eval_dirs: Vec<String> = std::fs::read_dir(iteration_dir)?
         .flatten()
@@ -332,6 +338,7 @@ pub fn detect_stray_writes_report(
                     .cloned()
                     .unwrap_or_else(|| slot.dir.join("outputs").to_string_lossy().into_owned());
 
+                invocations_inspected += run.tool_invocations.len();
                 let findings = detect_stray_writes(&run.tool_invocations, &outputs_dir, repo_root);
                 let live_reads =
                     detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root);
@@ -362,6 +369,7 @@ pub fn detect_stray_writes_report(
         iteration,
         totals,
         runs,
+        invocations_inspected,
     };
 
     let out_path = iteration_dir.join("stray-writes.json");
