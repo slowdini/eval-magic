@@ -286,6 +286,9 @@ pub struct RunArgs {
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
+    /// When invoking this from inside Codex, staging writes `.agents/skills` and
+    /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
+    /// its default workspace-write sandbox, so approval/escalation may be needed.
     #[arg(long)]
     pub guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the

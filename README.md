@@ -286,7 +286,9 @@ Pass `--harness codex`: skills stage under repo-local `.agents/skills/` (the sta
 codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
-  > <outputs_dir>/codex-events.jsonl
+  </dev/null \
+  > <outputs_dir>/codex-events.jsonl \
+  2> <outputs_dir>/codex-stderr.log
 ```
 
 When the run was armed with `--guard`, add `--dangerously-bypass-hook-trust` to that `codex exec` command so the vetted project-local `PreToolUse` hook staged in `.codex/hooks.json` actually runs:
@@ -295,8 +297,12 @@ When the run was armed with `--guard`, add `--dangerously-bypass-hook-trust` to 
 codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
-  > <outputs_dir>/codex-events.jsonl
+  </dev/null \
+  > <outputs_dir>/codex-events.jsonl \
+  2> <outputs_dir>/codex-stderr.log
 ```
+
+The `</dev/null` redirect matters when dispatching in parallel from a pipe (for example with `xargs -P`): without it, Codex treats piped stdin as additional prompt context. `codex-stderr.log` keeps progress/status text such as stdin notices out of the JSONL transcript.
 
 Then ingest **without** `--subagents-dir` — the transcript source is fixed to each task's `codex-events.jsonl`:
 
@@ -305,6 +311,8 @@ eval-magic ingest --harness codex
 ```
 
 `finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code in a few places: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. `--guard` stages a Codex `PreToolUse` hook that blocks out-of-sandbox `Bash` mutations and `apply_patch` targets before they run; `detect-stray-writes` remains the post-run audit. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events.
+
+When running `eval-magic run --harness codex` from inside Codex itself, staging writes `.agents/skills`; adding `--guard` also writes `.codex/hooks.json`. Those project-local Codex config paths are protected by Codex's default workspace-write sandbox, so the runner may need approval/escalation or an external terminal invocation. That approval is Codex's own permission boundary, not something eval-magic bypasses.
 
 ### OpenCode
 
