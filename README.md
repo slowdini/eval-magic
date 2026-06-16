@@ -87,9 +87,10 @@ eval-magic run --guard
 # 2. Your agent dispatches each task in skills-workspace/my-skill/iteration-1/dispatch.json
 #    as a fresh subagent (each reads its dispatch_prompt_path and follows it).
 
-# 3. Assemble records, detect stray writes, grade:
-eval-magic ingest \
-  --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/
+# 3. Assemble records, detect stray writes, grade. ingest auto-resolves the
+#    subagents dir from CLAUDE_CODE_SESSION_ID; outside that session pass
+#    --session-id <id> or --subagents-dir <path>.
+eval-magic ingest
 
 # 4. Dispatch the judge tasks ingest lists, then finalize. If --guard is still
 #    armed, finalize reminds you to run teardown-guard before editing source.
@@ -271,7 +272,7 @@ Project-local staged skills live in `<cwd>/.claude/skills/`, independent of inst
 
 **Same-session staging gotcha.** Claude Code applies *live change detection* to skill directories that existed when the session started, so whether subagents discover the *mid-session*-staged eval skills hinges on one question: did `<cwd>/.claude/skills/` already exist when your session started? If it did, the staged skills are surfaced in-session and subagents dispatched afterward discover them (a freshly-staged skill can lag the watcher by a moment). If `run` had to *create* `.claude/skills/`, that new top-level directory isn't watched until the session re-scans — a restart, or a plugin reload / other refresh event — so until then subagents won't discover the staged copies and every with-skill arm falls back. `run` detects which case applies and prints either a confirmation note or the actionable warning. To guarantee discovery either way: restart (or start a *fresh* session) once `.claude/skills/` exists, or run with `--no-stage` (each `SKILL.md` is inlined into its dispatch prompt, so there is no staged discovery to miss). Regardless, run `detect-stray-writes` (folded into `ingest`) before trusting a staged result.
 
-**Where transcripts live.** Claude Code persists subagent transcripts under `~/.claude/projects/<project-slug>/<parent-session-id>/subagents/`. Pass that directory as `--subagents-dir` to `ingest`. Besides out-of-bounds writes, `detect-stray-writes` also flags **live-source reads**: an arm whose subagent read the live skill source instead of its staged copy. That usually means the Skill tool couldn't resolve the staged slug yet and the agent improvised — fatal in revision mode, where the `old_skill` arm then sees new-skill content. Treat a flagged cell's arm as contaminated.
+**Where transcripts live.** Claude Code persists subagent transcripts under `~/.claude/projects/<project-slug>/<parent-session-id>/subagents/`. `ingest` auto-resolves this from the `CLAUDE_CODE_SESSION_ID` the orchestrating session exports (deriving `<project-slug>` from the cwd and scanning `projects/*` if needed), so you normally don't pass `--subagents-dir` at all. When running outside that session — or to target a past session — pass `--session-id <id>`, or override the lookup entirely with `--subagents-dir <path>`. Besides out-of-bounds writes, `detect-stray-writes` also flags **live-source reads**: an arm whose subagent read the live skill source instead of its staged copy. That usually means the Skill tool couldn't resolve the staged slug yet and the agent improvised — fatal in revision mode, where the `old_skill` arm then sees new-skill content. Treat a flagged cell's arm as contaminated.
 
 **Dispatching via the Task tool.** `dispatch.json` is a top-level object (`{ skill_name, iteration, run_nonce, …, tasks: [...] }`); iterate `tasks[]`. For each task, dispatch a fresh subagent via the Task tool with the prompt `Read the file at <dispatch_prompt_path> and follow its instructions exactly.` (substituting the task's `dispatch_prompt_path`), and pass `agent_description` *verbatim* as the description — it's namespaced `<eval_id>:<condition>:i<N>-<nonce>`, and passing it unchanged is what lets transcript correlation work. (The Task tool documents `description` as "short", but pass the full string regardless — correlation depends on the exact value.) You do **not** write `run.json`/`timing.json` yourself; the subagent writes `outputs/final-message.md`, and `ingest` (`record-runs`) assembles both records from disk. For a plan-mode-relevant skill, add `--plan-mode` to inject Claude Code's verbatim plan-mode procedure as a `<system-reminder>` operating-context layer.
 

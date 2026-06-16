@@ -64,6 +64,14 @@ pub fn resolve_config_dir(config_dir_override: Option<&str>) -> PathBuf {
     }
 }
 
+/// The Claude Code config dir, reading the `CLAUDE_CONFIG_DIR` override from the
+/// environment (else `~/.claude`). Thin convenience over [`resolve_config_dir`]
+/// for the call sites that should honor the env var — the override logic itself
+/// is covered by `resolve_config_dir`'s tests.
+pub fn config_dir_from_env() -> PathBuf {
+    resolve_config_dir(std::env::var("CLAUDE_CONFIG_DIR").ok().as_deref())
+}
+
 fn read_json_safe<T: DeserializeOwned>(path: &Path) -> Option<T> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()

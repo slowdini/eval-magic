@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::json;
 
-use crate::adapters::{detect_plugin_shadows, format_shadow_banner, resolve_config_dir};
+use crate::adapters::{config_dir_from_env, detect_plugin_shadows, format_shadow_banner};
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, Harness, RunContext};
 use crate::pipeline::io::now_iso8601;
 use crate::sandbox::install_guard_for_harness;
@@ -234,7 +234,7 @@ pub(super) fn post_build(
     if ctx.harness == Harness::ClaudeCode {
         let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
         names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
-        let report = detect_plugin_shadows(&resolve_config_dir(None), &ctx.stage_root, &names);
+        let report = detect_plugin_shadows(&config_dir_from_env(), &ctx.stage_root, &names);
         if !report.shadowed.is_empty() {
             write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
             eprintln!("{}", format_shadow_banner(&report));

@@ -92,9 +92,20 @@ pub struct CommonArgs {
     ///
     /// Where Claude Code persisted subagent transcripts. `ingest`/`record-runs`/
     /// `fill-transcripts` read it to populate `tool_invocations`, tokens, and
-    /// duration. Not used for Codex, which reads `outputs/codex-events.jsonl`.
+    /// duration. Optional: when omitted it is auto-resolved from `--session-id`
+    /// (or the `CLAUDE_CODE_SESSION_ID` env var); pass it explicitly only to
+    /// override. Not used for Codex, which reads `outputs/codex-events.jsonl`.
     #[arg(long)]
     pub subagents_dir: Option<String>,
+    /// Parent session id for auto-resolving `--subagents-dir` (Claude Code only).
+    ///
+    /// Defaults to the `CLAUDE_CODE_SESSION_ID` env var that Claude Code sets in
+    /// the orchestrating agent's shell. `ingest`/`record-runs`/`fill-transcripts`
+    /// use it to locate `<config>/projects/<cwd-slug>/<session-id>/subagents/`
+    /// (scanning `projects/*` if the cwd slug differs). Pass it only when running
+    /// outside that session; an explicit `--subagents-dir` overrides it.
+    #[arg(long)]
+    pub session_id: Option<String>,
     /// Restrict to these eval ids (comma-separated).
     ///
     /// Mutually exclusive with `--skip`; every named id must exist or the run
@@ -360,9 +371,10 @@ pub(crate) enum Commands {
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
     /// writes, grades `transcript_check` assertions, then stops at the judge
     /// hand-off, listing a judge task per `llm_judge` assertion. Requires
-    /// `--iteration`; Claude Code also needs `--subagents-dir`, while Codex reads
-    /// each task's `outputs/codex-events.jsonl`. Re-running after a fix is safe —
-    /// every sub-step skips work already done.
+    /// `--iteration`; Claude Code auto-resolves the subagents dir from the session
+    /// id (override with `--subagents-dir`), while Codex reads each task's
+    /// `outputs/codex-events.jsonl`. Re-running after a fix is safe — every
+    /// sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///

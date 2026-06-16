@@ -59,10 +59,7 @@ pub(crate) fn run_init(args: InitArgs) -> anyhow::Result<()> {
     println!("Next:");
     let target_args = command_target_args(&ctx);
     println!("  eval-magic run{} --guard", target_args);
-    println!(
-        "  eval-magic ingest{} --subagents-dir <subagents-dir>",
-        target_args
-    );
+    println!("  eval-magic ingest{}", target_args);
     println!("  eval-magic finalize{}", target_args);
     println!("  eval-magic promote-baseline{}", target_args);
 

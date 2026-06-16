@@ -14,8 +14,8 @@ EXAMPLES:
   # Mode A — evaluate a new skill (with vs. without)
   eval-magic run --guard
   # …dispatch each task in dispatch.json as a fresh subagent…
-  eval-magic ingest \\
-    --subagents-dir ~/.claude/projects/<slug>/<session-id>/subagents/
+  eval-magic ingest   # auto-resolves --subagents-dir from CLAUDE_CODE_SESSION_ID
+                      # (override: --session-id <id> or --subagents-dir <path>)
   # …dispatch each judge task ingest listed…
   eval-magic finalize
   eval-magic promote-baseline   # optional
@@ -37,7 +37,7 @@ EXAMPLES:
   # Opt in to seeded environment parity: stage sibling skills from a skills dir
   eval-magic run --skill-dir ./skills --skill my-skill --guard
 
-  # Codex harness: dispatch with `codex exec --json`, then ingest without --subagents-dir
+  # Codex harness: dispatch with `codex exec --json`; ingest reads each task's codex-events.jsonl
   eval-magic run --harness codex
   eval-magic ingest --harness codex
 

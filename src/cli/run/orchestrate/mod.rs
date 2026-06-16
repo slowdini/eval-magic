@@ -187,7 +187,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     } else {
         let target_args = command_target_args(ctx);
         println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, passing its `agent_description` verbatim as the subagent description (that string is the key that links each transcript back — without it tool calls, tokens, and duration come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)"
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, passing its `agent_description` verbatim as the subagent description (that string is the key that links each transcript back — without it tool calls, tokens, and duration come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration}\n(ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that session, add --session-id <id> or --subagents-dir <path>.)"
         );
     }
 }

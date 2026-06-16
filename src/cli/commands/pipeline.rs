@@ -2,15 +2,12 @@
 //! `finalize` chains and each individual stage (`record-runs`,
 //! `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`).
 
-use std::path::Path;
-
 use anyhow::bail;
 
 use crate::cli::args::{CommonArgs, GradeArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
-use crate::cli::{check_subagents_dir, iteration_dir, resolve_iteration, run_context_from};
-use crate::core::Harness;
+use crate::cli::{iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from};
 use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
@@ -28,7 +25,10 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
         mode: None,
         harness: Some(step.harness),
         workspace_dir: step.workspace_dir.clone(),
+        // The chain carries the already-resolved absolute subagents dir, so the
+        // session id is no longer needed downstream.
         subagents_dir: step.subagents_dir.clone(),
+        session_id: None,
         only: None,
         skip: None,
         overwrite: false,
@@ -51,18 +51,19 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
-    if ctx.harness == Harness::ClaudeCode && args.subagents_dir.is_none() {
-        bail!(
-            "ingest requires --subagents-dir <path> (Claude Code persists subagent transcripts under ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
-        );
-    }
+    let resolved = resolve_subagents_dir(
+        ctx.harness,
+        args.subagents_dir.as_deref(),
+        args.session_id.as_deref(),
+    )?;
+    let resolved = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
         skill_dir: args.skill_dir.as_deref(),
         skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
-        subagents_dir: args.subagents_dir.as_deref(),
+        subagents_dir: resolved.as_deref(),
         workspace_dir: args.workspace_dir.as_deref(),
     });
     if let Some(failed) = run::steps::run_steps(&steps, run_step) {
@@ -125,8 +126,12 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
 /// `dispatch.json`.
 pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
-    check_subagents_dir(ctx.harness, subagents_dir)?;
+    let resolved = resolve_subagents_dir(
+        ctx.harness,
+        args.subagents_dir.as_deref(),
+        args.session_id.as_deref(),
+    )?;
+    let subagents_dir = resolved.as_deref();
 
     let dir = iteration_dir(&ctx, args.iteration)?;
     let result = pipeline::record_runs(&dir, ctx.harness, subagents_dir, args.overwrite)?;
@@ -148,8 +153,12 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
 /// the iteration.
 pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let subagents_dir = args.subagents_dir.as_deref().map(Path::new);
-    check_subagents_dir(ctx.harness, subagents_dir)?;
+    let resolved = resolve_subagents_dir(
+        ctx.harness,
+        args.subagents_dir.as_deref(),
+        args.session_id.as_deref(),
+    )?;
+    let subagents_dir = resolved.as_deref();
 
     let dir = iteration_dir(&ctx, args.iteration)?;
     let result = pipeline::fill_transcripts(&dir, ctx.harness, subagents_dir, args.overwrite)?;
