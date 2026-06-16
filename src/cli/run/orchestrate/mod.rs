@@ -73,6 +73,11 @@ struct Staged {
     sibling_skills: Vec<AvailableSkill>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
+    /// Whether the harness skills dir existed when `run` started — i.e. before this run staged
+    /// anything. Drives the Claude Code staged-skill discovery warning: an existing dir is already
+    /// watched, so live change detection surfaces the staged skills; a dir this run had to create
+    /// isn't watched until the session re-scans. See [`super::util::staging_discovery_warning`].
+    skills_dir_preexisted: bool,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.
@@ -81,7 +86,7 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
-    build::post_build(ctx, opts, &resolved)?;
+    build::post_build(ctx, opts, &resolved, &staged)?;
     print_next_steps(ctx, opts, &resolved, num_tasks);
     Ok(())
 }

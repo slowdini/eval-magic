@@ -192,6 +192,7 @@ pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
     r: &Resolved,
+    staged: &Staged,
 ) -> Result<(), RunError> {
     // Opt-in hard guard: a PreToolUse hook blocking subagent writes/installs
     // outside the eval sandbox while dispatches run.
@@ -239,10 +240,15 @@ pub(super) fn post_build(
             eprintln!("{}", format_shadow_banner(&report));
         }
         // When the staging-discovery miss and a plugin shadow both bite, the
-        // individual warnings don't add up to an obvious action — summarize it.
-        if let Some(action) =
-            staging_plugin_shadow_action(ctx.harness, opts.no_stage, !report.shadowed.is_empty())
-        {
+        // individual warnings don't add up to an obvious action — summarize it. The discovery
+        // miss only applies when `run` created .claude/skills/ fresh (an existing dir is watched,
+        // so the staged skill is discoverable), so gate on `!skills_dir_preexisted`.
+        if let Some(action) = staging_plugin_shadow_action(
+            ctx.harness,
+            opts.no_stage,
+            !report.shadowed.is_empty(),
+            staged.skills_dir_preexisted,
+        ) {
             eprintln!("{action}");
         }
     }
