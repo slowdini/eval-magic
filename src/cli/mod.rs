@@ -6,11 +6,12 @@
 //! [`commands`], grouped by concern. This module is the thin coordinator: parse,
 //! dispatch, and the shared context/iteration helpers the handlers reuse.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{anyhow, bail};
 use clap::Parser;
 
+use crate::adapters::{config_dir_from_env, resolve_subagents_dir_for_session};
 use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
 mod args;
@@ -38,6 +39,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
             harness: None,
             workspace_dir: None,
             subagents_dir: None,
+            session_id: None,
             only: None,
             skip: None,
             overwrite: false,
@@ -166,29 +168,58 @@ pub(crate) fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow:
     Ok(dir)
 }
 
-/// Claude Code reads subagent transcripts by description, so `--subagents-dir` is
-/// required and must exist; Codex reads `outputs/codex-events.jsonl`, so it's
-/// ignored there.
-pub(crate) fn check_subagents_dir(
+/// Resolve the subagents transcript dir for a Claude Code stage that reads
+/// transcripts. Precedence: an explicit `--subagents-dir` (validated to exist)
+/// wins; otherwise resolve from a session id — the `--session-id` flag if given,
+/// else the `CLAUDE_CODE_SESSION_ID` env var Claude Code sets in the
+/// orchestrating agent's shell — locating
+/// `<config>/projects/<cwd-slug>/<session-id>/subagents/` (scanning `projects/*`
+/// if the cwd slug differs). Codex/OpenCode read `outputs/codex-events.jsonl`,
+/// so they resolve to `None`.
+pub(crate) fn resolve_subagents_dir(
     harness: Harness,
-    subagents_dir: Option<&Path>,
-) -> anyhow::Result<()> {
-    if harness == Harness::ClaudeCode {
-        match subagents_dir {
-            None => bail!(
-                "missing --subagents-dir (e.g. ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/)"
-            ),
-            Some(dir) if !dir.exists() => bail!("subagents-dir not found: {}", dir.display()),
-            Some(_) => {}
-        }
+    subagents_dir: Option<&str>,
+    session_id: Option<&str>,
+) -> anyhow::Result<Option<PathBuf>> {
+    if harness != Harness::ClaudeCode {
+        return Ok(None);
     }
-    Ok(())
+    if let Some(dir) = subagents_dir {
+        let path = PathBuf::from(dir);
+        if !path.exists() {
+            bail!("subagents-dir not found: {}", path.display());
+        }
+        return Ok(Some(path));
+    }
+    let session = session_id
+        .map(str::to_string)
+        .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
+        .filter(|s| !s.trim().is_empty());
+    let Some(session) = session else {
+        bail!(
+            "could not auto-resolve the subagents dir: CLAUDE_CODE_SESSION_ID is not set. \
+             Re-run inside the Claude Code session that dispatched the subagents, or pass \
+             --session-id <id> or --subagents-dir <path>."
+        );
+    };
+    let config_dir = config_dir_from_env();
+    let cwd = std::env::current_dir()?;
+    match resolve_subagents_dir_for_session(&config_dir, &cwd, &session) {
+        Some(path) => Ok(Some(path)),
+        None => bail!(
+            "no subagents dir found for session {session} under {}/projects/. The session may \
+             not have dispatched any subagents (or lives under a different CLAUDE_CONFIG_DIR). \
+             Pass --subagents-dir <path> to override.",
+            config_dir.display()
+        ),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::fs;
+    use std::path::Path;
     use tempfile::TempDir;
 
     /// Create `<root>/<parent>/<name>/SKILL.md` and return the skill subdir.
@@ -242,5 +273,45 @@ mod tests {
         })
         .unwrap();
         assert_eq!(resolved.skill_subdir, ctx.skill_subdir);
+    }
+
+    #[test]
+    fn resolve_subagents_dir_is_none_for_non_claude_harness() {
+        // Codex/OpenCode never read a subagents dir, so resolution is a no-op
+        // even when a dir is passed.
+        assert_eq!(
+            resolve_subagents_dir(Harness::Codex, Some("/whatever"), None).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_subagents_dir(Harness::OpenCode, None, None).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_subagents_dir_uses_existing_explicit_dir() {
+        let tmp = TempDir::new().unwrap();
+        let resolved = resolve_subagents_dir(
+            Harness::ClaudeCode,
+            Some(&tmp.path().display().to_string()),
+            None,
+        )
+        .unwrap();
+        assert_eq!(resolved, Some(tmp.path().to_path_buf()));
+    }
+
+    #[test]
+    fn resolve_subagents_dir_errors_when_explicit_dir_missing() {
+        let err = resolve_subagents_dir(
+            Harness::ClaudeCode,
+            Some("/no/such/subagents/dir/xyz"),
+            None,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("subagents-dir not found"),
+            "got: {err}"
+        );
     }
 }

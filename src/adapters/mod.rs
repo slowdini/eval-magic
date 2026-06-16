@@ -11,7 +11,10 @@ pub mod codex_transcript;
 pub mod opencode_session;
 pub mod plugin_shadow;
 
-pub use claude_code_session::{render_available_skills_block, render_plan_mode_context};
+pub use claude_code_session::{
+    render_available_skills_block, render_plan_mode_context, resolve_subagents_dir_for_session,
+    slugify_project_path,
+};
 pub use claude_code_transcript::{
     SubagentEntry, SubagentMeta, TranscriptSummary, find_by_description, list_subagents,
     parse_transcript, parse_transcript_full,
@@ -22,6 +25,6 @@ pub use opencode_session::{
     render_opencode_available_skills_block, render_opencode_plan_mode_context,
 };
 pub use plugin_shadow::{
-    PluginShadowReport, ShadowSource, detect_plugin_shadows, format_shadow_banner,
-    resolve_config_dir, shadow_validity_warnings,
+    PluginShadowReport, ShadowSource, config_dir_from_env, detect_plugin_shadows,
+    format_shadow_banner, resolve_config_dir, shadow_validity_warnings,
 };

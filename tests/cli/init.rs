@@ -1,6 +1,7 @@
 //! `init` subcommand: scaffold a first evals/evals.json for a skill.
 
 use crate::helpers::{canonical_root, skill_eval};
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use serde_json::json;
 use std::fs;
@@ -84,9 +85,9 @@ fn init_from_skill_dir_prints_copy_pasteable_next_steps() {
         .success()
         .stdout(contains("  eval-magic run --skill-dir"))
         .stdout(contains("--skill mr-review --guard"))
-        .stdout(contains(
-            "--skill mr-review --subagents-dir <subagents-dir>",
-        ))
+        // ingest auto-resolves the subagents dir now, so the placeholder is gone.
+        .stdout(contains("  eval-magic ingest --skill-dir"))
+        .stdout(contains("--subagents-dir <subagents-dir>").not())
         .stdout(contains("  eval-magic finalize --skill-dir"))
         .stdout(contains("  eval-magic promote-baseline --skill-dir"));
 }
