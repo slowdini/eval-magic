@@ -383,12 +383,7 @@ pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, 
 /// Remove the staged skills (prefix-scanned + manifest-listed) and restore any
 /// pre-existing siblings the runner displaced.
 pub fn cleanup_staged_skills(repo_root: &Path, harness: Harness) -> Result<(), RunError> {
-    let harness_dir = match harness {
-        Harness::Codex => repo_root.join(".agents"),
-        Harness::ClaudeCode => repo_root.join(".claude"),
-        Harness::OpenCode => repo_root.join(".opencode"),
-    };
-    let skills_dir = harness_dir.join("skills");
+    let skills_dir = skills_dir_for_harness(repo_root, harness);
     if !skills_dir.exists() {
         return Ok(());
     }
@@ -422,7 +417,10 @@ pub fn cleanup_staged_skills(repo_root: &Path, harness: Harness) -> Result<(), R
     // non-prefixed dirs left behind), then prune an emptied parent.
     if manifest.skills_dir_preexisting == Some(false) {
         fs::remove_dir_all(&skills_dir)?;
-        prune_if_empty(&harness_dir)?;
+        // Prune the now-emptied harness config dir (the skills dir's parent).
+        if let Some(harness_dir) = skills_dir.parent() {
+            prune_if_empty(harness_dir)?;
+        }
         return Ok(());
     }
 
