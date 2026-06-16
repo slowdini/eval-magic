@@ -37,7 +37,7 @@ EXAMPLES:
   # Opt in to seeded environment parity: stage sibling skills from a skills dir
   eval-magic run --skill-dir ./skills --skill my-skill --guard
 
-  # Codex harness: dispatch with `codex exec --json`; ingest reads each task's codex-events.jsonl
+  # Codex harness: dispatch with stdin detached; ingest reads each task's codex-events.jsonl
   eval-magic run --harness codex
   eval-magic ingest --harness codex
 

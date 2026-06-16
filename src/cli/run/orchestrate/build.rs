@@ -14,7 +14,8 @@ use crate::pipeline::io::now_iso8601;
 use crate::sandbox::install_guard_for_harness;
 
 use super::super::dispatch::{
-    DispatchTaskOpts, build_dispatch_task, build_manifest, copy_fixtures, get_skill_description,
+    DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, copy_fixtures,
+    get_skill_description,
 };
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::{staging_plugin_shadow_action, unguarded_notice};
@@ -156,6 +157,10 @@ pub(super) fn write_dispatch(
             r.iteration,
             &now_iso8601(),
             &tasks,
+            ManifestContext {
+                harness: ctx.harness,
+                guard: opts.guard,
+            },
         ),
     )?;
 

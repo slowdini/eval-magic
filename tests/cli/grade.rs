@@ -418,6 +418,10 @@ fn grade_writes_prompt_files_and_drops_inline_prompt() {
         assert!(prompt_path.ends_with(&format!("{assertion_id}.txt")));
         let contents = fs::read_to_string(prompt_path).unwrap();
         assert!(contents.contains(t["response_path"].as_str().unwrap()));
+        assert!(contents.contains("Grade only this one assertion"));
+        assert!(contents.contains("Do not run eval-magic"));
+        assert!(contents.contains("Do not dispatch other judge tasks"));
+        assert!(contents.contains("Do not wait for other workers"));
     }
 }
 

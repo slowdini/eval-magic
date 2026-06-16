@@ -21,6 +21,8 @@ use crate::adapters::{
 };
 use crate::core::{AvailableSkill, Eval, Harness};
 
+use super::codex_dispatch::{codex_exec_command_template, codex_parallel_dispatch_recipe};
+
 use super::{RunError, copy_dir_recursive};
 
 /// One dispatchable task: the metadata the orchestrator persists per
@@ -410,6 +412,13 @@ pub fn get_skill_description(skill_path: &Path) -> String {
 
 pub use crate::core::Mode;
 
+/// Harness-specific knobs for the human dispatch manifest.
+#[derive(Debug, Clone, Copy)]
+pub struct ManifestContext {
+    pub harness: Harness,
+    pub guard: bool,
+}
+
 /// Build the human-readable `dispatch-manifest.md`.
 pub fn build_manifest(
     skill_name: &str,
@@ -418,6 +427,7 @@ pub fn build_manifest(
     iteration: u32,
     timestamp: &str,
     tasks: &[DispatchTask],
+    context: ManifestContext,
 ) -> String {
     let mode_str = match mode {
         Mode::NewSkill => "new-skill",
@@ -427,7 +437,7 @@ pub fn build_manifest(
         Some(b) => format!("Mode: {mode_str} (baseline: {b})"),
         None => format!("Mode: {mode_str}"),
     };
-    let header = [
+    let mut header = vec![
         format!("# Dispatch manifest — {skill_name} iteration-{iteration}"),
         String::new(),
         mode_line,
@@ -440,7 +450,29 @@ pub fn build_manifest(
         String::new(),
         "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>[:r<k>]:i<N>-<nonce>` (the `r<k>` segment appears only in multi-run cells, naming the 1-based run index). When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition, run)` slot without collisions.".to_string(),
         String::new(),
-        "After all dispatches (Claude Code):".to_string(),
+    ];
+    if context.harness == Harness::Codex {
+        header.extend([
+            "After all dispatches (Codex):".to_string(),
+            String::new(),
+            "Run one fresh `codex exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
+            String::new(),
+            "```bash".to_string(),
+            codex_exec_command_template(context.guard),
+            "```".to_string(),
+            String::new(),
+            "Parallel dispatch from this iteration directory:".to_string(),
+            String::new(),
+            "```bash".to_string(),
+            codex_parallel_dispatch_recipe(context.guard),
+            "```".to_string(),
+            String::new(),
+            "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
+            String::new(),
+        ]);
+    }
+    header.extend([
+        "After all dispatches (Claude Code only):".to_string(),
         String::new(),
         "1. Run `eval-magic ingest` (it auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside the dispatching session, pass `--session-id <id>` or `--subagents-dir <path>`) — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the subagent's own `outputs/final-message.md` + the persisted transcript, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
         "2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize` for the benchmark.".to_string(),
@@ -449,8 +481,8 @@ pub fn build_manifest(
         String::new(),
         "## Dispatches".to_string(),
         String::new(),
-    ]
-    .join("\n");
+    ]);
+    let header = header.join("\n");
 
     let entries = tasks
         .iter()

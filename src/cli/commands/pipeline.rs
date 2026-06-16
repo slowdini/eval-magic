@@ -12,6 +12,8 @@ use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
 
+const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
+
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
 /// handler. This is the production runner for [`run::steps::run_steps`]; it
 /// prints the `error: <msg>` contract on failure before propagating, so the
@@ -87,10 +89,10 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
             "\n✅ Ingest complete — no judge dispatches needed.\nNext: eval-magic finalize{target_args} --iteration {iteration}"
         ),
         Some(n) => println!(
-            "\n✅ Ingest complete. Dispatch the {n} judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize{target_args} --iteration {iteration}"
+            "\n✅ Ingest complete. Dispatch the {n} judge task(s) from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nThen run:\n  eval-magic finalize{target_args} --iteration {iteration}"
         ),
         None => println!(
-            "\n✅ Ingest complete. Dispatch the judge task(s) grade listed above (judge-tasks.json), then:\n  eval-magic finalize{target_args} --iteration {iteration}"
+            "\n✅ Ingest complete. Dispatch the judge task(s) from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nThen run:\n  eval-magic finalize{target_args} --iteration {iteration}"
         ),
     }
     Ok(())
@@ -287,7 +289,7 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
         }
         let target_args = command_target_args(&ctx);
         println!(
-            "\nNext: dispatch each task as a judge subagent, write each verdict to its `response_path`, then run: eval-magic grade{target_args} --iteration {iteration} --finalize"
+            "\nNext: dispatch each task as a judge subagent with:\n  {JUDGE_WORKER_PROMPT}\nThen run: eval-magic grade{target_args} --iteration {iteration} --finalize"
         );
     }
     Ok(())

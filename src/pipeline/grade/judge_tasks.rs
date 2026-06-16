@@ -169,6 +169,7 @@ fn build_judge_prompt(
 
     [
         "You are grading one assertion for a skill evaluation run. Be strict but fair.",
+        "Grade only this one assertion. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.",
         "",
         "# Run record",
         "",

@@ -17,6 +17,7 @@ use crate::cli::command_target_args;
 use crate::core::{AvailableSkill, Eval, Harness, Mode, RunContext};
 
 use super::RunError;
+use super::codex_dispatch::codex_exec_command_template;
 use super::util::mode_str;
 
 mod build;
@@ -170,14 +171,10 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     if opts.dry_run {
         println!("\n--dry-run: stopping after workspace prep.");
     } else if ctx.harness == Harness::Codex {
-        let hook_trust = if opts.guard {
-            " --dangerously-bypass-hook-trust"
-        } else {
-            ""
-        };
         let target_args = command_target_args(ctx);
         println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec{hook_trust} --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest{target_args} --iteration {iteration} --harness codex`."
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
+            codex_exec_command_template(opts.guard)
         );
     } else if ctx.harness == Harness::OpenCode {
         let target_args = command_target_args(ctx);
