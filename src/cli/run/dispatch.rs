@@ -17,8 +17,6 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::adapter_for;
 use crate::core::{AvailableSkill, Eval, Harness};
 
-use super::codex_dispatch::{codex_exec_command_template, codex_parallel_dispatch_recipe};
-
 use super::{RunError, copy_dir_recursive};
 
 /// One dispatchable task: the metadata the orchestrator persists per
@@ -432,25 +430,8 @@ pub fn build_manifest(
         "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>[:r<k>]:i<N>-<nonce>` (the `r<k>` segment appears only in multi-run cells, naming the 1-based run index). When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition, run)` slot without collisions.".to_string(),
         String::new(),
     ];
-    if context.harness == Harness::Codex {
-        header.extend([
-            "After all dispatches (Codex):".to_string(),
-            String::new(),
-            "Run one fresh `codex exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            codex_exec_command_template(context.guard),
-            "```".to_string(),
-            String::new(),
-            "Parallel dispatch from this iteration directory:".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            codex_parallel_dispatch_recipe(context.guard),
-            "```".to_string(),
-            String::new(),
-            "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
-            String::new(),
-        ]);
+    if let Some(lines) = adapter_for(context.harness).cli_manifest_section(context.guard) {
+        header.extend(lines);
     }
     header.extend([
         "After all dispatches (Claude Code only):".to_string(),

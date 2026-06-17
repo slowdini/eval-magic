@@ -19,7 +19,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::adapters::{TranscriptSummary, adapter_for, find_by_description};
-use crate::core::{Harness, RunRecord, TimingRecord, TimingSource};
+use crate::core::{
+    DispatchMechanism, Harness, RunRecord, TimingRecord, TimingSource, mechanism_for,
+};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::validation::{SchemaName, validate_against_schema};
@@ -187,23 +189,27 @@ fn transcript_summary_for_task(
     subagents_dir: Option<&Path>,
     task: &DispatchTask,
 ) -> Option<TranscriptSummary> {
-    if harness == Harness::Codex {
-        let events_path = Path::new(&task.outputs_dir).join("codex-events.jsonl");
-        if !events_path.exists() {
-            return None;
+    match mechanism_for(harness) {
+        DispatchMechanism::Cli => {
+            let events_path =
+                Path::new(&task.outputs_dir).join(adapter_for(harness).cli_events_filename()?);
+            if !events_path.exists() {
+                return None;
+            }
+            adapter_for(harness)
+                .parse_transcript_full(&events_path)
+                .ok()
         }
-        return adapter_for(harness)
-            .parse_transcript_full(&events_path)
-            .ok();
+        DispatchMechanism::InSession => {
+            let subagent = find_by_description(
+                subagents_dir.unwrap_or_else(|| Path::new("")),
+                &task.agent_description,
+            )?;
+            adapter_for(harness)
+                .parse_transcript_full(&subagent.jsonl_path)
+                .ok()
+        }
     }
-
-    let subagent = find_by_description(
-        subagents_dir.unwrap_or_else(|| Path::new("")),
-        &task.agent_description,
-    )?;
-    adapter_for(harness)
-        .parse_transcript_full(&subagent.jsonl_path)
-        .ok()
 }
 
 #[cfg(test)]

@@ -13,7 +13,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::adapters::{adapter_for, find_by_description};
-use crate::core::{ConditionsRecord, Harness, RunRecord, ToolInvocation};
+use crate::core::{
+    ConditionsRecord, DispatchMechanism, Harness, RunRecord, ToolInvocation, mechanism_for,
+};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::pipeline::slots::{run_key, run_slots};
@@ -181,20 +183,24 @@ fn invocations_for_run(
     run_index: Option<u32>,
     outputs_dir: &Path,
 ) -> Option<Vec<ToolInvocation>> {
-    if harness == Harness::Codex {
-        let events_path = outputs_dir.join("codex-events.jsonl");
-        if !events_path.exists() {
-            return None;
+    match mechanism_for(harness) {
+        DispatchMechanism::Cli => {
+            let events_path = outputs_dir.join(adapter_for(harness).cli_events_filename()?);
+            if !events_path.exists() {
+                return None;
+            }
+            adapter_for(harness).parse_transcript(&events_path).ok()
         }
-        return adapter_for(harness).parse_transcript(&events_path).ok();
+        DispatchMechanism::InSession => {
+            let description =
+                resolve_agent_description(iteration_dir, eval_id, condition, run_index);
+            let subagent =
+                find_by_description(subagents_dir.unwrap_or_else(|| Path::new("")), &description)?;
+            adapter_for(harness)
+                .parse_transcript(&subagent.jsonl_path)
+                .ok()
+        }
     }
-
-    let description = resolve_agent_description(iteration_dir, eval_id, condition, run_index);
-    let subagent =
-        find_by_description(subagents_dir.unwrap_or_else(|| Path::new("")), &description)?;
-    adapter_for(harness)
-        .parse_transcript(&subagent.jsonl_path)
-        .ok()
 }
 
 #[cfg(test)]

@@ -15,7 +15,6 @@ use std::path::Path;
 
 use serde::Serialize;
 
-mod codex_dispatch;
 pub mod dispatch;
 pub mod orchestrate;
 pub mod staging;

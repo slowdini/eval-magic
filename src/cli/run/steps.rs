@@ -13,7 +13,7 @@
 //! parameter; the production runner — which maps each [`StepKind`] to its stage
 //! handler — lives in [`crate::cli`] alongside those handlers.
 
-use crate::core::Harness;
+use crate::core::{DispatchMechanism, Harness, mechanism_for};
 
 /// Which post-dispatch stage a [`StepCommand`] runs. The production runner
 /// matches on this to call the corresponding handler; tests assert on it.
@@ -88,12 +88,13 @@ impl StepParams<'_> {
 }
 
 /// The ingest chain: record-runs → fill-transcripts → detect-stray-writes →
-/// grade. Only the first two carry the subagents dir, and only on Claude Code
-/// (Codex reads `outputs/codex-events.jsonl`).
+/// grade. Only the first two carry the subagents dir, and only for the
+/// in-session dispatch mechanism (a Cli-dispatch harness reads its transcript
+/// from each task's `outputs/` dir instead).
 pub fn build_ingest_commands(p: &StepParams) -> Vec<StepCommand> {
-    let transcripts = match p.harness {
-        Harness::ClaudeCode => p.subagents_dir.map(str::to_string),
-        Harness::Codex | Harness::OpenCode => None,
+    let transcripts = match mechanism_for(p.harness) {
+        DispatchMechanism::InSession => p.subagents_dir.map(str::to_string),
+        DispatchMechanism::Cli => None,
     };
     vec![
         p.step("record-runs", StepKind::RecordRuns, transcripts.clone()),

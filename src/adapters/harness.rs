@@ -68,6 +68,30 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
+    /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
+    /// filename (under a task's `outputs/` dir) its one-shot CLI writes the
+    /// transcript to. `None` when the harness dispatches in-session (no local
+    /// transcript) or has no Cli-mechanism transcript wired yet.
+    fn cli_events_filename(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// The `Next:` guidance printed after `run` for a
+    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness: how to
+    /// dispatch each task through this harness's one-shot CLI and then ingest.
+    /// Empty for in-session harnesses (their guidance is the mechanism's, not the
+    /// adapter's).
+    fn cli_next_steps(&self, _guard: bool, _target_args: &str, _iteration: u32) -> String {
+        String::new()
+    }
+
+    /// Extra `dispatch-manifest.md` lines describing this harness's Cli dispatch
+    /// recipe (command template, parallel recipe, ingest note). `None` when the
+    /// harness contributes no Cli-specific manifest section.
+    fn cli_manifest_section(&self, _guard: bool) -> Option<Vec<String>> {
+        None
+    }
+
     /// Parse a persisted transcript into its ordered tool invocations.
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>>;
 
@@ -157,6 +181,35 @@ impl HarnessAdapter for CodexAdapter {
     fn plan_mode_profile(&self) -> &'static str {
         include_str!("../../profiles/codex/plan-mode.md")
     }
+    fn cli_events_filename(&self) -> Option<&'static str> {
+        Some("codex-events.jsonl")
+    }
+    fn cli_next_steps(&self, guard: bool, target_args: &str, iteration: u32) -> String {
+        format!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
+            codex_exec_command_template(guard)
+        )
+    }
+    fn cli_manifest_section(&self, guard: bool) -> Option<Vec<String>> {
+        Some(vec![
+            "After all dispatches (Codex):".to_string(),
+            String::new(),
+            "Run one fresh `codex exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
+            String::new(),
+            "```bash".to_string(),
+            codex_exec_command_template(guard),
+            "```".to_string(),
+            String::new(),
+            "Parallel dispatch from this iteration directory:".to_string(),
+            String::new(),
+            "```bash".to_string(),
+            codex_parallel_dispatch_recipe(guard),
+            "```".to_string(),
+            String::new(),
+            "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
+            String::new(),
+        ])
+    }
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_codex_events(path)
     }
@@ -199,6 +252,11 @@ impl HarnessAdapter for OpenCodeAdapter {
     fn plan_mode_profile(&self) -> &'static str {
         include_str!("../../profiles/opencode/plan-mode.md")
     }
+    fn cli_next_steps(&self, _guard: bool, target_args: &str, iteration: u32) -> String {
+        format!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`. OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`."
+        )
+    }
     // OpenCode transcript ingest is not yet wired. In the current dispatch flow
     // this is unreachable (no subagents dir and no events file), so delegating to
     // the shared JSONL parser preserves the pre-refactor behavior of the
@@ -232,6 +290,53 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
         Harness::Codex => &CodexAdapter,
         Harness::OpenCode => &OpenCodeAdapter,
     }
+}
+
+/// Copy/pasteable Codex dispatch command template. Stdin is detached so a
+/// surrounding `xargs`/pipe cannot be treated as extra prompt context.
+fn codex_exec_command_template(guard: bool) -> String {
+    let hook_trust = if guard {
+        " --dangerously-bypass-hook-trust"
+    } else {
+        ""
+    };
+    [
+        format!(
+            "codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never{hook_trust} --json \\"
+        ),
+        "  --output-last-message <outputs_dir>/final-message.md \\".to_string(),
+        "  \"Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md.\" \\".to_string(),
+        "  </dev/null \\".to_string(),
+        "  > <outputs_dir>/codex-events.jsonl \\".to_string(),
+        "  2> <outputs_dir>/codex-stderr.log".to_string(),
+    ]
+    .join("\n")
+}
+
+fn codex_parallel_dispatch_recipe(guard: bool) -> String {
+    let hook_trust = if guard {
+        " --dangerously-bypass-hook-trust"
+    } else {
+        ""
+    };
+    [
+        "JOBS=${JOBS:-4}".to_string(),
+        "jq -j '.tasks[] | [.dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\".to_string(),
+        "  xargs -0 -P \"$JOBS\" -I{} sh -c '".to_string(),
+        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
+        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
+        "    mkdir -p \"$outputs_dir\"".to_string(),
+        format!(
+            "    codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never{hook_trust} --json \\"
+        ),
+        "      --output-last-message \"$outputs_dir/final-message.md\" \\".to_string(),
+        "      \"Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to $outputs_dir/final-message.md.\" \\".to_string(),
+        "      </dev/null \\".to_string(),
+        "      > \"$outputs_dir/codex-events.jsonl\" \\".to_string(),
+        "      2> \"$outputs_dir/codex-stderr.log\"".to_string(),
+        "  ' sh {}".to_string(),
+    ]
+    .join("\n")
 }
 
 #[cfg(test)]

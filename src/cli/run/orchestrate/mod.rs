@@ -13,11 +13,11 @@
 
 use std::path::PathBuf;
 
+use crate::adapters::adapter_for;
 use crate::cli::command_target_args;
-use crate::core::{AvailableSkill, Eval, Harness, Mode, RunContext};
+use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext, mechanism_for};
 
 use super::RunError;
-use super::codex_dispatch::codex_exec_command_template;
 use super::util::mode_str;
 
 mod build;
@@ -170,21 +170,18 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
 
     if opts.dry_run {
         println!("\n--dry-run: stopping after workspace prep.");
-    } else if ctx.harness == Harness::Codex {
-        let target_args = command_target_args(ctx);
-        println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
-            codex_exec_command_template(opts.guard)
-        );
-    } else if ctx.harness == Harness::OpenCode {
-        let target_args = command_target_args(ctx);
-        println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`. OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`."
-        );
-    } else {
-        let target_args = command_target_args(ctx);
-        println!(
+        return;
+    }
+    let target_args = command_target_args(ctx);
+    match mechanism_for(ctx.harness) {
+        // In-session subagent dispatch (Claude Code's Task tool today).
+        DispatchMechanism::InSession => println!(
             "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, passing its `agent_description` verbatim as the subagent description (that string is the key that links each transcript back — without it tool calls, tokens, and duration come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration}\n(ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that session, add --session-id <id> or --subagents-dir <path>.)"
-        );
+        ),
+        // One-shot CLI dispatch; the exact command is harness-specific.
+        DispatchMechanism::Cli => println!(
+            "{}",
+            adapter_for(ctx.harness).cli_next_steps(opts.guard, &target_args, iteration)
+        ),
     }
 }
