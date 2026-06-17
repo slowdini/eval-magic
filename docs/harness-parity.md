@@ -14,7 +14,7 @@ Parity is organized around **run mode** — *how* an eval is dispatched — as t
    - **`InSession`** — the runner hands tasks to in-session subagents (Claude Code's Task tool). **Claude Code** is the reference.
    - **`Cli`** — each task is dispatched through a one-shot harness CLI subprocess (`codex exec`). **Codex** is the reference.
 
-   These two mechanisms underpin the three *user-facing* run modes in the README's [Run modes](../README.md#run-modes) section: **fully-interactive** rides on `InSession`; **headless** and **hybrid** both ride on `Cli`. `mechanism_for(harness)` (same file) maps each harness to the mechanism it wires today — that mapping is the single place the harness↔mechanism coupling lives.
+   These two mechanisms underpin the three *user-facing* run modes in the README's [Run modes](../README.md#run-modes) section: **fully-interactive** rides on `InSession`; **headless** and **hybrid** both ride on `Cli`. `capabilities_for(harness)` (same file) maps each harness to the mechanism it wires today plus the narrow run-option capabilities the generic `run` preflight validates; `mechanism_for(harness)` reads from that table. That table is the single place the run-mode harness↔mechanism coupling lives.
 
 2. **Harness-adapter feature parity (the plug-in surface).** Each harness plugs into the runner through one impl of the **`HarnessAdapter`** trait in `src/adapters/harness.rs`, resolved by `adapter_for(harness)`. The trait's methods *are* the feature surface: skill-list rendering, transcript parsing, staged-skills dir, plan-mode profile, the write-guard hook, and the `Cli`-mechanism dispatch guidance. A harness reaches parity for a mechanism by implementing the trait methods that mechanism consumes.
 
@@ -42,7 +42,7 @@ Read these in order. Paths are relative to the repository root.
 
 | Source | What to look for |
 |--------|------------------|
-| `src/core/run_mode.rs` | `DispatchMechanism` and `mechanism_for`. The two dispatch mechanisms and which one your harness maps to today |
+| `src/core/run_mode.rs` | `DispatchMechanism`, `capabilities_for`, and `mechanism_for`. The two dispatch mechanisms, which one your harness maps to today, and the focused run-option capabilities generic preflight validates |
 | `src/adapters/harness.rs` | The `HarnessAdapter` trait (the feature surface), the three impls, and `adapter_for`. The reference impls are `ClaudeCodeAdapter` (`InSession`) and `CodexAdapter` (`Cli`) — read the one that matches your mechanism |
 | `src/adapters/claude_code_transcript.rs` and `src/adapters/codex_transcript.rs` | The reference transcript parsers (`parse_transcript*` / `parse_codex_events*`) that the trait's `parse_transcript` / `parse_transcript_full` delegate to. A second harness translates its transcript shape into the same `ToolInvocation` list / `TranscriptSummary` |
 | `eval-magic --help` and the README's [Environment parity](../README.md#environment-parity) / [Harnesses](../README.md#harnesses) sections | The cross-harness breadcrumbs and the flag-by-flag reference. Treat the breadcrumbs as starting points, not specifications |
