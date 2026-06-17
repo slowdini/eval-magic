@@ -327,5 +327,6 @@ fn codex_rejects_unsupported_parity_features() {
         .arg("--dry-run")
         .assert()
         .failure()
-        .stderr(contains("Codex"));
+        .stderr(contains("Unsupported for --harness codex"))
+        .stderr(contains("--bootstrap with --no-stage"));
 }

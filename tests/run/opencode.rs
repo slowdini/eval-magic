@@ -163,7 +163,10 @@ fn opencode_rejects_guard() {
         ])
         .assert()
         .failure()
-        .stderr(contains("not yet supported for the opencode harness"));
+        .stderr(contains("Unsupported for --harness opencode: --guard"));
+
+    assert!(!cwd.join(".opencode/skills").exists());
+    assert!(!iteration_dir(&cwd).exists());
 }
 
 #[test]
