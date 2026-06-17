@@ -319,19 +319,21 @@ pub struct RunArgs {
     /// per-eval `runs` field in evals.json overrides this flag for that eval.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     pub runs: u32,
-    /// Operator-declared agent model, persisted into `conditions.json`.
+    /// Agent-under-test model for CLI dispatches; otherwise recorded as
+    /// provenance.
     ///
-    /// The runner never dispatches the under-test agent itself, so it cannot
-    /// observe the model — declare it here while it's fresh and
-    /// `promote-baseline` records it in `BASELINE.md` automatically (its own
-    /// `--agent-model` flag still overrides).
+    /// For `Cli`-mechanism harnesses such as Codex, the run's dispatch recipes
+    /// include the harness-native model flag when the adapter supports one. For
+    /// in-session dispatch, the runner cannot select the model, so the value is
+    /// persisted to `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub agent_model: Option<String>,
-    /// Operator-declared judge model, persisted into `conditions.json`.
+    /// Default judge model for emitted judge tasks.
     ///
-    /// Like `--agent-model`, but for the grading judge; surfaced in
-    /// `BASELINE.md` by `promote-baseline` (its own `--judge-model` flag still
-    /// overrides).
+    /// `grade` writes this into `judge-tasks.json` for judge tasks that do not
+    /// have an assertion-level `model` override, and Cli harness judge recipes
+    /// pass it through using the harness-native model flag. Also persists to
+    /// `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub judge_model: Option<String>,
     /// Provenance label for this run, persisted into `conditions.json`.

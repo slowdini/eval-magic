@@ -41,6 +41,10 @@ EXAMPLES:
   eval-magic run --harness codex
   eval-magic ingest --harness codex
 
+  # Codex model selection: agent dispatches use --agent-model; judge tasks
+  # use --judge-model unless an individual llm_judge assertion sets model.
+  eval-magic run --harness codex --agent-model gpt-5-mini --judge-model gpt-5
+
   # OpenCode harness: stages under `.opencode/skills/`
   eval-magic run --harness opencode
   # ...dispatch each task with `opencode run`, then assemble records manually

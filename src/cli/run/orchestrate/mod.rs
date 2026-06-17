@@ -13,7 +13,7 @@
 
 use std::path::PathBuf;
 
-use crate::adapters::adapter_for;
+use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
 use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext, mechanism_for};
 
@@ -181,7 +181,12 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         // One-shot CLI dispatch; the exact command is harness-specific.
         DispatchMechanism::Cli => println!(
             "{}",
-            adapter_for(ctx.harness).cli_next_steps(opts.guard, &target_args, iteration)
+            adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {
+                guard: opts.guard,
+                target_args: &target_args,
+                iteration,
+                agent_model: opts.agent_model,
+            })
         ),
     }
 }

@@ -11,6 +11,7 @@ mod helpers;
 mod aggregate;
 mod basics;
 mod grade;
+mod grade_models;
 mod guard;
 mod init;
 mod stray_writes;

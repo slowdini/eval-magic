@@ -224,6 +224,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
         })
         .collect();
     let code_check_available = ctx.conditions.harness != Some(Harness::Codex);
+    let default_judge_model = ctx.conditions.judge_model.clone();
 
     let mut tasks: Vec<JudgeTask> = Vec::new();
     let mut summary = EmitSummary::default();
@@ -281,7 +282,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                         run_index: slot.run_index,
                         assertion_id: j.id.clone(),
                         rubric: j.rubric.clone(),
-                        model: j.model.clone(),
+                        model: j.model.clone().or_else(|| default_judge_model.clone()),
                         is_meta: false,
                         run_record_path: run_record_path.to_string_lossy().into_owned(),
                         outputs_dir: outputs_dir.to_string_lossy().into_owned(),
@@ -337,7 +338,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                             run_index: slot.run_index,
                             assertion_id: SKILL_INVOKED_META_ID.to_string(),
                             rubric,
-                            model: None,
+                            model: default_judge_model.clone(),
                             is_meta: true,
                             run_record_path: run_record_path.to_string_lossy().into_owned(),
                             outputs_dir: outputs_dir.to_string_lossy().into_owned(),
