@@ -188,6 +188,67 @@ fn codex_guard_installs_project_hook() {
 }
 
 #[test]
+fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--guard",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(stdout.contains("codex exec --cd <eval-root>"));
+    assert!(stdout.contains("--dangerously-bypass-hook-trust"));
+    assert!(stdout.contains("</dev/null"));
+    assert!(stdout.contains("codex-events.jsonl"));
+    assert!(stdout.contains("codex-stderr.log"));
+
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(manifest.contains("codex exec --cd <eval-root>"));
+    assert!(manifest.contains("--dangerously-bypass-hook-trust"));
+    assert!(manifest.contains("</dev/null"));
+    assert!(manifest.contains("codex-events.jsonl"));
+    assert!(manifest.contains("codex-stderr.log"));
+    assert!(manifest.contains("xargs -0 -P"));
+}
+
+#[test]
+fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(stdout.contains("codex exec --cd <eval-root>"));
+    assert!(stdout.contains("</dev/null"));
+    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+}
+
+#[test]
 fn codex_rejects_unsupported_parity_features() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(&tmp.path().join("c-stage-name"), DEFAULT_EVALS);

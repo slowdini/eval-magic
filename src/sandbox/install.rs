@@ -17,9 +17,8 @@ use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use crate::core::Harness;
-
 use super::now_ms;
+use super::{guard::read_marker, marker_is_armed};
 
 /// Marker file (under the staged skills dir) that arms the guard.
 pub const GUARD_MARKER: &str = ".slow-powers-eval-guard.json";
@@ -125,30 +124,10 @@ pub fn install_guard(
     guard_exe: &Path,
     ttl: Option<Duration>,
 ) -> io::Result<PathBuf> {
-    install_guard_for_harness(
-        stage_root,
-        workspace_root,
-        guard_exe,
-        Harness::ClaudeCode,
-        ttl,
-    )
+    install_claude_guard(stage_root, workspace_root, guard_exe, ttl)
 }
 
-/// Arm the write guard using the target harness's native hook surface.
-pub fn install_guard_for_harness(
-    stage_root: &Path,
-    workspace_root: &Path,
-    guard_exe: &Path,
-    harness: Harness,
-    ttl: Option<Duration>,
-) -> io::Result<PathBuf> {
-    match harness {
-        Harness::ClaudeCode => install_claude_guard(stage_root, workspace_root, guard_exe, ttl),
-        Harness::Codex => install_codex_guard(stage_root, workspace_root, guard_exe, ttl),
-    }
-}
-
-fn install_claude_guard(
+pub(crate) fn install_claude_guard(
     stage_root: &Path,
     workspace_root: &Path,
     guard_exe: &Path,
@@ -208,7 +187,7 @@ fn install_claude_guard(
     Ok(marker_path)
 }
 
-fn install_codex_guard(
+pub(crate) fn install_codex_guard(
     stage_root: &Path,
     workspace_root: &Path,
     guard_exe: &Path,
@@ -286,6 +265,17 @@ pub fn teardown_guard(stage_root: &Path) -> bool {
     torn_claude || torn_codex
 }
 
+/// True when either harness has a live guard marker under `stage_root`.
+pub(crate) fn guard_is_armed(stage_root: &Path) -> bool {
+    let now = now_ms();
+    [
+        stage_root.join(".claude").join("skills").join(GUARD_MARKER),
+        stage_root.join(".agents").join("skills").join(GUARD_MARKER),
+    ]
+    .iter()
+    .any(|path| marker_is_armed(read_marker(path).as_ref(), now))
+}
+
 fn teardown_guard_from_skills_dir(skills_dir: &Path) -> bool {
     let manifest_path = skills_dir.join(GUARD_MANIFEST);
     let marker_path = skills_dir.join(GUARD_MARKER);
@@ -329,7 +319,6 @@ fn prune_if_empty(dir: &Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Harness;
     use tempfile::TempDir;
 
     struct Case {
@@ -465,6 +454,60 @@ mod tests {
     }
 
     #[test]
+    fn guard_is_armed_detects_claude_or_codex_marker() {
+        let c = setup();
+        install_guard(
+            &c.stage_root,
+            &c.workspace_root,
+            Path::new("/g/eval-magic"),
+            None,
+        )
+        .unwrap();
+        assert!(guard_is_armed(&c.stage_root));
+        teardown_guard(&c.stage_root);
+        assert!(!guard_is_armed(&c.stage_root));
+
+        install_codex_guard(
+            &c.stage_root,
+            &c.workspace_root,
+            Path::new("/g/eval-magic"),
+            None,
+        )
+        .unwrap();
+        assert!(guard_is_armed(&c.stage_root));
+    }
+
+    #[test]
+    fn guard_is_armed_ignores_missing_inactive_expired_and_malformed_markers() {
+        let c = setup();
+        let marker_path = skills_dir(&c.stage_root).join(GUARD_MARKER);
+        fs::create_dir_all(skills_dir(&c.stage_root)).unwrap();
+
+        assert!(!guard_is_armed(&c.stage_root));
+
+        fs::write(
+            &marker_path,
+            serde_json::to_string(&json!({ "active": false })).unwrap(),
+        )
+        .unwrap();
+        assert!(!guard_is_armed(&c.stage_root));
+
+        fs::write(
+            &marker_path,
+            serde_json::to_string(&json!({
+                "active": true,
+                "expiresAt": iso_millis(now_ms() - 60_000),
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(!guard_is_armed(&c.stage_root));
+
+        fs::write(&marker_path, "not json").unwrap();
+        assert!(!guard_is_armed(&c.stage_root));
+    }
+
+    #[test]
     fn teardown_sweeps_a_stray_marker_even_without_a_manifest() {
         let c = setup();
         fs::create_dir_all(skills_dir(&c.stage_root)).unwrap();
@@ -477,8 +520,7 @@ mod tests {
     fn codex_install_writes_project_hook_marker_and_manifest() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        install_guard_for_harness(&c.stage_root, &c.workspace_root, exe, Harness::Codex, None)
-            .unwrap();
+        install_codex_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
 
         let marker = read_json(
             &c.stage_root
@@ -533,11 +575,10 @@ mod tests {
         );
         fs::write(codex_hooks_path(&c.stage_root), &original).unwrap();
 
-        install_guard_for_harness(
+        install_codex_guard(
             &c.stage_root,
             &c.workspace_root,
             Path::new("/g/eval-magic"),
-            Harness::Codex,
             None,
         )
         .unwrap();

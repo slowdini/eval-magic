@@ -11,4 +11,5 @@ mod helpers;
 
 mod codex;
 mod lifecycle;
+mod opencode;
 mod staging;

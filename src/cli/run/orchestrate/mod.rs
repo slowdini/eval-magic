@@ -13,7 +13,9 @@
 
 use std::path::PathBuf;
 
-use crate::core::{AvailableSkill, Eval, Harness, Mode, RunContext};
+use crate::adapters::adapter_for;
+use crate::cli::command_target_args;
+use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext, mechanism_for};
 
 use super::RunError;
 use super::util::mode_str;
@@ -36,6 +38,13 @@ pub struct RunOptions<'a> {
     pub guard: bool,
     pub stage_name: Option<&'a str>,
     pub plan_mode: bool,
+    /// Runs per condition cell; per-eval `runs` overrides take precedence.
+    pub runs: u32,
+    /// Operator-declared models + label, persisted into `conditions.json` for
+    /// provenance (the runner cannot observe them itself).
+    pub agent_model: Option<&'a str>,
+    pub judge_model: Option<&'a str>,
+    pub label: Option<&'a str>,
 }
 
 /// Everything [`resolve::resolve_request`] works out before any filesystem
@@ -43,6 +52,7 @@ pub struct RunOptions<'a> {
 /// and each condition's name + skill path.
 struct Resolved {
     mode: Mode,
+    baseline: Option<String>,
     skill_md_path: PathBuf,
     iteration: u32,
     iteration_dir: PathBuf,
@@ -64,6 +74,11 @@ struct Staged {
     sibling_skills: Vec<AvailableSkill>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
+    /// Whether the harness skills dir existed when `run` started — i.e. before this run staged
+    /// anything. Drives the Claude Code staged-skill discovery warning: an existing dir is already
+    /// watched, so live change detection surfaces the staged skills; a dir this run had to create
+    /// isn't watched until the session re-scans. See [`super::util::staging_discovery_warning`].
+    skills_dir_preexisted: bool,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.
@@ -72,7 +87,7 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
-    build::post_build(ctx, opts, &resolved)?;
+    build::post_build(ctx, opts, &resolved, &staged)?;
     print_next_steps(ctx, opts, &resolved, num_tasks);
     Ok(())
 }
@@ -127,28 +142,46 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         "Dispatch tasks:     {}",
         r.iteration_dir.join("dispatch.json").display()
     );
-    println!(
-        "\n{} dispatches required ({} evals × 2 conditions).",
-        num_tasks,
-        r.selected_evals.len()
-    );
+    let run_counts: Vec<u32> = r
+        .selected_evals
+        .iter()
+        .map(|e| e.runs.unwrap_or(opts.runs))
+        .collect();
+    let uniform_runs = run_counts
+        .first()
+        .filter(|&&n| run_counts.iter().all(|&m| m == n));
+    match uniform_runs {
+        Some(1) => println!(
+            "\n{} dispatches required ({} evals × 2 conditions).",
+            num_tasks,
+            r.selected_evals.len()
+        ),
+        Some(n) => println!(
+            "\n{} dispatches required ({} evals × 2 conditions × {n} runs).",
+            num_tasks,
+            r.selected_evals.len()
+        ),
+        None => println!(
+            "\n{} dispatches required ({} evals × 2 conditions, per-eval run counts).",
+            num_tasks,
+            r.selected_evals.len()
+        ),
+    }
 
     if opts.dry_run {
         println!("\n--dry-run: stopping after workspace prep.");
-    } else if ctx.harness == Harness::Codex {
-        let hook_trust = if opts.guard {
-            " --dangerously-bypass-hook-trust"
-        } else {
-            ""
-        };
-        println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with codex exec{hook_trust} --json, writing each stream to its outputs/codex-events.jsonl. Then run `ingest --iteration {iteration} --harness codex`."
-        );
-    } else {
-        println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent. Then run:\n  eval-magic ingest --skill {} --skill-dir {} --iteration {iteration} \\\n    --subagents-dir ~/.claude/projects/<project-slug>/<session-id>/subagents/\n(The session ID is the parent session's ID — find it in the Claude Code session URL or from a tool-result path.)",
-            ctx.skill_name,
-            ctx.skill_dir.display()
-        );
+        return;
+    }
+    let target_args = command_target_args(ctx);
+    match mechanism_for(ctx.harness) {
+        // In-session subagent dispatch (Claude Code's Task tool today).
+        DispatchMechanism::InSession => println!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, passing its `agent_description` verbatim as the subagent description (that string is the key that links each transcript back — without it tool calls, tokens, and duration come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration}\n(ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that session, add --session-id <id> or --subagents-dir <path>.)"
+        ),
+        // One-shot CLI dispatch; the exact command is harness-specific.
+        DispatchMechanism::Cli => println!(
+            "{}",
+            adapter_for(ctx.harness).cli_next_steps(opts.guard, &target_args, iteration)
+        ),
     }
 }

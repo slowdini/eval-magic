@@ -64,6 +64,10 @@ pub struct Eval {
     /// true; set false for negative evals where not invoking the skill is correct.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_should_trigger: Option<bool>,
+    /// Runs per condition for this eval; overrides the `--runs` flag. Defaults
+    /// to the flag's value (1 unless raised).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runs: Option<u32>,
 }
 
 /// The parsed `evals.json` for one skill.
@@ -106,6 +110,20 @@ pub struct ConditionsRecord {
     /// collide across iterations sharing one parent session's subagents dir.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_nonce: Option<String>,
+    /// The `--runs` value the iteration was built with (provenance; per-eval
+    /// `runs` overrides may raise or lower individual cells).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runs: Option<u32>,
+    /// Operator-declared agent model (provenance; the runner never dispatches
+    /// the agent itself, so it cannot observe this).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_model: Option<String>,
+    /// Operator-declared judge model (provenance, like `agent_model`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judge_model: Option<String>,
+    /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 /// Comparison mode for a run.
@@ -142,6 +160,10 @@ pub struct RunRecord {
     pub tool_invocations: Vec<ToolInvocation>,
     pub total_tokens: Option<i64>,
     pub duration_ms: Option<i64>,
+    /// 1-based run index within a multi-run cell; absent for single-run cells.
+    /// Appended last so legacy single-run records serialize byte-identically.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_index: Option<u32>,
 }
 
 /// The result of grading one assertion.
@@ -266,11 +288,13 @@ mod tests {
             files: None,
             assertions: None,
             skill_should_trigger: None,
+            runs: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
         assert!(out.get("assertions").is_none());
         assert!(out.get("skill_should_trigger").is_none());
+        assert!(out.get("runs").is_none());
     }
 
     #[test]
@@ -285,12 +309,15 @@ mod tests {
             tool_invocations: vec![],
             total_tokens: None,
             duration_ms: None,
+            run_index: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
         assert_eq!(out.get("skill_path"), Some(&Value::Null));
         assert_eq!(out.get("total_tokens"), Some(&Value::Null));
         assert_eq!(out.get("duration_ms"), Some(&Value::Null));
+        // Absent run_index is omitted, keeping single-run records byte-identical.
+        assert!(out.get("run_index").is_none());
     }
 
     #[test]
@@ -335,6 +362,10 @@ mod tests {
             timestamp: "2026-06-08T00:00:00Z".into(),
             harness: Some(Harness::ClaudeCode),
             run_nonce: None,
+            runs: None,
+            agent_model: None,
+            judge_model: None,
+            label: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));

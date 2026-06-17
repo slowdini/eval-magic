@@ -24,21 +24,32 @@ pub(super) fn stage_conditions(
     fs::create_dir_all(&r.iteration_dir)?;
     fs::copy(&r.skill_md_path, r.iteration_dir.join("skill-snapshot.md"))?;
 
+    // Capture whether the harness skills dir already existed BEFORE this run touches anything:
+    // cleanup may prune an empty dir and sibling/skill staging below create it, so reading
+    // `.exists()` later would always be true. Claude Code only watches skill dirs that existed at
+    // session start, so this is the signal for whether the staged skills are discoverable
+    // in-session. See `staging_discovery_warning`.
+    let skills_dir_preexisted = skills_dir_for_harness(&ctx.stage_root, ctx.harness).exists();
+
     // Always disarm a prior run's guard before re-staging, so a crashed run can't
     // leave the write-blocking hook armed across runs.
     teardown_guard(&ctx.stage_root);
 
     if !opts.no_stage {
         cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
-        stage_sibling_skills(&StageSiblingOpts {
-            skill_under_test: &ctx.skill_name,
-            skills_source_dir: &ctx.skill_dir,
-            repo_root: &ctx.stage_root,
-            harness: ctx.harness,
-        })?;
+        if ctx.stage_siblings {
+            stage_sibling_skills(&StageSiblingOpts {
+                skill_under_test: &ctx.skill_name,
+                skills_source_dir: &ctx.skill_dir,
+                repo_root: &ctx.stage_root,
+                harness: ctx.harness,
+            })?;
+        }
     }
 
-    if let Some(warning) = staging_discovery_warning(ctx.harness, opts.no_stage) {
+    if let Some(warning) =
+        staging_discovery_warning(ctx.harness, opts.no_stage, skills_dir_preexisted)
+    {
         eprintln!("{warning}");
     }
 
@@ -132,5 +143,6 @@ pub(super) fn stage_conditions(
         sibling_skills,
         bootstrap_content,
         plan_mode_content,
+        skills_dir_preexisted,
     })
 }

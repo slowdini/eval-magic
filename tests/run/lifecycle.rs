@@ -2,6 +2,7 @@
 //! bootstrap framing, and `--only` filtering.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 use std::path::Path;
@@ -36,6 +37,58 @@ fn guard_installs_pretooluse_hook_and_teardown_guard_removes_it() {
         .assert()
         .success();
     assert!(!settings.exists());
+}
+
+#[test]
+fn finalize_warns_when_guard_is_still_armed() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let marker = cwd.join(".claude/skills/.slow-powers-eval-guard.json");
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--guard"])
+        .assert()
+        .success();
+    assert!(marker.exists());
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["finalize", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .success()
+        .stdout(contains("Guard still armed"))
+        .stdout(contains("eval-magic teardown-guard"));
+
+    assert!(marker.exists());
+}
+
+#[test]
+fn finalize_does_not_warn_when_guard_is_not_armed() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .assert()
+        .success();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["finalize", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .success()
+        .stdout(contains("Finalize complete"))
+        .stdout(contains("Guard still armed").not());
 }
 
 #[test]
@@ -140,6 +193,59 @@ fn namespaces_agent_description_and_records_run_nonce() {
 }
 
 #[test]
+fn records_operator_declared_models_and_label_in_manifests() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .args(["--agent-model", "claude-haiku-4-5-20251001"])
+        .args(["--judge-model", "claude-opus-4-8"])
+        .args(["--label", "canonical-run"])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert_eq!(
+        conditions["agent_model"].as_str().unwrap(),
+        "claude-haiku-4-5-20251001"
+    );
+    assert_eq!(
+        conditions["judge_model"].as_str().unwrap(),
+        "claude-opus-4-8"
+    );
+    assert_eq!(conditions["label"].as_str().unwrap(), "canonical-run");
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(
+        dispatch["agent_model"].as_str().unwrap(),
+        "claude-haiku-4-5-20251001"
+    );
+    assert_eq!(dispatch["judge_model"].as_str().unwrap(), "claude-opus-4-8");
+    assert_eq!(dispatch["label"].as_str().unwrap(), "canonical-run");
+}
+
+#[test]
+fn omitted_models_and_label_are_absent_from_conditions() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert!(conditions.get("agent_model").is_none());
+    assert!(conditions.get("judge_model").is_none());
+    assert!(conditions.get("label").is_none());
+}
+
+#[test]
 fn bootstrap_content_prepended_before_available_skills() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
@@ -169,6 +275,149 @@ fn bootstrap_content_prepended_before_available_skills() {
         .find("The following skills are available for use with the Skill tool:")
         .unwrap();
     assert!(list_idx > boot_idx);
+}
+
+#[test]
+fn runs_flag_expands_dispatches_into_run_dirs() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review MR 1", "expected_output": "a review" },
+        { "id": "e2", "prompt": "review MR 2", "expected_output": "a review" } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "2",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stdout(contains(
+            "8 dispatches required (2 evals × 2 conditions × 2 runs)",
+        ));
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(dispatch["runs"], serde_json::json!(2));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 8);
+
+    let mut descriptions = std::collections::HashSet::new();
+    for task in tasks {
+        let k = task["run_index"].as_u64().unwrap();
+        assert!(k == 1 || k == 2);
+        let run_seg = format!("/run-{k}/");
+        assert!(
+            task["run_record_path"].as_str().unwrap().contains(&run_seg),
+            "run.json not under its run dir: {}",
+            task["run_record_path"]
+        );
+        assert!(task["outputs_dir"].as_str().unwrap().contains(&run_seg));
+        let desc = task["agent_description"].as_str().unwrap();
+        assert!(
+            desc.contains(&format!(":r{k}:")),
+            "missing run segment in description: {desc}"
+        );
+        assert!(descriptions.insert(desc.to_string()), "duplicate: {desc}");
+    }
+    for eval in ["e1", "e2"] {
+        for cond in ["with_skill", "without_skill"] {
+            for k in [1, 2] {
+                let run_dir = iteration_dir(&cwd)
+                    .join(format!("eval-{eval}"))
+                    .join(cond)
+                    .join(format!("run-{k}"));
+                assert!(run_dir.join("outputs").is_dir(), "missing {run_dir:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn runs_one_keeps_flat_single_run_layout() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "1",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    for task in dispatch["tasks"].as_array().unwrap() {
+        assert!(task.get("run_index").is_none(), "run_index on single run");
+        assert!(!task["run_record_path"].as_str().unwrap().contains("/run-"));
+    }
+    let cond_dir = iteration_dir(&cwd).join("eval-e1").join("with_skill");
+    assert!(cond_dir.join("outputs").is_dir());
+    assert!(!cond_dir.join("run-1").exists());
+}
+
+#[test]
+fn runs_zero_is_rejected() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "0",
+            "--dry-run",
+        ])
+        .assert()
+        .failure();
+}
+
+#[test]
+fn per_eval_runs_overrides_the_flag() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review MR 1", "expected_output": "a review", "runs": 3 },
+        { "id": "e2", "prompt": "review MR 2", "expected_output": "a review" } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 8, "3 runs × 2 conds for e1 + 1 run × 2 for e2");
+    let e1_indices: Vec<u64> = tasks
+        .iter()
+        .filter(|t| t["eval_id"] == "e1" && t["condition"] == "with_skill")
+        .map(|t| t["run_index"].as_u64().unwrap())
+        .collect();
+    assert_eq!(e1_indices, vec![1, 2, 3]);
+    for task in tasks.iter().filter(|t| t["eval_id"] == "e2") {
+        assert!(task.get("run_index").is_none());
+        assert!(!task["run_record_path"].as_str().unwrap().contains("/run-"));
+    }
 }
 
 #[test]

@@ -34,10 +34,14 @@ fn setup_agg(
 
 /// Write `eval-e1/<cond>/grading.json` with the given pass rate.
 fn write_grading(iteration_dir: &std::path::Path, cond: &str, pass_rate: f64) {
-    let cond_dir = iteration_dir.join("eval-e1").join(cond);
-    fs::create_dir_all(&cond_dir).unwrap();
+    write_grading_in(&iteration_dir.join("eval-e1").join(cond), pass_rate);
+}
+
+/// Write `<run_dir>/grading.json` with the given pass rate.
+fn write_grading_in(run_dir: &std::path::Path, pass_rate: f64) {
+    fs::create_dir_all(run_dir).unwrap();
     fs::write(
-        cond_dir.join("grading.json"),
+        run_dir.join("grading.json"),
         serde_json::to_string(&serde_json::json!({
             "assertion_results": [],
             "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": pass_rate},
@@ -49,8 +53,13 @@ fn write_grading(iteration_dir: &std::path::Path, cond: &str, pass_rate: f64) {
 
 /// Write `eval-e1/<cond>/timing.json` (the cond dir must already exist).
 fn write_timing(iteration_dir: &std::path::Path, cond: &str, timing: serde_json::Value) {
+    write_timing_in(&iteration_dir.join("eval-e1").join(cond), timing);
+}
+
+/// Write `<run_dir>/timing.json` (the run dir must already exist).
+fn write_timing_in(run_dir: &std::path::Path, timing: serde_json::Value) {
     fs::write(
-        iteration_dir.join("eval-e1").join(cond).join("timing.json"),
+        run_dir.join("timing.json"),
         serde_json::to_string(&timing).unwrap(),
     )
     .unwrap();
@@ -128,6 +137,105 @@ fn aggregate_computes_benchmark_from_graded_workspace() {
     );
     assert_eq!(b["delta"]["pass_rate"].as_f64().unwrap(), 1.0);
     assert_eq!(b["delta"]["total_tokens"].as_f64().unwrap(), 2000.0);
+}
+
+#[test]
+fn aggregate_defaults_to_latest_iteration() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_1, cwd) = setup_agg(&root);
+    let iteration_2 = iteration_1.parent().unwrap().join("iteration-2");
+    fs::create_dir_all(&iteration_2).unwrap();
+    new_skill_conditions(&iteration_2, &skill_md);
+    write_grading(&iteration_2, "with_skill", 1.0);
+    write_timing(
+        &iteration_2,
+        "with_skill",
+        serde_json::json!({"total_tokens": 5000, "duration_ms": 1000}),
+    );
+    write_grading(&iteration_2, "without_skill", 0.0);
+    write_timing(
+        &iteration_2,
+        "without_skill",
+        serde_json::json!({"total_tokens": 3000, "duration_ms": 1000}),
+    );
+
+    let mut cmd = skill_eval();
+    cmd.current_dir(&cwd)
+        .arg("aggregate")
+        .arg("--skill-dir")
+        .arg(&skill_dir)
+        .arg("--skill")
+        .arg("mr-review");
+    cmd.assert().success();
+
+    assert!(iteration_2.join("benchmark.json").exists());
+    assert!(!iteration_1.join("benchmark.json").exists());
+}
+
+/// `aggregate`: every `run-<k>` subdirectory of a condition cell contributes a
+/// sample, so `n` reflects runs and the mean averages across them.
+#[test]
+fn aggregate_collects_all_runs_from_nested_run_dirs() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for (cond, rates) in [("with_skill", [1.0, 0.5]), ("without_skill", [0.0, 0.5])] {
+        for (k, rate) in rates.iter().enumerate() {
+            let run_dir = iteration_dir
+                .join("eval-e1")
+                .join(cond)
+                .join(format!("run-{}", k + 1));
+            write_grading_in(&run_dir, *rate);
+            write_timing_in(&run_dir, json!({"total_tokens": 1000, "duration_ms": 100}));
+        }
+    }
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let with_skill = &b["run_summary"]["with_skill"]["pass_rate"];
+    assert_eq!(with_skill["n"].as_u64().unwrap(), 2);
+    assert_eq!(with_skill["mean"].as_f64().unwrap(), 0.75);
+    let without_skill = &b["run_summary"]["without_skill"]["pass_rate"];
+    assert_eq!(without_skill["n"].as_u64().unwrap(), 2);
+    assert_eq!(without_skill["mean"].as_f64().unwrap(), 0.25);
+    assert_eq!(b["delta"]["pass_rate"].as_f64().unwrap(), 0.5);
+}
+
+/// `aggregate`: uneven run counts across the two conditions weaken the delta,
+/// so they surface as a validity warning.
+#[test]
+fn aggregate_warns_on_uneven_run_counts_across_conditions() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for k in [1, 2] {
+        let run_dir = iteration_dir
+            .join("eval-e1")
+            .join("with_skill")
+            .join(format!("run-{k}"));
+        write_grading_in(&run_dir, 1.0);
+        write_timing_in(&run_dir, json!({"total_tokens": 1000, "duration_ms": 100}));
+    }
+    write_grading(&iteration_dir, "without_skill", 1.0);
+    write_timing(
+        &iteration_dir,
+        "without_skill",
+        json!({"total_tokens": 1000, "duration_ms": 100}),
+    );
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    assert!(
+        warns
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("uneven run counts")),
+        "expected an uneven-run-counts warning, got: {warns:?}"
+    );
 }
 
 /// `aggregate`: stray-write violations surface as validity_warnings.

@@ -51,7 +51,7 @@ impl GuardDecision {
 }
 
 /// True when the marker is active and unexpired at `now_ms` (epoch milliseconds).
-fn armed(marker: Option<&GuardMarker>, now_ms: i64) -> bool {
+pub(crate) fn marker_is_armed(marker: Option<&GuardMarker>, now_ms: i64) -> bool {
     let Some(marker) = marker else {
         return false;
     };
@@ -81,7 +81,7 @@ pub fn decide(
     marker: Option<&GuardMarker>,
     now_ms: i64,
 ) -> GuardDecision {
-    if !armed(marker, now_ms) {
+    if !marker_is_armed(marker, now_ms) {
         return GuardDecision::allow();
     }
     let roots = marker

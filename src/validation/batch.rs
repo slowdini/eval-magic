@@ -86,6 +86,34 @@ pub fn validate_all(skill_dir: &Path) -> io::Result<ValidationReport> {
     Ok(report)
 }
 
+/// Validate exactly one skill's `evals/evals.json`, reporting paths relative to
+/// that skill directory.
+pub fn validate_one(skill_subdir: &Path) -> io::Result<ValidationReport> {
+    let skill = skill_subdir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "skill".to_string());
+    let evals_path = skill_subdir.join("evals").join("evals.json");
+    let rel_path = "evals/evals.json".to_string();
+    let error = match fs::read_to_string(&evals_path) {
+        Err(e) => Some(format!("{rel_path}: {e}")),
+        Ok(contents) => match serde_json::from_str(&contents) {
+            Err(e) => Some(format!("{rel_path}: invalid JSON: {e}")),
+            Ok(raw) => validate_evals_config(&raw, &rel_path)
+                .err()
+                .map(|e| e.to_string()),
+        },
+    };
+
+    Ok(ValidationReport {
+        outcomes: vec![FileOutcome {
+            skill,
+            rel_path,
+            error,
+        }],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::validate_all;

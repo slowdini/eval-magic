@@ -22,10 +22,11 @@ use crate::core::Harness;
 ///
 ///   run → dispatch agents → ingest → dispatch judges → finalize → teardown
 ///
-/// Every command takes two required flags: `--skill-dir` (the directory *holding*
-/// skill folders — it is the eval's test environment; every skill in it gets
-/// staged) and `--skill` (which folder to evaluate). With no subcommand, the
-/// default action is `run`.
+/// The default target is the skill in the current directory. Pass
+/// `--skill <path-or-name>` to select one skill from elsewhere. Pass
+/// `--skill-dir <dir>` only when you want every other skill in that directory
+/// staged as part of the eval environment. With no subcommand, the default
+/// action is `run`.
 #[derive(Debug, Parser)]
 #[command(
     name = "eval-magic",
@@ -41,34 +42,43 @@ pub(crate) struct Cli {
 /// Flags shared by most subcommands.
 #[derive(Debug, Args)]
 pub struct CommonArgs {
-    /// Directory containing the skill(s) under evaluation (required).
+    /// Optional directory of skills to stage as the eval environment.
     ///
-    /// This directory IS the eval's test environment: the skill-under-test is
-    /// staged under a unique slug, and every *other* skill folder inside it is
-    /// staged under its natural name so cross-references resolve. If it holds only
-    /// your skill, the eval runs in isolation — copy or symlink siblings in to
-    /// stage them.
+    /// Use this when the skill under test needs sibling skills available. The
+    /// skill-under-test is staged under a unique slug, and every *other* skill
+    /// folder inside this directory is staged under its natural name so
+    /// cross-references resolve. Omit it for the default single-skill isolated
+    /// run.
     #[arg(long)]
     pub skill_dir: Option<String>,
-    /// Skill name under evaluation — the subdirectory of `--skill-dir` (required).
+    /// Skill under evaluation.
+    ///
+    /// With `--skill-dir`, this is the child folder name, inferred when the
+    /// directory contains exactly one skill. Without `--skill-dir`, this is a
+    /// skill directory path, or a child directory name relative to the current
+    /// directory. Omit it when running from inside the skill directory.
     #[arg(long)]
     pub skill: Option<String>,
-    /// Iteration number for post-dispatch steps.
+    /// Iteration number for post-dispatch steps (defaults to latest existing).
     #[arg(long)]
     pub iteration: Option<u32>,
-    /// Comparison mode: `new-skill` (with vs. without) or `revision` (old vs. new).
+    /// Comparison mode: `new-skill` (default, with vs. without) or `revision`
+    /// (old vs. new).
     ///
     /// Mode A (`new-skill`) validates a brand-new skill against baseline behavior
     /// with no skill loaded. Mode B (`revision`) tests a language change to an
     /// existing skill: snapshot the old `SKILL.md` (see `snapshot`), then run both
-    /// variants against the same prompts. `revision` requires `--baseline`.
+    /// variants against the same prompts. `revision` defaults `--baseline` to
+    /// `baseline`.
     #[arg(long)]
     pub mode: Option<String>,
-    /// Target harness: `claude-code` (default) or `codex`.
+    /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
     /// Claude Code and Codex both support staged skills, transcript ingest, and
     /// `--guard`. Codex stages skills under `.agents/skills` and reads each
     /// task's `outputs/codex-events.jsonl` instead of a subagents dir.
+    /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
+    /// `--guard` are not yet wired for OpenCode.
     #[arg(long)]
     pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).
@@ -82,9 +92,20 @@ pub struct CommonArgs {
     ///
     /// Where Claude Code persisted subagent transcripts. `ingest`/`record-runs`/
     /// `fill-transcripts` read it to populate `tool_invocations`, tokens, and
-    /// duration. Not used for Codex, which reads `outputs/codex-events.jsonl`.
+    /// duration. Optional: when omitted it is auto-resolved from `--session-id`
+    /// (or the `CLAUDE_CODE_SESSION_ID` env var); pass it explicitly only to
+    /// override. Not used for Codex, which reads `outputs/codex-events.jsonl`.
     #[arg(long)]
     pub subagents_dir: Option<String>,
+    /// Parent session id for auto-resolving `--subagents-dir` (Claude Code only).
+    ///
+    /// Defaults to the `CLAUDE_CODE_SESSION_ID` env var that Claude Code sets in
+    /// the orchestrating agent's shell. `ingest`/`record-runs`/`fill-transcripts`
+    /// use it to locate `<config>/projects/<cwd-slug>/<session-id>/subagents/`
+    /// (scanning `projects/*` if the cwd slug differs). Pass it only when running
+    /// outside that session; an explicit `--subagents-dir` overrides it.
+    #[arg(long)]
+    pub session_id: Option<String>,
     /// Restrict to these eval ids (comma-separated).
     ///
     /// Mutually exclusive with `--skip`; every named id must exist or the run
@@ -103,9 +124,62 @@ pub struct CommonArgs {
 /// `validate` only needs to know where to look.
 #[derive(Debug, Args)]
 pub struct ValidateArgs {
-    /// Directory whose `evals.json` files should be validated.
+    /// Directory whose child skills' `evals.json` files should be batch validated.
     #[arg(long)]
     pub skill_dir: Option<String>,
+    /// Skill directory to validate when `--skill-dir` is omitted.
+    #[arg(long)]
+    pub skill: Option<String>,
+}
+
+/// `init` writes the first eval scaffold for a skill.
+#[derive(Debug, Args)]
+pub struct InitArgs {
+    /// Optional directory containing the skill under evaluation.
+    ///
+    /// Use this when the skill is an immediate child of a skills directory. If
+    /// omitted, `init` uses `--skill <path-or-name>` or the current directory.
+    /// `init` creates only the eval scaffold; it does not create the skill itself.
+    #[arg(long)]
+    pub skill_dir: Option<String>,
+    /// Skill under evaluation.
+    ///
+    /// With `--skill-dir`, this is the child folder name, inferred when the
+    /// directory contains exactly one skill. Without `--skill-dir`, this is a
+    /// skill directory path, or a child directory name relative to the current
+    /// directory. This value becomes the generated `skill_name`.
+    #[arg(long)]
+    pub skill: Option<String>,
+    /// Stable kebab-case id for the first eval case.
+    ///
+    /// If omitted, prompts interactively. The id is used as the workspace eval
+    /// directory name, so it must satisfy the eval schema's kebab-case pattern.
+    #[arg(long)]
+    pub id: Option<String>,
+    /// User-facing prompt the eval subagent receives.
+    ///
+    /// If omitted, prompts interactively. Write this like a realistic user
+    /// request, not like an instruction to satisfy the eval.
+    #[arg(long)]
+    pub prompt: Option<String>,
+    /// Human-readable description of a successful response.
+    ///
+    /// If omitted, prompts interactively. This seeds `expected_output`; add
+    /// concrete assertions after seeing iteration 1 outputs.
+    #[arg(long = "expected-output")]
+    pub expected_output: Option<String>,
+    /// Whether the skill is expected to trigger for this eval.
+    ///
+    /// Defaults to true and is omitted from the generated JSON. Set false for
+    /// negative evals where correct behavior is not invoking the skill.
+    #[arg(long)]
+    pub skill_should_trigger: Option<bool>,
+    /// Overwrite an existing `<skill>/evals/evals.json`.
+    ///
+    /// Refuses to overwrite existing evals by default and checks that before
+    /// prompting for seed fields.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// `grade` adds a finalize flag on top of the common set.
@@ -143,12 +217,23 @@ pub struct PromoteBaselineArgs {
     #[command(flatten)]
     pub common: CommonArgs,
     /// Provenance label recorded in `BASELINE.md`.
+    ///
+    /// Overrides a `label` recorded in the iteration's `conditions.json` (set via
+    /// `run --label`); when both are absent, `BASELINE.md` shows `(none)`.
     #[arg(long)]
     pub label: Option<String>,
     /// Operator-declared agent model, recorded in `BASELINE.md`.
+    ///
+    /// Overrides an `agent_model` recorded in the iteration's `conditions.json`
+    /// (set via `run --agent-model`); when both are absent, `BASELINE.md` shows
+    /// `unspecified`.
     #[arg(long)]
     pub agent_model: Option<String>,
     /// Operator-declared judge model, recorded in `BASELINE.md`.
+    ///
+    /// Overrides a `judge_model` recorded in the iteration's `conditions.json`
+    /// (set via `run --judge-model`); when both are absent, `BASELINE.md` shows
+    /// `unspecified`.
     #[arg(long)]
     pub judge_model: Option<String>,
 }
@@ -159,7 +244,7 @@ pub struct PromoteBaselineArgs {
 pub struct RunArgs {
     #[command(flatten)]
     pub common: CommonArgs,
-    /// Baseline snapshot label (required in `--mode revision`).
+    /// Baseline snapshot label (defaults to `baseline` in `--mode revision`).
     ///
     /// The snapshot label to use as the `old_skill` arm in revision mode (see
     /// `snapshot`).
@@ -181,8 +266,11 @@ pub struct RunArgs {
     /// staging it under the harness skills dir.
     ///
     /// For harnesses without project-local skill discovery. Forces the LLM-judge
-    /// meta-check tier and does not inline sibling skills or sibling asset files,
-    /// so multi-file skills need the staged (default) path.
+    /// meta-check tier and inlines only SKILL.md (not sibling skills or sibling
+    /// asset files); use the staged (default) path when the measured behavior
+    /// depends on sibling files. Also disables `--guard` — the write guard
+    /// requires staging — so no-stage runs are unguarded and rely on
+    /// `detect-stray-writes` after the fact.
     #[arg(long)]
     pub no_stage: bool,
     /// Arm the write guard (PreToolUse hook) for the dispatch window.
@@ -191,9 +279,16 @@ pub struct RunArgs {
     /// writes/installs outside the eval sandbox while dispatches run. Arm it
     /// unless the user opts out. The marker auto-expires after 6h and is torn down
     /// at the next run; while armed the hook fires on your own tool calls too.
+    /// If it remains armed after `finalize`, `finalize` reminds you to run
+    /// `teardown-guard` before editing source. Requires staging — incompatible
+    /// with `--no-stage`, under which guard install is skipped and the run is
+    /// unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
+    /// When invoking this from inside Codex, staging writes `.agents/skills` and
+    /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
+    /// its default workspace-write sandbox, so approval/escalation may be needed.
     #[arg(long)]
     pub guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the
@@ -212,6 +307,39 @@ pub struct RunArgs {
     /// real injected mode.
     #[arg(long)]
     pub plan_mode: bool,
+    /// Runs per condition cell, for variance reduction (default: 1).
+    ///
+    /// Dispatches every eval N times per condition, so an iteration needs
+    /// `evals × 2 conditions × N` dispatches. Each run gets its own
+    /// `run-<k>/` directory under the condition (own `inputs/`, `outputs/`,
+    /// `run.json`, `timing.json`, `grading.json`) and a unique
+    /// `agent_description` carrying an `r<k>` segment. With N=1 the layout is
+    /// unchanged (artifacts sit directly in the condition directory). The
+    /// benchmark's per-condition `mean`/`stddev`/`n` then reflect all runs. A
+    /// per-eval `runs` field in evals.json overrides this flag for that eval.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub runs: u32,
+    /// Operator-declared agent model, persisted into `conditions.json`.
+    ///
+    /// The runner never dispatches the under-test agent itself, so it cannot
+    /// observe the model — declare it here while it's fresh and
+    /// `promote-baseline` records it in `BASELINE.md` automatically (its own
+    /// `--agent-model` flag still overrides).
+    #[arg(long)]
+    pub agent_model: Option<String>,
+    /// Operator-declared judge model, persisted into `conditions.json`.
+    ///
+    /// Like `--agent-model`, but for the grading judge; surfaced in
+    /// `BASELINE.md` by `promote-baseline` (its own `--judge-model` flag still
+    /// overrides).
+    #[arg(long)]
+    pub judge_model: Option<String>,
+    /// Provenance label for this run, persisted into `conditions.json`.
+    ///
+    /// Surfaced in `BASELINE.md` by `promote-baseline` (its own `--label` flag
+    /// still overrides).
+    #[arg(long)]
+    pub label: Option<String>,
 }
 
 /// Every subcommand on the CLI.
@@ -246,14 +374,16 @@ pub(crate) enum Commands {
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
     /// writes, grades `transcript_check` assertions, then stops at the judge
     /// hand-off, listing a judge task per `llm_judge` assertion. Requires
-    /// `--iteration`; Claude Code also needs `--subagents-dir`, while Codex reads
-    /// each task's `outputs/codex-events.jsonl`. Re-running after a fix is safe —
-    /// every sub-step skips work already done.
+    /// `--iteration`; Claude Code auto-resolves the subagents dir from the session
+    /// id (override with `--subagents-dir`), while Codex reads each task's
+    /// `outputs/codex-events.jsonl`. Re-running after a fix is safe — every
+    /// sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges the judge verdicts
-    /// and writes `benchmark.json`. Requires `--iteration`.
+    /// and writes `benchmark.json`. If a live guard remains armed, prints a
+    /// `teardown-guard` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
@@ -298,6 +428,14 @@ pub(crate) enum Commands {
     /// pass-rate / duration / token stats per condition, the delta, and
     /// `validity_warnings`.
     Aggregate(CommonArgs),
+    /// Scaffold a first `evals/evals.json` for a skill.
+    ///
+    /// Creates `<skill>/evals/evals.json` with one schema-valid seed eval, then
+    /// prints the next run/ingest/finalize/promote commands. Prompts
+    /// interactively for any missing seed fields, and refuses to overwrite an
+    /// existing eval file unless `--force` is passed. This is scaffold-only: it
+    /// does not run agents, ingest transcripts, finalize, or promote results.
+    Init(InitArgs),
     /// Promote a benchmark + gradings into a committed baseline.
     PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.

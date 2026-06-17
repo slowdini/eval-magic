@@ -41,6 +41,11 @@
       "properties": {
         "eval_id": { "type": "string" },
         "condition": { "type": "string" },
+        "run_index": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based run index within a multi-run (eval, condition) cell; absent for single-run cells."
+        },
         "assertion_id": { "type": "string" },
         "rubric": { "type": "string" },
         "model": {

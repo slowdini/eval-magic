@@ -23,6 +23,7 @@ fn help_lists_subcommands() {
         .arg("--help")
         .assert()
         .success()
+        .stdout(contains("init"))
         .stdout(contains("record-runs"))
         .stdout(contains("grade"))
         .stdout(contains("validate"))
@@ -65,6 +66,44 @@ fn validate_succeeds_on_valid_evals() {
         .stdout(contains("Validated 1 evals.json file(s); 0 failed."));
 }
 
+#[test]
+fn validate_defaults_to_current_skill_dir() {
+    let tmp = TempDir::new().unwrap();
+    write_evals(tmp.path(), "good", VALID_EVALS);
+    fs::write(
+        tmp.path().join("good").join("SKILL.md"),
+        "---\nname: good\n---\nbody\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path().join("good"))
+        .arg("validate")
+        .assert()
+        .success()
+        .stdout(contains("✓ evals/evals.json"))
+        .stdout(contains("Validated 1 evals.json file(s); 0 failed."));
+}
+
+#[test]
+fn validate_accepts_a_skill_path() {
+    let tmp = TempDir::new().unwrap();
+    write_evals(tmp.path(), "good", VALID_EVALS);
+    fs::write(
+        tmp.path().join("good").join("SKILL.md"),
+        "---\nname: good\n---\nbody\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .arg("validate")
+        .arg("--skill")
+        .arg(tmp.path().join("good"))
+        .assert()
+        .success()
+        .stdout(contains("✓ evals/evals.json"));
+}
+
 /// `validate` exits non-zero and prints a ✗ when a file fails validation.
 #[test]
 fn validate_fails_on_invalid_evals() {
@@ -80,14 +119,14 @@ fn validate_fails_on_invalid_evals() {
         .stderr(contains("✗"));
 }
 
-/// `validate` without the required `--skill-dir` flag fails with our message.
+/// `validate` without a detectable skill fails with our message.
 #[test]
-fn validate_requires_skill_dir() {
+fn validate_requires_a_skill_context() {
     skill_eval()
         .arg("validate")
         .assert()
         .failure()
-        .stderr(contains("missing required flag --skill-dir"));
+        .stderr(contains("missing skill"));
 }
 
 /// An unknown subcommand is rejected by the parser (clap), not silently

@@ -14,10 +14,7 @@ use std::path::Path;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::{
-    render_available_skills_block, render_codex_available_skills_block,
-    render_codex_plan_mode_context, render_plan_mode_context,
-};
+use crate::adapters::adapter_for;
 use crate::core::{AvailableSkill, Eval, Harness};
 
 use super::{RunError, copy_dir_recursive};
@@ -30,6 +27,9 @@ use super::{RunError, copy_dir_recursive};
 pub struct DispatchTask {
     pub eval_id: String,
     pub condition: String,
+    /// 1-based run index within a multi-run cell; absent for single-run cells.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_index: Option<u32>,
     pub skill_path: Option<String>,
     pub staged_skill_slug: Option<String>,
     pub user_prompt: String,
@@ -66,6 +66,9 @@ pub struct DispatchTaskOpts<'a> {
     /// Per-run uniqueness suffix (`i<iteration>-<nonce>`) appended to the dispatch
     /// description; omitted in unit tests that exercise prompt assembly directly.
     pub run_tag: Option<&'a str>,
+    /// 1-based run index within a multi-run cell (adds an `r<k>` segment to the
+    /// dispatch description); `None` for single-run cells.
+    pub run_index: Option<u32>,
 }
 
 impl Default for DispatchTaskOpts<'_> {
@@ -86,6 +89,7 @@ impl Default for DispatchTaskOpts<'_> {
             available_skills: Vec::new(),
             harness: Harness::ClaudeCode,
             run_tag: None,
+            run_index: None,
         }
     }
 }
@@ -94,17 +98,11 @@ fn render_available_skills_block_for_harness(
     harness: Harness,
     skills: &[AvailableSkill],
 ) -> String {
-    match harness {
-        Harness::Codex => render_codex_available_skills_block(skills),
-        Harness::ClaudeCode => render_available_skills_block(skills),
-    }
+    adapter_for(harness).render_available_skills_block(skills)
 }
 
 fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) -> String {
-    match harness {
-        Harness::Codex => render_codex_plan_mode_context(profile_text),
-        Harness::ClaudeCode => render_plan_mode_context(profile_text),
-    }
+    adapter_for(harness).render_plan_mode_context(profile_text)
 }
 
 /// Construct one dispatch task and its full prompt.
@@ -117,21 +115,14 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         // Neutral slug disambiguation only — surface the staged identifier so a
         // deliberate invocation hits the staged copy (and the meta-check finds
         // it), without instructing invocation or implying a global plugin.
-        let surface = if harness == Harness::Codex {
-            "as a Codex skill"
-        } else {
-            "via the Skill tool"
-        };
+        let adapter = adapter_for(harness);
+        let surface = adapter.skill_surface_phrase();
         let mut lines = vec![format!(
             "The `{}` skill is registered under the identifier `{slug}` and is discoverable {surface}. If you invoke it, use that identifier.",
             opts.skill_name
         )];
         if let Some(staged_path) = opts.staged_skill_path {
-            let cannot_resolve = if harness == Harness::Codex {
-                "If it does not load as a Codex skill"
-            } else {
-                "If the Skill tool cannot resolve that identifier"
-            };
+            let cannot_resolve = adapter.skill_unresolved_phrase();
             lines.push(format!(
                 "{cannot_resolve}, read the skill from `{staged_path}` instead."
             ));
@@ -241,14 +232,19 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     sections.push(task_lines.join("\n"));
 
     let cond_dir = Path::new(opts.cond_dir);
+    let run_seg = match opts.run_index {
+        Some(k) => format!(":r{k}"),
+        None => String::new(),
+    };
     let agent_description = match opts.run_tag {
-        Some(tag) => format!("{}:{}:{tag}", opts.eval_id, opts.condition),
-        None => format!("{}:{}", opts.eval_id, opts.condition),
+        Some(tag) => format!("{}:{}{run_seg}:{tag}", opts.eval_id, opts.condition),
+        None => format!("{}:{}{run_seg}", opts.eval_id, opts.condition),
     };
 
     Ok(DispatchTask {
         eval_id: opts.eval_id.to_string(),
         condition: opts.condition.to_string(),
+        run_index: opts.run_index,
         skill_path: opts.skill_path.map(str::to_string),
         staged_skill_slug: opts.staged_skill_slug.map(str::to_string),
         user_prompt: opts.user_prompt.to_string(),
@@ -395,6 +391,13 @@ pub fn get_skill_description(skill_path: &Path) -> String {
 
 pub use crate::core::Mode;
 
+/// Harness-specific knobs for the human dispatch manifest.
+#[derive(Debug, Clone, Copy)]
+pub struct ManifestContext {
+    pub harness: Harness,
+    pub guard: bool,
+}
+
 /// Build the human-readable `dispatch-manifest.md`.
 pub fn build_manifest(
     skill_name: &str,
@@ -403,6 +406,7 @@ pub fn build_manifest(
     iteration: u32,
     timestamp: &str,
     tasks: &[DispatchTask],
+    context: ManifestContext,
 ) -> String {
     let mode_str = match mode {
         Mode::NewSkill => "new-skill",
@@ -412,7 +416,7 @@ pub fn build_manifest(
         Some(b) => format!("Mode: {mode_str} (baseline: {b})"),
         None => format!("Mode: {mode_str}"),
     };
-    let header = [
+    let mut header = vec![
         format!("# Dispatch manifest — {skill_name} iteration-{iteration}"),
         String::new(),
         mode_line,
@@ -423,25 +427,34 @@ pub fn build_manifest(
         String::new(),
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the subagent with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
-        "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>:i<N>-<nonce>`. When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition)` slot without collisions.".to_string(),
+        "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>[:r<k>]:i<N>-<nonce>` (the `r<k>` segment appears only in multi-run cells, naming the 1-based run index). When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition, run)` slot without collisions.".to_string(),
         String::new(),
-        "After all dispatches (Claude Code):".to_string(),
+    ];
+    if let Some(lines) = adapter_for(context.harness).cli_manifest_section(context.guard) {
+        header.extend(lines);
+    }
+    header.extend([
+        "After all dispatches (Claude Code only):".to_string(),
         String::new(),
-        "1. Run `eval-magic ingest --skill <name> --iteration <N> --subagents-dir ~/.claude/projects/<project-slug>/<parent-session-id>/subagents/` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the subagent's own `outputs/final-message.md` + the persisted transcript, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
-        "2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize --skill <name> --iteration <N>` for the benchmark.".to_string(),
+        "1. Run `eval-magic ingest` (it auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside the dispatching session, pass `--session-id <id>` or `--subagents-dir <path>`) — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the subagent's own `outputs/final-message.md` + the persisted transcript, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
+        "2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize` for the benchmark.".to_string(),
         String::new(),
         "On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.".to_string(),
         String::new(),
         "## Dispatches".to_string(),
         String::new(),
-    ]
-    .join("\n");
+    ]);
+    let header = header.join("\n");
 
     let entries = tasks
         .iter()
         .map(|t| {
+            let run_seg = t
+                .run_index
+                .map(|k| format!(" / run-{k}"))
+                .unwrap_or_default();
             [
-                format!("### {} / {}", t.eval_id, t.condition),
+                format!("### {} / {}{run_seg}", t.eval_id, t.condition),
                 String::new(),
                 format!("- run.json:    {}", t.run_record_path),
                 format!("- timing.json: {}", t.timing_path),
@@ -472,8 +485,39 @@ mod tests {
                 files: None,
                 assertions: None,
                 skill_should_trigger: None,
+                runs: None,
             })
             .collect()
+    }
+
+    #[test]
+    fn run_index_adds_r_segment_to_agent_description() {
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            eval_id: "e1",
+            condition: "with_skill",
+            cond_dir: "/work/eval-e1/with_skill/run-2",
+            run_tag: Some("i1-abc"),
+            run_index: Some(2),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(task.agent_description, "e1:with_skill:r2:i1-abc");
+        assert_eq!(task.run_index, Some(2));
+        assert_eq!(
+            task.run_record_path,
+            "/work/eval-e1/with_skill/run-2/run.json"
+        );
+
+        let flat = build_dispatch_task(&DispatchTaskOpts {
+            eval_id: "e1",
+            condition: "with_skill",
+            cond_dir: "/work/eval-e1/with_skill",
+            run_tag: Some("i1-abc"),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(flat.agent_description, "e1:with_skill:i1-abc");
+        assert_eq!(flat.run_index, None);
     }
 
     fn skill(name: &str, description: &str) -> AvailableSkill {
@@ -724,6 +768,44 @@ mod tests {
             task.dispatch_prompt
                 .contains(&format!("read the skill from `{staged}` instead."))
         );
+    }
+
+    #[test]
+    fn opencode_flavored_fallback_wording() {
+        let staged = "/repo/.opencode/skills/slow-powers-eval-1-with-skill-foo/SKILL.md";
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            harness: Harness::OpenCode,
+            staged_skill_path: Some(staged),
+            ..base_opts()
+        })
+        .unwrap();
+        assert!(
+            task.dispatch_prompt
+                .contains("discoverable as an OpenCode skill")
+        );
+        assert!(
+            task.dispatch_prompt
+                .contains("If it does not load as an OpenCode skill")
+        );
+        assert!(
+            task.dispatch_prompt
+                .contains(&format!("read the skill from `{staged}` instead."))
+        );
+    }
+
+    #[test]
+    fn opencode_available_skills_block_uses_xml() {
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            harness: Harness::OpenCode,
+            available_skills: vec![skill("foo", "the foo skill")],
+            ..base_opts()
+        })
+        .unwrap();
+        let p = &task.dispatch_prompt;
+        assert!(p.contains("<available_skills>"));
+        assert!(p.contains("<name>foo</name>"));
+        assert!(p.contains("<description>the foo skill</description>"));
+        assert!(!p.contains("The following skills are available for use with the Skill tool:"));
     }
 
     #[test]
