@@ -8,13 +8,17 @@
 
 pub mod claude_code_session;
 pub mod claude_code_transcript;
+mod codex_cli;
 pub mod codex_session;
 pub mod codex_transcript;
 pub mod harness;
 pub mod opencode_session;
 pub mod plugin_shadow;
 
-pub use harness::{ClaudeCodeAdapter, CodexAdapter, HarnessAdapter, OpenCodeAdapter, adapter_for};
+pub use harness::{
+    ClaudeCodeAdapter, CliDispatchContext, CliJudgeContext, CliManifestContext, CodexAdapter,
+    HarnessAdapter, OpenCodeAdapter, adapter_for,
+};
 
 pub use claude_code_session::{
     render_available_skills_block, render_plan_mode_context, resolve_subagents_dir_for_session,

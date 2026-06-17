@@ -15,6 +15,9 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, Harness, ToolInvocation};
 
 use super::TranscriptSummary;
+use super::codex_cli::{
+    codex_exec_command_template, codex_judge_dispatch_recipe, codex_parallel_dispatch_recipe,
+};
 use super::{
     parse_codex_events, parse_codex_events_full, parse_transcript, parse_transcript_full,
     render_available_skills_block, render_codex_available_skills_block,
@@ -76,19 +79,33 @@ pub trait HarnessAdapter {
         None
     }
 
+    /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
+    /// native model-selection flag accepted by the harness CLI. `None` means the
+    /// adapter has no model-selection support wired yet.
+    fn cli_model_flag(&self) -> Option<&'static str> {
+        None
+    }
+
     /// The `Next:` guidance printed after `run` for a
     /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness: how to
     /// dispatch each task through this harness's one-shot CLI and then ingest.
     /// Empty for in-session harnesses (their guidance is the mechanism's, not the
     /// adapter's).
-    fn cli_next_steps(&self, _guard: bool, _target_args: &str, _iteration: u32) -> String {
+    fn cli_next_steps(&self, _ctx: CliDispatchContext<'_>) -> String {
         String::new()
     }
 
     /// Extra `dispatch-manifest.md` lines describing this harness's Cli dispatch
     /// recipe (command template, parallel recipe, ingest note). `None` when the
     /// harness contributes no Cli-specific manifest section.
-    fn cli_manifest_section(&self, _guard: bool) -> Option<Vec<String>> {
+    fn cli_manifest_section(&self, _ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
+        None
+    }
+
+    /// The post-`grade` / post-`ingest` judge dispatch guidance for a
+    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness. `None`
+    /// leaves the generic in-session-style judge handoff in place.
+    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext) -> Option<String> {
         None
     }
 
@@ -113,6 +130,28 @@ pub trait HarnessAdapter {
 pub struct ClaudeCodeAdapter;
 pub struct CodexAdapter;
 pub struct OpenCodeAdapter;
+
+/// Context for rendering a harness's one-shot CLI agent-dispatch guidance.
+#[derive(Debug, Clone, Copy)]
+pub struct CliDispatchContext<'a> {
+    pub guard: bool,
+    pub target_args: &'a str,
+    pub iteration: u32,
+    pub agent_model: Option<&'a str>,
+}
+
+/// Context for rendering a harness's `dispatch-manifest.md` CLI recipe.
+#[derive(Debug, Clone, Copy)]
+pub struct CliManifestContext<'a> {
+    pub guard: bool,
+    pub agent_model: Option<&'a str>,
+}
+
+/// Context for rendering a harness's one-shot CLI judge-dispatch guidance.
+#[derive(Debug, Clone, Copy)]
+pub struct CliJudgeContext {
+    pub guard: bool,
+}
 
 impl HarnessAdapter for ClaudeCodeAdapter {
     fn label(&self) -> &'static str {
@@ -184,31 +223,42 @@ impl HarnessAdapter for CodexAdapter {
     fn cli_events_filename(&self) -> Option<&'static str> {
         Some("codex-events.jsonl")
     }
-    fn cli_next_steps(&self, guard: bool, target_args: &str, iteration: u32) -> String {
+    fn cli_model_flag(&self) -> Option<&'static str> {
+        Some("-m")
+    }
+    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         format!(
             "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
-            codex_exec_command_template(guard)
+            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
+            target_args = ctx.target_args,
+            iteration = ctx.iteration
         )
     }
-    fn cli_manifest_section(&self, guard: bool) -> Option<Vec<String>> {
+    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
         Some(vec![
             "After all dispatches (Codex):".to_string(),
             String::new(),
             "Run one fresh `codex exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
             String::new(),
             "```bash".to_string(),
-            codex_exec_command_template(guard),
+            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
             "```".to_string(),
             String::new(),
             "Parallel dispatch from this iteration directory:".to_string(),
             String::new(),
             "```bash".to_string(),
-            codex_parallel_dispatch_recipe(guard),
+            codex_parallel_dispatch_recipe(self.cli_model_flag(), ctx.guard, ctx.agent_model),
             "```".to_string(),
             String::new(),
             "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
             String::new(),
         ])
+    }
+    fn cli_judge_next_steps(&self, ctx: CliJudgeContext) -> Option<String> {
+        Some(codex_judge_dispatch_recipe(
+            self.cli_model_flag(),
+            ctx.guard,
+        ))
     }
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_codex_events(path)
@@ -252,9 +302,16 @@ impl HarnessAdapter for OpenCodeAdapter {
     fn plan_mode_profile(&self) -> &'static str {
         include_str!("../../profiles/opencode/plan-mode.md")
     }
-    fn cli_next_steps(&self, _guard: bool, target_args: &str, iteration: u32) -> String {
+    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
+        let model_note = if ctx.agent_model.is_some() {
+            " Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet."
+        } else {
+            ""
+        };
         format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`. OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`."
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`.{model_note} OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`.",
+            target_args = ctx.target_args,
+            iteration = ctx.iteration
         )
     }
     // OpenCode transcript ingest is not yet wired. In the current dispatch flow
@@ -290,53 +347,6 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
         Harness::Codex => &CodexAdapter,
         Harness::OpenCode => &OpenCodeAdapter,
     }
-}
-
-/// Copy/pasteable Codex dispatch command template. Stdin is detached so a
-/// surrounding `xargs`/pipe cannot be treated as extra prompt context.
-fn codex_exec_command_template(guard: bool) -> String {
-    let hook_trust = if guard {
-        " --dangerously-bypass-hook-trust"
-    } else {
-        ""
-    };
-    [
-        format!(
-            "codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never{hook_trust} --json \\"
-        ),
-        "  --output-last-message <outputs_dir>/final-message.md \\".to_string(),
-        "  \"Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md.\" \\".to_string(),
-        "  </dev/null \\".to_string(),
-        "  > <outputs_dir>/codex-events.jsonl \\".to_string(),
-        "  2> <outputs_dir>/codex-stderr.log".to_string(),
-    ]
-    .join("\n")
-}
-
-fn codex_parallel_dispatch_recipe(guard: bool) -> String {
-    let hook_trust = if guard {
-        " --dangerously-bypass-hook-trust"
-    } else {
-        ""
-    };
-    [
-        "JOBS=${JOBS:-4}".to_string(),
-        "jq -j '.tasks[] | [.dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\".to_string(),
-        "  xargs -0 -P \"$JOBS\" -I{} sh -c '".to_string(),
-        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
-        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
-        "    mkdir -p \"$outputs_dir\"".to_string(),
-        format!(
-            "    codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never{hook_trust} --json \\"
-        ),
-        "      --output-last-message \"$outputs_dir/final-message.md\" \\".to_string(),
-        "      \"Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to $outputs_dir/final-message.md.\" \\".to_string(),
-        "      </dev/null \\".to_string(),
-        "      > \"$outputs_dir/codex-events.jsonl\" \\".to_string(),
-        "      2> \"$outputs_dir/codex-stderr.log\"".to_string(),
-        "  ' sh {}".to_string(),
-    ]
-    .join("\n")
 }
 
 #[cfg(test)]

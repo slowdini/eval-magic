@@ -102,7 +102,7 @@
         },
         "model": {
           "type": "string",
-          "description": "Optional override. Defaults to whatever the harness operator configures for judge dispatches."
+          "description": "Optional judge model override. When absent, defaults to the run-level judge model recorded in conditions.json, or the harness default when no run-level model was selected."
         }
       }
     }

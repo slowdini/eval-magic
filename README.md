@@ -133,7 +133,7 @@ The chains run in-process and stop at the first failure; re-running after a fix 
 
 An eval run is not free: an N-case suite is **2N full agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A subagent under test runs the real skill, and some skills write to disk, so it can write outside its sandbox.
 
-If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge (the runner can't observe these, so state them), the cost, and the guard status — and wait for explicit confirmation. Arm `--guard` unless the user actively opts out; unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
+If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. For CLI-dispatch harnesses, pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection; for in-session dispatch, those flags are still provenance because the runner does not choose the parent session's model. Arm `--guard` unless the user actively opts out; unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
 
 The judgment of *whether* a change needs an eval, and how to design cases that actually measure it, lives in the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill.
 
@@ -215,7 +215,7 @@ eval-magic promote-baseline \
   NOTES.md                             # optional, hand-authored — forward-looking observations
 ```
 
-The runner never dispatches the agent or judge itself, so it can't observe which models ran — pass `--agent-model` / `--judge-model` to record them as provenance (both default to `unspecified`). `NOTES.md` is optional and hand-authored; `promote-baseline` neither generates nor overwrites it.
+Pass `run --agent-model` / `run --judge-model` while the model choice is fresh: CLI-dispatch harnesses use those values in generated command recipes when supported, and every harness records them in `conditions.json` for `promote-baseline` (both default to `unspecified`). `promote-baseline --agent-model` / `--judge-model` still override the recorded values when promoting a benchmark. `NOTES.md` is optional and hand-authored; `promote-baseline` neither generates nor overwrites it.
 
 ## Environment parity
 
@@ -293,6 +293,17 @@ codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -
   2> <outputs_dir>/codex-stderr.log
 ```
 
+When `run --agent-model <id>` is set, the generated Codex recipes insert `-m <id>` before `--json`:
+
+```bash
+codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -m <agent-model> --json \
+  --output-last-message <outputs_dir>/final-message.md \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
+  </dev/null \
+  > <outputs_dir>/codex-events.jsonl \
+  2> <outputs_dir>/codex-stderr.log
+```
+
 When the run was armed with `--guard`, add `--dangerously-bypass-hook-trust` to that `codex exec` command so the vetted project-local `PreToolUse` hook staged in `.codex/hooks.json` actually runs:
 
 ```bash
@@ -311,6 +322,8 @@ Then ingest **without** `--subagents-dir` — the transcript source is fixed to 
 ```bash
 eval-magic ingest --harness codex
 ```
+
+Judge tasks follow the same model-selection rule. `run --judge-model <id>` becomes the default `model` in `judge-tasks.json`; an individual `llm_judge.model` overrides it. The Codex judge recipe reads each task's resolved `model` and passes `-m "$model"` only when one is present.
 
 `finalize` and `teardown` work the same with `--harness codex`. Codex results are lower fidelity than Claude Code in a few places: `transcript_check` matches parsed `item.completed` entries (`command_execution`, `file_change`, `web_search`, MCP items); the automatic `__skill_invoked` meta-check uses the LLM-judge fallback (Codex's JSONL exposes no deterministic skill-tool event); and `--plan-mode` injects Codex's plan-mode procedure as text rather than launching `codex exec` into the interactive CLI's real `/plan` mode. `--guard` stages a Codex `PreToolUse` hook that blocks out-of-sandbox `Bash` mutations and `apply_patch` targets before they run; `detect-stray-writes` remains the post-run audit. Bias Codex suites toward `llm_judge` assertions for behavior and `transcript_check` for tool events.
 
