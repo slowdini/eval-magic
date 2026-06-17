@@ -234,11 +234,13 @@ Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record me
 
 ### Run modes
 
-*How* an eval gets dispatched is a separate axis from *which* harness runs it. There are three run modes — pick whichever fits your account and plan:
+*How* an eval gets dispatched is the primary parity axis (see [docs/harness-parity.md](docs/harness-parity.md)), distinct from *which* harness runs it. There are three run modes — pick whichever fits your account and plan:
 
 - **Headless** — you never start an agent session. You run a series of `eval-magic` commands, and every eval test and judge is dispatched through the harness's one-shot CLI (`claude -p`, `codex exec`), writing transcripts to disk. The run ends in a written report.
 - **Fully interactive** — you start an agent session and ask it to run an eval. The agent runs the `eval-magic` commands and dispatches tests and judges as **in-session subagents**, then hands you the report.
 - **Hybrid** — like interactive, but the agent guides the process and issues headless CLI dispatches (`claude -p` / `codex exec`) for some or all tests and judges — useful for working through iterations.
+
+Under the hood these three modes ride on **two dispatch mechanisms** (`DispatchMechanism` in `src/core/run_mode.rs`): *fully-interactive* dispatches **in-session** subagents, while *headless* and *hybrid* both dispatch through the **one-shot CLI** — they differ only in whether a session drives the loop, not in how a single task reaches the harness.
 
 Support today:
 

@@ -172,8 +172,10 @@ fn outputs_dirs_by_key(iteration_dir: &Path) -> HashMap<String, String> {
     out
 }
 
-/// Parse the invocations for one run: a Codex event stream under `outputs_dir`,
-/// or the Claude Code subagent transcript matched by the resolved description.
+/// Parse the invocations for one run, keyed on the dispatch mechanism: a
+/// `Cli`-mechanism harness reads the events file its CLI wrote under
+/// `outputs_dir` (e.g. Codex's `codex-events.jsonl`); an `InSession` harness
+/// reads the subagent transcript matched by the resolved description.
 fn invocations_for_run(
     harness: Harness,
     subagents_dir: Option<&Path>,
