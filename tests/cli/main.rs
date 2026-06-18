@@ -14,5 +14,6 @@ mod grade;
 mod grade_models;
 mod guard;
 mod init;
+mod package;
 mod stray_writes;
 mod workspace;
