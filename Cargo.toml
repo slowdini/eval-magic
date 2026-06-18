@@ -5,6 +5,17 @@ edition = "2024"
 description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior."
 license = "MIT"
 repository = "https://github.com/slowdini/eval-magic"
+homepage = "https://github.com/slowdini/eval-magic"
+readme = "README.md"
+keywords = ["evals", "agents", "skills"]
+categories = ["command-line-utilities"]
+exclude = [
+    "/.cargo-husky/**",
+    "/.claude/**",
+    "/.github/**",
+    "AGENTS.md",
+    "CLAUDE.md",
+]
 
 # Explicit only to pin `src/main.rs` as the entry path; the binary name matches the crate.
 [[bin]]
