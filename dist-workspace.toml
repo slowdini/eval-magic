@@ -20,5 +20,3 @@ hosting = "github"
 create-release = false
 # Whether to install an updater program
 install-updater = false
-# Reusable cargo-dist publish job that publishes the source crate to crates.io.
-publish-jobs = ["./publish-crates"]
