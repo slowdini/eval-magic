@@ -289,6 +289,10 @@ jobs:
     permissions:
       "id-token": "write"
       "packages": "write"
+      # publish-crate runs actions/checkout, which needs contents: read.
+      # A reusable workflow can't request more than the caller grants, so this
+      # must be granted here or the whole workflow fails to start.
+      "contents": "read"
 
   announce:
     needs:
