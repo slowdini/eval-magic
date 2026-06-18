@@ -224,6 +224,40 @@ fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
 }
 
 #[test]
+fn codex_dispatch_guidance_includes_agent_model_when_provided() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--agent-model",
+            "gpt-5-mini",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(stdout.contains("codex exec --cd <eval-root>"));
+    assert!(stdout.contains("-m gpt-5-mini"));
+    assert!(stdout.contains("</dev/null"));
+    assert!(stdout.contains("codex-events.jsonl"));
+    assert!(stdout.contains("codex-stderr.log"));
+
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(manifest.contains("codex exec --cd <eval-root>"));
+    assert!(manifest.contains("-m gpt-5-mini"));
+    assert!(manifest.contains("xargs -0 -P"));
+}
+
+#[test]
 fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
@@ -293,5 +327,6 @@ fn codex_rejects_unsupported_parity_features() {
         .arg("--dry-run")
         .assert()
         .failure()
-        .stderr(contains("Codex"));
+        .stderr(contains("Unsupported for --harness codex"))
+        .stderr(contains("--bootstrap with --no-stage"));
 }

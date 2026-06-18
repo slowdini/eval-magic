@@ -163,6 +163,7 @@ pub(super) fn write_dispatch(
             ManifestContext {
                 harness: ctx.harness,
                 guard: opts.guard,
+                agent_model: opts.agent_model,
             },
         ),
     )?;

@@ -74,6 +74,88 @@ fn promote_baseline_copies_artifacts_and_reports() {
     assert!(iteration_dir.join(".promoted.json").exists());
 }
 
+/// `promote-baseline`: a multi-run (`runs > 1`) cell stores each run's grading
+/// under an `__r<k>` filename, and the reported count covers every run.
+#[test]
+fn promote_baseline_captures_multi_run_gradings() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join("skills-workspace")
+        .join("mr-review")
+        .join("iteration-2");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0.5}}"#,
+    )
+    .unwrap();
+    // eval-e1 ran with `runs: 2` → gradings nested under run-<k>/.
+    for k in 1..=2 {
+        let run_dir = iteration_dir
+            .join("eval-e1")
+            .join("with_skill")
+            .join(format!("run-{k}"));
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(
+            run_dir.join("grading.json"),
+            r#"{"summary":{"pass_rate":1}}"#,
+        )
+        .unwrap();
+    }
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["promote-baseline", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "2"])
+        .assert()
+        .success()
+        .stderr("")
+        .stdout(contains("2 grading files"));
+
+    let baseline = skill_sub.join("evals").join("baseline");
+    assert!(baseline.join("grading/e1__with_skill__r1.json").exists());
+    assert!(baseline.join("grading/e1__with_skill__r2.json").exists());
+}
+
+/// `promote-baseline`: a run cell dispatched but never graded is surfaced as a
+/// stderr warning instead of being silently dropped.
+#[test]
+fn promote_baseline_warns_when_run_cells_missing_gradings() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, _skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join("skills-workspace")
+        .join("mr-review")
+        .join("iteration-2");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0.5}}"#,
+    )
+    .unwrap();
+    let cell = iteration_dir.join("eval-e1").join("with_skill");
+    let run1 = cell.join("run-1");
+    fs::create_dir_all(&run1).unwrap();
+    fs::write(run1.join("grading.json"), r#"{"summary":{"pass_rate":1}}"#).unwrap();
+    // run-2 dispatched but never graded.
+    fs::create_dir_all(cell.join("run-2")).unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["promote-baseline", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "2"])
+        .assert()
+        .success()
+        .stderr(contains("missing grading.json"));
+}
+
 /// `promote-baseline`: a fresh promotion (no prior NOTES.md) writes a stub and
 /// says so on stdout, keeping stderr clean.
 #[test]

@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::adapter_for;
-use crate::core::{Harness, Mode, RunContext};
+use crate::core::{Harness, Mode, RunContext, capabilities_for};
 
 use super::RunError;
 use super::orchestrate::RunOptions;
@@ -148,27 +148,32 @@ pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str
     Ok(adapter_for(harness).plan_mode_profile())
 }
 
-/// Reject the Claude-tier features Codex support does not yet cover.
+/// Reject run options not supported by the selected harness's current mechanism.
 pub(crate) fn validate_harness_run_options(
     opts: &RunOptions,
     ctx: &RunContext,
 ) -> Result<(), RunError> {
-    if ctx.harness != Harness::Codex {
-        return Ok(());
-    }
+    let capabilities = capabilities_for(ctx.harness);
     let mut unsupported: Vec<&str> = Vec::new();
-    if ctx.bootstrap_path.is_some() && opts.no_stage {
+    if opts.guard && !capabilities.supports_guard {
+        unsupported.push("--guard");
+    }
+    if ctx.bootstrap_path.is_some()
+        && opts.no_stage
+        && !capabilities.supports_bootstrap_with_no_stage
+    {
         unsupported.push("--bootstrap with --no-stage");
     }
-    if opts.stage_name.is_some() && opts.no_stage {
+    if opts.stage_name.is_some() && opts.no_stage && !capabilities.supports_stage_name_with_no_stage
+    {
         unsupported.push("--stage-name with --no-stage");
     }
     if unsupported.is_empty() {
         Ok(())
     } else {
         Err(RunError::msg(format!(
-            "Codex harness support does not cover every Claude-tier feature yet. Unsupported for \
-             Codex: {}.",
+            "Unsupported for --harness {}: {}.",
+            harness_label(ctx.harness),
             unsupported.join(", ")
         )))
     }

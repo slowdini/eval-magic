@@ -50,7 +50,7 @@
         "rubric": { "type": "string" },
         "model": {
           "type": ["string", "null"],
-          "description": "Judge model override, or null for the default."
+          "description": "Resolved judge model for this task, after assertion-level override and run-level default precedence; null means use the harness default."
         },
         "is_meta": { "type": "boolean" },
         "run_record_path": { "type": "string" },

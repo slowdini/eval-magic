@@ -4,15 +4,34 @@
 
 use anyhow::bail;
 
+use crate::adapters::{CliJudgeContext, adapter_for};
 use crate::cli::args::{CommonArgs, GradeArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
 use crate::cli::{iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from};
+use crate::core::{DispatchMechanism, RunContext, mechanism_for};
 use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
 
 const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
+
+fn judge_dispatch_guidance(ctx: &RunContext) -> String {
+    match mechanism_for(ctx.harness) {
+        DispatchMechanism::InSession => {
+            format!("Dispatch each task as a judge subagent with:\n  {JUDGE_WORKER_PROMPT}")
+        }
+        DispatchMechanism::Cli => adapter_for(ctx.harness)
+            .cli_judge_next_steps(CliJudgeContext {
+                guard: sandbox::guard_is_armed(&ctx.stage_root),
+            })
+            .unwrap_or_else(|| {
+                format!(
+                    "Dispatch each task from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nModel selection is recorded in judge-tasks.json, but this harness adapter has no judge CLI recipe wired yet."
+                )
+            }),
+    }
+}
 
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
 /// handler. This is the production runner for [`run::steps::run_steps`]; it
@@ -84,15 +103,16 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get("total_tasks").and_then(serde_json::Value::as_u64));
     let target_args = command_target_args(&ctx);
+    let judge_guidance = judge_dispatch_guidance(&ctx);
     match total_tasks {
         Some(0) => println!(
             "\n✅ Ingest complete — no judge dispatches needed.\nNext: eval-magic finalize{target_args} --iteration {iteration}"
         ),
         Some(n) => println!(
-            "\n✅ Ingest complete. Dispatch the {n} judge task(s) from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nThen run:\n  eval-magic finalize{target_args} --iteration {iteration}"
+            "\n✅ Ingest complete. {n} judge task(s) ready.\n{judge_guidance}\nThen run:\n  eval-magic finalize{target_args} --iteration {iteration}"
         ),
         None => println!(
-            "\n✅ Ingest complete. Dispatch the judge task(s) from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nThen run:\n  eval-magic finalize{target_args} --iteration {iteration}"
+            "\n✅ Ingest complete. Judge task(s) ready.\n{judge_guidance}\nThen run:\n  eval-magic finalize{target_args} --iteration {iteration}"
         ),
     }
     Ok(())
@@ -288,8 +308,9 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             );
         }
         let target_args = command_target_args(&ctx);
+        let judge_guidance = judge_dispatch_guidance(&ctx);
         println!(
-            "\nNext: dispatch each task as a judge subagent with:\n  {JUDGE_WORKER_PROMPT}\nThen run: eval-magic grade{target_args} --iteration {iteration} --finalize"
+            "\nNext: {judge_guidance}\nThen run: eval-magic grade{target_args} --iteration {iteration} --finalize"
         );
     }
     Ok(())

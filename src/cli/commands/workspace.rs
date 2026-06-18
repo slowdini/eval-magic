@@ -61,6 +61,14 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
         result.baseline_dir.display(),
         if n == 1 { "" } else { "s" }
     );
+    if result.missing_gradings > 0 {
+        let m = result.missing_gradings;
+        eprintln!(
+            "⚠ {m} run cell{} missing grading.json — omitted from the baseline. \
+             Run grade/aggregate to complete the iteration before promoting.",
+            if m == 1 { "" } else { "s" }
+        );
+    }
     match result.notes {
         workspace::NotesStatus::StubWritten => {
             println!("+ NOTES.md stub — fill in observations for this iteration.");
