@@ -1,0 +1,25 @@
+name: Publish to crates.io
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  publish:
+    name: cargo publish
+    runs-on: ubuntu-latest
+    if: ${{ !github.event.release.prerelease }} # full releases only
+    permissions:
+      id-token: write # mint the OIDC token for trusted publishing
+      contents: read # actions/checkout
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: rust-lang/crates-io-auth-action@v1 # consider pinning to a SHA
+        id: auth
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
