@@ -24,7 +24,13 @@ Windows (PowerShell):
 powershell -ExecutionPolicy Bypass -c "irm https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.ps1 | iex"
 ```
 
-Or download the archive for your platform from the release page directly. To build from source instead:
+Or download the archive for your platform from the release page directly. If you prefer Cargo's source-build path:
+
+```bash
+cargo install eval-magic
+```
+
+To build from a checkout instead:
 
 ```bash
 git clone https://github.com/slowdini/eval-magic
