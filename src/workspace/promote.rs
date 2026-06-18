@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::core::{ConditionsRecord, Harness, run_git};
+use crate::pipeline::run_slots;
 use crate::workspace::teardown::PROMOTED_MARKER;
 use crate::workspace::{WorkspaceError, now_iso8601, write_json};
 
@@ -38,6 +39,10 @@ pub struct PromoteOptions<'a> {
 pub struct PromoteResult {
     pub baseline_dir: PathBuf,
     pub gradings_copied: usize,
+    /// Run slots whose `grading.json` was absent and therefore not copied — a
+    /// sign the iteration was promoted before grading finished. Surfaced as a
+    /// warning so the gap isn't silent.
+    pub missing_gradings: usize,
     pub notes: NotesStatus,
 }
 
@@ -91,7 +96,7 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
 
     fs::copy(&benchmark_src, baseline_dir.join("benchmark.json"))?;
 
-    let gradings_copied = copy_gradings(&iteration_dir, &grading_dir)?;
+    let (gradings_copied, missing_gradings) = copy_gradings(&iteration_dir, &grading_dir)?;
 
     let head = git_head(opts.git_cwd);
     fs::write(
@@ -115,6 +120,7 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
     Ok(PromoteResult {
         baseline_dir,
         gradings_copied,
+        missing_gradings,
         notes,
     })
 }
@@ -142,11 +148,18 @@ fn write_or_retain_notes(
     Ok(NotesStatus::StubWritten)
 }
 
-/// Copy every `eval-<id>/<condition>/grading.json` into
-/// `<grading_dir>/<id>__<condition>.json`, returning the count. Entries are
-/// sorted so the copy is deterministic.
-fn copy_gradings(iteration_dir: &Path, grading_dir: &Path) -> Result<usize, WorkspaceError> {
+/// Copy each run's `grading.json` from every `eval-<id>/<condition>` cell into
+/// `<grading_dir>/`, returning `(copied, missing)`. A flat `runs: 1` cell lands
+/// at `<id>__<condition>.json`; a multi-run cell emits one
+/// `<id>__<condition>__r<k>.json` per `run-<k>/`. `missing` counts run slots
+/// whose `grading.json` is absent (an incomplete iteration). Entries are sorted
+/// so the copy is deterministic.
+fn copy_gradings(
+    iteration_dir: &Path,
+    grading_dir: &Path,
+) -> Result<(usize, usize), WorkspaceError> {
     let mut copied = 0;
+    let mut missing = 0;
     for eval_name in sorted_entry_names(iteration_dir) {
         let Some(eval_id) = eval_name.strip_prefix("eval-") else {
             continue;
@@ -160,18 +173,25 @@ fn copy_gradings(iteration_dir: &Path, grading_dir: &Path) -> Result<usize, Work
             if !cond_dir.is_dir() {
                 continue;
             }
-            let grading_src = cond_dir.join("grading.json");
-            if !grading_src.exists() {
-                continue;
+            // Walk every run slot so multi-run cells (`run-<k>/grading.json`)
+            // are captured alongside flat `runs: 1` cells, just as `aggregate`
+            // reads them.
+            for slot in run_slots(&cond_dir) {
+                let grading_src = slot.dir.join("grading.json");
+                if !grading_src.exists() {
+                    missing += 1;
+                    continue;
+                }
+                let dest = match slot.run_index {
+                    Some(k) => format!("{eval_id}__{cond_name}__r{k}.json"),
+                    None => format!("{eval_id}__{cond_name}.json"),
+                };
+                fs::copy(&grading_src, grading_dir.join(dest))?;
+                copied += 1;
             }
-            fs::copy(
-                &grading_src,
-                grading_dir.join(format!("{eval_id}__{cond_name}.json")),
-            )?;
-            copied += 1;
         }
     }
-    Ok(copied)
+    Ok((copied, missing))
 }
 
 /// Directory entry names, sorted. Missing/unreadable dirs yield `[]`.
@@ -267,7 +287,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         String::new(),
         "Files:".to_string(),
         "- `benchmark.json` — aggregate pass-rate / duration / token deltas.".to_string(),
-        "- `grading/<eval-id>__<condition>.json` — per-run assertion results and judge rationales."
+        "- `grading/<eval-id>__<condition>.json` (multi-run cells add an `__r<k>` suffix per run) — assertion results and judge rationales."
             .to_string(),
         "- `NOTES.md` — operator-authored observations for this baseline (never overwritten by promote)."
             .to_string(),
@@ -373,6 +393,72 @@ mod tests {
         assert!(provenance.contains("2026-05-27T00:00:00.000Z"));
         assert!(provenance.contains("Agent model | unspecified"));
         assert!(provenance.contains("Judge model | unspecified"));
+    }
+
+    #[test]
+    fn captures_per_run_gradings_for_multi_run_cells() {
+        let f = fixture(4);
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0.5}}"#,
+        );
+        // eval-e1: runs=3 → gradings nested under run-<k>/.
+        for cond in ["with_skill", "without_skill"] {
+            for k in 1..=3 {
+                write(
+                    &f.iteration_dir
+                        .join(format!("eval-e1/{cond}/run-{k}/grading.json")),
+                    r#"{"summary":{"pass_rate":1}}"#,
+                );
+            }
+        }
+        // eval-e2: runs=1 → flat legacy layout.
+        write(
+            &f.iteration_dir.join("eval-e2/with_skill/grading.json"),
+            r#"{"summary":{"pass_rate":0}}"#,
+        );
+
+        let res = promote_baseline(&opts(&f, 4)).unwrap();
+        let baseline = &res.baseline_dir;
+
+        assert_eq!(res.gradings_copied, 7);
+        // Nested cells carry an __r<k> suffix per run.
+        for k in 1..=3 {
+            assert!(
+                baseline
+                    .join(format!("grading/e1__with_skill__r{k}.json"))
+                    .exists()
+            );
+            assert!(
+                baseline
+                    .join(format!("grading/e1__without_skill__r{k}.json"))
+                    .exists()
+            );
+        }
+        // The flat runs=1 cell keeps the unsuffixed name.
+        assert!(baseline.join("grading/e2__with_skill.json").exists());
+        assert_eq!(res.missing_gradings, 0);
+    }
+
+    #[test]
+    fn reports_missing_gradings_for_incomplete_run_cells() {
+        let f = fixture(5);
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+        // run-1 graded; run-2 dispatched but never graded (incomplete iteration).
+        write(
+            &f.iteration_dir
+                .join("eval-e1/with_skill/run-1/grading.json"),
+            r#"{"summary":{"pass_rate":1}}"#,
+        );
+        fs::create_dir_all(f.iteration_dir.join("eval-e1/with_skill/run-2")).unwrap();
+
+        let res = promote_baseline(&opts(&f, 5)).unwrap();
+
+        assert_eq!(res.gradings_copied, 1);
+        assert_eq!(res.missing_gradings, 1);
     }
 
     #[test]
