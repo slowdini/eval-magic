@@ -29,12 +29,20 @@ fn source_files_advertise_crates_io_publish_channel() {
     let readme = read_repo_file("README.md");
     assert!(readme.contains("cargo install eval-magic"));
 
+    // crates.io publishing is intentionally NOT wired through cargo-dist: a dist
+    // `publish-jobs` reusable workflow only receives the caller's id-token/packages
+    // permissions, so its checkout can't get `contents: read` and the whole release
+    // workflow fails at startup. Publishing lives in a standalone Trusted Publishing
+    // workflow instead — guard against accidentally re-coupling.
     let dist_config = read_repo_file("dist-workspace.toml");
-    assert!(dist_config.contains(r#"publish-jobs = ["./publish-crates"]"#));
+    assert!(!dist_config.contains("publish-jobs"));
 
+    // Trusted Publishing: a published GitHub Release triggers an OIDC-authenticated
+    // `cargo publish` (no long-lived CARGO_REGISTRY_TOKEN secret).
     let workflow = read_repo_file(".github/workflows/publish-crates.yml");
-    assert!(workflow.contains("workflow_call:"));
-    assert!(workflow.contains("CARGO_REGISTRY_TOKEN"));
+    assert!(workflow.contains("types: [published]"));
+    assert!(workflow.contains("rust-lang/crates-io-auth-action"));
+    assert!(workflow.contains("id-token: write"));
     assert!(workflow.contains("cargo publish --locked"));
 }
 
