@@ -5,7 +5,7 @@
 use anyhow::bail;
 
 use crate::adapters::{CliJudgeContext, adapter_for};
-use crate::cli::args::{CommonArgs, GradeArgs};
+use crate::cli::args::{CommonArgs, GradeArgs, SwitchConditionArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
 use crate::cli::{iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from};
@@ -140,6 +140,78 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     );
     if sandbox::guard_is_armed(&ctx.stage_root) {
         println!("⚠ Guard still armed — run `eval-magic teardown-guard` before editing source.");
+    }
+    Ok(())
+}
+
+/// Switch the active condition batch in a single-session isolated run: remove the
+/// *off-condition*'s staged skill from `env/.claude/skills/` so the next batch the
+/// session dispatches cannot read it. `--condition` names the condition about to be
+/// dispatched (the one to keep); its counterpart is removed. Idempotent, and a hard
+/// barrier — the runbook instructs the operator to join every Task subagent of the
+/// prior batch first. Resolves the iteration from `--workspace-dir`, so it runs from
+/// `cwd = env/`. The guard marker is a sibling file of the slug subtree, so removing
+/// the slug dir leaves it (and an armed guard) intact.
+pub(crate) fn run_switch_condition(args: SwitchConditionArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args.common)?;
+    let dir = iteration_dir(&ctx, args.common.iteration)?;
+
+    let conditions_path = dir.join("conditions.json");
+    if !conditions_path.exists() {
+        bail!("missing: {}", conditions_path.display());
+    }
+    let conditions: crate::core::ConditionsRecord =
+        serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+
+    // `--condition` names the arm to KEEP; its counterpart is the off-condition to
+    // remove. Validate against the recorded conditions so a typo fails loudly
+    // instead of silently no-opping.
+    let names: Vec<&str> = conditions
+        .conditions
+        .iter()
+        .map(|c| c.name.as_str())
+        .collect();
+    if !names.contains(&args.condition.as_str()) {
+        bail!(
+            "unknown --condition '{}'; this iteration's conditions are: {}",
+            args.condition,
+            names.join(", ")
+        );
+    }
+    let off = conditions
+        .conditions
+        .iter()
+        .find(|c| c.name != args.condition)
+        .ok_or_else(|| anyhow::anyhow!("no off-condition to switch away from"))?;
+
+    let skills_dir = run::staging::skills_dir_for_harness(&dir.join("env"), ctx.harness);
+    match off.staged_skill_slug.as_ref() {
+        // The off-condition staged a skill: remove exactly its slug subtree. We do
+        // NOT use `cleanup_staged_skills` (it prefix-scans and would remove both
+        // arms' slugs and prune the dir) — only this one slug must go.
+        Some(Some(slug)) => {
+            let slug_dir = skills_dir.join(slug);
+            if slug_dir.exists() {
+                std::fs::remove_dir_all(&slug_dir)?;
+                println!(
+                    "Switched to '{}': removed off-condition '{}' staged skill ({}).",
+                    args.condition,
+                    off.name,
+                    slug_dir.display()
+                );
+            } else {
+                println!(
+                    "Switched to '{}': off-condition '{}' staged skill already absent — nothing to do.",
+                    args.condition, off.name
+                );
+            }
+        }
+        // The off-condition never staged a skill (e.g. the new-skill control arm),
+        // so there is nothing to hide.
+        _ => println!(
+            "Switched to '{}': off-condition '{}' has no staged skill — nothing to remove.",
+            args.condition, off.name
+        ),
     }
     Ok(())
 }

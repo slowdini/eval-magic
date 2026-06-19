@@ -8,14 +8,41 @@ you should not need anything from the surrounding repo.
 - **Mode:** {{MODE}} — comparing `{{COND_A}}` vs `{{COND_B}}`
 - **Dispatches:** {{NUM_TASKS}} (the `tasks[]` array in `{{DISPATCH_JSON}}`)
 
-## 1. Dispatch the eval subagents, then ingest
+The two conditions run as **separate batches** in this one session: dispatch every subagent of
+one batch, wait for them **all** to return, then switch conditions before dispatching the next.
+Never interleave the batches — `switch-condition` removes the off-condition's staged skill, and a
+subagent still in flight could observe a half-removed skill or read the wrong one.
 
-{{DISPATCH_NEXT_STEPS}}
+## 1. Dispatch the `{{COND_A}}` batch
+
+{{DISPATCH_COND_A}}
+
+Wait for **every** one of these subagents to return before continuing.
+
+## 2. Switch to the `{{COND_B}}` condition
+
+This removes the `{{COND_A}}` staged skill so the `{{COND_B}}` batch cannot read it:
+
+```
+{{SWITCH_CMD}}
+```
+
+## 3. Dispatch the `{{COND_B}}` batch
+
+{{DISPATCH_COND_B}}
+
+Wait for **every** one of these subagents to return before continuing.
+
+## 4. Ingest
+
+```
+{{INGEST_CMD}}
+```
 
 `ingest` records each run, backfills transcripts, scans for stray writes, and grades every
 mechanical assertion. It then prints any `llm_judge` tasks it could not grade itself.
 
-## 2. Dispatch the judge subagents, then finalize
+## 5. Dispatch the judge subagents, then finalize
 
 Dispatch each judge task `ingest` listed as a subagent the same way — pass its
 `agent_description` verbatim — then merge the verdicts and aggregate:
@@ -24,7 +51,7 @@ Dispatch each judge task `ingest` listed as a subagent the same way — pass its
 {{FINALIZE_CMD}}
 ```
 
-## 3. Read the result
+## 6. Read the result
 
 `finalize` writes the cross-condition benchmark to:
 
@@ -35,7 +62,7 @@ Dispatch each judge task `ingest` listed as a subagent the same way — pass its
 Read it for the per-condition pass rates and the `{{COND_A}}` − `{{COND_B}}` deltas. This is
 the artifact the prep session resumes on.
 
-## 4. Tear down
+## 7. Tear down
 
 When you are done, remove the staged skills (and the write guard, if armed):
 

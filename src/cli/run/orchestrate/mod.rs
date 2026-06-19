@@ -202,7 +202,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         // ([`super::runbook`]) so the two can never drift.
         DispatchMechanism::InSession => println!(
             "\nNext: {}",
-            insession_dispatch_next_steps(&target_args, iteration)
+            insession_dispatch_next_steps(&target_args, iteration, r.cond_a, r.cond_b)
         ),
         // One-shot CLI dispatch; the exact command is harness-specific.
         DispatchMechanism::Cli => println!(

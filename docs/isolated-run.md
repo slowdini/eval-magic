@@ -49,6 +49,7 @@ eval-magic meta lives **above** the env; only the clean `env/` is the agent's cw
 | `iteration-N/` | eval-magic | `conditions.json`, `dispatch.json`, `dispatch-manifest.md`, `RUNBOOK.md` (see below), `benchmark.json`, `stray-writes.json`, `skill-snapshot.md`, and the per-run `eval-<id>/<condition>[/run-k]/` trees (`run.json`, `timing.json`, `grading.json`) | **No** |
 | `iteration-N/env/` | the run | The agent's cwd. Clean; fixtures copied in so it reads like a real repo | Yes (it *is* the cwd) |
 | `iteration-N/env/.claude/skills/` | the run | The staged skill for the **current condition batch only** (becomes the guard `skills_dir` once `stage_root = env/`, `src/sandbox/install.rs:136`) | Yes |
+| `iteration-N/env/.eval-magic/outputs/<eval>/<cond>[/run-k]/` | the run | Where each dispatched subagent writes its files + `final-message.md`. Per-`(eval, condition, run)` so concurrent same-batch subagents can't collide; `record-runs` reads `final-message.md` from here. Inside the env so the agent never writes above its cwd | Yes (inside the cwd) |
 
 The agent never needs to look above `env/`. eval-magic does — it reads and writes the meta tree as a
 trusted binary (§5).
@@ -72,13 +73,16 @@ The dispatch-loop guidance is shared with the post-`run` "Next:" message
 (`insession_dispatch_next_steps`, `src/cli/run/util.rs`) so the printed steps and the runbook cannot
 drift.
 
-**Status.** The env builder (#78) has landed: staging, copied fixtures, and `RUNBOOK.md` are written
-into `iteration-N/env/` — the isolated session's cwd — while eval-magic meta (and the per-run
-`eval-<id>/` output trees) stay above it in `iteration-N/`. Still pending: the full-loop handoff (#79)
-layers the `switch-condition` barrier into the interactive content and reframes the runbook prose,
-and moves the dispatch outputs into the env. The generated `RUNBOOK.md` is a workspace artifact and is
-**not** version controlled (`skills-workspace/` is gitignored); only the `profiles/` templates are
-checked in.
+**Status.** The env builder (#78) and the full-loop handoff (#79) have landed. Staging, copied
+fixtures, and `RUNBOOK.md` are written into `iteration-N/env/` — the isolated session's cwd — while
+eval-magic meta (and the per-run `eval-<id>/` `run.json`/`timing.json` trees) stay above it in
+`iteration-N/`. The isolated session now drives the **whole loop** itself: it dispatches each
+condition as a batch, runs `eval-magic switch-condition` between batches (the §4 barrier), then
+`ingest → finalize`, writing `benchmark.json` into `iteration-N/`. Per-task dispatch outputs live
+inside the env at `env/.eval-magic/outputs/` (§2), and every printed/runbook command carries an
+absolute `--workspace-dir` (`command_target_args`) so it resolves the iteration tree from
+`cwd = env/`. The generated `RUNBOOK.md` is a workspace artifact and is **not** version controlled
+(`skills-workspace/` is gitignored); only the `profiles/` templates are checked in.
 
 ## 3 — The condition / dispatch model under Claude's subagent model
 
@@ -103,17 +107,23 @@ swapped) on disk before that condition's batch runs, so there is nothing to leak
 
 ## 4 — The `switch-condition` mechanism
 
-`switch-condition` mutates `env/.claude/skills/` between condition batches, reusing the existing
-per-condition staging and cleanup primitives (`stage_skill_for_harness`, `cleanup_staged_skills` in
-`src/cli/run/staging/mod.rs`; the per-condition slugs `cond_a_slug`/`cond_b_slug` in
-`src/cli/run/orchestrate/stage.rs`).
+`switch-condition` mutates `env/.claude/skills/` between condition batches. The handler
+(`run_switch_condition`, `src/cli/commands/pipeline.rs`) reads the off-condition's recorded
+`staged_skill_slug` from `conditions.json` and removes exactly that slug subtree with
+`fs::remove_dir_all`. It deliberately does **not** call `cleanup_staged_skills`
+(`src/cli/run/staging/mod.rs`) — that prefix-scans and would remove *both* arms' slugs and prune the
+dir; only the one off-condition slug must go. `--condition` names the arm to **keep** (the one about to
+be dispatched); its counterpart is the off-condition.
 
 - **New-skill:** stage the `with_skill` slug → dispatch **and join** that batch → `switch-condition`
   **removes** `env/.claude/skills/<with_skill-slug>/` → dispatch the `without_skill` batch. The files
   are gone, so the control arm cannot read them.
-- **Revision:** `switch-condition` performs an **in-place content swap** at a path that already
-  existed at session start, so Claude's live change detection propagates it
-  (`src/cli/run/util.rs:65-74`). No watched directory is created mid-session.
+- **Revision:** both arms are staged at `run` time (the `old_skill` and `new_skill` slugs), so
+  `switch-condition` is the **same primitive** — it removes the off-condition's slug
+  (`<old_skill-slug>/`) before the `new_skill` batch, leaving only the kept arm's slug, which existed
+  at session start and is therefore already watched. No content is rewritten, and no watched directory
+  is created mid-session. (This supersedes the earlier "in-place content swap" sketch: with both arms
+  staged up front, removing the off-condition slug is simpler and uniform across modes.)
 
 > **Hard contract — `switch-condition` is a barrier.** The orchestrator MUST join *all* Task
 > subagents of the current batch before switching. A subagent still in flight when the skill is
@@ -128,9 +138,10 @@ watcher hazard — so `switch-condition` only ever mutates *contents* (remove a 
 content), never creates the watched dir fresh.
 
 **Guard note.** The guard marker (`.slow-powers-eval-guard.json`, `src/sandbox/install.rs`) is a
-**sibling** of the `<slug>/` subtree inside `skills_dir`, not nested within it. `switch-condition`
-removes only `<slug>/` and must leave the marker intact; decide explicitly whether to re-arm the guard
-(refresh its TTL) for the second batch.
+**sibling** of the `<slug>/` subtree inside `skills_dir`, not nested within it, so removing only
+`<slug>/` leaves it — and an armed guard — intact. `switch-condition` does **not** re-arm or refresh
+the guard's TTL: the 6h TTL comfortably covers a sequential two-batch run, so the barrier stays a pure
+remove-the-slug operation. (`tests/run/switch_condition.rs` locks the marker's survival.)
 
 ## 5 — The loop in one session: dispatch → ingest → finalize
 
@@ -147,9 +158,9 @@ eval-magic, which writes the meta tree by design.
 
 ## 6 — Validation checklist (the spike's "one real Claude-interactive run")
 
-These are the empirical assumptions the design rests on. They are to be confirmed by a real
-Claude-interactive run once the env builder (#78) and full-loop handoff (#79) exist; the design note
-records them so those tickets execute against a fixed contract.
+These are the empirical assumptions the design rests on. Now that the env builder (#78) and full-loop
+handoff (#79) have landed, they are confirmed by a real Claude-interactive run (the dogfood run that
+gates #79); the design note records them so the contract stays fixed.
 
 1. **Watcher retraction on delete (riskiest).** After `env/.claude/skills/<slug>/` is removed
    mid-session, a `without_skill` subagent (a) does not *discover* the skill in its available-skills

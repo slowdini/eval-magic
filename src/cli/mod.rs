@@ -61,6 +61,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Run(args) => run_run(args),
         Commands::Ingest(args) => run_ingest(args),
         Commands::Finalize(args) => run_finalize(args),
+        Commands::SwitchCondition(args) => run_switch_condition(args),
         Commands::Init(args) => run_init(args),
         Commands::Validate(args) => run_validate(args),
         Commands::TeardownGuard(_) => run_teardown_guard(),
@@ -111,14 +112,19 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
 
 /// Render a fully self-sufficient target selector for the current run context.
 ///
-/// Always names both `--skill-dir` and `--skill` (both are always populated in
-/// [`RunContext`] and always re-resolve), so the printed "Next:" commands are
-/// copy-pasteable from any cwd — not just the one `run` happened to start in.
+/// Always names `--skill-dir`, `--skill`, and `--workspace-dir` (all three are
+/// always populated in [`RunContext`] and always re-resolve), so the printed
+/// "Next:" commands are copy-pasteable from any cwd — not just the one `run`
+/// happened to start in. The absolute `--workspace-dir` is what lets the isolated
+/// session run `ingest`/`finalize`/`switch-condition` from `cwd = iteration-N/env/`:
+/// without it, `workspace_root` would default to `<cwd>/skills-workspace`
+/// (`detect_run_context`) and the iteration tree above the env would not resolve.
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
     format!(
-        " --skill-dir {} --skill {}",
+        " --skill-dir {} --skill {} --workspace-dir {}",
         ctx.skill_dir.display(),
-        ctx.skill_name
+        ctx.skill_name,
+        ctx.workspace_root.display()
     )
 }
 
@@ -273,6 +279,54 @@ mod tests {
         })
         .unwrap();
         assert_eq!(resolved.skill_subdir, ctx.skill_subdir);
+    }
+
+    /// The isolated session runs `ingest`/`finalize`/`switch-condition` from
+    /// `cwd = iteration-N/env/`. Without an explicit workspace root those commands
+    /// default `workspace_root` to `<cwd>/skills-workspace` and bail "not found",
+    /// so the selector must carry an absolute `--workspace-dir` pointing at the
+    /// real workspace above the env.
+    #[test]
+    fn target_args_carry_absolute_workspace_dir() {
+        let tmp = TempDir::new().unwrap();
+        let root = fs::canonicalize(tmp.path()).unwrap();
+        let skill_subdir = make_skill(&root, "skills", "mr-review");
+
+        let ctx = detect_run_context(DetectInput {
+            cwd: Some(skill_subdir),
+            ..Default::default()
+        })
+        .unwrap();
+
+        let args = command_target_args(&ctx);
+        assert!(
+            args.contains(&format!("--workspace-dir {}", ctx.workspace_root.display())),
+            "selector names absolute --workspace-dir: {args}"
+        );
+        assert!(
+            ctx.workspace_root.is_absolute(),
+            "workspace_root is absolute: {}",
+            ctx.workspace_root.display()
+        );
+
+        // Round-trip from an env-like cwd below the workspace: feeding the
+        // selector's roots back resolves the SAME workspace, not
+        // `<cwd>/skills-workspace`.
+        let env_like = ctx
+            .workspace_root
+            .join("mr-review")
+            .join("iteration-1")
+            .join("env");
+        fs::create_dir_all(&env_like).unwrap();
+        let resolved = detect_run_context(DetectInput {
+            skill_dir: Some(ctx.skill_dir.display().to_string()),
+            skill: Some(ctx.skill_name.clone()),
+            workspace_dir: Some(ctx.workspace_root.display().to_string()),
+            cwd: Some(env_like),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(resolved.workspace_root, ctx.workspace_root);
     }
 
     #[test]

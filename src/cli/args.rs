@@ -192,6 +192,18 @@ pub struct GradeArgs {
     pub finalize: bool,
 }
 
+/// `switch-condition` names the condition about to be dispatched (the one to keep)
+/// on top of the common set.
+#[derive(Debug, Args)]
+pub struct SwitchConditionArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// The condition you are about to dispatch next (the one to KEEP). Its
+    /// counterpart's staged skill is removed from `env/.claude/skills/`.
+    #[arg(long)]
+    pub condition: String,
+}
+
 /// `snapshot` adds a label and an optional git ref on top of the common set.
 #[derive(Debug, Args)]
 pub struct SnapshotArgs {
@@ -390,6 +402,17 @@ pub(crate) enum Commands {
     /// and writes `benchmark.json`. If a live guard remains armed, prints a
     /// `teardown-guard` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
+    /// Switch the active condition batch in a single-session isolated run.
+    ///
+    /// Removes the *off-condition*'s staged skill from `env/.claude/skills/` so the
+    /// next batch you dispatch cannot read it — the per-condition read-isolation
+    /// barrier for an interactive isolated run (see `RUNBOOK.md` /
+    /// `docs/isolated-run.md`). `--condition` names the condition you are about to
+    /// dispatch next (the one to keep); its counterpart's staged skill is removed.
+    /// Run it only after every Task subagent of the prior batch has returned — it is
+    /// a hard barrier. Idempotent; resolves the iteration from `--workspace-dir` so
+    /// it works invoked from `env/`. Requires `--iteration`.
+    SwitchCondition(SwitchConditionArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
     /// Assembles a schema-valid `run.json` and backfills `timing.json` for every

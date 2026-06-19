@@ -15,7 +15,7 @@ pub(crate) use guard::{run_guard, run_guard_codex, run_teardown_guard};
 pub(crate) use init::run_init;
 pub(crate) use pipeline::{
     run_aggregate, run_detect_stray_writes, run_fill_transcripts, run_finalize, run_grade,
-    run_ingest, run_record_runs,
+    run_ingest, run_record_runs, run_switch_condition,
 };
 pub(crate) use run::run_run;
 pub(crate) use validate::run_validate;

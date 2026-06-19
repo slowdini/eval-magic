@@ -97,6 +97,93 @@ fn fixtures_copied_into_env_like_a_real_repo() {
 }
 
 #[test]
+fn dispatch_tasks_grouped_by_condition() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // Two evals so the interleaved-vs-grouped distinction is observable.
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review", "expected_output": "a review" },
+        { "id": "e2", "prompt": "review again", "expected_output": "a review" } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let conds: Vec<String> = dispatch["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["condition"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(conds.len(), 4, "2 evals × 2 conditions: {conds:?}");
+
+    // All with_skill tasks precede all without_skill tasks, so the runbook's
+    // "dispatch all of cond A → switch-condition → dispatch all of cond B" batches
+    // map to a straight top-to-bottom read of tasks[].
+    let first_b = conds.iter().position(|c| c == "without_skill").unwrap();
+    assert!(
+        conds[..first_b].iter().all(|c| c == "with_skill"),
+        "cond A not contiguous at the front: {conds:?}"
+    );
+    assert!(
+        conds[first_b..].iter().all(|c| c == "without_skill"),
+        "cond B not contiguous at the back: {conds:?}"
+    );
+}
+
+#[test]
+fn dispatch_outputs_live_under_env() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert!(!tasks.is_empty(), "run produced dispatch tasks");
+
+    // Canonicalize to compare across the macOS /var → /private/var symlink:
+    // dispatch.json stores resolved paths, but the test roots come from the raw
+    // tempdir, so a lexical starts_with would mismatch.
+    let env = fs::canonicalize(env_dir(&cwd)).unwrap();
+    let iter = fs::canonicalize(iteration_dir(&cwd)).unwrap();
+    let outputs_root = env.join(".eval-magic").join("outputs");
+    for task in tasks {
+        // The agent-under-test (cwd = env/) writes only inside its env.
+        let outputs_dir = fs::canonicalize(task["outputs_dir"].as_str().unwrap()).unwrap();
+        assert!(
+            outputs_dir.starts_with(&outputs_root),
+            "outputs_dir under env/.eval-magic/outputs/: {}",
+            outputs_dir.display()
+        );
+        // run.json / timing.json are eval-magic meta: above the env, in iteration-N/.
+        // The files don't exist yet (dry-run), so canonicalize their shared run dir.
+        let run_record = Path::new(task["run_record_path"].as_str().unwrap());
+        let timing = Path::new(task["timing_path"].as_str().unwrap());
+        let run_meta_dir = fs::canonicalize(run_record.parent().unwrap()).unwrap();
+        assert!(
+            run_meta_dir.starts_with(&iter) && !run_meta_dir.starts_with(&env),
+            "run dir stays above env: {}",
+            run_meta_dir.display()
+        );
+        assert_eq!(
+            timing.parent().unwrap(),
+            run_record.parent().unwrap(),
+            "run.json and timing.json share the meta run dir"
+        );
+    }
+}
+
+#[test]
 fn shared_fixture_copied_once_across_conditions_and_runs() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [

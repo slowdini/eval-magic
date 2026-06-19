@@ -29,6 +29,14 @@ fn run_writes_interactive_runbook_and_points_at_it() {
         book.contains("agent_description"),
         "carries the in-session dispatch guidance: {book}"
     );
+    // The per-condition batch loop: a switch-condition barrier between the two
+    // batches, carrying the absolute --workspace-dir so it resolves from env/.
+    assert!(
+        book.contains("eval-magic switch-condition --skill-dir")
+            && book.contains("--workspace-dir")
+            && book.contains("--condition without_skill"),
+        "carries the switch-condition barrier between batches: {book}"
+    );
     assert!(
         book.contains("eval-magic ingest --skill-dir"),
         "carries the ingest command: {book}"

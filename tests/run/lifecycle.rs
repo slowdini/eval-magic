@@ -331,7 +331,14 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
             "run.json not under its run dir: {}",
             task["run_record_path"]
         );
-        assert!(task["outputs_dir"].as_str().unwrap().contains(&run_seg));
+        // Outputs live inside the env, namespaced per run so concurrent
+        // same-batch subagents can't collide; run-<k> is the leaf segment.
+        let outputs_dir = task["outputs_dir"].as_str().unwrap();
+        assert!(
+            outputs_dir.contains(".eval-magic/outputs/")
+                && outputs_dir.ends_with(&format!("run-{k}")),
+            "outputs not namespaced under env per run: {outputs_dir}"
+        );
         let desc = task["agent_description"].as_str().unwrap();
         assert!(
             desc.contains(&format!(":r{k}:")),
@@ -342,11 +349,19 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
     for eval in ["e1", "e2"] {
         for cond in ["with_skill", "without_skill"] {
             for k in [1, 2] {
+                // Meta run dir (run.json / timing.json) above the env.
                 let run_dir = iteration_dir(&cwd)
                     .join(format!("eval-{eval}"))
                     .join(cond)
                     .join(format!("run-{k}"));
-                assert!(run_dir.join("outputs").is_dir(), "missing {run_dir:?}");
+                assert!(run_dir.is_dir(), "missing meta run dir {run_dir:?}");
+                // Per-run outputs dir inside the env.
+                let out_dir = env_dir(&cwd)
+                    .join(".eval-magic/outputs")
+                    .join(format!("eval-{eval}"))
+                    .join(cond)
+                    .join(format!("run-{k}"));
+                assert!(out_dir.is_dir(), "missing env outputs dir {out_dir:?}");
             }
         }
     }
@@ -377,9 +392,14 @@ fn runs_one_keeps_flat_single_run_layout() {
         assert!(task.get("run_index").is_none(), "run_index on single run");
         assert!(!task["run_record_path"].as_str().unwrap().contains("/run-"));
     }
+    // Flat single-run layout: the meta cond dir exists, with no run-1/ nesting.
     let cond_dir = iteration_dir(&cwd).join("eval-e1").join("with_skill");
-    assert!(cond_dir.join("outputs").is_dir());
+    assert!(cond_dir.is_dir());
     assert!(!cond_dir.join("run-1").exists());
+    // Outputs live inside the env, flat (no run-1/ segment) for a single-run cell.
+    let out_dir = env_dir(&cwd).join(".eval-magic/outputs/eval-e1/with_skill");
+    assert!(out_dir.is_dir());
+    assert!(!out_dir.join("run-1").exists());
 }
 
 #[test]
