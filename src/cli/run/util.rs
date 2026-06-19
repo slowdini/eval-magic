@@ -141,6 +141,23 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
     )
 }
 
+/// The in-session dispatch-loop guidance shared by the post-`run` "Next:" message
+/// ([`super::orchestrate`]) and the interactive runbook
+/// ([`super::runbook`]): iterate `tasks[]`, dispatch each as a subagent passing
+/// `agent_description` verbatim, then `ingest`. Threads the target selector +
+/// iteration into the ingest command so it is copy-pasteable. Keeping it in one
+/// place means the printed guidance and the runbook can never drift.
+pub(crate) fn insession_dispatch_next_steps(target_args: &str, iteration: u32) -> String {
+    format!(
+        "iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, \
+         passing its `agent_description` verbatim as the subagent description (that string is \
+         the key that links each transcript back — without it tool calls, tokens, and duration \
+         come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration}\n\
+         (ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that \
+         session, add --session-id <id> or --subagents-dir <path>.)"
+    )
+}
+
 /// Resolve the verbatim plan-mode procedure profile for a harness.
 /// The profile is a compile-time bundled asset, mirroring the schema embedding in
 /// `validation`.

@@ -18,10 +18,12 @@ use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, copy_fixtures,
     get_skill_description,
 };
+use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::{staging_plugin_shadow_action, unguarded_notice};
 use super::super::{RunError, write_json};
 use super::{Resolved, RunOptions, Staged};
+use crate::cli::command_target_args;
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.
@@ -191,6 +193,26 @@ pub(super) fn write_dispatch(
         "tasks": tasks,
     });
     write_json(&dispatch_json_path, &dispatch_json)?;
+
+    // The followable handoff artifact: a fresh isolated session (interactive) or
+    // a human (headless) reads RUNBOOK.md to run the loop. A sibling of
+    // dispatch-manifest.md; written into iteration-N/ today (the env builder, #78,
+    // relocates it into env/). Generated, not version controlled.
+    let target_args = command_target_args(ctx);
+    let runbook = build_runbook(&RunbookContext {
+        harness: ctx.harness,
+        skill_name: &ctx.skill_name,
+        iteration: r.iteration,
+        iteration_dir: &r.iteration_dir,
+        mode: r.mode,
+        cond_a: r.cond_a,
+        cond_b: r.cond_b,
+        num_tasks: tasks.len(),
+        target_args: &target_args,
+        guard: opts.guard,
+        agent_model: opts.agent_model,
+    });
+    fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
 
     Ok(tasks.len())
 }

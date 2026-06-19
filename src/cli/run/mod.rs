@@ -17,6 +17,7 @@ use serde::Serialize;
 
 pub mod dispatch;
 pub mod orchestrate;
+pub mod runbook;
 pub mod staging;
 pub mod steps;
 mod util;

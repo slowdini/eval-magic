@@ -43,12 +43,38 @@ eval-magic meta lives **above** the env; only the clean `env/` is the agent's cw
 
 | Path | Owner | Contents | Agent-visible? |
 |------|-------|----------|----------------|
-| `iteration-N/` | eval-magic | `conditions.json`, `dispatch.json`, `benchmark.json`, `stray-writes.json`, `skill-snapshot.md`, and the per-run `eval-<id>/<condition>[/run-k]/` trees (`run.json`, `timing.json`, `grading.json`) | **No** |
+| `iteration-N/` | eval-magic | `conditions.json`, `dispatch.json`, `dispatch-manifest.md`, `RUNBOOK.md` (see below), `benchmark.json`, `stray-writes.json`, `skill-snapshot.md`, and the per-run `eval-<id>/<condition>[/run-k]/` trees (`run.json`, `timing.json`, `grading.json`) | **No** |
 | `iteration-N/env/` | the run | The agent's cwd. Clean; fixtures copied in so it reads like a real repo | Yes (it *is* the cwd) |
 | `iteration-N/env/.claude/skills/` | the run | The staged skill for the **current condition batch only** (becomes the guard `skills_dir` once `stage_root = env/`, `src/sandbox/install.rs:136`) | Yes |
 
 The agent never needs to look above `env/`. eval-magic does — it reads and writes the meta tree as a
 trusted binary (§5).
+
+### Runbook (#69)
+
+`run` generates `RUNBOOK.md` — a followable handoff the isolated session reads end-to-end ("Read and
+follow RUNBOOK.md"). The per-mode prose skeletons are checked in under `profiles/` and carry
+`{{TOKEN}}` placeholders the run fills with run-specific values
+(`src/cli/run/runbook.rs`); the template is selected by the harness's
+`DispatchMechanism` (`runbook_template`, `src/adapters/harness.rs`):
+
+- **`InSession` (Claude Code) → interactive, agent-followed** (`profiles/claude-code/runbook.md`): an
+  agent in a fresh session dispatches the subagents and runs the whole `ingest → finalize → teardown`
+  loop itself.
+- **`Cli` (Codex / OpenCode) → headless, human-followed** (`profiles/shared/runbook-headless.md`): a
+  human pastes the harness CLI dispatch recipe (from the adapter's `cli_*` generators) and the
+  pipeline commands.
+
+The dispatch-loop guidance is shared with the post-`run` "Next:" message
+(`insession_dispatch_next_steps`, `src/cli/run/util.rs`) so the printed steps and the runbook cannot
+drift.
+
+**Today vs. the target.** `RUNBOOK.md` is written into `iteration-N/` and describes the workflow that
+runs *now* (no `env/` cwd, no `switch-condition`). The env builder (#78) relocates it into `env/` —
+the isolated session's cwd — and the full-loop handoff (#79) layers the `switch-condition` barrier
+into the interactive content. The generated `RUNBOOK.md` is a workspace artifact and is **not**
+version controlled (`skills-workspace/` is gitignored); only the `profiles/` templates are checked
+in.
 
 ## 3 — The condition / dispatch model under Claude's subagent model
 

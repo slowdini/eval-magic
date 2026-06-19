@@ -13,6 +13,8 @@ EXAMPLES:
 
   # Mode A — evaluate a new skill (with vs. without)
   eval-magic run --guard
+  # run writes RUNBOOK.md — for an isolated run, start a fresh session and
+  # say \"Read and follow RUNBOOK.md\" (it walks the steps below end-to-end)
   # …dispatch each task in dispatch.json as a fresh subagent…
   eval-magic ingest   # auto-resolves --subagents-dir from CLAUDE_CODE_SESSION_ID
                       # (override: --session-id <id> or --subagents-dir <path>)

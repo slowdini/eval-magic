@@ -71,6 +71,16 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
+    /// The `RUNBOOK.md` template for this harness, carrying `{{TOKEN}}`
+    /// placeholders the run fills with run-specific values. The default is the
+    /// shared **headless** (human-followed) template used by
+    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harnesses;
+    /// [`InSession`](crate::core::DispatchMechanism::InSession) harnesses
+    /// override with an **interactive** (agent-followed) variant.
+    fn runbook_template(&self) -> &'static str {
+        include_str!("../../profiles/shared/runbook-headless.md")
+    }
+
     /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
     /// filename (under a task's `outputs/` dir) its one-shot CLI writes the
     /// transcript to. `None` when the harness dispatches in-session (no local
@@ -177,6 +187,9 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
     fn plan_mode_profile(&self) -> &'static str {
         include_str!("../../profiles/claude-code/plan-mode.md")
+    }
+    fn runbook_template(&self) -> &'static str {
+        include_str!("../../profiles/claude-code/runbook.md")
     }
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_transcript(path)

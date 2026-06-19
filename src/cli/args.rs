@@ -352,6 +352,9 @@ pub(crate) enum Commands {
     /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
     /// (human-readable). Your agent then dispatches each task as a fresh subagent.
+    /// Also writes `RUNBOOK.md`, a followable handoff for an isolated run session
+    /// ("Read and follow RUNBOOK.md") — interactive (agent-followed) for Claude
+    /// Code, human-followed for Codex/OpenCode.
     Run(RunArgs),
     /// Snapshot a workspace baseline.
     ///
