@@ -98,27 +98,41 @@ pub(super) fn write_dispatch(
     // (condition, run): conditions and runs legitimately share the same env. `claims`
     // rejects two evals clobbering the same env path from different sources.
     let mut fixture_claims = FixtureClaims::new();
+    let mut ev_fixtures_by_eval = Vec::with_capacity(r.selected_evals.len());
     for ev in &r.selected_evals {
         let eval_dir = r.iteration_dir.join(format!("eval-{}", ev.id));
         fs::create_dir_all(&eval_dir)?;
-        let ev_fixtures =
-            copy_fixtures(ev, &ctx.skill_subdir, &ctx.stage_root, &mut fixture_claims)?;
+        ev_fixtures_by_eval.push(copy_fixtures(
+            ev,
+            &ctx.skill_subdir,
+            &ctx.stage_root,
+            &mut fixture_claims,
+        )?);
+    }
 
-        for (cond_name, cond_skill_path, cond_slug) in [
-            (
-                r.cond_a,
-                r.skill_path_a.as_deref(),
-                staged.cond_a_slug.as_deref(),
-            ),
-            (
-                r.cond_b,
-                r.skill_path_b.as_deref(),
-                staged.cond_b_slug.as_deref(),
-            ),
-        ] {
-            let cond_dir = eval_dir.join(cond_name);
+    // Build tasks grouped by CONDITION — every cond-A task, then every cond-B task —
+    // so the isolated session dispatches one whole condition batch, hits the
+    // `switch-condition` barrier, then dispatches the next, by walking dispatch.json's
+    // tasks[] top to bottom (docs/isolated-run.md §4).
+    for (cond_name, cond_skill_path, cond_slug) in [
+        (
+            r.cond_a,
+            r.skill_path_a.as_deref(),
+            staged.cond_a_slug.as_deref(),
+        ),
+        (
+            r.cond_b,
+            r.skill_path_b.as_deref(),
+            staged.cond_b_slug.as_deref(),
+        ),
+    ] {
+        let staged_path = staged_skill_path_for(cond_slug);
+        for (ev, ev_fixtures) in r.selected_evals.iter().zip(&ev_fixtures_by_eval) {
+            let cond_dir = r
+                .iteration_dir
+                .join(format!("eval-{}", ev.id))
+                .join(cond_name);
             let runs = ev.runs.unwrap_or(opts.runs);
-            let staged_path = staged_skill_path_for(cond_slug);
 
             for run_idx in 1..=runs {
                 // A single-run cell keeps the flat legacy layout; multi-run
@@ -128,7 +142,25 @@ pub(super) fn write_dispatch(
                 } else {
                     (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
                 };
-                let outputs_dir = run_dir.join("outputs");
+                // The per-run meta dir (run.json / timing.json / dispatch-prompt.txt)
+                // above the env. Created explicitly now that the outputs dir — which
+                // used to materialize it as a side effect — lives inside the env.
+                fs::create_dir_all(&run_dir)?;
+                // The agent-under-test's cwd is the env, so its outputs must land
+                // *inside* env — it never writes above its sandbox
+                // (docs/isolated-run.md §8). A hidden, per-(eval, condition, run)
+                // subtree keeps the concurrent same-batch subagents that share the
+                // one env from colliding. run.json / timing.json (eval-magic meta)
+                // stay above the env under `run_dir`.
+                let outputs_rel = match run_index {
+                    None => format!("eval-{}/{cond_name}", ev.id),
+                    Some(k) => format!("eval-{}/{cond_name}/run-{k}", ev.id),
+                };
+                let outputs_dir = ctx
+                    .stage_root
+                    .join(".eval-magic")
+                    .join("outputs")
+                    .join(outputs_rel);
                 fs::create_dir_all(&outputs_dir)?;
 
                 let fixtures = ev_fixtures.clone();

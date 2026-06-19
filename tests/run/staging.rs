@@ -66,7 +66,8 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
         .success()
         .stdout(contains("Preparing mr-review iteration-1 (new-skill)"))
         .stdout(contains("eval-magic ingest --skill-dir"))
-        .stdout(contains("--skill mr-review --iteration 1"));
+        .stdout(contains("--skill mr-review --workspace-dir"))
+        .stdout(contains("--iteration 1"));
 
     assert!(
         direct_iteration_dir(&skill_sub)

@@ -84,7 +84,8 @@ fn init_from_skill_dir_prints_copy_pasteable_next_steps() {
         .assert()
         .success()
         .stdout(contains("  eval-magic run --skill-dir"))
-        .stdout(contains("--skill mr-review --guard"))
+        .stdout(contains("--skill mr-review --workspace-dir"))
+        .stdout(contains("--guard"))
         // ingest auto-resolves the subagents dir now, so the placeholder is gone.
         .stdout(contains("  eval-magic ingest --skill-dir"))
         .stdout(contains("--subagents-dir <subagents-dir>").not())
