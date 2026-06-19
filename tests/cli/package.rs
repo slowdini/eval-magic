@@ -37,10 +37,14 @@ fn source_files_advertise_crates_io_publish_channel() {
     let dist_config = read_repo_file("dist-workspace.toml");
     assert!(!dist_config.contains("publish-jobs"));
 
-    // Trusted Publishing: a published GitHub Release triggers an OIDC-authenticated
-    // `cargo publish` (no long-lived CARGO_REGISTRY_TOKEN secret).
+    // Trusted Publishing: the version tag triggers an OIDC-authenticated
+    // `cargo publish` (no long-lived CARGO_REGISTRY_TOKEN secret). The trigger is
+    // the tag, NOT `release: published` — dist undrafts the release with the
+    // default GITHUB_TOKEN, and GITHUB_TOKEN-triggered events never start new
+    // workflow runs, so a `release` trigger would silently never fire.
     let workflow = read_repo_file(".github/workflows/publish-crates.yml");
-    assert!(workflow.contains("types: [published]"));
+    assert!(workflow.contains("tags:"));
+    assert!(!workflow.contains("types: [published]"));
     assert!(workflow.contains("rust-lang/crates-io-auth-action"));
     assert!(workflow.contains("id-token: write"));
     assert!(workflow.contains("cargo publish --locked"));

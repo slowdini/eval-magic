@@ -1,21 +1,24 @@
 name: Publish to crates.io
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "**[0-9]+.[0-9]+.[0-9]+*"
 
 jobs:
   publish:
     name: cargo publish
     runs-on: ubuntu-latest
-    if: ${{ !github.event.release.prerelease }} # full releases only
+    # Skip prerelease tags (e.g. v0.1.0-prerelease.1); cargo publish is
+    # irreversible, so only full releases land on crates.io.
+    if: ${{ !contains(github.ref_name, '-') }}
     permissions:
       id-token: write # mint the OIDC token for trusted publishing
       contents: read # actions/checkout
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.release.tag_name }}
+          ref: ${{ github.ref_name }}
           persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - uses: rust-lang/crates-io-auth-action@v1 # consider pinning to a SHA
