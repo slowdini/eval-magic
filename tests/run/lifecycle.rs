@@ -8,10 +8,11 @@ use std::fs;
 use std::path::Path;
 
 #[test]
-fn guard_installs_pretooluse_hook_and_teardown_guard_removes_it() {
+fn guard_installs_pretooluse_hook_under_env() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    let settings = cwd.join(".claude/settings.local.json");
+    // The guard arms inside the isolated env — the agent-under-test's cwd.
+    let settings = env_dir(&cwd).join(".claude/settings.local.json");
 
     skill_eval()
         .current_dir(&cwd)
@@ -28,7 +29,14 @@ fn guard_installs_pretooluse_hook_and_teardown_guard_removes_it() {
             .unwrap()
             .contains("Write")
     );
+    // Nothing is armed at the invocation cwd anymore.
+    assert!(!cwd.join(".claude/settings.local.json").exists());
 
+    // `teardown-guard` operates at the invocation cwd, so it does not reach the
+    // env-scoped guard: this is a transitional no-op, reconciled when the loop runs
+    // inside the env session / teardown is reworked. The env is disposable
+    // and the guard auto-expires (6h TTL); full `teardown` reclaims it (see
+    // `teardown_reclaims_workspace_and_env_guard`).
     skill_eval()
         .current_dir(&cwd)
         .args(["teardown-guard", "--skill-dir"])
@@ -36,14 +44,17 @@ fn guard_installs_pretooluse_hook_and_teardown_guard_removes_it() {
         .args(["--skill", "mr-review"])
         .assert()
         .success();
-    assert!(!settings.exists());
+    assert!(settings.exists(), "env guard survives a cwd teardown-guard");
 }
 
 #[test]
-fn finalize_warns_when_guard_is_still_armed() {
+fn finalize_does_not_warn_about_env_scoped_guard_from_cwd() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    let marker = cwd.join(".claude/skills/.slow-powers-eval-guard.json");
+    // The guard arms inside the env; `finalize` checks the invocation cwd, where no
+    // guard lives, so it does not warn. The env-scoped guard is harmless to the operator's
+    // cwd (it only loads when cwd = env); the in-env loop handles it within the session.
+    let marker = env_dir(&cwd).join(".claude/skills/.slow-powers-eval-guard.json");
 
     skill_eval()
         .current_dir(&cwd)
@@ -61,8 +72,7 @@ fn finalize_warns_when_guard_is_still_armed() {
         .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success()
-        .stdout(contains("Guard still armed"))
-        .stdout(contains("eval-magic teardown-guard"));
+        .stdout(contains("Guard still armed").not());
 
     assert!(marker.exists());
 }
@@ -92,11 +102,11 @@ fn finalize_does_not_warn_when_guard_is_not_armed() {
 }
 
 #[test]
-fn teardown_removes_guard_and_staged_skill_set() {
+fn teardown_reclaims_workspace_and_env_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    let settings = cwd.join(".claude/settings.local.json");
-    let staged = cwd.join(".claude/skills");
+    let settings = env_dir(&cwd).join(".claude/settings.local.json");
+    let staged = env_dir(&cwd).join(".claude/skills");
 
     skill_eval()
         .current_dir(&cwd)
@@ -108,6 +118,9 @@ fn teardown_removes_guard_and_staged_skill_set() {
     assert!(settings.exists());
     assert!(staged.exists());
 
+    // Full `teardown` reclaims the workspace iteration; the env (and its guard) lives
+    // inside it, so removing the workspace removes the env guard too — this is what makes
+    // deferring the cwd teardown-guard rework safe.
     skill_eval()
         .current_dir(&cwd)
         .args(["teardown", "--skill-dir"])
@@ -115,10 +128,10 @@ fn teardown_removes_guard_and_staged_skill_set() {
         .args(["--skill", "mr-review"])
         .assert()
         .success();
+    assert!(!cwd.join("skills-workspace").exists());
     assert!(!settings.exists());
     assert!(!staged.exists());
     assert!(!cwd.join(".claude").exists());
-    assert!(!cwd.join("skills-workspace").exists());
 }
 
 #[test]

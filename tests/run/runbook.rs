@@ -17,7 +17,9 @@ fn run_writes_interactive_runbook_and_points_at_it() {
         .success()
         .stdout(contains("Read and follow RUNBOOK.md"));
 
-    let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    // The runbook lives inside the isolated env — the session's cwd reads it.
+    assert!(!iteration_dir(&cwd).join("RUNBOOK.md").exists());
+    let book = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
     assert!(book.contains("mr-review"), "names the skill: {book}");
     assert!(
         book.contains("with_skill") && book.contains("without_skill"),
@@ -54,7 +56,8 @@ fn run_writes_headless_runbook_for_codex() {
         .assert()
         .success();
 
-    let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    assert!(!iteration_dir(&cwd).join("RUNBOOK.md").exists());
+    let book = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         book.contains("human driving"),
         "frames the run for a human at a terminal: {book}"

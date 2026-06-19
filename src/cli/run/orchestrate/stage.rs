@@ -22,6 +22,13 @@ pub(super) fn stage_conditions(
     r: &Resolved,
 ) -> Result<Staged, RunError> {
     fs::create_dir_all(&r.iteration_dir)?;
+    // The isolated env dir: the agent-under-test's cwd and the staging root
+    // (`ctx.stage_root` = `iteration_dir/env`). Created unconditionally — even under
+    // `--no-stage`, fixtures + RUNBOOK still land here. `create_dir_all` is recursive,
+    // so this also guarantees `iteration_dir`. The harness skills dir
+    // (`env/.claude/skills`) is created by the staging primitives below once
+    // `stage_root` points here.
+    fs::create_dir_all(&ctx.stage_root)?;
     fs::copy(&r.skill_md_path, r.iteration_dir.join("skill-snapshot.md"))?;
 
     // Capture whether the harness skills dir already existed BEFORE this run touches anything:

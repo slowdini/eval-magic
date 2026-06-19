@@ -65,7 +65,7 @@ fn codex_stages_repo_local_skills_under_agents() {
         .success();
 
     let slug = "slow-powers-eval-1-with_skill__mr-review";
-    let codex_skills = cwd.join(".agents/skills");
+    let codex_skills = env_dir(&cwd).join(".agents/skills");
     assert!(read_str(&codex_skills.join(slug).join("SKILL.md")).contains(&format!("name: {slug}")));
     assert_eq!(
         read_str(&codex_skills.join("release-notes/helper.md")),
@@ -112,7 +112,10 @@ fn codex_supports_stage_name_when_staging() {
         .assert()
         .success();
 
-    assert!(read_str(&cwd.join(".agents/skills/mr-review/SKILL.md")).contains("name: mr-review"));
+    assert!(
+        read_str(&env_dir(&cwd).join(".agents/skills/mr-review/SKILL.md"))
+            .contains("name: mr-review")
+    );
 }
 
 #[test]
@@ -171,7 +174,8 @@ fn codex_guard_installs_project_hook() {
         .success()
         .stdout(contains("--dangerously-bypass-hook-trust"));
 
-    let hooks_path = cwd.join(".codex/hooks.json");
+    // The guard installs into the isolated env (the agent-under-test's cwd).
+    let hooks_path = env_dir(&cwd).join(".codex/hooks.json");
     assert!(hooks_path.exists());
     let hooks = read_json(&hooks_path);
     let hook = &hooks["hooks"]["PreToolUse"][0];
@@ -182,7 +186,8 @@ fn codex_guard_installs_project_hook() {
             .contains("guard-codex")
     );
     assert!(
-        cwd.join(".agents/skills/.slow-powers-eval-guard.json")
+        env_dir(&cwd)
+            .join(".agents/skills/.slow-powers-eval-guard.json")
             .exists()
     );
 }

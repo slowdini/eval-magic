@@ -71,7 +71,7 @@ fn opencode_stages_repo_local_skills_under_opencode() {
         .assert()
         .success();
 
-    let opencode_skills = cwd.join(".opencode/skills");
+    let opencode_skills = env_dir(&cwd).join(".opencode/skills");
     assert!(
         read_str(&opencode_skills.join(OPENCODE_SLUG).join("SKILL.md"))
             .contains(&format!("name: {OPENCODE_SLUG}"))

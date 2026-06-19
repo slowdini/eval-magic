@@ -16,6 +16,7 @@ use std::path::Path;
 use serde::Serialize;
 
 pub mod dispatch;
+pub mod fixtures;
 pub mod orchestrate;
 pub mod runbook;
 pub mod staging;

@@ -15,9 +15,9 @@ use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, Harness, Run
 use crate::pipeline::io::now_iso8601;
 
 use super::super::dispatch::{
-    DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, copy_fixtures,
-    get_skill_description,
+    DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, get_skill_description,
 };
+use super::super::fixtures::{FixtureClaims, copy_fixtures};
 use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::{staging_plugin_shadow_action, unguarded_notice};
@@ -94,9 +94,15 @@ pub(super) fn write_dispatch(
         };
 
     let mut tasks = Vec::new();
+    // Fixtures are copied once per eval into the single shared env, not per
+    // (condition, run): conditions and runs legitimately share the same env. `claims`
+    // rejects two evals clobbering the same env path from different sources.
+    let mut fixture_claims = FixtureClaims::new();
     for ev in &r.selected_evals {
         let eval_dir = r.iteration_dir.join(format!("eval-{}", ev.id));
         fs::create_dir_all(&eval_dir)?;
+        let ev_fixtures =
+            copy_fixtures(ev, &ctx.skill_subdir, &ctx.stage_root, &mut fixture_claims)?;
 
         for (cond_name, cond_skill_path, cond_slug) in [
             (
@@ -125,7 +131,7 @@ pub(super) fn write_dispatch(
                 let outputs_dir = run_dir.join("outputs");
                 fs::create_dir_all(&outputs_dir)?;
 
-                let fixtures = copy_fixtures(ev, &ctx.skill_subdir, &run_dir)?;
+                let fixtures = ev_fixtures.clone();
                 let available_skills = available_skills_for(cond_skill_path, cond_slug);
                 let outputs_dir_str = outputs_dir.to_string_lossy().into_owned();
                 let run_dir_str = run_dir.to_string_lossy().into_owned();
@@ -195,9 +201,10 @@ pub(super) fn write_dispatch(
     write_json(&dispatch_json_path, &dispatch_json)?;
 
     // The followable handoff artifact: a fresh isolated session (interactive) or
-    // a human (headless) reads RUNBOOK.md to run the loop. A sibling of
-    // dispatch-manifest.md; written into iteration-N/ today (the env builder, #78,
-    // relocates it into env/). Generated, not version controlled.
+    // a human (headless) reads RUNBOOK.md to run the loop. Written into env/ — the
+    // isolated session's cwd — while it references eval-magic meta (dispatch.json,
+    // benchmark.json) that stays above the env in iteration_dir, so `RunbookContext`
+    // keeps `iteration_dir`, not the env. Generated, not version controlled.
     let target_args = command_target_args(ctx);
     let runbook = build_runbook(&RunbookContext {
         harness: ctx.harness,
@@ -212,7 +219,7 @@ pub(super) fn write_dispatch(
         guard: opts.guard,
         agent_model: opts.agent_model,
     });
-    fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
+    fs::write(ctx.stage_root.join("RUNBOOK.md"), runbook)?;
 
     Ok(tasks.len())
 }
