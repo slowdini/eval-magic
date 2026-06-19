@@ -15,3 +15,4 @@ mod lifecycle;
 mod opencode;
 mod runbook;
 mod staging;
+mod switch_condition;

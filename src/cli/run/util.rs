@@ -141,20 +141,56 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
     )
 }
 
-/// The in-session dispatch-loop guidance shared by the post-`run` "Next:" message
-/// ([`super::orchestrate`]) and the interactive runbook
-/// ([`super::runbook`]): iterate `tasks[]`, dispatch each as a subagent passing
-/// `agent_description` verbatim, then `ingest`. Threads the target selector +
-/// iteration into the ingest command so it is copy-pasteable. Keeping it in one
-/// place means the printed guidance and the runbook can never drift.
-pub(crate) fn insession_dispatch_next_steps(target_args: &str, iteration: u32) -> String {
+/// Dispatch instruction for one condition batch: iterate the matching `tasks[]`
+/// and dispatch each as a subagent with its `agent_description` verbatim. Shared by
+/// the interactive runbook's per-condition steps and the post-`run` "Next:" summary
+/// so they can never drift on the transcript-linking contract.
+pub(crate) fn insession_dispatch_batch(condition: &str) -> String {
     format!(
-        "iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, \
-         passing its `agent_description` verbatim as the subagent description (that string is \
-         the key that links each transcript back — without it tool calls, tokens, and duration \
-         come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration}\n\
+        "iterate the `tasks[]` entries in dispatch.json whose `condition` is `{condition}` and \
+         dispatch each as a subagent, passing its `agent_description` verbatim as the subagent \
+         description (that string is the key that links each transcript back — without it tool \
+         calls, tokens, and duration come back empty)."
+    )
+}
+
+/// The `switch-condition` barrier command between batches: name the condition about
+/// to be dispatched (the one to keep). Shared by the runbook and the printed "Next:"
+/// so the two carry identical text.
+pub(crate) fn insession_switch_command(target_args: &str, iteration: u32, keep: &str) -> String {
+    format!("eval-magic switch-condition{target_args} --iteration {iteration} --condition {keep}")
+}
+
+/// The `ingest` hand-off command + its session-resolution hint, shared by the
+/// runbook and the printed "Next:".
+pub(crate) fn insession_ingest_command(target_args: &str, iteration: u32) -> String {
+    format!(
+        "eval-magic ingest{target_args} --iteration {iteration}\n\
          (ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that \
          session, add --session-id <id> or --subagents-dir <path>.)"
+    )
+}
+
+/// The full in-session loop guidance for the post-`run` "Next:" message: dispatch
+/// the `cond_a` batch, join, `switch-condition`, dispatch the `cond_b` batch, join,
+/// then `ingest`. Built from the same fragments the interactive runbook uses, so the
+/// printed steps and the runbook can never drift.
+pub(crate) fn insession_dispatch_next_steps(
+    target_args: &str,
+    iteration: u32,
+    cond_a: &str,
+    cond_b: &str,
+) -> String {
+    format!(
+        "dispatch the conditions one batch at a time, joining every subagent before switching.\n\n\
+         1. {batch_a}\n\
+         2. Once they have all returned:\n  {switch}\n\
+         3. {batch_b}\n\
+         4. Once they have all returned:\n  {ingest}",
+        batch_a = insession_dispatch_batch(cond_a),
+        switch = insession_switch_command(target_args, iteration, cond_b),
+        batch_b = insession_dispatch_batch(cond_b),
+        ingest = insession_ingest_command(target_args, iteration),
     )
 }
 

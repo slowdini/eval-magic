@@ -20,7 +20,10 @@ use std::path::Path;
 use crate::adapters::{CliDispatchContext, CliJudgeContext, adapter_for};
 use crate::core::{DispatchMechanism, Harness, Mode, mechanism_for};
 
-use super::util::{harness_label, insession_dispatch_next_steps, mode_str};
+use super::util::{
+    harness_label, insession_dispatch_batch, insession_ingest_command, insession_switch_command,
+    mode_str,
+};
 
 /// Run-specific values the renderer substitutes into a runbook template. Built by
 /// the orchestrator from the resolved run; kept as primitives so the renderer is
@@ -74,19 +77,27 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
     ];
 
     // Mechanism-specific tokens. Owners outlive the `render` call below.
-    let (dispatch_next_steps, dispatch_recipe, judge_recipe, finalize_cmd, teardown_cmd);
+    let (dispatch_cond_a, dispatch_cond_b, switch_cmd, ingest_cmd);
+    let (dispatch_recipe, judge_recipe, finalize_cmd, teardown_cmd);
     match mechanism_for(ctx.harness) {
-        // Interactive: an agent dispatches in-session subagents and runs the
-        // whole loop itself. Reuse the shared dispatch guidance so it can never
-        // drift from the post-`run` "Next:" message.
+        // Interactive: an agent dispatches in-session subagents one condition batch
+        // at a time, runs `switch-condition` between them, then runs the rest of the
+        // loop itself. Built from the same fragments as the post-`run` "Next:"
+        // message so the two can never drift on the dispatch / switch / ingest text.
         DispatchMechanism::InSession => {
-            dispatch_next_steps = insession_dispatch_next_steps(ctx.target_args, ctx.iteration);
+            dispatch_cond_a = insession_dispatch_batch(ctx.cond_a);
+            dispatch_cond_b = insession_dispatch_batch(ctx.cond_b);
+            switch_cmd = insession_switch_command(ctx.target_args, ctx.iteration, ctx.cond_b);
+            ingest_cmd = insession_ingest_command(ctx.target_args, ctx.iteration);
             finalize_cmd = format!(
                 "eval-magic finalize{} --iteration {}",
                 ctx.target_args, ctx.iteration
             );
             teardown_cmd = format!("eval-magic teardown{}", ctx.target_args);
-            vars.push(("DISPATCH_NEXT_STEPS", &dispatch_next_steps));
+            vars.push(("DISPATCH_COND_A", &dispatch_cond_a));
+            vars.push(("DISPATCH_COND_B", &dispatch_cond_b));
+            vars.push(("SWITCH_CMD", &switch_cmd));
+            vars.push(("INGEST_CMD", &ingest_cmd));
             vars.push(("FINALIZE_CMD", &finalize_cmd));
             vars.push(("TEARDOWN_CMD", &teardown_cmd));
         }
@@ -201,6 +212,20 @@ mod tests {
         assert!(
             book.contains("agent_description"),
             "carries the dispatch-loop guidance: {book}"
+        );
+
+        // The per-condition batch loop: each condition dispatched as its own batch,
+        // with a `switch-condition` barrier (naming the kept condition) between them.
+        assert!(
+            book.contains("`condition` is `with_skill`")
+                && book.contains("`condition` is `without_skill`"),
+            "dispatches each condition as its own batch: {book}"
+        );
+        assert!(
+            book.contains(
+                "eval-magic switch-condition --skill-dir /tmp/skills --skill widget-skill --iteration 5 --condition without_skill"
+            ),
+            "carries the switch-condition barrier command: {book}"
         );
 
         // The full single-session loop: ingest → finalize → teardown, each a
