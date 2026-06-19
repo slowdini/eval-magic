@@ -49,7 +49,7 @@ fn stages_only_sut_and_writes_workspace_under_cwd() {
 
     assert!(iteration_dir(&cwd).join("dispatch.json").exists());
     assert_eq!(
-        staged_entries(&cwd.join(".claude/skills")),
+        env_staged_entries(&cwd),
         vec!["slow-powers-eval-1-with_skill__mr-review"]
     );
 }
@@ -74,7 +74,7 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
             .exists()
     );
     assert_eq!(
-        staged_entries(&skill_sub.join(".claude/skills")),
+        env_staged_entries(&skill_sub),
         vec!["slow-powers-eval-1-with_skill__mr-review"]
     );
 
@@ -107,7 +107,7 @@ fn run_with_skill_path_defaults_to_single_skill_mode() {
 
     assert!(direct_iteration_dir(&cwd).join("dispatch.json").exists());
     assert_eq!(
-        staged_entries(&cwd.join(".claude/skills")),
+        env_staged_entries(&cwd),
         vec!["slow-powers-eval-1-with_skill__mr-review"]
     );
 }
@@ -181,7 +181,7 @@ fn stage_name_threads_verbatim_name_and_registers_cleanup() {
         .assert()
         .success();
 
-    let skills_dir = cwd.join(".claude/skills");
+    let skills_dir = env_dir(&cwd).join(".claude/skills");
     assert_eq!(staged_entries(&skills_dir), vec!["mr-review"]);
 
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
@@ -218,7 +218,10 @@ fn stage_name_threads_verbatim_name_and_registers_cleanup() {
 fn stage_name_refuses_to_clobber_preexisting_dir() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    let preexisting = cwd.join(".claude/skills/my-real-skill");
+    // Staging now lands in env/.claude/skills, which is fresh per iteration.
+    // The clobber guard still matters on a re-run (--iteration 1) where the env
+    // already holds an untracked skill dir; pre-seed that and confirm it is preserved.
+    let preexisting = env_dir(&cwd).join(".claude/skills/my-real-skill");
     fs::create_dir_all(&preexisting).unwrap();
     fs::write(preexisting.join("SKILL.md"), "USER OWNED").unwrap();
 
@@ -231,6 +234,8 @@ fn stage_name_refuses_to_clobber_preexisting_dir() {
             "mr-review",
             "--mode",
             "new-skill",
+            "--iteration",
+            "1",
             "--stage-name",
             "my-real-skill",
             "--dry-run",
@@ -297,12 +302,15 @@ fn writes_each_prompt_to_file_and_drops_inline() {
 }
 
 #[test]
-fn discovery_warning_fires_when_claude_skills_dir_created_fresh() {
+fn discovery_warning_fires_when_env_skills_dir_created_fresh() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // No .claude/skills/ in cwd when the session started: `run` creates it, so Claude Code's
-    // watcher won't pick it up until the session re-scans — the actionable warning should fire.
-    assert!(!cwd.join(".claude/skills").exists());
+    // Staging targets env/.claude/skills, freshly created this run, so Claude Code's
+    // watcher won't pick it up until the session re-scans — the actionable warning fires.
+    // A pre-existing cwd .claude/skills is irrelevant now that staging is isolated in env;
+    // pre-seed one to prove cwd state does not suppress the warning.
+    fs::create_dir_all(cwd.join(".claude/skills")).unwrap();
+    assert!(!env_dir(&cwd).join(".claude/skills").exists());
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -316,18 +324,26 @@ fn discovery_warning_fires_when_claude_skills_dir_created_fresh() {
 }
 
 #[test]
-fn discovery_note_when_claude_skills_dir_preexists() {
+fn discovery_note_when_env_skills_dir_preexists_on_rerun() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // .claude/skills/ already exists when the session starts: it is watched, so live change
-    // detection surfaces the staged skill in-session — emit the confirmation note, not the
-    // fallback warning.
-    fs::create_dir_all(cwd.join(".claude/skills")).unwrap();
+    // On a re-run (--iteration 1), env/.claude/skills already exists from the prior run, so it
+    // is watched and live change detection surfaces the staged skill in-session — emit the
+    // confirmation note, not the fallback warning.
+    fs::create_dir_all(env_dir(&cwd).join(".claude/skills")).unwrap();
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--iteration",
+            "1",
+            "--dry-run",
+        ])
         .assert()
         .success()
         .stderr(contains("live change detection"))

@@ -10,6 +10,7 @@
 mod helpers;
 
 mod codex;
+mod env_layout;
 mod lifecycle;
 mod opencode;
 mod runbook;

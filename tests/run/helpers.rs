@@ -36,6 +36,18 @@ pub fn iteration_dir(cwd: &Path) -> PathBuf {
         .join("iteration-1")
 }
 
+/// The isolated env dir that becomes the agent-under-test's cwd: staging,
+/// fixtures, and `RUNBOOK.md` all land under here, below `iteration_dir`.
+pub fn env_dir(cwd: &Path) -> PathBuf {
+    iteration_dir(cwd).join("env")
+}
+
+/// Staged skill names under the env's harness skills dir (`env/.claude/skills`),
+/// excluding the staging manifest, sorted.
+pub fn env_staged_entries(cwd: &Path) -> Vec<String> {
+    staged_entries(&env_dir(cwd).join(".claude/skills"))
+}
+
 pub fn read_json(path: &Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }

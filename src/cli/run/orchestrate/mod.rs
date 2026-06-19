@@ -84,6 +84,17 @@ struct Staged {
 /// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
     let resolved = resolve::resolve_request(ctx, opts)?;
+
+    // Redirect staging into the isolated env dir. `resolve_request` has now
+    // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
+    // staging root, so the existing root-parameterized staging path follows it
+    // (every `skills_dir_for_harness(&ctx.stage_root, …)` site). eval-magic meta
+    // stays above the env in `iteration_dir`. Only `run` overrides the cwd default
+    // set in `detect_run_context`; teardown/finalize keep operating at cwd.
+    let mut owned_ctx = ctx.clone();
+    owned_ctx.stage_root = resolved.iteration_dir.join("env");
+    let ctx = &owned_ctx;
+
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
@@ -142,7 +153,8 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         "Dispatch tasks:     {}",
         r.iteration_dir.join("dispatch.json").display()
     );
-    let runbook_path = r.iteration_dir.join("RUNBOOK.md");
+
+    let runbook_path = ctx.stage_root.join("RUNBOOK.md");
     match mechanism_for(ctx.harness) {
         DispatchMechanism::InSession => println!(
             "Runbook:            {} — for an isolated run, start a fresh session and say \"Read and follow RUNBOOK.md\".",

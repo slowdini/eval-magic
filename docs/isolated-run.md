@@ -15,15 +15,18 @@ a follow-up spike.
 
 ## 1 — Why isolation, and what it isolates
 
-Today staging targets the current working directory: `RunContext.stage_root = cwd`
-(`src/core/context.rs:204`). The agent-under-test therefore runs *inside the source tree* and can
+Staging historically targeted the current working directory (`RunContext.stage_root` defaults to
+`cwd`, `src/core/context.rs:204`), so the agent-under-test ran *inside the source tree* and could
 read everything around it — the rest of the repo, installed plugins, and the staged copy of the other
 condition's skill. These leaks are **confounds**: a result may be attributable to context that leaked
 in, and you only find out (if at all) after the run.
 
-The goal is a clean, per-iteration directory — `skills-workspace/<skill>/iteration-N/env/` — that
-becomes the agent's cwd. Read isolation then comes *for free* from the same cwd boundary every harness
-already enforces. Two distinct threats have to be addressed:
+The env builder (#78) redirects staging into a clean, per-iteration directory —
+`skills-workspace/<skill>/iteration-N/env/` — that becomes the agent's cwd: `command_run` rebinds
+`stage_root` to `iteration-N/env/` once the iteration is resolved
+(`src/cli/run/orchestrate/mod.rs`), and the existing root-parameterized staging path follows. Read
+isolation then comes *for free* from the same cwd boundary every harness already enforces. Two
+distinct threats have to be addressed:
 
 | Threat | What blocks it |
 |--------|----------------|
@@ -69,12 +72,13 @@ The dispatch-loop guidance is shared with the post-`run` "Next:" message
 (`insession_dispatch_next_steps`, `src/cli/run/util.rs`) so the printed steps and the runbook cannot
 drift.
 
-**Today vs. the target.** `RUNBOOK.md` is written into `iteration-N/` and describes the workflow that
-runs *now* (no `env/` cwd, no `switch-condition`). The env builder (#78) relocates it into `env/` —
-the isolated session's cwd — and the full-loop handoff (#79) layers the `switch-condition` barrier
-into the interactive content. The generated `RUNBOOK.md` is a workspace artifact and is **not**
-version controlled (`skills-workspace/` is gitignored); only the `profiles/` templates are checked
-in.
+**Status.** The env builder (#78) has landed: staging, copied fixtures, and `RUNBOOK.md` are written
+into `iteration-N/env/` — the isolated session's cwd — while eval-magic meta (and the per-run
+`eval-<id>/` output trees) stay above it in `iteration-N/`. Still pending: the full-loop handoff (#79)
+layers the `switch-condition` barrier into the interactive content and reframes the runbook prose,
+and moves the dispatch outputs into the env. The generated `RUNBOOK.md` is a workspace artifact and is
+**not** version controlled (`skills-workspace/` is gitignored); only the `profiles/` templates are
+checked in.
 
 ## 3 — The condition / dispatch model under Claude's subagent model
 

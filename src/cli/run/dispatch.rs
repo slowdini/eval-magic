@@ -7,7 +7,6 @@
 //! available-skills block, an optional plan-mode `<system-reminder>`, then the
 //! eval task framing.
 
-use std::ffi::OsStr;
 use std::fs;
 use std::path::Path;
 
@@ -17,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::{AvailableSkill, Eval, Harness};
 
-use super::{RunError, copy_dir_recursive};
+use super::RunError;
 
 /// One dispatchable task: the metadata the orchestrator persists per
 /// `(eval, condition)`. `dispatch_prompt` is held in memory (for manifest
@@ -332,39 +331,6 @@ pub fn redact_skill_from_bootstrap(content: &str, skill_name: &str) -> String {
         out.push(line);
     }
     out.join("\n")
-}
-
-/// Copy an eval's fixture files into `<cond_dir>/inputs/`, returning the copied
-/// paths.
-pub fn copy_fixtures(
-    ev: &Eval,
-    skill_dir: &Path,
-    cond_dir: &Path,
-) -> Result<Vec<String>, RunError> {
-    let Some(files) = ev.files.as_ref().filter(|f| !f.is_empty()) else {
-        return Ok(Vec::new());
-    };
-    let inputs_dir = cond_dir.join("inputs");
-    fs::create_dir_all(&inputs_dir)?;
-    let mut copied = Vec::new();
-    for f in files {
-        let src = skill_dir.join("evals").join(f);
-        if !src.exists() {
-            return Err(RunError::msg(format!(
-                "fixture not found: {}",
-                src.display()
-            )));
-        }
-        let base = Path::new(f).file_name().unwrap_or(OsStr::new(f));
-        let dst = inputs_dir.join(base);
-        if src.is_dir() {
-            copy_dir_recursive(&src, &dst)?;
-        } else {
-            fs::copy(&src, &dst)?;
-        }
-        copied.push(dst.to_string_lossy().into_owned());
-    }
-    Ok(copied)
 }
 
 /// Read the `description:` frontmatter value (unquoted) from a skill's
