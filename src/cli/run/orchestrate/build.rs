@@ -268,7 +268,6 @@ pub(super) fn post_build(
         } else {
             adapter_for(ctx.harness).install_guard(
                 &ctx.stage_root,
-                &ctx.workspace_root,
                 &std::env::current_exe()?,
                 None,
             )?;

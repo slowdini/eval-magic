@@ -127,11 +127,12 @@ pub trait HarnessAdapter {
     fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary>;
 
     /// Arm the write guard using this harness's native pre-tool hook surface,
-    /// returning the staged marker path.
+    /// returning the staged marker path. The guard's allowed roots are derived
+    /// from `stage_root` (the isolated env / agent cwd), so it bounds the agent to
+    /// the same env boundary that isolates its reads.
     fn install_guard(
         &self,
         stage_root: &Path,
-        workspace_root: &Path,
         guard_exe: &Path,
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf>;
@@ -200,11 +201,10 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn install_guard(
         &self,
         stage_root: &Path,
-        workspace_root: &Path,
         guard_exe: &Path,
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf> {
-        crate::sandbox::install::install_claude_guard(stage_root, workspace_root, guard_exe, ttl)
+        crate::sandbox::install::install_claude_guard(stage_root, guard_exe, ttl)
     }
 }
 
@@ -282,11 +282,10 @@ impl HarnessAdapter for CodexAdapter {
     fn install_guard(
         &self,
         stage_root: &Path,
-        workspace_root: &Path,
         guard_exe: &Path,
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf> {
-        crate::sandbox::install::install_codex_guard(stage_root, workspace_root, guard_exe, ttl)
+        crate::sandbox::install::install_codex_guard(stage_root, guard_exe, ttl)
     }
 }
 
@@ -340,7 +339,6 @@ impl HarnessAdapter for OpenCodeAdapter {
     fn install_guard(
         &self,
         _stage_root: &Path,
-        _workspace_root: &Path,
         _guard_exe: &Path,
         _ttl: Option<Duration>,
     ) -> io::Result<PathBuf> {
