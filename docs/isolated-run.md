@@ -32,7 +32,7 @@ distinct threats have to be addressed:
 |--------|----------------|
 | Reading the surrounding repo / installed plugins | Clean `env/` as cwd — nothing unrelated is inside it |
 | The control arm reading the *other* condition's staged skill | Per-condition staging + the `switch-condition` barrier (§4) — the off-condition's skill is physically absent during a batch |
-| A subagent writing outside the sandbox | `--guard` (pre-tool deny) while dispatches run; `detect-stray-writes` post-pass as the portable fallback |
+| A subagent writing outside the env | The cwd boundary bounds the agent's direct file tools to `env/`; `--guard` (pre-tool deny, scoped to `env/`) additionally blocks Bash-subprocess escapes the cwd boundary misses (installs, `git worktree`, redirects); `detect-stray-writes` post-pass as the portable fallback (#81) |
 
 **Honest caveat:** `detect-stray-writes` is **not** the backstop for the second threat inside `env/`.
 Its live-source-read detection (`src/pipeline/detect_stray_writes.rs:178-222`) flags reads of the
@@ -155,10 +155,15 @@ conditions' subagent transcripts in-session (`resolve_subagents_dir`, `src/cli/m
 in one session avoids (`src/cli/run/dispatch.rs:443`; #79).
 
 `benchmark.json` aggregates across both conditions and is written into `iteration-N/`, *above* `env/`.
-This is allowed because eval-magic is a **trusted binary** writing within the guard's `allowedRoots`
-— `[workspace_root, skills_dir, temp]` (`src/sandbox/install.rs:71-77`) — which includes the
-workspace iteration tree. The guard bounds the *agent's* writes to its cwd; it does not bind
-eval-magic, which writes the meta tree by design.
+This is allowed because eval-magic writes the meta tree as a **subprocess** the agent launches via
+Bash (`eval-magic ingest` / `finalize`), and the guard hook only inspects the agent's *own* tool
+calls — the file writes of a subprocess it spawns are never intercepted. `eval-magic finalize` is a
+non-mutating command the guard's Bash classifier passes, so the meta-tree writes proceed regardless
+of the allowed roots. The guard's `allowedRoots` are therefore scoped tight to the env —
+`[stage_root (env/), temp]` (`marker_allowed_roots`, `src/sandbox/install.rs`) — bounding the
+*agent's* direct writes to its cwd and nothing above it (no sibling iteration, no meta tree). Scoping
+to the env, not the parent `skills-workspace/`, keeps the guard boundary identical to the isolation
+boundary (#81).
 
 ## 6 — Validation checklist (the spike's "one real Claude-interactive run")
 

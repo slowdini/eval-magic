@@ -289,13 +289,19 @@ pub struct RunArgs {
     /// Arm the write guard (PreToolUse hook) for the dispatch window.
     ///
     /// Stages a harness-native `PreToolUse` hook that *blocks* subagent
-    /// writes/installs outside the eval sandbox while dispatches run. Arm it
-    /// unless the user opts out. The marker auto-expires after 6h and is torn down
-    /// at the next run; while armed the hook fires on your own tool calls too.
-    /// If it remains armed after `finalize`, `finalize` reminds you to run
-    /// `teardown-guard` before editing source. Requires staging — incompatible
-    /// with `--no-stage`, under which guard install is skipped and the run is
-    /// unguarded.
+    /// writes/installs outside the isolated run env (the agent-under-test's cwd)
+    /// while dispatches run. Its allowed roots are the env plus the OS temp dir, so
+    /// the guard boundary matches the same env that isolates the agent's reads.
+    /// Because the harness already cwd-bounds the agent's direct file tools to the
+    /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
+    /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
+    /// redirects to absolute paths — and acting as a backstop when the isolated
+    /// session runs with relaxed permissions. Arm it unless the user opts out. The
+    /// marker auto-expires after 6h and is torn down at the next run; while armed the
+    /// hook fires on your own tool calls too. If it remains armed after `finalize`,
+    /// `finalize` reminds you to run `teardown-guard` before editing source. Requires
+    /// staging — incompatible with `--no-stage`, under which guard install is skipped
+    /// and the run is unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
