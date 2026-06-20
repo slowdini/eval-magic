@@ -18,7 +18,7 @@ use crate::cli::command_target_args;
 use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext, mechanism_for};
 
 use super::RunError;
-use super::util::{insession_dispatch_next_steps, mode_str};
+use super::util::{insession_isolated_handoff, mode_str};
 
 mod build;
 mod resolve;
@@ -74,11 +74,6 @@ struct Staged {
     sibling_skills: Vec<AvailableSkill>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
-    /// Whether the harness skills dir existed when `run` started — i.e. before this run staged
-    /// anything. Drives the Claude Code staged-skill discovery warning: an existing dir is already
-    /// watched, so live change detection surfaces the staged skills; a dir this run had to create
-    /// isn't watched until the session re-scans. See [`super::util::staging_discovery_warning`].
-    skills_dir_preexisted: bool,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.
@@ -98,7 +93,7 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
-    build::post_build(ctx, opts, &resolved, &staged)?;
+    build::post_build(ctx, opts, &resolved)?;
     print_next_steps(ctx, opts, &resolved, num_tasks);
     Ok(())
 }
@@ -157,7 +152,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     let runbook_path = ctx.stage_root.join("RUNBOOK.md");
     match mechanism_for(ctx.harness) {
         DispatchMechanism::InSession => println!(
-            "Runbook:            {} — for an isolated run, start a fresh session and say \"Read and follow RUNBOOK.md\".",
+            "Runbook:            {} — start a fresh session in env/ and \"Read and follow RUNBOOK.md\".",
             runbook_path.display()
         ),
         DispatchMechanism::Cli => println!(
@@ -197,13 +192,13 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     }
     let target_args = command_target_args(ctx);
     match mechanism_for(ctx.harness) {
-        // In-session subagent dispatch (Claude Code's Task tool today). The
-        // dispatch-loop guidance is shared with the interactive runbook
-        // ([`super::runbook`]) so the two can never drift.
-        DispatchMechanism::InSession => println!(
-            "\nNext: {}",
-            insession_dispatch_next_steps(&target_args, iteration, r.cond_a, r.cond_b)
-        ),
+        // In-session subagent dispatch (Claude Code's Task tool today). The env is
+        // built before the isolated session starts, so the summary just hands off:
+        // cd into env/, start a fresh session, "Read and follow RUNBOOK.md" — which
+        // carries the full dispatch → switch-condition → ingest → finalize loop.
+        DispatchMechanism::InSession => {
+            println!("\nNext: {}", insession_isolated_handoff(&ctx.stage_root))
+        }
         // One-shot CLI dispatch; the exact command is harness-specific.
         DispatchMechanism::Cli => println!(
             "{}",

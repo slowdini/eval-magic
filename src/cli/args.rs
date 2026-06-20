@@ -280,9 +280,10 @@ pub struct RunArgs {
     /// For harnesses without project-local skill discovery. Forces the LLM-judge
     /// meta-check tier and inlines only SKILL.md (not sibling skills or sibling
     /// asset files); use the staged (default) path when the measured behavior
-    /// depends on sibling files. Also disables `--guard` — the write guard
-    /// requires staging — so no-stage runs are unguarded and rely on
-    /// `detect-stray-writes` after the fact.
+    /// depends on sibling files. The isolated env (`env/`) is still built either
+    /// way — `--no-stage` only skips populating the harness skills dir. Also
+    /// disables `--guard` — the write guard requires staging — so no-stage runs
+    /// are unguarded and rely on `detect-stray-writes` after the fact.
     #[arg(long)]
     pub no_stage: bool,
     /// Arm the write guard (PreToolUse hook) for the dispatch window.
