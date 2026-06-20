@@ -182,6 +182,47 @@ fn claude_headless_records_mode_and_human_runbook() {
 }
 
 #[test]
+fn claude_hybrid_record_runs_does_not_require_a_session_id() {
+    // Regression: hybrid/headless ride the Cli mechanism and read each task's
+    // claude-events.jsonl, never the in-session subagents dir. Resolving that dir
+    // is gated on the dispatch mechanism, not the harness, so `record-runs` in
+    // hybrid mode must NOT bail on a missing CLAUDE_CODE_SESSION_ID — the way the
+    // old harness-keyed gate did for `--harness claude-code`. This is the
+    // documented headless path (no session at all).
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--run-mode",
+            "hybrid",
+        ])
+        .assert()
+        .success();
+
+    // No session id in the environment, and none passed — the pre-fix code aborted
+    // here with "could not auto-resolve the subagents dir". The fix returns early
+    // for the Cli mechanism, so record-runs proceeds to its summary.
+    skill_eval()
+        .current_dir(&cwd)
+        .env_remove("CLAUDE_CODE_SESSION_ID")
+        .args(["record-runs", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--workspace-dir"])
+        .arg(cwd.join("skills-workspace"))
+        .args(["--harness", "claude-code", "--run-mode", "hybrid"])
+        .assert()
+        .success()
+        .stdout(contains("Recorded:"));
+}
+
+#[test]
 fn codex_rejects_run_mode_interactive() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);

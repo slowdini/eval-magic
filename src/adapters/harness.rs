@@ -156,6 +156,15 @@ pub trait HarnessAdapter {
         guard_exe: &Path,
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf>;
+
+    /// The banner printed after `--guard` successfully arms, describing the
+    /// harness's native hook surface and how to remove it. Harness-specific text,
+    /// so it lives here rather than in generic run code. `None` for a harness with
+    /// no write guard (its [`install_guard`](Self::install_guard) errors), in which
+    /// case no banner is printed.
+    fn guard_armed_message(&self) -> Option<&'static str> {
+        None
+    }
 }
 
 /// The shared **headless** (human-followed) `RUNBOOK.md` template used by every
@@ -275,6 +284,11 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     ) -> io::Result<PathBuf> {
         crate::sandbox::install::install_claude_guard(stage_root, guard_exe, ttl)
     }
+    fn guard_armed_message(&self) -> Option<&'static str> {
+        Some(
+            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches —\n   both in-session subagents and `claude -p` (hybrid/headless), which loads the\n   hook from the env cwd each dispatch runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
+        )
+    }
 }
 
 impl HarnessAdapter for CodexAdapter {
@@ -355,6 +369,11 @@ impl HarnessAdapter for CodexAdapter {
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf> {
         crate::sandbox::install::install_codex_guard(stage_root, guard_exe, ttl)
+    }
+    fn guard_armed_message(&self) -> Option<&'static str> {
+        Some(
+            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
+        )
     }
 }
 
@@ -478,6 +497,31 @@ mod tests {
         let a = adapter_for(Harness::ClaudeCode);
         assert_eq!(a.cli_events_filename(), Some("claude-events.jsonl"));
         assert_eq!(a.cli_model_flag(), Some("--model"));
+    }
+
+    #[test]
+    fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
+        // The post-arm `--guard` banner names the harness's native hook surface,
+        // so it lives behind the adapter rather than in generic run code.
+        let claude = adapter_for(Harness::ClaudeCode)
+            .guard_armed_message()
+            .expect("claude code has a write guard");
+        assert!(
+            claude.contains(".claude/settings.local.json"),
+            "claude banner names its hook file: {claude}"
+        );
+
+        let codex = adapter_for(Harness::Codex)
+            .guard_armed_message()
+            .expect("codex has a write guard");
+        assert!(
+            codex.contains(".codex/hooks.json"),
+            "codex banner names its hook file: {codex}"
+        );
+
+        // OpenCode has no write guard (its install_guard errors), so there is no
+        // banner to print.
+        assert_eq!(adapter_for(Harness::OpenCode).guard_armed_message(), None);
     }
 
     #[test]

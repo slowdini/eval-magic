@@ -74,7 +74,7 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
     let resolved = resolve_subagents_dir(
-        ctx.harness,
+        ctx.run_mode.mechanism(),
         args.subagents_dir.as_deref(),
         args.session_id.as_deref(),
     )?;
@@ -223,15 +223,15 @@ pub(crate) fn run_switch_condition(args: SwitchConditionArgs) -> anyhow::Result<
 /// `dispatch.json`.
 pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
+    let mechanism = ctx.run_mode.mechanism();
     let resolved = resolve_subagents_dir(
-        ctx.harness,
+        mechanism,
         args.subagents_dir.as_deref(),
         args.session_id.as_deref(),
     )?;
     let subagents_dir = resolved.as_deref();
 
     let dir = iteration_dir(&ctx, args.iteration)?;
-    let mechanism = ctx.run_mode.mechanism();
     let result =
         pipeline::record_runs(&dir, ctx.harness, mechanism, subagents_dir, args.overwrite)?;
 
@@ -252,21 +252,17 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
 /// the iteration.
 pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
+    let mechanism = ctx.run_mode.mechanism();
     let resolved = resolve_subagents_dir(
-        ctx.harness,
+        mechanism,
         args.subagents_dir.as_deref(),
         args.session_id.as_deref(),
     )?;
     let subagents_dir = resolved.as_deref();
 
     let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::fill_transcripts(
-        &dir,
-        ctx.harness,
-        ctx.run_mode.mechanism(),
-        subagents_dir,
-        args.overwrite,
-    )?;
+    let result =
+        pipeline::fill_transcripts(&dir, ctx.harness, mechanism, subagents_dir, args.overwrite)?;
 
     println!(
         "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
