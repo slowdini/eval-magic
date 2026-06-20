@@ -6,8 +6,9 @@ read the surrounding repo, sibling/installed plugins, or the *other* condition's
 end-to-end before staging or dispatching.
 
 This file covers the **Claude Code interactive** path (the `InSession` dispatch mechanism) — the
-first milestone of the isolated-run epic (#74). The design is written to extend to the `Cli`
-mechanism (Codex hybrid, headless) without changing the env layout; those land later (#82, #83).
+first milestone of the isolated-run epic (#74). The same env layout also serves the `Cli` mechanism
+unchanged: Claude Code and Codex hybrid/headless runs share this env and the human-followed runbook,
+differing only in the dispatch recipe and who drives the loop.
 
 **Evergreen:** when the env layout or the `switch-condition` contract changes, update this file in the
 same PR. The decision recorded in §3 is the resolved output of design spike #77 — change it only with
@@ -65,9 +66,9 @@ follow RUNBOOK.md"). The per-mode prose skeletons are checked in under `profiles
 - **`InSession` (Claude Code) → interactive, agent-followed** (`profiles/claude-code/runbook.md`): an
   agent in a fresh session dispatches the subagents and runs the whole `ingest → finalize → teardown`
   loop itself.
-- **`Cli` (Codex / OpenCode) → headless, human-followed** (`profiles/shared/runbook-headless.md`): a
-  human pastes the harness CLI dispatch recipe (from the adapter's `cli_*` generators) and the
-  pipeline commands.
+- **`Cli` (Claude Code hybrid/headless, Codex, OpenCode) → human-followed** (`profiles/shared/runbook-headless.md`): a
+  human (headless) or an orchestrating agent (hybrid) pastes the harness CLI dispatch recipe (from the
+  adapter's `cli_*` generators) and the pipeline commands.
 
 `RUNBOOK.md` is the single source of the in-session dispatch loop (built from the shared
 `insession_dispatch_batch` / `insession_switch_command` / `insession_ingest_command` fragments in
