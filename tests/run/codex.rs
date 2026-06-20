@@ -288,6 +288,44 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
 }
 
 #[test]
+fn codex_headless_records_mode_and_human_runbook() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "codex",
+            "--run-mode",
+            "headless",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert_eq!(conditions["run_mode"], "headless");
+
+    let runbook = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
+    assert!(
+        runbook.contains("human driving"),
+        "headless uses the human-followed template: {runbook}"
+    );
+    assert!(
+        runbook.contains("codex exec"),
+        "carries the Codex CLI dispatch recipe: {runbook}"
+    );
+    assert!(
+        runbook.contains("--run-mode headless"),
+        "pipeline commands carry the headless run mode: {runbook}"
+    );
+}
+
+#[test]
 fn codex_rejects_unsupported_parity_features() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(&tmp.path().join("c-stage-name"), DEFAULT_EVALS);

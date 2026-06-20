@@ -89,20 +89,18 @@ impl RunMode {
 pub fn resolve_run_mode(harness: Harness, requested: Option<RunMode>) -> Result<RunMode, String> {
     let mode = requested.unwrap_or_else(|| RunMode::default_for(harness));
     let supported: &[RunMode] = match harness {
-        Harness::ClaudeCode => &[RunMode::Interactive, RunMode::Hybrid],
-        // Codex/OpenCode dispatch via subprocess, so in-session doesn't translate.
-        Harness::Codex | Harness::OpenCode => &[RunMode::Hybrid],
+        // Claude Code wires every mode: in-session (interactive) plus both CLI
+        // modes (hybrid and headless ride the same `claude -p` mechanism).
+        Harness::ClaudeCode => &[RunMode::Interactive, RunMode::Hybrid, RunMode::Headless],
+        // Codex dispatches via subprocess, so in-session doesn't translate, but
+        // both CLI modes do (hybrid is agent-driven, headless human-driven).
+        Harness::Codex => &[RunMode::Hybrid, RunMode::Headless],
+        // OpenCode's CLI path is only partially wired (no transcript ingest), so
+        // only hybrid is advertised for now.
+        Harness::OpenCode => &[RunMode::Hybrid],
     };
     if supported.contains(&mode) {
         return Ok(mode);
-    }
-    // headless for Claude Code is the deliberately-deferred follow-up, not an
-    // unknown combo — point the operator at the wired hybrid mode.
-    if harness == Harness::ClaudeCode && mode == RunMode::Headless {
-        return Err(
-            "--run-mode headless is not yet wired for --harness claude-code; use --run-mode hybrid"
-                .to_string(),
-        );
     }
     let supported_list = supported
         .iter()
@@ -237,10 +235,19 @@ mod tests {
     }
 
     #[test]
-    fn resolve_run_mode_rejects_headless_for_claude_for_now() {
-        let err = resolve_run_mode(Harness::ClaudeCode, Some(RunMode::Headless)).unwrap_err();
-        assert!(err.contains("headless"), "message was: {err}");
-        assert!(err.contains("hybrid"), "message was: {err}");
+    fn resolve_run_mode_accepts_claude_headless() {
+        assert_eq!(
+            resolve_run_mode(Harness::ClaudeCode, Some(RunMode::Headless)).unwrap(),
+            RunMode::Headless
+        );
+    }
+
+    #[test]
+    fn resolve_run_mode_accepts_codex_headless() {
+        assert_eq!(
+            resolve_run_mode(Harness::Codex, Some(RunMode::Headless)).unwrap(),
+            RunMode::Headless
+        );
     }
 
     #[test]

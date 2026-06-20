@@ -90,3 +90,42 @@ fn run_writes_headless_runbook_for_codex() {
     );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
 }
+
+#[test]
+fn run_writes_headless_runbook_for_claude() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--run-mode",
+            "headless",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let book = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
+    // A Claude Code Cli-mode run uses the shared human-followed template, NOT
+    // Claude's interactive (agent-followed) one — so the in-session switch-condition
+    // batch loop is absent and the claude -p recipe is present.
+    assert!(
+        book.contains("human driving"),
+        "frames the run for a human at a terminal: {book}"
+    );
+    assert!(
+        book.contains("claude -p"),
+        "carries the claude -p dispatch recipe: {book}"
+    );
+    assert!(
+        !book.contains("switch-condition"),
+        "headless does not use the in-session batch loop: {book}"
+    );
+    assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
+}
