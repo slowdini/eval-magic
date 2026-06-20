@@ -69,9 +69,11 @@ follow RUNBOOK.md"). The per-mode prose skeletons are checked in under `profiles
   human pastes the harness CLI dispatch recipe (from the adapter's `cli_*` generators) and the
   pipeline commands.
 
-The dispatch-loop guidance is shared with the post-`run` "Next:" message
-(`insession_dispatch_next_steps`, `src/cli/run/util.rs`) so the printed steps and the runbook cannot
-drift.
+`RUNBOOK.md` is the single source of the in-session dispatch loop (built from the shared
+`insession_dispatch_batch` / `insession_switch_command` / `insession_ingest_command` fragments in
+`src/cli/run/util.rs`). The post-`run` summary no longer reprints that loop — it just hands off:
+"cd into `env/`, start a fresh session, *Read and follow RUNBOOK.md*" (`insession_isolated_handoff`,
+`src/cli/run/util.rs`).
 
 **Status.** The env builder (#78) and the full-loop handoff (#79) have landed. Staging, copied
 fixtures, and `RUNBOOK.md` are written into `iteration-N/env/` — the isolated session's cwd — while
@@ -132,10 +134,12 @@ be dispatched); its counterpart is the off-condition.
 
 **Watcher caveat.** `env/.claude/skills/` MUST exist *before* the isolated session starts. Claude
 Code only watches skill directories that existed at session start; a directory created mid-session
-isn't watched (`src/cli/run/util.rs:56-94`, `src/cli/run/orchestrate/stage.rs:32`). Populating the env
-before session B begins is exactly what makes the fresh session *structural* and removes the
-watcher hazard — so `switch-condition` only ever mutates *contents* (remove a slug, or swap a file's
-content), never creates the watched dir fresh.
+isn't watched. Populating the env before session B begins is exactly what makes the fresh session
+*structural* and removes the watcher hazard — so `switch-condition` only ever mutates *contents*
+(remove a slug, or swap a file's content), never creates the watched dir fresh. Because the env is
+always built before the dispatching session starts, the hazard never bites in practice, so it needs
+no in-session warning: the build-time discovery warnings and the session-juggling "Next:" loop were
+retired in #80, leaving the clean cd-into-`env/` handoff.
 
 **Guard note.** The guard marker (`.slow-powers-eval-guard.json`, `src/sandbox/install.rs`) is a
 **sibling** of the `<slug>/` subtree inside `skills_dir`, not nested within it, so removing only

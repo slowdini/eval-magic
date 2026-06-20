@@ -1,7 +1,6 @@
 //! Staging, plan-mode injection, `--stage-name`, and dispatch-prompt rendering.
 
 use crate::helpers::*;
-use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use serde_json::Value;
 use std::fs;
@@ -65,9 +64,9 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
         .assert()
         .success()
         .stdout(contains("Preparing mr-review iteration-1 (new-skill)"))
-        .stdout(contains("eval-magic ingest --skill-dir"))
-        .stdout(contains("--skill mr-review --workspace-dir"))
-        .stdout(contains("--iteration 1"));
+        // The run summary now hands off to the isolated session; the pipeline
+        // commands live in the RUNBOOK (asserted below), not the printed summary.
+        .stdout(contains("Read and follow RUNBOOK.md"));
 
     assert!(
         direct_iteration_dir(&skill_sub)
@@ -78,6 +77,17 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
         env_staged_entries(&skill_sub),
         vec!["slow-powers-eval-1-with_skill__mr-review"]
     );
+
+    // Run from inside the skill dir with no args: the auto-derived target selector
+    // (`command_target_args`) is threaded into the RUNBOOK's pipeline commands.
+    let runbook = read_str(
+        &direct_iteration_dir(&skill_sub)
+            .join("env")
+            .join("RUNBOOK.md"),
+    );
+    assert!(runbook.contains("eval-magic ingest --skill-dir"));
+    assert!(runbook.contains("--skill mr-review --workspace-dir"));
+    assert!(runbook.contains("--iteration 1"));
 
     let dispatch = read_json(&direct_iteration_dir(&skill_sub).join("dispatch.json"));
     let task = dispatch["tasks"]
@@ -300,53 +310,4 @@ fn writes_each_prompt_to_file_and_drops_inline() {
         assert!(!contents.is_empty());
         assert!(contents.contains("User request:"));
     }
-}
-
-#[test]
-fn discovery_warning_fires_when_env_skills_dir_created_fresh() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // Staging targets env/.claude/skills, freshly created this run, so Claude Code's
-    // watcher won't pick it up until the session re-scans — the actionable warning fires.
-    // A pre-existing cwd .claude/skills is irrelevant now that staging is isolated in env;
-    // pre-seed one to prove cwd state does not suppress the warning.
-    fs::create_dir_all(cwd.join(".claude/skills")).unwrap();
-    assert!(!env_dir(&cwd).join(".claude/skills").exists());
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
-        .assert()
-        .success()
-        .stderr(contains("did not exist when your session started"))
-        .stderr(contains("--no-stage"))
-        .stderr(contains("live change detection").not());
-}
-
-#[test]
-fn discovery_note_when_env_skills_dir_preexists_on_rerun() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // On a re-run (--iteration 1), env/.claude/skills already exists from the prior run, so it
-    // is watched and live change detection surfaces the staged skill in-session — emit the
-    // confirmation note, not the fallback warning.
-    fs::create_dir_all(env_dir(&cwd).join(".claude/skills")).unwrap();
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--iteration",
-            "1",
-            "--dry-run",
-        ])
-        .assert()
-        .success()
-        .stderr(contains("live change detection"))
-        .stderr(contains("did not exist when your session started").not());
 }
