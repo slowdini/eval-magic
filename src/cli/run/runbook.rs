@@ -3,11 +3,12 @@
 //!
 //! The runbook turns the prep session's "what to do next" guidance into a file
 //! a *fresh, isolated* session (or a human at a terminal) can read end-to-end:
-//! "Read and follow RUNBOOK.md". Which template is used is keyed on the harness's
-//! [`DispatchMechanism`](crate::core::DispatchMechanism):
+//! "Read and follow RUNBOOK.md". Which template is used is keyed on the run mode's
+//! [`DispatchMechanism`](crate::core::DispatchMechanism), not the harness:
 //!
-//! - `InSession` (Claude Code) → the interactive, agent-followed template.
-//! - `Cli` (Codex / OpenCode) → the headless, human-followed template.
+//! - `InSession` (interactive) → the harness's interactive, agent-followed template.
+//! - `Cli` (hybrid / headless) → the shared headless, human-followed template —
+//!   including Claude Code under `--run-mode hybrid`.
 //!
 //! The per-mode prose skeletons live in `profiles/` (checked in, loaded via
 //! [`HarnessAdapter::runbook_template`](crate::adapters::HarnessAdapter::runbook_template))
@@ -17,8 +18,10 @@
 
 use std::path::Path;
 
-use crate::adapters::{CliDispatchContext, CliJudgeContext, adapter_for};
-use crate::core::{DispatchMechanism, Harness, Mode, mechanism_for};
+use crate::adapters::{
+    CliDispatchContext, CliJudgeContext, HEADLESS_RUNBOOK_TEMPLATE, adapter_for,
+};
+use crate::core::{DispatchMechanism, Harness, Mode, RunMode};
 
 use super::util::{
     harness_label, insession_dispatch_batch, insession_ingest_command, insession_switch_command,
@@ -31,6 +34,7 @@ use super::util::{
 /// unit-testable on its own.
 pub(crate) struct RunbookContext<'a> {
     pub harness: Harness,
+    pub run_mode: RunMode,
     pub skill_name: &'a str,
     pub iteration: u32,
     pub iteration_dir: &'a Path,
@@ -49,7 +53,14 @@ pub(crate) struct RunbookContext<'a> {
 /// headless) and fill its `{{TOKEN}}` placeholders with run-specific values.
 pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
     let adapter = adapter_for(ctx.harness);
-    let template = adapter.runbook_template();
+    // The runbook template is mechanism-keyed, not harness-keyed: an in-session
+    // run uses the harness's interactive (agent-followed) template; every Cli run
+    // uses the shared headless (human-followed) one — including Claude Code in
+    // hybrid, whose `runbook_template()` is the interactive variant.
+    let template = match ctx.run_mode.mechanism() {
+        DispatchMechanism::InSession => adapter.runbook_template(),
+        DispatchMechanism::Cli => HEADLESS_RUNBOOK_TEMPLATE,
+    };
 
     let iteration = ctx.iteration.to_string();
     let num_tasks = ctx.num_tasks.to_string();
@@ -79,7 +90,7 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
     // Mechanism-specific tokens. Owners outlive the `render` call below.
     let (dispatch_cond_a, dispatch_cond_b, switch_cmd, ingest_cmd);
     let (dispatch_recipe, judge_recipe, finalize_cmd, teardown_cmd);
-    match mechanism_for(ctx.harness) {
+    match ctx.run_mode.mechanism() {
         // Interactive: an agent dispatches in-session subagents one condition batch
         // at a time, runs `switch-condition` between them, then runs the rest of the
         // loop itself. Built from the same fragments as the post-`run` "Next:"
@@ -180,6 +191,7 @@ mod tests {
     fn claude_ctx(dir: &Path) -> RunbookContext<'_> {
         RunbookContext {
             harness: Harness::ClaudeCode,
+            run_mode: RunMode::Interactive,
             skill_name: "widget-skill",
             iteration: 5,
             iteration_dir: dir,
@@ -269,6 +281,7 @@ mod tests {
         let dir = PathBuf::from("/work/skills-workspace/widget-skill/iteration-2");
         let ctx = RunbookContext {
             harness: Harness::Codex,
+            run_mode: RunMode::Hybrid,
             skill_name: "widget-skill",
             iteration: 2,
             iteration_dir: &dir,

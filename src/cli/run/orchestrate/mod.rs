@@ -15,7 +15,7 @@ use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext, mechanism_for};
+use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext};
 
 use super::RunError;
 use super::util::{insession_isolated_handoff, mode_str};
@@ -150,7 +150,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     );
 
     let runbook_path = ctx.stage_root.join("RUNBOOK.md");
-    match mechanism_for(ctx.harness) {
+    match ctx.run_mode.mechanism() {
         DispatchMechanism::InSession => println!(
             "Runbook:            {} — start a fresh session in env/ and \"Read and follow RUNBOOK.md\".",
             runbook_path.display()
@@ -191,7 +191,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
-    match mechanism_for(ctx.harness) {
+    match ctx.run_mode.mechanism() {
         // In-session subagent dispatch (Claude Code's Task tool today). The env is
         // built before the isolated session starts, so the summary just hands off:
         // cd into env/, start a fresh session, "Read and follow RUNBOOK.md" — which

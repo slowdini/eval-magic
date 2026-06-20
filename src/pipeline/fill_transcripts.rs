@@ -13,9 +13,7 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::adapters::{adapter_for, find_by_description};
-use crate::core::{
-    ConditionsRecord, DispatchMechanism, Harness, RunRecord, ToolInvocation, mechanism_for,
-};
+use crate::core::{ConditionsRecord, DispatchMechanism, Harness, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::pipeline::slots::{run_key, run_slots};
@@ -79,6 +77,7 @@ pub fn resolve_agent_description(
 pub fn fill_transcripts(
     iteration_dir: &Path,
     harness: Harness,
+    mechanism: DispatchMechanism,
     subagents_dir: Option<&Path>,
     overwrite: bool,
 ) -> Result<FillTranscriptsResult, PipelineError> {
@@ -132,13 +131,16 @@ pub fn fill_transcripts(
                     .cloned()
                     .unwrap_or_else(|| slot.dir.join("outputs").to_string_lossy().into_owned());
 
+                // Resolve the in-session description lazily — only the InSession
+                // branch needs it, so a Cli run skips the dispatch.json re-read.
+                let description = (mechanism == DispatchMechanism::InSession).then(|| {
+                    resolve_agent_description(iteration_dir, eval_id, cond, slot.run_index)
+                });
                 let Some(invocations) = invocations_for_run(
                     harness,
+                    mechanism,
                     subagents_dir,
-                    iteration_dir,
-                    eval_id,
-                    cond,
-                    slot.run_index,
+                    description.as_deref(),
                     Path::new(&outputs_dir),
                 ) else {
                     result.missing += 1;
@@ -174,30 +176,27 @@ fn outputs_dirs_by_key(iteration_dir: &Path) -> HashMap<String, String> {
 
 /// Parse the invocations for one run, keyed on the dispatch mechanism: a
 /// `Cli`-mechanism harness reads the events file its CLI wrote under
-/// `outputs_dir` (e.g. Codex's `codex-events.jsonl`); an `InSession` harness
-/// reads the subagent transcript matched by the resolved description.
+/// `outputs_dir` (e.g. Codex's `codex-events.jsonl`, Claude Code hybrid's
+/// `claude-events.jsonl`); an `InSession` harness reads the subagent transcript
+/// matched by `description` (resolved by the caller).
 fn invocations_for_run(
     harness: Harness,
+    mechanism: DispatchMechanism,
     subagents_dir: Option<&Path>,
-    iteration_dir: &Path,
-    eval_id: &str,
-    condition: &str,
-    run_index: Option<u32>,
+    description: Option<&str>,
     outputs_dir: &Path,
 ) -> Option<Vec<ToolInvocation>> {
-    match mechanism_for(harness) {
+    match mechanism {
         DispatchMechanism::Cli => {
             let events_path = outputs_dir.join(adapter_for(harness).cli_events_filename()?);
             if !events_path.exists() {
                 return None;
             }
-            adapter_for(harness).parse_transcript(&events_path).ok()
+            adapter_for(harness).parse_cli_events(&events_path).ok()
         }
         DispatchMechanism::InSession => {
-            let description =
-                resolve_agent_description(iteration_dir, eval_id, condition, run_index);
             let subagent =
-                find_by_description(subagents_dir.unwrap_or_else(|| Path::new("")), &description)?;
+                find_by_description(subagents_dir.unwrap_or_else(|| Path::new("")), description?)?;
             adapter_for(harness)
                 .parse_transcript(&subagent.jsonl_path)
                 .ok()
@@ -308,6 +307,61 @@ mod tests {
     // --- fillTranscripts ---
 
     #[test]
+    fn fills_a_claude_hybrid_run_record_from_outputs_events() {
+        let root = TempDir::new().unwrap();
+        let iteration_dir: PathBuf = root.path().join("iter-claude-fill");
+        let cond_dir = iteration_dir.join("eval-crash").join("with_skill");
+        let outputs_dir = cond_dir.join("outputs");
+        fs::create_dir_all(&outputs_dir).unwrap();
+        let run_path = cond_dir.join("run.json");
+        write_run_record(&run_path, json!([]));
+        fs::write(
+            iteration_dir.join("conditions.json"),
+            json!({
+                "mode": "new-skill",
+                "conditions": [{"name": "with_skill", "skill_path": "/skill/SKILL.md"}],
+                "timestamp": "2026-06-07T00:00:00.000Z",
+                "harness": "claude-code",
+                "run_mode": "hybrid"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        write_dispatch(
+            &iteration_dir,
+            json!([{"eval_id": "crash", "condition": "with_skill", "outputs_dir": outputs_dir.to_string_lossy()}]),
+        );
+        // `claude -p` stream-json: assistant tool_use + user tool_result + result.
+        fs::write(
+            outputs_dir.join("claude-events.jsonl"),
+            jsonl(&[
+                json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "bun test"}}]}}),
+                json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}}),
+                json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 10, "usage": {"input_tokens": 1, "output_tokens": 1, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}),
+            ]),
+        )
+        .unwrap();
+
+        let result = fill_transcripts(
+            &iteration_dir,
+            Harness::ClaudeCode,
+            DispatchMechanism::Cli,
+            None,
+            false,
+        )
+        .unwrap();
+        assert_eq!(result.filled, 1);
+        assert_eq!(result.missing, 0);
+
+        let updated: RunRecord =
+            serde_json::from_str(&fs::read_to_string(&run_path).unwrap()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&updated.tool_invocations).unwrap(),
+            json!([{"name": "Bash", "ordinal": 0, "args": {"command": "bun test"}, "result": "ok"}])
+        );
+    }
+
+    #[test]
     fn fills_a_codex_run_record_from_outputs_events() {
         let root = TempDir::new().unwrap();
         let iteration_dir: PathBuf = root.path().join("iter-codex-fill");
@@ -339,7 +393,14 @@ mod tests {
         )
         .unwrap();
 
-        let result = fill_transcripts(&iteration_dir, Harness::Codex, None, false).unwrap();
+        let result = fill_transcripts(
+            &iteration_dir,
+            Harness::Codex,
+            DispatchMechanism::Cli,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(result.filled, 1);
         assert_eq!(result.missing, 0);
 
@@ -382,7 +443,14 @@ mod tests {
             .unwrap();
         }
 
-        let result = fill_transcripts(&iteration_dir, Harness::Codex, None, false).unwrap();
+        let result = fill_transcripts(
+            &iteration_dir,
+            Harness::Codex,
+            DispatchMechanism::Cli,
+            None,
+            false,
+        )
+        .unwrap();
         assert_eq!(result.filled, 2);
         assert_eq!(result.missing, 0);
 

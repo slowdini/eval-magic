@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::adapter_for;
-use crate::core::{Harness, Mode, RunContext, capabilities_for};
+use crate::core::{DispatchMechanism, Harness, Mode, RunContext, capabilities_for};
 
 use super::RunError;
 use super::orchestrate::RunOptions;
@@ -120,6 +120,15 @@ pub(crate) fn validate_harness_run_options(
     if opts.guard && !capabilities.supports_guard {
         unsupported.push("--guard");
     }
+    // The write guard arms an in-session pre-tool hook, not the `claude -p`
+    // subprocess; guard support under Claude Code's Cli (hybrid/headless) run mode
+    // is a deferred follow-up.
+    if opts.guard
+        && ctx.harness == Harness::ClaudeCode
+        && ctx.run_mode.mechanism() == DispatchMechanism::Cli
+    {
+        unsupported.push("--guard with --run-mode hybrid/headless (deferred to a follow-up)");
+    }
     if ctx.bootstrap_path.is_some()
         && opts.no_stage
         && !capabilities.supports_bootstrap_with_no_stage
@@ -185,6 +194,50 @@ pub(crate) fn harness_label(harness: Harness) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::{DetectInput, RunMode, detect_run_context};
+    use std::fs;
+
+    /// Build a `RunContext` for `harness`/`run_mode` against a throwaway skill dir.
+    fn ctx_for(harness: Harness, run_mode: RunMode) -> (tempfile::TempDir, RunContext) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill = tmp.path().join("widget");
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: widget\ndescription: t\n---\n\nbody\n",
+        )
+        .unwrap();
+        let ctx = detect_run_context(DetectInput {
+            skill: Some(skill.display().to_string()),
+            harness: Some(harness),
+            run_mode: Some(run_mode),
+            cwd: Some(tmp.path().to_path_buf()),
+            ..Default::default()
+        })
+        .unwrap();
+        (tmp, ctx)
+    }
+
+    #[test]
+    fn claude_hybrid_rejects_guard() {
+        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Hybrid);
+        let opts = RunOptions {
+            guard: true,
+            ..Default::default()
+        };
+        let err = validate_harness_run_options(&opts, &ctx).unwrap_err();
+        assert!(err.to_string().contains("--guard"), "got: {err}");
+    }
+
+    #[test]
+    fn claude_interactive_allows_guard() {
+        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Interactive);
+        let opts = RunOptions {
+            guard: true,
+            ..Default::default()
+        };
+        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
+    }
 
     #[test]
     fn unguarded_notice_when_no_stage() {

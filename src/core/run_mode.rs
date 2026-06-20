@@ -18,6 +18,8 @@
 //! (`new-skill` / `revision`), which selects the two conditions being compared,
 //! not the dispatch path.
 
+use serde::{Deserialize, Serialize};
+
 use crate::core::Harness;
 
 /// How a single dispatch is delivered to a harness. The primary code axis for
@@ -28,6 +30,100 @@ pub enum DispatchMechanism {
     InSession,
     /// One-shot harness CLI subprocess dispatch (`codex exec`).
     Cli,
+}
+
+/// The user-facing run mode — *who/what drives the loop* plus which dispatch
+/// mechanism each task rides on. This is the parity vocabulary documented in the
+/// README (§Run modes); it maps down to a [`DispatchMechanism`] via
+/// [`RunMode::mechanism`]. `hybrid` and `headless` both ride on
+/// [`Cli`](DispatchMechanism::Cli) and differ only in whether a session drives
+/// the loop — a distinction we persist (in `conditions.json`) even though it
+/// doesn't change how a single task reaches the harness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[value(rename_all = "kebab-case")]
+pub enum RunMode {
+    /// In-session subagent dispatch (Claude Code's Task tool).
+    Interactive,
+    /// An agent session orchestrates while each dispatch shells out to the
+    /// harness CLI (`claude -p`, `codex exec`).
+    Hybrid,
+    /// No session drives the loop; eval-magic commands dispatch through the
+    /// harness CLI end to end.
+    Headless,
+}
+
+impl RunMode {
+    /// The dispatch mechanism this run mode rides on.
+    pub fn mechanism(self) -> DispatchMechanism {
+        match self {
+            RunMode::Interactive => DispatchMechanism::InSession,
+            RunMode::Hybrid | RunMode::Headless => DispatchMechanism::Cli,
+        }
+    }
+
+    /// The default run mode for a harness when `--run-mode` is omitted, chosen to
+    /// preserve today's behavior: Claude Code → interactive, the CLI-dispatch
+    /// harnesses → hybrid.
+    pub fn default_for(harness: Harness) -> RunMode {
+        match harness {
+            Harness::ClaudeCode => RunMode::Interactive,
+            Harness::Codex | Harness::OpenCode => RunMode::Hybrid,
+        }
+    }
+
+    /// The kebab-case identifier (matches the `--run-mode` flag values and the
+    /// serialized form in `conditions.json`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RunMode::Interactive => "interactive",
+            RunMode::Hybrid => "hybrid",
+            RunMode::Headless => "headless",
+        }
+    }
+}
+
+/// Resolve the effective run mode for a harness, defaulting per harness when
+/// unspecified and rejecting unsupported `(harness, mode)` combinations. The
+/// `Err` string is operator-facing.
+pub fn resolve_run_mode(harness: Harness, requested: Option<RunMode>) -> Result<RunMode, String> {
+    let mode = requested.unwrap_or_else(|| RunMode::default_for(harness));
+    let supported: &[RunMode] = match harness {
+        Harness::ClaudeCode => &[RunMode::Interactive, RunMode::Hybrid],
+        // Codex/OpenCode dispatch via subprocess, so in-session doesn't translate.
+        Harness::Codex | Harness::OpenCode => &[RunMode::Hybrid],
+    };
+    if supported.contains(&mode) {
+        return Ok(mode);
+    }
+    // headless for Claude Code is the deliberately-deferred follow-up, not an
+    // unknown combo — point the operator at the wired hybrid mode.
+    if harness == Harness::ClaudeCode && mode == RunMode::Headless {
+        return Err(
+            "--run-mode headless is not yet wired for --harness claude-code; use --run-mode hybrid"
+                .to_string(),
+        );
+    }
+    let supported_list = supported
+        .iter()
+        .map(|m| m.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Err(format!(
+        "--run-mode {} is not supported for --harness {}; supported: {}",
+        mode.as_str(),
+        harness_label(harness),
+        supported_list,
+    ))
+}
+
+/// The kebab-case CLI identifier for a harness (for operator-facing messages).
+fn harness_label(harness: Harness) -> &'static str {
+    match harness {
+        Harness::ClaudeCode => "claude-code",
+        Harness::Codex => "codex",
+        Harness::OpenCode => "opencode",
+    }
 }
 
 /// Run-option support for a harness's currently wired dispatch mechanism.
@@ -67,28 +163,9 @@ pub fn capabilities_for(harness: Harness) -> HarnessRunCapabilities {
     }
 }
 
-/// The dispatch mechanism a harness uses today. This is the single, documented
-/// place where the current 1:1 harness↔mechanism coupling lives — when a harness
-/// gains a second mechanism (e.g. a true headless Claude Code mode), the choice
-/// stops being derivable from the harness alone and this is the seam that grows
-/// to take an explicit selection.
-pub fn mechanism_for(harness: Harness) -> DispatchMechanism {
-    capabilities_for(harness).mechanism
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn maps_each_harness_to_its_mechanism_today() {
-        assert_eq!(
-            mechanism_for(Harness::ClaudeCode),
-            DispatchMechanism::InSession
-        );
-        assert_eq!(mechanism_for(Harness::Codex), DispatchMechanism::Cli);
-        assert_eq!(mechanism_for(Harness::OpenCode), DispatchMechanism::Cli);
-    }
 
     #[test]
     fn capabilities_capture_run_option_support_by_harness() {
@@ -109,5 +186,70 @@ mod tests {
         assert!(!opencode.supports_guard);
         assert!(opencode.supports_bootstrap_with_no_stage);
         assert!(opencode.supports_stage_name_with_no_stage);
+    }
+
+    #[test]
+    fn run_mode_mechanism_maps_each_mode() {
+        assert_eq!(
+            RunMode::Interactive.mechanism(),
+            DispatchMechanism::InSession
+        );
+        assert_eq!(RunMode::Hybrid.mechanism(), DispatchMechanism::Cli);
+        assert_eq!(RunMode::Headless.mechanism(), DispatchMechanism::Cli);
+    }
+
+    #[test]
+    fn run_mode_default_per_harness_preserves_today() {
+        assert_eq!(
+            RunMode::default_for(Harness::ClaudeCode),
+            RunMode::Interactive
+        );
+        assert_eq!(RunMode::default_for(Harness::Codex), RunMode::Hybrid);
+        assert_eq!(RunMode::default_for(Harness::OpenCode), RunMode::Hybrid);
+    }
+
+    #[test]
+    fn resolve_run_mode_defaults_when_unspecified() {
+        assert_eq!(
+            resolve_run_mode(Harness::ClaudeCode, None).unwrap(),
+            RunMode::Interactive
+        );
+        assert_eq!(
+            resolve_run_mode(Harness::Codex, None).unwrap(),
+            RunMode::Hybrid
+        );
+    }
+
+    #[test]
+    fn resolve_run_mode_accepts_claude_hybrid() {
+        assert_eq!(
+            resolve_run_mode(Harness::ClaudeCode, Some(RunMode::Hybrid)).unwrap(),
+            RunMode::Hybrid
+        );
+    }
+
+    #[test]
+    fn resolve_run_mode_rejects_interactive_for_cli_harnesses() {
+        let err = resolve_run_mode(Harness::Codex, Some(RunMode::Interactive)).unwrap_err();
+        assert!(err.contains("interactive"), "message was: {err}");
+        assert!(err.contains("codex"), "message was: {err}");
+        assert!(resolve_run_mode(Harness::OpenCode, Some(RunMode::Interactive)).is_err());
+    }
+
+    #[test]
+    fn resolve_run_mode_rejects_headless_for_claude_for_now() {
+        let err = resolve_run_mode(Harness::ClaudeCode, Some(RunMode::Headless)).unwrap_err();
+        assert!(err.contains("headless"), "message was: {err}");
+        assert!(err.contains("hybrid"), "message was: {err}");
+    }
+
+    #[test]
+    fn run_mode_serde_roundtrips_kebab_case() {
+        assert_eq!(
+            serde_json::to_string(&RunMode::Hybrid).unwrap(),
+            "\"hybrid\""
+        );
+        let parsed: RunMode = serde_json::from_str("\"headless\"").unwrap();
+        assert_eq!(parsed, RunMode::Headless);
     }
 }

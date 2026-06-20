@@ -6,7 +6,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::core::Harness;
+use crate::core::{Harness, RunMode};
 
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
 ///
@@ -81,6 +81,19 @@ pub struct CommonArgs {
     /// `--guard` are not yet wired for OpenCode.
     #[arg(long)]
     pub harness: Option<Harness>,
+    /// Run mode: `interactive` (in-session subagents), `hybrid` (an agent
+    /// orchestrates while each dispatch shells out to the harness CLI), or
+    /// `headless` (CLI-only, no session).
+    ///
+    /// Defaults per harness — Claude Code → `interactive`, Codex/OpenCode →
+    /// `hybrid`. `hybrid`/`headless` dispatch through the harness CLI (`claude -p`,
+    /// `codex exec`) and read each task's `outputs/<harness>-events.jsonl`;
+    /// `interactive` dispatches in-session subagents. Claude Code adds `hybrid`
+    /// (`claude -p` stream-json); `headless` for Claude Code is not yet wired.
+    /// Pass the same value to every command of a run (it selects the transcript
+    /// source at `ingest`); the printed next-step commands already carry it.
+    #[arg(long)]
+    pub run_mode: Option<RunMode>,
     /// Workspace directory (defaults to `<cwd>/skills-workspace`).
     ///
     /// The artifact root. Pass the same value to every command of a run, including
@@ -305,6 +318,9 @@ pub struct RunArgs {
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
+    /// Not supported under Claude Code's `--run-mode hybrid`: the guard arms an
+    /// in-session pre-tool hook, not the `claude -p` subprocess (a deferred
+    /// follow-up); use `--guard` with the default interactive run mode.
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.

@@ -16,11 +16,11 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 #[derive(Debug, Deserialize)]
-struct UsageRecord {
-    input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    cache_creation_input_tokens: Option<i64>,
-    cache_read_input_tokens: Option<i64>,
+pub(crate) struct UsageRecord {
+    pub(crate) input_tokens: Option<i64>,
+    pub(crate) output_tokens: Option<i64>,
+    pub(crate) cache_creation_input_tokens: Option<i64>,
+    pub(crate) cache_read_input_tokens: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -32,9 +32,9 @@ struct Message {
 }
 
 #[derive(Debug, Deserialize)]
-struct TranscriptRecord {
+pub(crate) struct TranscriptRecord {
     #[serde(rename = "type")]
-    record_type: Option<String>,
+    pub(crate) record_type: Option<String>,
     timestamp: Option<String>,
     message: Option<Message>,
 }
@@ -83,7 +83,7 @@ fn stringify_result(content: Option<&Value>) -> String {
     }
 }
 
-fn read_records(jsonl_path: &Path) -> io::Result<Vec<TranscriptRecord>> {
+pub(crate) fn read_records(jsonl_path: &Path) -> io::Result<Vec<TranscriptRecord>> {
     let raw = fs::read_to_string(jsonl_path)?;
     let mut records = Vec::new();
     for line in raw.split('\n') {
@@ -98,7 +98,7 @@ fn read_records(jsonl_path: &Path) -> io::Result<Vec<TranscriptRecord>> {
     Ok(records)
 }
 
-fn extract_invocations(records: &[TranscriptRecord]) -> Vec<ToolInvocation> {
+pub(crate) fn extract_invocations(records: &[TranscriptRecord]) -> Vec<ToolInvocation> {
     let mut invocations: Vec<ToolInvocation> = Vec::new();
     let mut index_by_id: HashMap<String, usize> = HashMap::new();
 
@@ -151,6 +151,27 @@ pub fn parse_transcript(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation>> {
     Ok(extract_invocations(&read_records(jsonl_path)?))
 }
 
+/// The concatenated text blocks of the last assistant message carrying any text.
+/// Shared with the `-p` stream-json parser, which uses it as the final-message
+/// fallback when the terminal `result` event is absent or errored.
+pub(crate) fn last_assistant_text(records: &[TranscriptRecord]) -> Option<String> {
+    let mut final_text: Option<String> = None;
+    for record in records {
+        if record.record_type.as_deref() != Some("assistant") {
+            continue;
+        }
+        let texts: Vec<&str> = content_blocks(&record.message)
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .collect();
+        if !texts.is_empty() {
+            final_text = Some(texts.join("\n"));
+        }
+    }
+    final_text
+}
+
 /// A transcript boiled down to the artifacts the pipeline needs.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptSummary {
@@ -179,7 +200,6 @@ pub fn parse_transcript_full(jsonl_path: &Path) -> io::Result<TranscriptSummary>
     let mut first_ts: Option<i64> = None;
     let mut last_ts: Option<i64> = None;
     let mut timestamp_count = 0usize;
-    let mut final_text: Option<String> = None;
 
     for record in &records {
         if let Some(ts_str) = &record.timestamp
@@ -201,16 +221,9 @@ pub fn parse_transcript_full(jsonl_path: &Path) -> io::Result<TranscriptSummary>
         {
             usage_by_id.insert(id, usage);
         }
-
-        let texts: Vec<&str> = content_blocks(&record.message)
-            .iter()
-            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-            .filter_map(|b| b.get("text").and_then(Value::as_str))
-            .collect();
-        if !texts.is_empty() {
-            final_text = Some(texts.join("\n"));
-        }
     }
+
+    let final_text = last_assistant_text(&records);
 
     let total_tokens = if usage_by_id.is_empty() {
         None
