@@ -175,8 +175,11 @@ gates #79); the design note records them so the contract stays fixed.
 1. **Watcher retraction on delete (riskiest).** After `env/.claude/skills/<slug>/` is removed
    mid-session, a `without_skill` subagent (a) does not *discover* the skill in its available-skills
    block, and (b) cannot *read* the file by path.
-2. **Content-swap propagation (Revision).** After an in-place content swap at a path present at
-   session start, a subsequently-dispatched subagent sees the *new* content.
+2. **Off-condition slug removal (Revision).** Revision uses the *same* removal primitive as new-skill:
+   both arms (`old_skill` and `new_skill`) are staged up front, and `switch-condition` removes the
+   off-condition (`old_skill`) slug before the `new_skill` batch — no content is rewritten. After the
+   removal, a subsequently-dispatched `new_skill` subagent neither discovers nor can read the removed
+   arm, while the kept arm's slug (present since session start) stays watched.
 3. **Single-session both-condition loop.** One session runs `ingest` → `finalize` resolving *both*
    conditions' transcripts via `CLAUDE_CODE_SESSION_ID` with no `--subagents-dir`, and writes
    `benchmark.json` into `iteration-N/` without tripping the guard.

@@ -12,7 +12,7 @@ use anyhow::{anyhow, bail};
 use clap::Parser;
 
 use crate::adapters::{config_dir_from_env, resolve_subagents_dir_for_session};
-use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
+use crate::core::{DetectInput, DispatchMechanism, RunContext, detect_run_context};
 
 mod args;
 mod commands;
@@ -177,20 +177,24 @@ pub(crate) fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow:
     Ok(dir)
 }
 
-/// Resolve the subagents transcript dir for a Claude Code stage that reads
-/// transcripts. Precedence: an explicit `--subagents-dir` (validated to exist)
-/// wins; otherwise resolve from a session id — the `--session-id` flag if given,
-/// else the `CLAUDE_CODE_SESSION_ID` env var Claude Code sets in the
+/// Resolve the subagents transcript dir for an in-session stage that reads
+/// transcripts. The subagents dir is the `InSession` transcript source, so this
+/// is keyed on the dispatch *mechanism*, not the harness: `Cli`-mechanism runs
+/// (Codex; Claude Code hybrid/headless) read each task's `outputs/<events>.jsonl`
+/// and resolve to `None` — they must never bail on a missing
+/// `CLAUDE_CODE_SESSION_ID`. For the `InSession` mechanism (Claude Code
+/// interactive), precedence is: an explicit `--subagents-dir` (validated to
+/// exist) wins; otherwise resolve from a session id — the `--session-id` flag if
+/// given, else the `CLAUDE_CODE_SESSION_ID` env var Claude Code sets in the
 /// orchestrating agent's shell — locating
 /// `<config>/projects/<cwd-slug>/<session-id>/subagents/` (scanning `projects/*`
-/// if the cwd slug differs). Codex/OpenCode read `outputs/codex-events.jsonl`,
-/// so they resolve to `None`.
+/// if the cwd slug differs).
 pub(crate) fn resolve_subagents_dir(
-    harness: Harness,
+    mechanism: DispatchMechanism,
     subagents_dir: Option<&str>,
     session_id: Option<&str>,
 ) -> anyhow::Result<Option<PathBuf>> {
-    if harness != Harness::ClaudeCode {
+    if mechanism != DispatchMechanism::InSession {
         return Ok(None);
     }
     if let Some(dir) = subagents_dir {
@@ -333,24 +337,33 @@ mod tests {
     }
 
     #[test]
-    fn resolve_subagents_dir_is_none_for_non_claude_harness() {
-        // Codex/OpenCode never read a subagents dir, so resolution is a no-op
-        // even when a dir is passed.
+    fn resolve_subagents_dir_is_none_for_cli_mechanism() {
+        // The subagents dir is the InSession transcript source. Cli-mechanism
+        // runs (Codex; Claude Code hybrid/headless) read each task's events file,
+        // so resolution is a no-op — and must NOT bail on a missing
+        // CLAUDE_CODE_SESSION_ID. This is the regression: the old harness-keyed
+        // gate forced session resolution for Claude Code and aborted under
+        // hybrid/headless. The Cli arm returns before reading any env var, so this
+        // is deterministic regardless of the test runner's environment.
         assert_eq!(
-            resolve_subagents_dir(Harness::Codex, Some("/whatever"), None).unwrap(),
+            resolve_subagents_dir(DispatchMechanism::Cli, None, None).unwrap(),
             None
         );
+        // A passed --subagents-dir is ignored in Cli mode (the events file is the
+        // source), so it resolves to None without touching the filesystem.
         assert_eq!(
-            resolve_subagents_dir(Harness::OpenCode, None, None).unwrap(),
+            resolve_subagents_dir(DispatchMechanism::Cli, Some("/whatever"), None).unwrap(),
             None
         );
     }
 
     #[test]
     fn resolve_subagents_dir_uses_existing_explicit_dir() {
+        // InSession (Claude Code interactive): an explicit, existing
+        // --subagents-dir wins over any session-id resolution.
         let tmp = TempDir::new().unwrap();
         let resolved = resolve_subagents_dir(
-            Harness::ClaudeCode,
+            DispatchMechanism::InSession,
             Some(&tmp.path().display().to_string()),
             None,
         )
@@ -360,8 +373,10 @@ mod tests {
 
     #[test]
     fn resolve_subagents_dir_errors_when_explicit_dir_missing() {
+        // InSession with an explicit --subagents-dir that doesn't exist is a hard
+        // error (not a silent fallback to session-id resolution).
         let err = resolve_subagents_dir(
-            Harness::ClaudeCode,
+            DispatchMechanism::InSession,
             Some("/no/such/subagents/dir/xyz"),
             None,
         )

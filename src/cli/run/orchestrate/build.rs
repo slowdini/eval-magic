@@ -270,21 +270,10 @@ pub(super) fn post_build(
         if opts.no_stage {
             eprintln!("\n⚠ --guard requires staging enabled; skipping guard install.");
         } else {
-            adapter_for(ctx.harness).install_guard(
-                &ctx.stage_root,
-                &std::env::current_exe()?,
-                None,
-            )?;
-            match ctx.harness {
-                Harness::ClaudeCode => println!(
-                    "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches —\n   both in-session subagents and `claude -p` (hybrid/headless), which loads the\n   hook from the env cwd each dispatch runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard"
-                ),
-                Harness::Codex => println!(
-                    "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard"
-                ),
-                Harness::OpenCode => unreachable!(
-                    "install_guard_for_harness rejects OpenCode before this message prints"
-                ),
+            let adapter = adapter_for(ctx.harness);
+            adapter.install_guard(&ctx.stage_root, &std::env::current_exe()?, None)?;
+            if let Some(msg) = adapter.guard_armed_message() {
+                println!("{msg}");
             }
         }
     }
