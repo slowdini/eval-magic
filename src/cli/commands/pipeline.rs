@@ -9,7 +9,7 @@ use crate::cli::args::{CommonArgs, GradeArgs, SwitchConditionArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
 use crate::cli::{iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from};
-use crate::core::{DispatchMechanism, RunContext, mechanism_for};
+use crate::core::{DispatchMechanism, RunContext};
 use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
@@ -17,7 +17,7 @@ use crate::validation;
 const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
 
 fn judge_dispatch_guidance(ctx: &RunContext) -> String {
-    match mechanism_for(ctx.harness) {
+    match ctx.run_mode.mechanism() {
         DispatchMechanism::InSession => {
             format!("Dispatch each task as a judge subagent with:\n  {JUDGE_WORKER_PROMPT}")
         }
@@ -45,6 +45,7 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
         iteration: Some(step.iteration),
         mode: None,
         harness: Some(step.harness),
+        run_mode: Some(step.run_mode),
         workspace_dir: step.workspace_dir.clone(),
         // The chain carries the already-resolved absolute subagents dir, so the
         // session id is no longer needed downstream.
@@ -84,6 +85,7 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
+        run_mode: ctx.run_mode,
         subagents_dir: resolved.as_deref(),
         workspace_dir: args.workspace_dir.as_deref(),
     });
@@ -128,6 +130,7 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
         skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
+        run_mode: ctx.run_mode,
         subagents_dir: None,
         workspace_dir: args.workspace_dir.as_deref(),
     });
@@ -228,7 +231,9 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let subagents_dir = resolved.as_deref();
 
     let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::record_runs(&dir, ctx.harness, subagents_dir, args.overwrite)?;
+    let mechanism = ctx.run_mode.mechanism();
+    let result =
+        pipeline::record_runs(&dir, ctx.harness, mechanism, subagents_dir, args.overwrite)?;
 
     println!(
         "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, missing transcript: {}",
@@ -237,7 +242,7 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         result.skipped_no_final_message,
         result.missing_transcript
     );
-    if let Some(warning) = result.transcript_warning(ctx.harness) {
+    if let Some(warning) = result.transcript_warning(ctx.harness, mechanism) {
         eprintln!("{warning}");
     }
     Ok(())
@@ -255,7 +260,13 @@ pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     let subagents_dir = resolved.as_deref();
 
     let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::fill_transcripts(&dir, ctx.harness, subagents_dir, args.overwrite)?;
+    let result = pipeline::fill_transcripts(
+        &dir,
+        ctx.harness,
+        ctx.run_mode.mechanism(),
+        subagents_dir,
+        args.overwrite,
+    )?;
 
     println!(
         "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",

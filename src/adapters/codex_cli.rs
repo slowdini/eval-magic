@@ -1,23 +1,6 @@
 //! Codex CLI command rendering for `DispatchMechanism::Cli` guidance.
 
-fn shell_quote_arg(value: &str) -> String {
-    if value.bytes().all(|b| {
-        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'/' | b':' | b'@' | b'+')
-    }) {
-        return value.to_string();
-    }
-    format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn render_cli_model_arg(flag: Option<&str>, model: Option<&str>) -> String {
-    let Some(model) = model.filter(|m| !m.trim().is_empty()) else {
-        return String::new();
-    };
-    let Some(flag) = flag else {
-        return String::new();
-    };
-    format!(" {flag} {}", shell_quote_arg(model))
-}
+use super::cli_command::render_cli_model_arg;
 
 /// Copy/pasteable Codex dispatch command template. Stdin is detached so a
 /// surrounding `xargs`/pipe cannot be treated as extra prompt context.

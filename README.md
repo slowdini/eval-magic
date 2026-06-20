@@ -252,7 +252,7 @@ Support today:
 
 | Harness | Headless | Fully interactive | Hybrid |
 |---------|:--------:|:-----------------:|:------:|
-| **Claude Code** | ❌ not yet | ✅ | ❌ not yet |
+| **Claude Code** | ❌ not yet | ✅ | ✅ |
 | **Codex** | ❌ not yet | ❔ likely N/A¹ | ✅ |
 | **OpenCode** | ❌ | ❌ | ❌² |
 
@@ -268,7 +268,7 @@ Support today:
 
 ### Claude Code (fully wired)
 
-The run loop above *is* the Claude Code loop. Today this is the **fully-interactive** run mode (see [Run modes](#run-modes)) — subagents are dispatched in-session via the Task tool; the **headless** and **hybrid** (`claude -p`) modes are not yet wired. `eval-magic run` itself only *prepares* the isolated env (`skills-workspace/<skill>/iteration-N/env/`) and writes `RUNBOOK.md` into it, then prints a handoff: `cd` into `env/`, start a **fresh** Claude Code session there, and say *Read and follow RUNBOOK.md*. That fresh session — clean cwd, staged skills present at session start — drives the whole dispatch → switch-condition → ingest → finalize loop and writes `benchmark.json`, which the prep session resumes on. These are the Claude-Code-specific details:
+The run loop above *is* the Claude Code loop. By default this is the **fully-interactive** run mode (see [Run modes](#run-modes)) — subagents are dispatched in-session via the Task tool; the **hybrid** (`claude -p`) mode is now wired (pass `--run-mode hybrid`, see below), and the fully **headless** mode is not yet. `eval-magic run` itself only *prepares* the isolated env (`skills-workspace/<skill>/iteration-N/env/`) and writes `RUNBOOK.md` into it, then prints a handoff: `cd` into `env/`, start a **fresh** Claude Code session there, and say *Read and follow RUNBOOK.md*. That fresh session — clean cwd, staged skills present at session start — drives the whole dispatch → switch-condition → ingest → finalize loop and writes `benchmark.json`, which the prep session resumes on. These are the Claude-Code-specific details:
 
 **Isolating from installed plugins.** Read this first if the skill you're evaluating shares a name with one an installed, enabled plugin provides. Subagents are dispatched via the **Task tool**, so they inherit *this session's* enabled plugins — the staging slug avoids an on-disk collision but does not stop the installed copy from being discoverable, contaminating both arms (the `without_skill` arm is then not truly skill-absent). Plugins load at session start and can't be unloaded mid-session, so the runner only *detects and warns* (the plugin-shadow banner). The isolated env gives a clean *cwd* but does not unload user/global plugins, so this still applies. To actually isolate, launch the **fresh session you start in `env/`** one of these ways — subagents inherit it:
 
@@ -283,6 +283,18 @@ Project-local staged skills live in the isolated env at `env/.claude/skills/`, i
 **Where transcripts live.** Claude Code persists subagent transcripts under `~/.claude/projects/<project-slug>/<parent-session-id>/subagents/`. `ingest` auto-resolves this from the `CLAUDE_CODE_SESSION_ID` the orchestrating session exports (deriving `<project-slug>` from the cwd and scanning `projects/*` if needed), so you normally don't pass `--subagents-dir` at all. When running outside that session — or to target a past session — pass `--session-id <id>`, or override the lookup entirely with `--subagents-dir <path>`. Besides out-of-bounds writes, `detect-stray-writes` also flags **live-source reads**: an arm whose subagent read the live skill source instead of its staged copy. That usually means the Skill tool couldn't resolve the staged slug yet and the agent improvised — fatal in revision mode, where the `old_skill` arm then sees new-skill content. Treat a flagged cell's arm as contaminated.
 
 **Dispatching via the Task tool.** `dispatch.json` is a top-level object (`{ skill_name, iteration, run_nonce, …, tasks: [...] }`); iterate `tasks[]`. For each task, dispatch a fresh subagent via the Task tool with the prompt `Read the file at <dispatch_prompt_path> and follow its instructions exactly.` (substituting the task's `dispatch_prompt_path`), and pass `agent_description` *verbatim* as the description — it's namespaced `<eval_id>:<condition>:i<N>-<nonce>`, and passing it unchanged is what lets transcript correlation work. (The Task tool documents `description` as "short", but pass the full string regardless — correlation depends on the exact value.) You do **not** write `run.json`/`timing.json` yourself; the subagent writes `outputs/final-message.md`, and `ingest` (`record-runs`) assembles both records from disk. For a plan-mode-relevant skill, add `--plan-mode` to inject Claude Code's verbatim plan-mode procedure as a `<system-reminder>` operating-context layer.
+
+**Hybrid mode (`--run-mode hybrid`).** Pass `--run-mode hybrid` to dispatch each task through the `claude -p` one-shot CLI instead of in-session subagents — the same shape as Codex's hybrid flow, where an agent session orchestrates while each test/judge shells out to the CLI. `run` then prints (and `dispatch-manifest.md` / `RUNBOOK.md` carry) a `claude -p` recipe per task:
+
+```bash
+cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. …" \
+  </dev/null \
+  > <outputs_dir>/claude-events.jsonl \
+  2> <outputs_dir>/claude-stderr.log
+```
+
+Three details differ from Codex's `codex exec`: `--output-format stream-json` **requires `--verbose`** in `-p` mode; `claude` has **no `--cd` flag**, so each dispatch must run from the env dir (`cd <eval-root> &&`) — staged-skill discovery is cwd-relative, so getting this wrong makes the `with_skill` arm behave like `without_skill`; and there is **no `--output-last-message`**, so the final message is recovered from the stream-json `result` event rather than a file. Detach stdin with `</dev/null` so a permission prompt can't block on a TTY. Then `eval-magic ingest --harness claude-code --run-mode hybrid` reads each task's `outputs/claude-events.jsonl` (the `-p` stream-json transcript) to populate `tool_invocations`, tokens, duration, and the final message. `--run-mode` is recorded in `conditions.json`; pass it to each post-dispatch command (the printed next-step commands already carry it). `--guard` is not yet supported under hybrid (the write guard arms an in-session hook, not the `claude -p` subprocess); use it with the default interactive mode.
 
 ### Codex
 

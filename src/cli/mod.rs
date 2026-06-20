@@ -37,6 +37,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
             iteration: None,
             mode: None,
             harness: None,
+            run_mode: None,
             workspace_dir: None,
             subagents_dir: None,
             session_id: None,
@@ -96,6 +97,7 @@ pub(crate) fn run_context_with_bootstrap(
         bootstrap,
         workspace_dir: args.workspace_dir.clone(),
         harness: args.harness,
+        run_mode: args.run_mode,
         cwd: None,
     })?)
 }
@@ -121,10 +123,11 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
 /// (`detect_run_context`) and the iteration tree above the env would not resolve.
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
     format!(
-        " --skill-dir {} --skill {} --workspace-dir {}",
+        " --skill-dir {} --skill {} --workspace-dir {} --run-mode {}",
         ctx.skill_dir.display(),
         ctx.skill_name,
-        ctx.workspace_root.display()
+        ctx.workspace_root.display(),
+        ctx.run_mode.as_str()
     )
 }
 

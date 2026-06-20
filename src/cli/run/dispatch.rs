@@ -14,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
-use crate::core::{AvailableSkill, Eval, Harness};
+use crate::core::{AvailableSkill, DispatchMechanism, Eval, Harness};
 
 use super::RunError;
 
@@ -361,6 +361,7 @@ pub use crate::core::Mode;
 #[derive(Debug, Clone, Copy)]
 pub struct ManifestContext<'a> {
     pub harness: Harness,
+    pub mechanism: DispatchMechanism,
     pub guard: bool,
     pub agent_model: Option<&'a str>,
 }
@@ -397,10 +398,14 @@ pub fn build_manifest(
         "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>[:r<k>]:i<N>-<nonce>` (the `r<k>` segment appears only in multi-run cells, naming the 1-based run index). When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition, run)` slot without collisions.".to_string(),
         String::new(),
     ];
-    if let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
-        guard: context.guard,
-        agent_model: context.agent_model,
-    }) {
+    // Only a Cli-dispatch run emits a CLI recipe section; an in-session run
+    // (e.g. interactive Claude Code) gets the generic ingest guidance below.
+    if context.mechanism == DispatchMechanism::Cli
+        && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
+            guard: context.guard,
+            agent_model: context.agent_model,
+        })
+    {
         header.extend(lines);
     }
     header.extend([

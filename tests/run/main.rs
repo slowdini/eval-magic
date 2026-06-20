@@ -9,6 +9,7 @@
 
 mod helpers;
 
+mod claude_cli;
 mod codex;
 mod env_layout;
 mod lifecycle;

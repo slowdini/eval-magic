@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::context::Harness;
+use crate::core::run_mode::RunMode;
 
 /// Meta-assertion id reserved for the skill-invocation check.
 pub const SKILL_INVOKED_META_ID: &str = "__skill_invoked";
@@ -106,6 +107,10 @@ pub struct ConditionsRecord {
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<Harness>,
+    /// The run mode this iteration was built with (provenance + recoverability).
+    /// `None` on older artifacts written before run-mode selection existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_mode: Option<RunMode>,
     /// Per-run nonce; namespaces dispatch descriptions so transcripts can't
     /// collide across iterations sharing one parent session's subagents dir.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -361,6 +366,7 @@ mod tests {
             conditions: vec![],
             timestamp: "2026-06-08T00:00:00Z".into(),
             harness: Some(Harness::ClaudeCode),
+            run_mode: Some(RunMode::Hybrid),
             run_nonce: None,
             runs: None,
             agent_model: None,
@@ -373,6 +379,7 @@ mod tests {
             out.get("harness"),
             Some(&Value::String("claude-code".into()))
         );
+        assert_eq!(out.get("run_mode"), Some(&Value::String("hybrid".into())));
         // Absent optionals omitted.
         assert!(out.get("baseline").is_none());
         assert!(out.get("run_nonce").is_none());

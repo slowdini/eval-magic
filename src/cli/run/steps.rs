@@ -13,7 +13,7 @@
 //! parameter; the production runner — which maps each [`StepKind`] to its stage
 //! handler — lives in [`crate::cli`] alongside those handlers.
 
-use crate::core::{DispatchMechanism, Harness, mechanism_for};
+use crate::core::{DispatchMechanism, Harness, RunMode};
 
 /// Which post-dispatch stage a [`StepCommand`] runs. The production runner
 /// matches on this to call the corresponding handler; tests assert on it.
@@ -37,6 +37,10 @@ pub struct StepCommand {
     pub skill: Option<String>,
     pub iteration: u32,
     pub harness: Harness,
+    /// The run mode, re-derived at each stage so the transcript source matches
+    /// the dispatch mechanism. Round-trips through `CommonArgs` exactly like
+    /// `harness`, so ingest sub-stages don't silently re-default it.
+    pub run_mode: RunMode,
     /// Only the transcript-reading stages (record-runs, fill-transcripts) carry a
     /// subagents dir; the others leave it `None`.
     pub subagents_dir: Option<String>,
@@ -50,6 +54,7 @@ pub struct StepParams<'a> {
     pub skill: Option<&'a str>,
     pub iteration: u32,
     pub harness: Harness,
+    pub run_mode: RunMode,
     pub subagents_dir: Option<&'a str>,
     pub workspace_dir: Option<&'a str>,
 }
@@ -61,6 +66,7 @@ impl Default for StepParams<'_> {
             skill: None,
             iteration: 0,
             harness: Harness::ClaudeCode,
+            run_mode: RunMode::Interactive,
             subagents_dir: None,
             workspace_dir: None,
         }
@@ -81,6 +87,7 @@ impl StepParams<'_> {
             skill: self.skill.map(str::to_string),
             iteration: self.iteration,
             harness: self.harness,
+            run_mode: self.run_mode,
             subagents_dir,
             workspace_dir: self.workspace_dir.map(str::to_string),
         }
@@ -92,7 +99,7 @@ impl StepParams<'_> {
 /// in-session dispatch mechanism (a Cli-dispatch harness reads its transcript
 /// from each task's `outputs/` dir instead).
 pub fn build_ingest_commands(p: &StepParams) -> Vec<StepCommand> {
-    let transcripts = match mechanism_for(p.harness) {
+    let transcripts = match p.run_mode.mechanism() {
         DispatchMechanism::InSession => p.subagents_dir.map(str::to_string),
         DispatchMechanism::Cli => None,
     };
@@ -185,6 +192,7 @@ mod tests {
             skill: Some("mr-review"),
             iteration: 2,
             harness: Harness::Codex,
+            run_mode: RunMode::Hybrid,
             ..Default::default()
         });
         assert_eq!(
@@ -199,6 +207,38 @@ mod tests {
         assert!(steps.iter().all(|s| s.harness == Harness::Codex));
         assert_eq!(steps[0].subagents_dir, None);
         assert_eq!(steps[1].subagents_dir, None);
+    }
+
+    #[test]
+    fn ingest_omits_subagents_for_claude_hybrid() {
+        // Claude Code in hybrid mode dispatches via the CLI, so it reads each
+        // task's events file — not a subagents dir — even though the harness is
+        // ClaudeCode and a subagents dir was passed.
+        let steps = build_ingest_commands(&StepParams {
+            skill_dir: Some("/skills"),
+            skill: Some("mr-review"),
+            iteration: 2,
+            harness: Harness::ClaudeCode,
+            run_mode: RunMode::Hybrid,
+            subagents_dir: Some("/subagents"),
+            ..Default::default()
+        });
+        assert!(steps.iter().all(|s| s.harness == Harness::ClaudeCode));
+        assert!(steps.iter().all(|s| s.run_mode == RunMode::Hybrid));
+        assert_eq!(steps[0].subagents_dir, None);
+        assert_eq!(steps[1].subagents_dir, None);
+    }
+
+    #[test]
+    fn ingest_keeps_subagents_for_claude_interactive() {
+        // The default (interactive) Claude path still reads the subagents dir.
+        let steps = build_ingest_commands(&StepParams {
+            iteration: 2,
+            subagents_dir: Some("/subagents"),
+            ..Default::default()
+        });
+        assert_eq!(steps[0].subagents_dir.as_deref(), Some("/subagents"));
+        assert_eq!(steps[1].subagents_dir.as_deref(), Some("/subagents"));
     }
 
     #[test]
@@ -225,6 +265,7 @@ mod tests {
             skill: None,
             iteration: 0,
             harness: Harness::ClaudeCode,
+            run_mode: RunMode::Interactive,
             subagents_dir: None,
             workspace_dir: None,
         }

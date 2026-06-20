@@ -15,11 +15,15 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, Harness, ToolInvocation};
 
 use super::TranscriptSummary;
+use super::claude_cli::{
+    claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
+};
 use super::codex_cli::{
     codex_exec_command_template, codex_judge_dispatch_recipe, codex_parallel_dispatch_recipe,
 };
 use super::{
-    parse_codex_events, parse_codex_events_full, parse_transcript, parse_transcript_full,
+    parse_claude_stream_json, parse_claude_stream_json_full, parse_codex_events,
+    parse_codex_events_full, parse_transcript, parse_transcript_full,
     render_available_skills_block, render_codex_available_skills_block,
     render_opencode_available_skills_block,
 };
@@ -71,14 +75,15 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
-    /// The `RUNBOOK.md` template for this harness, carrying `{{TOKEN}}`
-    /// placeholders the run fills with run-specific values. The default is the
-    /// shared **headless** (human-followed) template used by
-    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harnesses;
-    /// [`InSession`](crate::core::DispatchMechanism::InSession) harnesses
-    /// override with an **interactive** (agent-followed) variant.
+    /// The **interactive** (agent-followed) `RUNBOOK.md` template a harness uses
+    /// under [`InSession`](crate::core::DispatchMechanism::InSession) dispatch,
+    /// carrying `{{TOKEN}}` placeholders the run fills. The default is the shared
+    /// headless template (harmless for the Cli-only harnesses that never read it
+    /// via this path); [`InSession`](crate::core::DispatchMechanism::InSession)
+    /// harnesses override it. The Cli-dispatch runbook always uses
+    /// [`HEADLESS_RUNBOOK_TEMPLATE`], selected by mechanism in `build_runbook`.
     fn runbook_template(&self) -> &'static str {
-        include_str!("../../profiles/shared/runbook-headless.md")
+        HEADLESS_RUNBOOK_TEMPLATE
     }
 
     /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
@@ -126,6 +131,21 @@ pub trait HarnessAdapter {
     /// deduped token usage, duration, and final message text.
     fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary>;
 
+    /// Parse a [`Cli`](crate::core::DispatchMechanism::Cli)-mechanism events file
+    /// (the harness CLI's captured output) into ordered tool invocations. Defaults
+    /// to [`parse_transcript`](Self::parse_transcript): for Codex/OpenCode the
+    /// on-disk parser already *is* the events parser, so the default is correct;
+    /// Claude Code overrides it, because its `parse_transcript` is the in-session
+    /// subagent parser while its Cli events are `claude -p` stream-json.
+    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
+        self.parse_transcript(path)
+    }
+
+    /// The full-summary counterpart of [`parse_cli_events`](Self::parse_cli_events).
+    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
+        self.parse_transcript_full(path)
+    }
+
     /// Arm the write guard using this harness's native pre-tool hook surface,
     /// returning the staged marker path. The guard's allowed roots are derived
     /// from `stage_root` (the isolated env / agent cwd), so it bounds the agent to
@@ -137,6 +157,12 @@ pub trait HarnessAdapter {
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf>;
 }
+
+/// The shared **headless** (human-followed) `RUNBOOK.md` template used by every
+/// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch run, regardless of
+/// harness (Codex, OpenCode, and Claude Code in hybrid/headless).
+pub const HEADLESS_RUNBOOK_TEMPLATE: &str =
+    include_str!("../../profiles/shared/runbook-headless.md");
 
 pub struct ClaudeCodeAdapter;
 pub struct CodexAdapter;
@@ -192,11 +218,54 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn runbook_template(&self) -> &'static str {
         include_str!("../../profiles/claude-code/runbook.md")
     }
+    fn cli_events_filename(&self) -> Option<&'static str> {
+        Some("claude-events.jsonl")
+    }
+    fn cli_model_flag(&self) -> Option<&'static str> {
+        Some("--model")
+    }
+    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
+        format!(
+            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness claude-code`.",
+            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
+            target_args = ctx.target_args,
+            iteration = ctx.iteration
+        )
+    }
+    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
+        Some(vec![
+            "After all dispatches (Claude Code hybrid):".to_string(),
+            String::new(),
+            "Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.".to_string(),
+            String::new(),
+            "```bash".to_string(),
+            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
+            "```".to_string(),
+            String::new(),
+            "Parallel dispatch from this iteration directory:".to_string(),
+            String::new(),
+            "```bash".to_string(),
+            claude_parallel_dispatch_recipe(self.cli_model_flag(), ctx.agent_model),
+            "```".to_string(),
+            String::new(),
+            "Then run `eval-magic ingest --harness claude-code --run-mode hybrid`; Claude hybrid ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
+            String::new(),
+        ])
+    }
+    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext) -> Option<String> {
+        Some(claude_judge_dispatch_recipe(self.cli_model_flag()))
+    }
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_transcript(path)
     }
     fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
         parse_transcript_full(path)
+    }
+    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
+        parse_claude_stream_json(path)
+    }
+    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
+        parse_claude_stream_json_full(path)
     }
     fn install_guard(
         &self,
@@ -402,5 +471,56 @@ mod tests {
             assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
             assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
         }
+    }
+
+    #[test]
+    fn claude_adapter_advertises_cli_events_file_and_model_flag() {
+        let a = adapter_for(Harness::ClaudeCode);
+        assert_eq!(a.cli_events_filename(), Some("claude-events.jsonl"));
+        assert_eq!(a.cli_model_flag(), Some("--model"));
+    }
+
+    #[test]
+    fn claude_parse_cli_events_full_reads_stream_json_result_event() {
+        use serde_json::json;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("claude-events.jsonl");
+        // No per-line timestamps; the result event is the only source of duration.
+        let lines = [
+            json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
+            ]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 5637, "usage": {"input_tokens": 1, "output_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}),
+        ];
+        let body = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, format!("{body}\n")).unwrap();
+
+        let a = adapter_for(Harness::ClaudeCode);
+        let summary = a.parse_cli_events_full(&path).unwrap();
+        assert_eq!(summary.final_text, Some("Done".into()));
+        assert_eq!(summary.duration_ms, Some(5637));
+        assert_eq!(summary.tool_invocations.len(), 1);
+        assert_eq!(summary.tool_invocations[0].name, "Bash");
+
+        // The on-disk parser would find no duration here (no line timestamps),
+        // proving parse_cli_events_full routes to the stream-json parser.
+        assert_eq!(a.parse_transcript_full(&path).unwrap().duration_ms, None);
+    }
+
+    #[test]
+    fn codex_parse_cli_events_delegates_to_events_parser() {
+        use serde_json::json;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("codex-events.jsonl");
+        let line = json!({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bun test", "output": "ok"}});
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let inv = adapter_for(Harness::Codex).parse_cli_events(&path).unwrap();
+        assert_eq!(inv.len(), 1);
+        assert_eq!(inv[0].name, "command_execution");
     }
 }

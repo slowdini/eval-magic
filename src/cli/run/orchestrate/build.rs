@@ -51,6 +51,7 @@ pub(super) fn write_dispatch(
         ],
         timestamp: now_iso8601(),
         harness: Some(ctx.harness),
+        run_mode: Some(ctx.run_mode),
         run_nonce: Some(r.run_nonce.clone()),
         runs: Some(opts.runs),
         agent_model: opts.agent_model.map(str::to_owned),
@@ -199,6 +200,7 @@ pub(super) fn write_dispatch(
             &tasks,
             ManifestContext {
                 harness: ctx.harness,
+                mechanism: ctx.run_mode.mechanism(),
                 guard: opts.guard,
                 agent_model: opts.agent_model,
             },
@@ -225,6 +227,7 @@ pub(super) fn write_dispatch(
         "label": conditions.label,
         "conditions": conditions.conditions,
         "harness": ctx.harness,
+        "run_mode": ctx.run_mode,
         "tasks": tasks,
     });
     write_json(&dispatch_json_path, &dispatch_json)?;
@@ -237,6 +240,7 @@ pub(super) fn write_dispatch(
     let target_args = command_target_args(ctx);
     let runbook = build_runbook(&RunbookContext {
         harness: ctx.harness,
+        run_mode: ctx.run_mode,
         skill_name: &ctx.skill_name,
         iteration: r.iteration,
         iteration_dir: &r.iteration_dir,
