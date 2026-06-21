@@ -326,7 +326,8 @@ pub struct RunArgs {
     /// session runs with relaxed permissions. Arm it unless the user opts out. The
     /// marker auto-expires after 6h and is torn down at the next run; while armed the
     /// hook fires on your own tool calls too. If it remains armed after `finalize`,
-    /// `finalize` reminds you to run `teardown-guard` before editing source. Requires
+    /// `finalize` reminds you to run `teardown` before editing source (which disarms
+    /// the cwd guard and every per-`(group, condition)` Cli env's guard). Requires
     /// staging — incompatible with `--no-stage`, under which guard install is skipped
     /// and the run is unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
@@ -437,8 +438,9 @@ pub(crate) enum Commands {
     /// Finalize grading after judge responses are in.
     ///
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges the judge verdicts
-    /// and writes `benchmark.json`. If a live guard remains armed, prints a
-    /// `teardown-guard` reminder before source edits. Requires `--iteration`.
+    /// and writes `benchmark.json`. If a live guard remains armed — the cwd guard, or
+    /// any per-`(group, condition)` Cli env guard — prints a `teardown` reminder before
+    /// source edits. Requires `--iteration`.
     Finalize(CommonArgs),
     /// Switch the active condition batch in a single-session isolated run.
     ///
