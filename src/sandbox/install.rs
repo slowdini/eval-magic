@@ -72,7 +72,7 @@ fn write_json(path: &Path, value: &Value) -> io::Result<()> {
 /// agent-under-test's cwd) and the OS temp dir. The staged skills dir
 /// (`stage_root/.claude/skills` or `.agents/skills`) and the per-task outputs dir
 /// both live *inside* `stage_root`, so a single env root covers every legitimate
-/// agent write. Scoping to the env — not the parent `skills-workspace/` — keeps the
+/// agent write. Scoping to the env — not the parent `.eval-magic/` — keeps the
 /// guard boundary identical to the isolation boundary: the agent can't reach a
 /// sibling iteration or the `iteration-N/` meta tree above its cwd. eval-magic's own
 /// above-env writes (e.g. `benchmark.json`) are not gated here: they run as
@@ -408,7 +408,7 @@ mod tests {
         let temp = absolutize(&std::env::temp_dir()).display().to_string();
         assert_eq!(roots, vec![env, temp]);
         assert!(
-            !roots.iter().any(|r| r.ends_with("skills-workspace")),
+            !roots.iter().any(|r| r.ends_with(".eval-magic")),
             "workspace_root must not be an allowed root: {roots:?}"
         );
     }

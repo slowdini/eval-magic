@@ -1,7 +1,7 @@
 //! End-of-run workspace cleanup.
 //!
 //! Reclaim a skill's ephemeral
-//! `skills-workspace/<skill>/` subtree without ever destroying results the user
+//! `.eval-magic/<skill>/` subtree without ever destroying results the user
 //! hasn't moved into version control.
 
 use std::fs;
@@ -42,7 +42,7 @@ pub struct WorkspaceCleanupSummary {
 /// The reason string attached to a kept, unpromoted iteration.
 const UNCOMMITTED_REASON: &str = "uncommitted results — not promoted to evals/baseline/";
 
-/// End-of-run cleanup of a skill's `skills-workspace/<skill>/` subtree.
+/// End-of-run cleanup of a skill's `.eval-magic/<skill>/` subtree.
 ///
 /// Per iteration: promoted (marker present) → removed; unpromoted but holding
 /// captured results → kept and reported; unpromoted scaffolding → removed. Per
@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn removes_promoted_iteration_and_prunes_workspace() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         let iter = make_iteration(
             &ws,
@@ -277,7 +277,7 @@ mod tests {
     #[test]
     fn keeps_unpromoted_iteration_with_benchmark_and_reports_it() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         let iter = make_iteration(
             &ws,
@@ -300,7 +300,7 @@ mod tests {
     #[test]
     fn keeps_unpromoted_iteration_with_only_a_run_record() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         let iter = make_iteration(
             &ws,
@@ -321,7 +321,7 @@ mod tests {
     #[test]
     fn removes_unpromoted_scaffolding_only_iteration() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         let iter = make_iteration(
             &ws,
@@ -342,7 +342,7 @@ mod tests {
     #[test]
     fn mixed_promoted_removed_kept_with_results_skill_dir_not_pruned() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         let promoted = make_iteration(
             &ws,
@@ -377,7 +377,7 @@ mod tests {
     #[test]
     fn removes_ref_snapshots_keeps_working_tree_and_legacy() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         let ref_snap = make_snapshot(&ws, "mr-review", "old-ref", Some("ref"));
         let wt_snap = make_snapshot(&ws, "mr-review", "wt", Some("working-tree"));
@@ -393,9 +393,9 @@ mod tests {
     }
 
     #[test]
-    fn never_touches_another_skills_workspace_and_leaves_root_intact() {
+    fn never_touches_another_skill_and_leaves_workspace_root_intact() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
         make_iteration(
             &ws,
@@ -426,7 +426,7 @@ mod tests {
     #[test]
     fn empty_summary_when_skill_has_no_workspace() {
         let tmp = TempDir::new().unwrap();
-        let ws = tmp.path().join("skills-workspace");
+        let ws = tmp.path().join(".eval-magic");
         fs::create_dir_all(&ws).unwrap();
 
         let summary = cleanup_workspace(&ws, "never-ran");

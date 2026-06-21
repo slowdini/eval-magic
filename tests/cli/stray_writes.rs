@@ -27,7 +27,7 @@ fn detect_stray_writes_reports_live_source_reads() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-e1").join("old_skill");
@@ -119,7 +119,7 @@ fn detect_stray_writes_flags_unverifiable_when_nothing_was_inspected() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-e1").join("old_skill");
@@ -176,7 +176,7 @@ fn detect_stray_writes_flags_unverifiable_when_nothing_was_inspected() {
 
 /// Without a `dispatch.json` outputs_dir for the run, the detector must NOT
 /// fabricate the old flat-layout boundary (`<cond_dir>/outputs`). Under the
-/// isolated env layout the agent writes into `env/.eval-magic/outputs/...`, an
+/// isolated env layout the agent writes into `env/.eval-magic-outputs/...`, an
 /// absolute path only `dispatch.json` carries; guessing the old convention would
 /// mis-flag every legitimate write as a violation. The detector instead skips
 /// out-of-bounds write classification for that run and logs why.
@@ -198,7 +198,7 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir()
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-e1").join("old_skill");
@@ -223,8 +223,7 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir()
     // location, which is NOT under the old `<cond_dir>/outputs` fallback path.
     let env_output = iteration_dir
         .join("env")
-        .join(".eval-magic")
-        .join("outputs")
+        .join(".eval-magic-outputs")
         .join("eval-e1")
         .join("old_skill")
         .join("answer.md")
@@ -273,7 +272,7 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir()
 }
 
 /// With `dispatch.json` carrying the env-layout outputs_dir
-/// (`env/.eval-magic/outputs/...`), the detector classifies against that real
+/// (`env/.eval-magic-outputs/...`), the detector classifies against that real
 /// boundary: a write inside it is clean, a write elsewhere in the env (the realistic
 /// repo, outside outputs) is a violation under the outputs-only contract.
 #[test]
@@ -294,7 +293,7 @@ fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-e1").join("old_skill");
@@ -303,8 +302,7 @@ fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
     // The isolated env's outputs tree — where the agent is supposed to write.
     let outputs_dir = iteration_dir
         .join("env")
-        .join(".eval-magic")
-        .join("outputs")
+        .join(".eval-magic-outputs")
         .join("eval-e1")
         .join("old_skill");
     let in_bounds = outputs_dir.join("answer.md").to_string_lossy().into_owned();
@@ -406,7 +404,7 @@ fn detect_stray_writes_scans_nested_run_dirs_and_reports_run_index() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-e1").join("old_skill");

@@ -118,7 +118,7 @@ mod tests {
     fn marker() -> GuardMarker {
         GuardMarker {
             active: Some(true),
-            allowed_roots: Some(vec!["/work/skills-workspace".to_string()]),
+            allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
             expires_at: None,
         }
     }
@@ -170,7 +170,7 @@ mod tests {
 
     #[test]
     fn codex_apply_patch_inside_allowed_roots_allows() {
-        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": { "files": ["/work/skills-workspace/out.md"] } }"#;
+        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "apply_patch", "tool_input": { "files": ["/work/.eval-magic/out.md"] } }"#;
         assert_eq!(codex_guard_decision(payload, Some(marker())), None);
     }
 

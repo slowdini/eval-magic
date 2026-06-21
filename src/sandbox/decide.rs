@@ -139,7 +139,7 @@ mod tests {
     use crate::sandbox::now_ms;
     use serde_json::json;
 
-    const ROOTS: [&str; 2] = ["/work/skills-workspace", "/work/.claude/skills"];
+    const ROOTS: [&str; 2] = ["/work/.eval-magic", "/work/.claude/skills"];
 
     /// An RFC3339 timestamp `offset_ms` from now — `future`/`past` bracket the
     /// current wall clock used by `decide`.
@@ -209,7 +209,7 @@ mod tests {
     fn allows_a_write_under_an_allowed_root() {
         let d = decide_now(
             "Write",
-            json!({ "file_path": "/work/skills-workspace/x/outputs/a.md" }),
+            json!({ "file_path": "/work/.eval-magic/x/outputs/a.md" }),
             Some(&marker()),
         );
         assert!(d.allow);
@@ -241,7 +241,7 @@ mod tests {
     fn allows_a_bash_command_scoped_to_an_allowed_root() {
         let d = decide_now(
             "Bash",
-            json!({ "command": "echo hi > /work/skills-workspace/x/outputs/log" }),
+            json!({ "command": "echo hi > /work/.eval-magic/x/outputs/log" }),
             Some(&marker()),
         );
         assert!(d.allow);
@@ -286,7 +286,7 @@ mod tests {
     fn allows_apply_patch_inside_allowed_roots() {
         let d = decide_now(
             "apply_patch",
-            json!({ "files": ["/work/skills-workspace/eval/outputs/out.md"] }),
+            json!({ "files": ["/work/.eval-magic/eval/outputs/out.md"] }),
             Some(&marker()),
         );
         assert!(d.allow);
@@ -363,10 +363,13 @@ mod tests {
     }
 
     #[test]
-    fn does_not_flag_skills_workspace_as_a_bare_skills_write() {
+    fn does_not_flag_a_skills_prefixed_dir_as_a_bare_skills_write() {
+        // A `skills`-prefixed path that is NOT an allowed root: the bare-`skills/`
+        // heuristic only fires on a bare `skills` at a path boundary, so a
+        // `skills-`-prefixed dir must not be flagged and the write is allowed.
         let d = decide_now(
             "Bash",
-            json!({ "command": "mkdir -p /work/skills-workspace/x/outputs" }),
+            json!({ "command": "mkdir -p /work/skills-data/x/outputs" }),
             Some(&marker()),
         );
         assert!(d.allow);

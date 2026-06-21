@@ -58,7 +58,7 @@ fn write_codex_armed_marker(
 #[test]
 fn guard_denies_out_of_bounds_write() {
     let tmp = TempDir::new().unwrap();
-    let marker = write_armed_marker(tmp.path(), &tmp.path().join("skills-workspace"));
+    let marker = write_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
 
     skill_eval()
         .arg("guard")
@@ -73,7 +73,7 @@ fn guard_denies_out_of_bounds_write() {
 #[test]
 fn guard_allows_in_bounds_write() {
     let tmp = TempDir::new().unwrap();
-    let workspace = tmp.path().join("skills-workspace");
+    let workspace = tmp.path().join(".eval-magic");
     let marker = write_armed_marker(tmp.path(), &workspace);
 
     skill_eval()
@@ -91,7 +91,7 @@ fn guard_allows_in_bounds_write() {
 #[test]
 fn guard_codex_subcommand_blocks_with_codex_verdict_shape() {
     let tmp = TempDir::new().unwrap();
-    let marker = write_codex_armed_marker(tmp.path(), &tmp.path().join("skills-workspace"));
+    let marker = write_codex_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
 
     skill_eval()
         .arg("guard-codex")
@@ -134,7 +134,7 @@ fn teardown_guard_reports_nothing_to_remove() {
 #[test]
 fn teardown_guard_removes_installed_guard() {
     let tmp = TempDir::new().unwrap();
-    write_armed_marker(tmp.path(), &tmp.path().join("skills-workspace"));
+    write_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
 
     skill_eval()
         .arg("teardown-guard")

@@ -207,7 +207,7 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
 
     let workspace_root = match input.workspace_dir {
         Some(raw) => absolutize(&cwd, &raw)?,
-        None => cwd.join("skills-workspace"),
+        None => cwd.join(".eval-magic"),
     };
     let stage_root = cwd;
 
@@ -444,7 +444,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(input(&skill_dir, "foo")).unwrap();
-        let expected = std::env::current_dir().unwrap().join("skills-workspace");
+        let expected = std::env::current_dir().unwrap().join(".eval-magic");
         assert_eq!(ctx.workspace_root, expected);
     }
 

@@ -287,10 +287,10 @@ mod tests {
 
     #[test]
     fn isolated_handoff_points_into_env_and_at_the_runbook() {
-        let env = Path::new("/work/skills-workspace/widget/iteration-3/env");
+        let env = Path::new("/work/.eval-magic/widget/iteration-3/env");
         let handoff = insession_isolated_handoff(env);
         assert!(
-            handoff.contains("/work/skills-workspace/widget/iteration-3/env"),
+            handoff.contains("/work/.eval-magic/widget/iteration-3/env"),
             "names the env to cd into: {handoff}"
         );
         assert!(handoff.contains("cd "), "spells out the cd step: {handoff}");

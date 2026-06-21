@@ -128,7 +128,7 @@ fn teardown_reclaims_workspace_and_env_guard() {
         .args(["--skill", "mr-review"])
         .assert()
         .success();
-    assert!(!cwd.join("skills-workspace").exists());
+    assert!(!cwd.join(".eval-magic").exists());
     assert!(!settings.exists());
     assert!(!staged.exists());
     assert!(!cwd.join(".claude").exists());
@@ -335,7 +335,7 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
         // same-batch subagents can't collide; run-<k> is the leaf segment.
         let outputs_dir = task["outputs_dir"].as_str().unwrap();
         assert!(
-            outputs_dir.contains(".eval-magic/outputs/")
+            outputs_dir.contains(".eval-magic-outputs/")
                 && outputs_dir.ends_with(&format!("run-{k}")),
             "outputs not namespaced under env per run: {outputs_dir}"
         );
@@ -357,7 +357,7 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
                 assert!(run_dir.is_dir(), "missing meta run dir {run_dir:?}");
                 // Per-run outputs dir inside the env.
                 let out_dir = env_dir(&cwd)
-                    .join(".eval-magic/outputs")
+                    .join(".eval-magic-outputs")
                     .join(format!("eval-{eval}"))
                     .join(cond)
                     .join(format!("run-{k}"));
@@ -397,7 +397,7 @@ fn runs_one_keeps_flat_single_run_layout() {
     assert!(cond_dir.is_dir());
     assert!(!cond_dir.join("run-1").exists());
     // Outputs live inside the env, flat (no run-1/ segment) for a single-run cell.
-    let out_dir = env_dir(&cwd).join(".eval-magic/outputs/eval-e1/with_skill");
+    let out_dir = env_dir(&cwd).join(".eval-magic-outputs/eval-e1/with_skill");
     assert!(out_dir.is_dir());
     assert!(!out_dir.join("run-1").exists());
 }

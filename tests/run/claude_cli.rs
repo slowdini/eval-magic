@@ -219,7 +219,7 @@ fn claude_hybrid_record_runs_does_not_require_a_session_id() {
         .args(["record-runs", "--skill-dir"])
         .arg(&skill_dir)
         .args(["--skill", "mr-review", "--workspace-dir"])
-        .arg(cwd.join("skills-workspace"))
+        .arg(cwd.join(".eval-magic"))
         .args(["--harness", "claude-code", "--run-mode", "hybrid"])
         .assert()
         .success()

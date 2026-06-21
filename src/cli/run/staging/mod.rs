@@ -257,7 +257,7 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
                 "SKILL.md"
                     | "evals"
                     | SNAPSHOT_META
-                    | "skills-workspace"
+                    | ".eval-magic"
                     | ".claude"
                     | ".agents"
                     | ".codex"

@@ -338,7 +338,7 @@ pub fn detect_stray_writes_report(
                 invocations_inspected += run.tool_invocations.len();
                 // `dispatch.json` is the authoritative source of the outputs
                 // boundary: an absolute path into the isolated env
-                // (`env/.eval-magic/outputs/...`). Without it we cannot honor the
+                // (`env/.eval-magic-outputs/...`). Without it we cannot honor the
                 // outputs-only contract, so we skip out-of-bounds *write*
                 // classification for that run rather than guess a boundary — the old
                 // `<slot>/outputs` convention no longer matches where agents write and
@@ -747,7 +747,7 @@ mod tests {
         let f = detect_live_source_reads(
             &[
                 inv("Read", json!({"file_path": format!("{OUTPUTS}/x.md")}), 0),
-                inv("Bash", json!({"command": "ls skills-workspace"}), 1),
+                inv("Bash", json!({"command": "ls .eval-magic"}), 1),
                 // Write tools are detect_stray_writes' jurisdiction — reads only here.
                 inv(
                     "Write",

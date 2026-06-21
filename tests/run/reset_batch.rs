@@ -41,7 +41,7 @@ fn reset_to(cwd: &Path, skill_dir: &Path, group: &str) -> assert_cmd::assert::As
         .args(["reset-batch", "--skill-dir"])
         .arg(skill_dir)
         .args(["--skill", "mr-review", "--workspace-dir"])
-        .arg(cwd.join("skills-workspace"))
+        .arg(cwd.join(".eval-magic"))
         .args(["--iteration", "1", "--group", group])
         .assert()
 }
@@ -73,7 +73,7 @@ fn reset_batch_wipes_working_tree_and_reseeds_group_fixtures() {
             .is_dir(),
         "the staged skill survives reset-batch"
     );
-    assert!(env_dir(&cwd).join(".eval-magic/outputs").exists());
+    assert!(env_dir(&cwd).join(".eval-magic-outputs").exists());
 }
 
 #[test]

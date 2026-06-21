@@ -86,7 +86,7 @@ environment.
 
 ```bash
 # 1. Build the iteration's isolated env (arm --guard — see Cost & confirmation).
-#    run stages skills into skills-workspace/my-skill/iteration-1/env/, copies
+#    run stages skills into .eval-magic/my-skill/iteration-1/env/, copies
 #    fixtures in, and writes RUNBOOK.md. It does NOT dispatch — it prints a handoff.
 #    Add --runs <N> to dispatch every eval N times per condition for variance
 #    reduction (a per-eval "runs" field in evals.json overrides the flag).
@@ -112,7 +112,7 @@ eval-magic ingest
 #    armed, finalize reminds you to run teardown-guard before editing source.
 eval-magic finalize
 
-# 5. Read skills-workspace/my-skill/iteration-1/benchmark.json (the prep session
+# 5. Read .eval-magic/my-skill/iteration-1/benchmark.json (the prep session
 #    resumes here), then clean up:
 eval-magic teardown
 ```
@@ -201,7 +201,7 @@ Read `validity_warnings` **before** trusting any delta — a low skill-invocatio
 Per skill being evaluated, the runner produces this tree (everything but `evals/evals.json` is generated):
 
 ```
-skills-workspace/<skill>/                # outside the skill directory, gitignore it
+.eval-magic/<skill>/                     # outside the skill directory, gitignore it
   snapshots/                             # Mode B baselines, persist across iterations
     <label>/SKILL.md
   iteration-N/
@@ -228,7 +228,7 @@ independently and the benchmark's per-condition `mean`/`stddev`/`n` cover all of
         run-2/  outputs/  run.json  timing.json  grading.json
 ```
 
-The only source file you author for evals is `<skill>/evals/evals.json` (or create it with `eval-magic init`). Keep `skills-workspace/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.
+The only source file you author for evals is `<skill>/evals/evals.json` (or create it with `eval-magic init`). Keep `.eval-magic/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.
 
 ## Version-controlled baselines
 
@@ -294,7 +294,7 @@ Support today:
 
 ### Claude Code (fully wired)
 
-The run loop above *is* the Claude Code loop. By default this is the **fully-interactive** run mode (see [Run modes](#run-modes)) — subagents are dispatched in-session via the Task tool; the **hybrid** and **headless** (`claude -p`) modes are now wired too (pass `--run-mode hybrid` or `--run-mode headless`, see below). `eval-magic run` itself only *prepares* the isolated env (`skills-workspace/<skill>/iteration-N/env/`) and writes `RUNBOOK.md` into it, then prints a handoff: `cd` into `env/`, start a **fresh** Claude Code session there, and say *Read and follow RUNBOOK.md*. That fresh session — clean cwd, staged skills present at session start — drives the whole dispatch → switch-condition → ingest → finalize loop and writes `benchmark.json`, which the prep session resumes on. These are the Claude-Code-specific details:
+The run loop above *is* the Claude Code loop. By default this is the **fully-interactive** run mode (see [Run modes](#run-modes)) — subagents are dispatched in-session via the Task tool; the **hybrid** and **headless** (`claude -p`) modes are now wired too (pass `--run-mode hybrid` or `--run-mode headless`, see below). `eval-magic run` itself only *prepares* the isolated env (`.eval-magic/<skill>/iteration-N/env/`) and writes `RUNBOOK.md` into it, then prints a handoff: `cd` into `env/`, start a **fresh** Claude Code session there, and say *Read and follow RUNBOOK.md*. That fresh session — clean cwd, staged skills present at session start — drives the whole dispatch → switch-condition → ingest → finalize loop and writes `benchmark.json`, which the prep session resumes on. These are the Claude-Code-specific details:
 
 **Isolating from installed plugins.** Read this first if the skill you're evaluating shares a name with one an installed, enabled plugin provides. Subagents are dispatched via the **Task tool**, so they inherit *this session's* enabled plugins — the staging slug avoids an on-disk collision but does not stop the installed copy from being discoverable, contaminating both arms (the `without_skill` arm is then not truly skill-absent). Plugins load at session start and can't be unloaded mid-session, so the runner only *detects and warns* (the plugin-shadow banner). The isolated env gives a clean *cwd* but does not unload user/global plugins, so this still applies. To actually isolate, launch the **fresh session you start in `env/`** one of these ways — subagents inherit it:
 

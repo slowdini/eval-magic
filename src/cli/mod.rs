@@ -120,7 +120,7 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
 /// "Next:" commands are copy-pasteable from any cwd — not just the one `run`
 /// happened to start in. The absolute `--workspace-dir` is what lets the isolated
 /// session run `ingest`/`finalize`/`switch-condition` from `cwd = iteration-N/env/`:
-/// without it, `workspace_root` would default to `<cwd>/skills-workspace`
+/// without it, `workspace_root` would default to `<cwd>/.eval-magic`
 /// (`detect_run_context`) and the iteration tree above the env would not resolve.
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
     format!(
@@ -314,7 +314,7 @@ mod tests {
 
     /// The isolated session runs `ingest`/`finalize`/`switch-condition` from
     /// `cwd = iteration-N/env/`. Without an explicit workspace root those commands
-    /// default `workspace_root` to `<cwd>/skills-workspace` and bail "not found",
+    /// default `workspace_root` to `<cwd>/.eval-magic` and bail "not found",
     /// so the selector must carry an absolute `--workspace-dir` pointing at the
     /// real workspace above the env.
     #[test]
@@ -342,7 +342,7 @@ mod tests {
 
         // Round-trip from an env-like cwd below the workspace: feeding the
         // selector's roots back resolves the SAME workspace, not
-        // `<cwd>/skills-workspace`.
+        // `<cwd>/.eval-magic`.
         let env_like = ctx
             .workspace_root
             .join("mr-review")

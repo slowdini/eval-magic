@@ -53,7 +53,7 @@ fn grade_defaults_judge_tasks_to_recorded_judge_model() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-pos-eval").join("with_skill");

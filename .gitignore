@@ -1,2 +1,6 @@
 /target
 .DS_Store
+
+# eval-magic run artifacts (workspace root + per-env outputs) — churn every run
+.eval-magic/
+.eval-magic-outputs/

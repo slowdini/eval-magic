@@ -20,7 +20,7 @@ fn switch_to(cwd: &Path, skill_dir: &Path, condition: &str) -> assert_cmd::asser
         .args(["switch-condition", "--skill-dir"])
         .arg(skill_dir)
         .args(["--skill", "mr-review", "--workspace-dir"])
-        .arg(cwd.join("skills-workspace"))
+        .arg(cwd.join(".eval-magic"))
         .args(["--iteration", "1", "--condition", condition])
         .assert()
 }

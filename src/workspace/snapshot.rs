@@ -1,7 +1,7 @@
 //! Skill snapshotting.
 //!
 //! Capture a skill's `SKILL.md` plus
-//! sibling assets into `skills-workspace/<skill>/snapshots/<label>/`, either from
+//! sibling assets into `.eval-magic/<skill>/snapshots/<label>/`, either from
 //! the working tree or — read straight from the git object database without
 //! touching the working tree — as it existed at a git ref. The
 //! `evals/` directory is always excluded; a `.snapshot-meta.json` records the
@@ -225,7 +225,7 @@ mod tests {
         // Working tree diverges to v2; the commit still holds v1.
         write(&skill_subdir.join("SKILL.md"), "v2 working tree\n");
 
-        let workspace_root = root.join("work").join("skills-workspace");
+        let workspace_root = root.join("work").join(".eval-magic");
         Repo {
             _tmp: tmp,
             skill_subdir,
