@@ -48,6 +48,12 @@
           "minimum": 1,
           "description": "Runs per condition for this eval, for variance reduction; overrides the --runs flag. Defaults to the flag's value (1 unless raised)."
         },
+        "isolation": {
+          "type": "string",
+          "enum": ["shared", "isolated"],
+          "default": "shared",
+          "description": "Isolation hint for run batching. 'isolated' forces this eval into its own group so it never shares an env with another eval (for confounds the framework can't detect from fixture conflicts, e.g. the agent mutates a shared fixture). Defaults to 'shared'. Evals whose fixtures conflict are auto-isolated regardless."
+        },
         "skill_should_trigger": {
           "type": "boolean",
           "default": true,

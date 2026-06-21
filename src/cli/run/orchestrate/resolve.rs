@@ -11,6 +11,8 @@ use crate::validation::validate_evals_config;
 
 use super::super::RunError;
 use super::super::dispatch::select_evals;
+use super::super::fixtures::fixture_pairs;
+use super::super::grouping::{GroupInput, compute_groups};
 use super::super::util::{
     condition_names_for, make_run_nonce, next_iteration, validate_harness_run_options,
 };
@@ -57,6 +59,24 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
 
     let selected_evals = select_evals(&config.evals, opts.only, opts.skip)?;
     let total_evals = config.evals.len();
+
+    // Compute isolation groups up front (fixture-conflict + explicit hint), before
+    // any env is staged: staging and dispatch both consume this plan. `fixture_pairs`
+    // also fails fast here if a declared fixture is missing.
+    let fixture_pairs_by_eval = selected_evals
+        .iter()
+        .map(|ev| fixture_pairs(ev, &ctx.skill_subdir))
+        .collect::<Result<Vec<_>, _>>()?;
+    let group_inputs: Vec<GroupInput> = selected_evals
+        .iter()
+        .zip(&fixture_pairs_by_eval)
+        .map(|(ev, fixtures)| GroupInput {
+            eval_id: &ev.id,
+            isolation: ev.isolation,
+            fixtures,
+        })
+        .collect();
+    let groups = compute_groups(&group_inputs);
 
     let workspace_skill_dir = ctx.workspace_root.join(&ctx.skill_name);
     let iteration = next_iteration(&workspace_skill_dir, opts.iteration);
@@ -108,5 +128,6 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
         skill_path_b,
         selected_evals,
         total_evals,
+        groups,
     })
 }

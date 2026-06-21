@@ -24,8 +24,8 @@ use crate::adapters::{
 use crate::core::{DispatchMechanism, Harness, Mode, RunMode};
 
 use super::util::{
-    harness_label, insession_dispatch_batch, insession_ingest_command, insession_switch_command,
-    mode_str,
+    harness_label, insession_dispatch_batch, insession_dispatch_segment, insession_ingest_command,
+    insession_reset_batch_command, insession_switch_command, mode_str,
 };
 
 /// Run-specific values the renderer substitutes into a runbook template. Built by
@@ -42,11 +42,46 @@ pub(crate) struct RunbookContext<'a> {
     pub cond_a: &'a str,
     pub cond_b: &'a str,
     pub num_tasks: usize,
+    /// Isolation-group ids in order. One entry → the byte-identical single-batch
+    /// dispatch; more → per-group batches with `reset-batch` barriers (in-session).
+    pub groups: &'a [String],
     /// The self-sufficient `--skill-dir … --skill …` selector (leading space),
     /// from [`command_target_args`](crate::cli::command_target_args).
     pub target_args: &'a str,
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+}
+
+/// The per-condition dispatch block for the interactive runbook. A single group
+/// renders the legacy single-batch instruction (byte-identical to the pre-grouping
+/// runbook). Multiple groups render each group's batch with a `reset-batch` barrier
+/// between them; `first_condition` suppresses the reset before the very first group
+/// (condition A starts from the env already staged with group 1, while condition B
+/// must restore group 1 after A's last group mutated the env).
+fn insession_dispatch_block(
+    condition: &str,
+    groups: &[String],
+    target_args: &str,
+    iteration: u32,
+    first_condition: bool,
+) -> String {
+    if groups.len() <= 1 {
+        return insession_dispatch_batch(condition);
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (i, group) in groups.iter().enumerate() {
+        if !(first_condition && i == 0) {
+            parts.push(format!(
+                "Reset the env to group `{group}` (wait for the previous batch to finish first):\n\n```\n{}\n```",
+                insession_reset_batch_command(target_args, iteration, group)
+            ));
+        }
+        parts.push(format!(
+            "Dispatch group `{group}`: {}",
+            insession_dispatch_segment(condition, group)
+        ));
+    }
+    parts.join("\n\n")
 }
 
 /// Render `RUNBOOK.md` for a run: pick the harness's template (interactive vs.
@@ -96,8 +131,20 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         // loop itself. Built from the same fragments as the post-`run` "Next:"
         // message so the two can never drift on the dispatch / switch / ingest text.
         DispatchMechanism::InSession => {
-            dispatch_cond_a = insession_dispatch_batch(ctx.cond_a);
-            dispatch_cond_b = insession_dispatch_batch(ctx.cond_b);
+            dispatch_cond_a = insession_dispatch_block(
+                ctx.cond_a,
+                ctx.groups,
+                ctx.target_args,
+                ctx.iteration,
+                true,
+            );
+            dispatch_cond_b = insession_dispatch_block(
+                ctx.cond_b,
+                ctx.groups,
+                ctx.target_args,
+                ctx.iteration,
+                false,
+            );
             switch_cmd = insession_switch_command(ctx.target_args, ctx.iteration, ctx.cond_b);
             ingest_cmd = insession_ingest_command(ctx.target_args, ctx.iteration);
             finalize_cmd = format!(
@@ -199,6 +246,7 @@ mod tests {
             cond_a: "with_skill",
             cond_b: "without_skill",
             num_tasks: 4,
+            groups: &[],
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             guard: true,
             agent_model: None,
@@ -277,6 +325,42 @@ mod tests {
     }
 
     #[test]
+    fn interactive_runbook_with_multiple_groups_carries_reset_batch_barriers() {
+        let dir = PathBuf::from("/work/skills-workspace/widget-skill/iteration-5");
+        let groups = ["g1".to_string(), "g2".to_string()];
+        let book = build_runbook(&RunbookContext {
+            groups: &groups,
+            ..claude_ctx(&dir)
+        });
+
+        // Each group dispatches as its own segment, filtered by group.
+        assert!(
+            book.contains("`condition` is `with_skill` and `group` is `g1`")
+                && book.contains("`condition` is `with_skill` and `group` is `g2`"),
+            "with_skill dispatches each group separately: {book}"
+        );
+        assert!(
+            book.contains("`condition` is `without_skill` and `group` is `g1`")
+                && book.contains("`condition` is `without_skill` and `group` is `g2`"),
+            "without_skill dispatches each group separately: {book}"
+        );
+        // reset-batch barriers between groups, naming the group to seed.
+        assert!(
+            book.contains(
+                "eval-magic reset-batch --skill-dir /tmp/skills --skill widget-skill --iteration 5 --group g2"
+            ),
+            "carries the reset-batch barrier for g2: {book}"
+        );
+        // The switch-condition barrier is still present, once, between conditions.
+        assert!(
+            book.contains("eval-magic switch-condition")
+                && book.contains("--condition without_skill"),
+            "still carries the switch-condition barrier: {book}"
+        );
+        assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
+    }
+
+    #[test]
     fn headless_runbook_is_human_followed_cli_recipe() {
         let dir = PathBuf::from("/work/skills-workspace/widget-skill/iteration-2");
         let ctx = RunbookContext {
@@ -289,6 +373,7 @@ mod tests {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
+            groups: &[],
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             guard: false,
             agent_model: Some("gpt-5-mini"),

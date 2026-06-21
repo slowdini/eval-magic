@@ -38,6 +38,16 @@ pub struct DispatchTask {
     pub timing_path: String,
     pub agent_description: String,
     pub dispatch_prompt_path: String,
+    /// Group id this task belongs to; absent when there is exactly one group
+    /// (the common no-conflict case), keeping single-group `dispatch.json`
+    /// byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+    /// The agent-under-test's cwd for this task (its env dir). Absent in the
+    /// single-group case, where the Cli recipe's `<eval-root>` placeholder still
+    /// resolves to `env/`; present (per `(group, condition)`) for multi-group Cli.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_root: Option<String>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -68,6 +78,12 @@ pub struct DispatchTaskOpts<'a> {
     /// 1-based run index within a multi-run cell (adds an `r<k>` segment to the
     /// dispatch description); `None` for single-run cells.
     pub run_index: Option<u32>,
+    /// Isolation-group id this task belongs to; `None` in the single-group case
+    /// (keeps the serialized task byte-identical to the pre-grouping shape).
+    pub group: Option<&'a str>,
+    /// The task's env dir (the agent-under-test's cwd); `None` in the single-group
+    /// case (the shared `env/`).
+    pub eval_root: Option<&'a str>,
 }
 
 impl Default for DispatchTaskOpts<'_> {
@@ -89,6 +105,8 @@ impl Default for DispatchTaskOpts<'_> {
             harness: Harness::ClaudeCode,
             run_tag: None,
             run_index: None,
+            group: None,
+            eval_root: None,
         }
     }
 }
@@ -256,6 +274,8 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
             .join("dispatch-prompt.txt")
             .to_string_lossy()
             .into_owned(),
+        group: opts.group.map(str::to_string),
+        eval_root: opts.eval_root.map(str::to_string),
         dispatch_prompt: sections.join(""),
     })
 }
@@ -461,6 +481,7 @@ mod tests {
                 assertions: None,
                 skill_should_trigger: None,
                 runs: None,
+                isolation: None,
             })
             .collect()
     }
@@ -628,6 +649,35 @@ mod tests {
         let boot_idx = prompt.find("BOOT-LOADED").unwrap();
         assert!(boot_idx < ssc_end);
         assert!(list_idx > ssc_end);
+    }
+
+    #[test]
+    fn task_carries_group_and_eval_root_when_set_and_omits_when_absent() {
+        let with = build_dispatch_task(&DispatchTaskOpts {
+            group: Some("g2"),
+            eval_root: Some("/work/env-g2-with_skill"),
+            ..base_opts()
+        })
+        .unwrap();
+        assert_eq!(with.group.as_deref(), Some("g2"));
+        assert_eq!(with.eval_root.as_deref(), Some("/work/env-g2-with_skill"));
+        let out = serde_json::to_value(&with).unwrap();
+        assert_eq!(
+            out.get("group"),
+            Some(&serde_json::Value::String("g2".into()))
+        );
+        assert_eq!(
+            out.get("eval_root"),
+            Some(&serde_json::Value::String("/work/env-g2-with_skill".into()))
+        );
+
+        // Single-group default: both omitted, keeping dispatch.json byte-identical.
+        let without = build_dispatch_task(&base_opts()).unwrap();
+        assert_eq!(without.group, None);
+        assert_eq!(without.eval_root, None);
+        let out = serde_json::to_value(&without).unwrap();
+        assert!(out.get("group").is_none());
+        assert!(out.get("eval_root").is_none());
     }
 
     #[test]

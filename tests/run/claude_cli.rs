@@ -116,7 +116,9 @@ fn claude_hybrid_runbook_is_human_followed_cli_recipe() {
         .assert()
         .success();
 
-    let runbook = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
+    // Cli dispatches from per-(group, condition) envs, so the human-followed
+    // runbook lives in the iteration dir, not a single env/.
+    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
         "hybrid uses the human-followed template: {runbook}"
@@ -157,8 +159,9 @@ fn claude_headless_records_mode_and_human_runbook() {
     assert!(manifest.contains("claude -p --output-format stream-json"));
 
     // The runbook is the shared human-followed template carrying the claude -p
-    // recipe and headless-threaded pipeline commands.
-    let runbook = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
+    // recipe and headless-threaded pipeline commands. Cli has no single env/, so
+    // it lives in the iteration dir.
+    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
         "headless uses the human-followed template: {runbook}"
@@ -265,10 +268,11 @@ fn claude_cli_guard_installs_project_hook() {
         .assert()
         .success();
 
-    // The guard installs into the isolated env (the agent-under-test's cwd) — the
-    // same `.claude/settings.local.json` each `claude -p` dispatch loads from that
-    // cwd, so a PreToolUse deny fires under Cli dispatch.
-    let settings_path = env_dir(&cwd).join(".claude/settings.local.json");
+    // The guard installs into EACH per-(group, condition) env (the agent-under-test's
+    // cwd) — the same `.claude/settings.local.json` each `claude -p` dispatch loads
+    // from that cwd, so a PreToolUse deny fires under Cli dispatch.
+    let with_env = cli_env_dir(&cwd, "g1", "with_skill");
+    let settings_path = with_env.join(".claude/settings.local.json");
     assert!(settings_path.exists());
     let settings = read_json(&settings_path);
     let hook = &settings["hooks"]["PreToolUse"][0];
@@ -282,8 +286,22 @@ fn claude_cli_guard_installs_project_hook() {
         "hook matches write tools: {settings}"
     );
     assert!(
-        env_dir(&cwd)
+        with_env
             .join(".claude/skills/.slow-powers-eval-guard.json")
             .exists()
+    );
+
+    // The control arm's env is independently guarded too, and — the gap fix — holds
+    // no staged skill slug at all (the skill is physically absent, not just unlisted).
+    let without_env = cli_env_dir(&cwd, "g1", "without_skill");
+    assert!(
+        without_env.join(".claude/settings.local.json").exists(),
+        "the without_skill env is guarded too"
+    );
+    assert!(
+        !without_env
+            .join(".claude/skills/slow-powers-eval-1-with_skill__mr-review")
+            .exists(),
+        "the control arm's env contains no staged skill slug"
     );
 }

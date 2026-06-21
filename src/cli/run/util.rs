@@ -56,16 +56,42 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
     )
 }
 
-/// Dispatch instruction for one condition batch: iterate the matching `tasks[]`
-/// and dispatch each as a subagent with its `agent_description` verbatim. A building
-/// block of the interactive runbook's per-condition steps ([`super::runbook`]).
-pub(crate) fn insession_dispatch_batch(condition: &str) -> String {
+/// The shared dispatch-instruction body, parameterized on the `tasks[]` filter so
+/// the condition-only and condition+group variants stay in lockstep.
+fn insession_dispatch_instruction(filter: &str) -> String {
     format!(
-        "iterate the `tasks[]` entries in dispatch.json whose `condition` is `{condition}` and \
+        "iterate the `tasks[]` entries in dispatch.json whose {filter} and \
          dispatch each as a subagent, passing its `agent_description` verbatim as the subagent \
          description (that string is the key that links each transcript back — without it tool \
          calls, tokens, and duration come back empty)."
     )
+}
+
+/// Dispatch instruction for one condition batch: iterate the matching `tasks[]`
+/// and dispatch each as a subagent with its `agent_description` verbatim. A building
+/// block of the interactive runbook's per-condition steps ([`super::runbook`]).
+pub(crate) fn insession_dispatch_batch(condition: &str) -> String {
+    insession_dispatch_instruction(&format!("`condition` is `{condition}`"))
+}
+
+/// Dispatch instruction for one `(condition, group)` segment — used when a run has
+/// more than one isolation group, so each group's batch dispatches separately with
+/// a [`insession_reset_batch_command`] barrier between groups ([`super::runbook`]).
+pub(crate) fn insession_dispatch_segment(condition: &str, group: &str) -> String {
+    insession_dispatch_instruction(&format!(
+        "`condition` is `{condition}` and `group` is `{group}`"
+    ))
+}
+
+/// The `reset-batch` barrier command between isolation-group batches: wipe the
+/// env working tree and re-seed it with `group`'s fixtures before dispatching it.
+/// A building block of the interactive runbook ([`super::runbook`]).
+pub(crate) fn insession_reset_batch_command(
+    target_args: &str,
+    iteration: u32,
+    group: &str,
+) -> String {
+    format!("eval-magic reset-batch{target_args} --iteration {iteration} --group {group}")
 }
 
 /// The `switch-condition` barrier command between batches: name the condition about

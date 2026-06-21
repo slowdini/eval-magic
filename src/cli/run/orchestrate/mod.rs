@@ -15,12 +15,13 @@ use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext};
+use crate::core::{DispatchMechanism, Eval, Mode, RunContext};
 
 use super::RunError;
 use super::util::{insession_isolated_handoff, mode_str};
 
 mod build;
+mod envs;
 mod resolve;
 mod stage;
 
@@ -64,6 +65,10 @@ struct Resolved {
     skill_path_b: Option<String>,
     selected_evals: Vec<Eval>,
     total_evals: usize,
+    /// Isolation groups computed from the selected evals' fixtures + hints, in
+    /// config order. Always at least one group (`g1`); a single group is the
+    /// common no-conflict case.
+    groups: Vec<super::grouping::Group>,
 }
 
 /// The product of [`stage::stage_conditions`]: the staged slugs plus the
@@ -71,7 +76,9 @@ struct Resolved {
 struct Staged {
     cond_a_slug: Option<String>,
     cond_b_slug: Option<String>,
-    sibling_skills: Vec<AvailableSkill>,
+    /// Sibling skills' `(name, description)` — env-independent. `build` resolves
+    /// the on-disk path per env (Cli stages a separate env per (group, condition)).
+    sibling_meta: Vec<(String, String)>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
 }
@@ -149,15 +156,14 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         r.iteration_dir.join("dispatch.json").display()
     );
 
-    let runbook_path = ctx.stage_root.join("RUNBOOK.md");
     match ctx.run_mode.mechanism() {
         DispatchMechanism::InSession => println!(
             "Runbook:            {} — start a fresh session in env/ and \"Read and follow RUNBOOK.md\".",
-            runbook_path.display()
+            ctx.stage_root.join("RUNBOOK.md").display()
         ),
         DispatchMechanism::Cli => println!(
             "Runbook:            {} — a human-followed copy of the steps below.",
-            runbook_path.display()
+            r.iteration_dir.join("RUNBOOK.md").display()
         ),
     }
     let run_counts: Vec<u32> = r

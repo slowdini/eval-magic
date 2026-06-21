@@ -64,8 +64,10 @@ fn codex_stages_repo_local_skills_under_agents() {
         .assert()
         .success();
 
+    // Codex rides Cli dispatch → per-(group, condition) envs. The skill stages into
+    // the with_skill env; the control arm's env carries the siblings but NOT the SUT.
     let slug = "slow-powers-eval-1-with_skill__mr-review";
-    let codex_skills = env_dir(&cwd).join(".agents/skills");
+    let codex_skills = cli_env_dir(&cwd, "g1", "with_skill").join(".agents/skills");
     assert!(read_str(&codex_skills.join(slug).join("SKILL.md")).contains(&format!("name: {slug}")));
     assert_eq!(
         read_str(&codex_skills.join("release-notes/helper.md")),
@@ -73,6 +75,11 @@ fn codex_stages_repo_local_skills_under_agents() {
     );
     assert!(!codex_skills.join("release-notes/evals").exists());
     assert!(!cwd.join(".claude/skills").exists());
+
+    // The gap fix: the control arm's env never contains the skill-under-test.
+    let without_skills = cli_env_dir(&cwd, "g1", "without_skill").join(".agents/skills");
+    assert!(!without_skills.join(slug).exists());
+    assert!(without_skills.join("release-notes/SKILL.md").exists());
 
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     let task = dispatch["tasks"]
@@ -113,7 +120,7 @@ fn codex_supports_stage_name_when_staging() {
         .success();
 
     assert!(
-        read_str(&env_dir(&cwd).join(".agents/skills/mr-review/SKILL.md"))
+        read_str(&cli_env_dir(&cwd, "g1", "with_skill").join(".agents/skills/mr-review/SKILL.md"))
             .contains("name: mr-review")
     );
 }
@@ -174,8 +181,10 @@ fn codex_guard_installs_project_hook() {
         .success()
         .stdout(contains("--dangerously-bypass-hook-trust"));
 
-    // The guard installs into the isolated env (the agent-under-test's cwd).
-    let hooks_path = env_dir(&cwd).join(".codex/hooks.json");
+    // The guard installs into each per-(group, condition) env (the agent-under-test's
+    // cwd).
+    let with_env = cli_env_dir(&cwd, "g1", "with_skill");
+    let hooks_path = with_env.join(".codex/hooks.json");
     assert!(hooks_path.exists());
     let hooks = read_json(&hooks_path);
     let hook = &hooks["hooks"]["PreToolUse"][0];
@@ -186,8 +195,14 @@ fn codex_guard_installs_project_hook() {
             .contains("guard-codex")
     );
     assert!(
-        env_dir(&cwd)
+        with_env
             .join(".agents/skills/.slow-powers-eval-guard.json")
+            .exists()
+    );
+    // The control arm's env is guarded too.
+    assert!(
+        cli_env_dir(&cwd, "g1", "without_skill")
+            .join(".codex/hooks.json")
             .exists()
     );
 }
@@ -310,7 +325,8 @@ fn codex_headless_records_mode_and_human_runbook() {
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
     assert_eq!(conditions["run_mode"], "headless");
 
-    let runbook = read_str(&env_dir(&cwd).join("RUNBOOK.md"));
+    // Cli has no single env/, so the human-followed runbook lives in the iteration dir.
+    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
         "headless uses the human-followed template: {runbook}"

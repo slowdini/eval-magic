@@ -218,6 +218,19 @@ pub struct SwitchConditionArgs {
     pub condition: String,
 }
 
+/// `reset-batch` names the isolation group about to be dispatched, on top of the
+/// common set.
+#[derive(Debug, Args)]
+pub struct ResetBatchArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// The isolation group you are about to dispatch next. The shared `env/`'s
+    /// working tree is wiped (keeping the staged skills + the outputs tree) and
+    /// re-seeded with this group's fixtures.
+    #[arg(long)]
+    pub group: String,
+}
+
 /// `snapshot` adds a label and an optional git ref on top of the common set.
 #[derive(Debug, Args)]
 pub struct SnapshotArgs {
@@ -438,6 +451,16 @@ pub(crate) enum Commands {
     /// a hard barrier. Idempotent; resolves the iteration from `--workspace-dir` so
     /// it works invoked from `env/`. Requires `--iteration`.
     SwitchCondition(SwitchConditionArgs),
+    /// Swap the active isolation batch in a single-session isolated run.
+    ///
+    /// Wipes the shared `env/` working tree (keeping `.claude/skills/` and the
+    /// `.eval-magic/` outputs tree) and re-seeds it with `--group`'s fixtures — the
+    /// per-batch isolation barrier between eval groups in an interactive isolated run
+    /// (see `RUNBOOK.md` / `docs/isolated-run.md`). `--group` names the group you are
+    /// about to dispatch next. Run it only after every Task subagent of the prior
+    /// batch has returned — it is a hard barrier. Resolves the iteration from
+    /// `--workspace-dir` so it works invoked from `env/`. Requires `--iteration`.
+    ResetBatch(ResetBatchArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
     /// Assembles a schema-valid `run.json` and backfills `timing.json` for every

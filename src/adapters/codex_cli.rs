@@ -41,13 +41,14 @@ pub(crate) fn codex_parallel_dispatch_recipe(
     let model_arg = render_cli_model_arg(model_flag, agent_model);
     [
         "JOBS=${JOBS:-4}".to_string(),
-        "jq -j '.tasks[] | [.dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\".to_string(),
+        "jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\".to_string(),
         "  xargs -0 -P \"$JOBS\" -I{} sh -c '".to_string(),
-        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
-        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
+        "    eval_root=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
+        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
+        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f3)\"".to_string(),
         "    mkdir -p \"$outputs_dir\"".to_string(),
         format!(
-            "    codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never{hook_trust}{model_arg} --json \\"
+            "    codex exec --cd \"$eval_root\" --sandbox workspace-write --ask-for-approval never{hook_trust}{model_arg} --json \\"
         ),
         "      --output-last-message \"$outputs_dir/final-message.md\" \\".to_string(),
         "      \"Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to $outputs_dir/final-message.md.\" \\".to_string(),

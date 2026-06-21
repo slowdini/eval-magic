@@ -71,7 +71,9 @@ fn opencode_stages_repo_local_skills_under_opencode() {
         .assert()
         .success();
 
-    let opencode_skills = env_dir(&cwd).join(".opencode/skills");
+    // OpenCode rides Cli dispatch → per-(group, condition) envs; the skill stages
+    // into the with_skill env.
+    let opencode_skills = cli_env_dir(&cwd, "g1", "with_skill").join(".opencode/skills");
     assert!(
         read_str(&opencode_skills.join(OPENCODE_SLUG).join("SKILL.md"))
             .contains(&format!("name: {OPENCODE_SLUG}"))

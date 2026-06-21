@@ -146,13 +146,22 @@ teardown
    - **Hybrid (Claude Code / Codex):** an orchestrating session follows `RUNBOOK.md`, shelling out a `claude -p` / `codex exec` recipe per task.
    - **Headless (Claude Code / Codex):** no session — a human follows the same `RUNBOOK.md`, pasting each recipe and command top to bottom.
 3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), an `agent_description` to pass through *verbatim* as the dispatch description, and the exact `run_record_path` / `timing_path`. For each task, dispatch a fresh subagent told to read the file at `dispatch_prompt_path` and follow it exactly. The `agent_description` is namespaced with the iteration and a per-run nonce (`<eval_id>:<condition>[:r<k>]:i<N>-<nonce>`; the `r<k>` segment appears only in multi-run cells, see `run --help` on `--runs`) — passing it through unchanged is what lets transcripts correlate to runs.
-4. **`switch-condition` between condition batches.** Conditions run as sequential batches, never interleaved. After joining *all* of the first batch's subagents, run `eval-magic switch-condition --condition <next>` to remove the off-condition's staged skill from `env/.claude/skills/`, so the next batch can't read it — the read-isolation barrier (contract in [docs/isolated-run.md](docs/isolated-run.md) §4).
+4. **`switch-condition` between condition batches.** Conditions run as sequential batches, never interleaved. After joining *all* of the first batch's subagents, run `eval-magic switch-condition --condition <next>` to remove the off-condition's staged skill from `env/.claude/skills/`, so the next batch can't read it — the read-isolation barrier (contract in [docs/isolated-run.md](docs/isolated-run.md) §4). When a run has more than one **isolation group** (see below), the runbook also dispatches each group as its own batch and runs `eval-magic reset-batch --group <g>` between groups — it wipes the shared `env/` working tree and re-seeds it with that group's fixtures, the per-group isolation barrier. The runbook spells out the exact `switch-condition` / `reset-batch` sequence; you never work it out yourself.
 5. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade), run from inside `env/`, assembles each task's `run.json` and `timing.json` from `dispatch.json` + the subagent's `outputs/final-message.md` + the persisted transcript, scans for stray writes, and grades the `transcript_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion.
 6. **Dispatch judges.** Same pattern as step 3: dispatch a fresh subagent for each judge task to read its prompt file and write its verdict back.
 7. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json` into `iteration-N/`, *above* `env/`. Read it. If a `--guard` marker is still live, it also reminds you to run `teardown-guard` before editing source.
 8. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
 
 The chains run in-process and stop at the first failure; re-running after a fix is safe — every sub-step skips work that's already done. The individual steps (`record-runs`, `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`) remain callable for inspection or recovery. Under the `Cli` mechanism (Claude Code hybrid/headless, Codex), the per-task dispatch recipe lives in `RUNBOOK.md` and `ingest` reads each task's events file (`claude-events.jsonl` / `codex-events.jsonl`) instead of an in-session transcript; un-wired harnesses still write records by hand until their adapters land.
+
+### Isolation grouping (which agents batch together)
+
+`run` decides at **setup** time which evals can share an environment and which need their own, writes the plan into `dispatch.json` (a `groups[]` summary plus a per-task `group`/`eval_root`), and the runbook follows it — the executing session does no isolation reasoning itself. By default every eval shares one group (today's behavior, unchanged). Two things create a separate group: evals whose fixtures would clobber each other, and an eval that opts out explicitly with `"isolation": "isolated"` in `evals.json` (use it when an eval's agent *mutates* a fixture another eval reads). How groups are realized depends on the run mode:
+
+- **Interactive (in-session):** one `env/`; groups are dispatched as sequential batches with a `reset-batch` barrier between them.
+- **Hybrid / headless (Cli):** one env per `(group, condition)` — `iteration-N/env-<group>-<condition>/` — so each subprocess `cd`s into a fully-isolated cwd. This also gives the Cli path real per-condition isolation: the control arm's env contains no skill at all.
+
+See [docs/isolated-run.md](docs/isolated-run.md) §3–§4 for the contract.
 
 ## Cost & confirmation
 
@@ -383,7 +392,7 @@ OpenCode skill names must be lowercase alphanumeric with single-hyphen separator
 | Where | What's in it |
 |-------|--------------|
 | `eval-magic --help` / `eval-magic <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
-| [docs/isolated-run.md](docs/isolated-run.md) | The isolated-env design + operating contract: the `env/` vs `iteration-N/` layout, the single-session `switch-condition` read-isolation barrier, and the guard boundary (Claude Code interactive reference; the same env layout serves hybrid/headless) |
+| [docs/isolated-run.md](docs/isolated-run.md) | The isolated-env design + operating contract: the `env/` vs `iteration-N/` layout, isolation **grouping** across evals (the `switch-condition` and `reset-batch` barriers in-session, per-`(group, condition)` envs for Cli), and the guard boundary |
 | [docs/harness-parity.md](docs/harness-parity.md) | The parity-audit framework for bringing a new harness up to the supported feature set |
 | [GitHub issues](https://github.com/slowdini/eval-magic/issues) | Planned features and known limitations |
 
