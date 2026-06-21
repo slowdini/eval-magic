@@ -86,7 +86,7 @@ fn grade_defaults_judge_tasks_to_recorded_judge_model() {
         .assert()
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("codex exec"));
+    assert!(stdout.contains("codex --ask-for-approval never exec"));
     assert!(stdout.contains("-m \"$model\""));
 
     let tasks: serde_json::Value =

@@ -228,14 +228,14 @@ fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("codex exec --cd <eval-root>"));
+    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(stdout.contains("--dangerously-bypass-hook-trust"));
     assert!(stdout.contains("</dev/null"));
     assert!(stdout.contains("codex-events.jsonl"));
     assert!(stdout.contains("codex-stderr.log"));
 
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
-    assert!(manifest.contains("codex exec --cd <eval-root>"));
+    assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(manifest.contains("--dangerously-bypass-hook-trust"));
     assert!(manifest.contains("</dev/null"));
     assert!(manifest.contains("codex-events.jsonl"));
@@ -265,14 +265,14 @@ fn codex_dispatch_guidance_includes_agent_model_when_provided() {
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("codex exec --cd <eval-root>"));
+    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(stdout.contains("-m gpt-5-mini"));
     assert!(stdout.contains("</dev/null"));
     assert!(stdout.contains("codex-events.jsonl"));
     assert!(stdout.contains("codex-stderr.log"));
 
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
-    assert!(manifest.contains("codex exec --cd <eval-root>"));
+    assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(manifest.contains("-m gpt-5-mini"));
     assert!(manifest.contains("xargs -0 -P"));
 }
@@ -297,7 +297,7 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("codex exec --cd <eval-root>"));
+    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(stdout.contains("</dev/null"));
     assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
 }
@@ -332,7 +332,7 @@ fn codex_headless_records_mode_and_human_runbook() {
         "headless uses the human-followed template: {runbook}"
     );
     assert!(
-        runbook.contains("codex exec"),
+        runbook.contains("codex --ask-for-approval never exec"),
         "carries the Codex CLI dispatch recipe: {runbook}"
     );
     assert!(

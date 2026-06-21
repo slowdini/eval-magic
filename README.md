@@ -326,12 +326,12 @@ Three details differ from Codex's `codex exec`: `--output-format stream-json` **
 
 ### Codex
 
-Codex's `codex exec --json` flow powers both CLI run modes (see [Run modes](#run-modes)): **hybrid** — an agent session orchestrates while each dispatch shells out to the CLI — and **headless** (`--run-mode headless`), where eval-magic drives the whole loop with no session, writing the same human-followed `RUNBOOK.md`. A **fully-interactive** mode likely doesn't translate, since Codex dispatches via subprocess rather than in-session subagents.
+Codex's `codex --ask-for-approval never exec --json` flow powers both CLI run modes (see [Run modes](#run-modes)): **hybrid** — an agent session orchestrates while each dispatch shells out to the CLI — and **headless** (`--run-mode headless`), where eval-magic drives the whole loop with no session, writing the same human-followed `RUNBOOK.md`. A **fully-interactive** mode likely doesn't translate, since Codex dispatches via subprocess rather than in-session subagents.
 
-Pass `--harness codex`: skills stage under repo-local `.agents/skills/` (the staged skill-under-test's frontmatter `name:` is rewritten to the eval slug so Codex's repo-local discovery sees it), and `conditions.json` / `dispatch.json` record `"harness": "codex"`. Dispatch each task with a fresh `codex exec --json` execution, capturing the event stream:
+Pass `--harness codex`: skills stage under repo-local `.agents/skills/` (the staged skill-under-test's frontmatter `name:` is rewritten to the eval slug so Codex's repo-local discovery sees it), and `conditions.json` / `dispatch.json` record `"harness": "codex"`. Dispatch each task with a fresh `codex --ask-for-approval never exec --json` execution, capturing the event stream:
 
 ```bash
-codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never --json \
+codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
   </dev/null \
@@ -342,7 +342,7 @@ codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -
 When `run --agent-model <id>` is set, the generated Codex recipes insert `-m <id>` before `--json`:
 
 ```bash
-codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -m <agent-model> --json \
+codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write -m <agent-model> --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
   </dev/null \
@@ -350,10 +350,10 @@ codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never -
   2> <outputs_dir>/codex-stderr.log
 ```
 
-When the run was armed with `--guard`, add `--dangerously-bypass-hook-trust` to that `codex exec` command so the vetted project-local `PreToolUse` hook staged in `.codex/hooks.json` actually runs:
+When the run was armed with `--guard`, add `--dangerously-bypass-hook-trust` to that `codex --ask-for-approval never exec` command so the vetted project-local `PreToolUse` hook staged in `.codex/hooks.json` actually runs:
 
 ```bash
-codex exec --cd <eval-root> --sandbox workspace-write --ask-for-approval never --dangerously-bypass-hook-trust --json \
+codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
   </dev/null \

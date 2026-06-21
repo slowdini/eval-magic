@@ -83,7 +83,7 @@ fn run_writes_headless_runbook_for_codex() {
         "frames the run for a human at a terminal: {book}"
     );
     assert!(
-        book.contains("codex exec"),
+        book.contains("codex --ask-for-approval never exec"),
         "carries the Codex CLI dispatch recipe: {book}"
     );
     assert!(
