@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::context::Harness;
+use crate::core::run_mode::RunMode;
 
 /// Meta-assertion id reserved for the skill-invocation check.
 pub const SKILL_INVOKED_META_ID: &str = "__skill_invoked";
@@ -68,6 +69,23 @@ pub struct Eval {
     /// to the flag's value (1 unless raised).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u32>,
+    /// Explicit isolation hint for run batching. `shared` (default, omitted) lets
+    /// the eval batch with others; `isolated` forces it into its own singleton
+    /// group, for confounds the framework can't auto-detect (e.g. the agent
+    /// mutates a shared fixture another eval reads). Conflicting fixtures
+    /// auto-isolate into separate groups regardless of this hint.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isolation: Option<Isolation>,
+}
+
+/// Per-eval isolation hint controlling how an eval is grouped into run batches.
+/// `Shared` is the default (an eval may share an env with non-conflicting evals);
+/// `Isolated` forces the eval into its own singleton group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Isolation {
+    Shared,
+    Isolated,
 }
 
 /// The parsed `evals.json` for one skill.
@@ -106,6 +124,10 @@ pub struct ConditionsRecord {
     pub timestamp: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub harness: Option<Harness>,
+    /// The run mode this iteration was built with (provenance + recoverability).
+    /// `None` on older artifacts written before run-mode selection existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_mode: Option<RunMode>,
     /// Per-run nonce; namespaces dispatch descriptions so transcripts can't
     /// collide across iterations sharing one parent session's subagents dir.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -289,12 +311,35 @@ mod tests {
             assertions: None,
             skill_should_trigger: None,
             runs: None,
+            isolation: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
         assert!(out.get("assertions").is_none());
         assert!(out.get("skill_should_trigger").is_none());
         assert!(out.get("runs").is_none());
+        assert!(out.get("isolation").is_none());
+    }
+
+    #[test]
+    fn isolation_round_trips_snake_case() {
+        let eval = Eval {
+            id: "e1".into(),
+            prompt: "p".into(),
+            expected_output: "o".into(),
+            files: None,
+            assertions: None,
+            skill_should_trigger: None,
+            runs: None,
+            isolation: Some(Isolation::Isolated),
+        };
+        let out = serde_json::to_value(&eval).unwrap();
+        assert_eq!(
+            out.get("isolation"),
+            Some(&Value::String("isolated".into()))
+        );
+        let back: Eval = serde_json::from_value(out).unwrap();
+        assert_eq!(back.isolation, Some(Isolation::Isolated));
     }
 
     #[test]
@@ -361,6 +406,7 @@ mod tests {
             conditions: vec![],
             timestamp: "2026-06-08T00:00:00Z".into(),
             harness: Some(Harness::ClaudeCode),
+            run_mode: Some(RunMode::Hybrid),
             run_nonce: None,
             runs: None,
             agent_model: None,
@@ -373,6 +419,7 @@ mod tests {
             out.get("harness"),
             Some(&Value::String("claude-code".into()))
         );
+        assert_eq!(out.get("run_mode"), Some(&Value::String("hybrid".into())));
         // Absent optionals omitted.
         assert!(out.get("baseline").is_none());
         assert!(out.get("run_nonce").is_none());

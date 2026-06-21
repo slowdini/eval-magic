@@ -52,7 +52,7 @@ fn grade_codex_staged_run_uses_llm_meta_check_with_skill_content() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-pos-eval").join("with_skill");
@@ -126,7 +126,7 @@ fn grade_omits_meta_check_for_negative_evals() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -202,7 +202,7 @@ fn grade_emits_and_finalizes_per_nested_run_dir() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -304,7 +304,7 @@ fn grade_fails_fast_on_malformed_run_record() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -363,7 +363,7 @@ fn grade_writes_prompt_files_and_drops_inline_prompt() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -446,7 +446,7 @@ fn grade_finalize_folds_responses_into_grading() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     let cond_dir = iteration_dir.join("eval-pos-eval").join("with_skill");

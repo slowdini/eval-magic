@@ -333,13 +333,31 @@ pub fn detect_stray_writes_report(
                     &source,
                 )?;
 
-                let outputs_dir = outputs_by_key
-                    .get(&run_key(eval_id, cond, slot.run_index))
-                    .cloned()
-                    .unwrap_or_else(|| slot.dir.join("outputs").to_string_lossy().into_owned());
+                let outputs_dir = outputs_by_key.get(&run_key(eval_id, cond, slot.run_index));
 
                 invocations_inspected += run.tool_invocations.len();
-                let findings = detect_stray_writes(&run.tool_invocations, &outputs_dir, repo_root);
+                // `dispatch.json` is the authoritative source of the outputs
+                // boundary: an absolute path into the isolated env
+                // (`env/.eval-magic-outputs/...`). Without it we cannot honor the
+                // outputs-only contract, so we skip out-of-bounds *write*
+                // classification for that run rather than guess a boundary — the old
+                // `<slot>/outputs` convention no longer matches where agents write and
+                // would mis-flag every legitimate write. Live-source-read detection is
+                // independent of the boundary and still runs.
+                let findings = match outputs_dir {
+                    Some(dir) => detect_stray_writes(&run.tool_invocations, dir, repo_root),
+                    None => {
+                        let run_label = slot
+                            .run_index
+                            .map(|k| format!(" run-{k}"))
+                            .unwrap_or_default();
+                        eprintln!(
+                            "⚠ {eval_id}/{cond}{run_label}: no outputs_dir in dispatch.json — \
+                             skipping out-of-bounds write classification (boundary unknown)"
+                        );
+                        RunFindings::default()
+                    }
+                };
                 let live_reads =
                     detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root);
 
@@ -729,7 +747,7 @@ mod tests {
         let f = detect_live_source_reads(
             &[
                 inv("Read", json!({"file_path": format!("{OUTPUTS}/x.md")}), 0),
-                inv("Bash", json!({"command": "ls skills-workspace"}), 1),
+                inv("Bash", json!({"command": "ls .eval-magic"}), 1),
                 // Write tools are detect_stray_writes' jurisdiction — reads only here.
                 inv(
                     "Write",

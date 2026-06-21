@@ -14,6 +14,8 @@ pub mod runtime;
 pub mod types;
 
 pub use context::{ContextError, DetectInput, Harness, RunContext, detect_run_context};
-pub use run_mode::{DispatchMechanism, HarnessRunCapabilities, capabilities_for, mechanism_for};
+pub use run_mode::{
+    DispatchMechanism, HarnessRunCapabilities, RunMode, capabilities_for, resolve_run_mode,
+};
 pub use runtime::{GitOutput, run_git};
 pub use types::*;

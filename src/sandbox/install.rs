@@ -68,26 +68,29 @@ fn write_json(path: &Path, value: &Value) -> io::Result<()> {
     fs::write(path, text)
 }
 
-fn marker_allowed_roots(workspace_root: &Path, skills_dir: &Path) -> Vec<String> {
+/// The guard's allowed write roots: the isolated env (`stage_root`, the
+/// agent-under-test's cwd) and the OS temp dir. The staged skills dir
+/// (`stage_root/.claude/skills` or `.agents/skills`) and the per-task outputs dir
+/// both live *inside* `stage_root`, so a single env root covers every legitimate
+/// agent write. Scoping to the env — not the parent `.eval-magic/` — keeps the
+/// guard boundary identical to the isolation boundary: the agent can't reach a
+/// sibling iteration or the `iteration-N/` meta tree above its cwd. eval-magic's own
+/// above-env writes (e.g. `benchmark.json`) are not gated here: they run as
+/// non-mutating `eval-magic` subprocesses the guard's Bash classifier passes.
+fn marker_allowed_roots(stage_root: &Path) -> Vec<String> {
     vec![
-        absolutize(workspace_root).display().to_string(),
-        absolutize(skills_dir).display().to_string(),
+        absolutize(stage_root).display().to_string(),
         absolutize(&std::env::temp_dir()).display().to_string(),
     ]
 }
 
-fn write_marker(
-    marker_path: &Path,
-    workspace_root: &Path,
-    skills_dir: &Path,
-    ttl: Option<Duration>,
-) -> io::Result<()> {
+fn write_marker(marker_path: &Path, stage_root: &Path, ttl: Option<Duration>) -> io::Result<()> {
     let expires_ms = now_ms() + ttl.unwrap_or(GUARD_TTL).as_millis() as i64;
     write_json(
         marker_path,
         &json!({
             "active": true,
-            "allowedRoots": marker_allowed_roots(workspace_root, skills_dir),
+            "allowedRoots": marker_allowed_roots(stage_root),
             "expiresAt": iso_millis(expires_ms),
         }),
     )
@@ -120,16 +123,14 @@ fn write_manifest(
 /// `std::env::current_exe()`); `ttl` overrides the default 6h lifetime.
 pub fn install_guard(
     stage_root: &Path,
-    workspace_root: &Path,
     guard_exe: &Path,
     ttl: Option<Duration>,
 ) -> io::Result<PathBuf> {
-    install_claude_guard(stage_root, workspace_root, guard_exe, ttl)
+    install_claude_guard(stage_root, guard_exe, ttl)
 }
 
 pub(crate) fn install_claude_guard(
     stage_root: &Path,
-    workspace_root: &Path,
     guard_exe: &Path,
     ttl: Option<Duration>,
 ) -> io::Result<PathBuf> {
@@ -137,7 +138,7 @@ pub(crate) fn install_claude_guard(
     fs::create_dir_all(&skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    write_marker(&marker_path, workspace_root, &skills_dir, ttl)?;
+    write_marker(&marker_path, stage_root, ttl)?;
 
     let settings_path = stage_root.join(".claude").join("settings.local.json");
     let settings_existed = settings_path.exists();
@@ -189,7 +190,6 @@ pub(crate) fn install_claude_guard(
 
 pub(crate) fn install_codex_guard(
     stage_root: &Path,
-    workspace_root: &Path,
     guard_exe: &Path,
     ttl: Option<Duration>,
 ) -> io::Result<PathBuf> {
@@ -197,7 +197,7 @@ pub(crate) fn install_codex_guard(
     fs::create_dir_all(&skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    write_marker(&marker_path, workspace_root, &skills_dir, ttl)?;
+    write_marker(&marker_path, stage_root, ttl)?;
 
     let hooks_path = stage_root.join(".codex").join("hooks.json");
     if let Some(parent) = hooks_path.parent() {
@@ -324,18 +324,15 @@ mod tests {
     struct Case {
         _tmp: TempDir,
         stage_root: PathBuf,
-        workspace_root: PathBuf,
     }
 
     fn setup() -> Case {
         let tmp = TempDir::new().unwrap();
         let stage_root = tmp.path().join("stage");
         fs::create_dir_all(&stage_root).unwrap();
-        let workspace_root = stage_root.join("skills-workspace");
         Case {
             _tmp: tmp,
             stage_root,
-            workspace_root,
         }
     }
 
@@ -359,7 +356,7 @@ mod tests {
     fn install_writes_an_active_marker_hook_and_manifest() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
+        install_guard(&c.stage_root, exe, None).unwrap();
 
         let marker = read_json(&skills_dir(&c.stage_root).join(GUARD_MARKER));
         assert_eq!(marker["active"], json!(true));
@@ -368,12 +365,13 @@ mod tests {
             .unwrap()
             .timestamp_millis();
         assert!(exp_ms > now_ms());
+        let env = absolutize(&c.stage_root).display().to_string();
         assert!(
             marker["allowedRoots"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|r| r.as_str().unwrap().contains("skills-workspace"))
+                .any(|r| r.as_str().unwrap() == env)
         );
 
         let settings = read_json(&settings_path(&c.stage_root));
@@ -390,10 +388,36 @@ mod tests {
     }
 
     #[test]
+    fn marker_scopes_allowed_roots_to_the_env_and_temp_only() {
+        let c = setup();
+        let exe = Path::new("/g/eval-magic");
+        install_guard(&c.stage_root, exe, None).unwrap();
+
+        let marker = read_json(&skills_dir(&c.stage_root).join(GUARD_MARKER));
+        let roots: Vec<String> = marker["allowedRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap().to_string())
+            .collect();
+
+        // The guard boundary is the isolated env (stage_root) plus temp — nothing
+        // above it. The parent workspace tree must NOT be an allowed root, or the
+        // agent could write into sibling iterations / the meta dir above `env/`.
+        let env = absolutize(&c.stage_root).display().to_string();
+        let temp = absolutize(&std::env::temp_dir()).display().to_string();
+        assert_eq!(roots, vec![env, temp]);
+        assert!(
+            !roots.iter().any(|r| r.ends_with(".eval-magic")),
+            "workspace_root must not be an allowed root: {roots:?}"
+        );
+    }
+
+    #[test]
     fn hook_command_invokes_the_binary_guard_subcommand() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        let marker = install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
+        let marker = install_guard(&c.stage_root, exe, None).unwrap();
         let settings = read_json(&settings_path(&c.stage_root));
         let command = settings["hooks"]["PreToolUse"][0]["hooks"][0]["command"]
             .as_str()
@@ -409,7 +433,7 @@ mod tests {
     fn teardown_deletes_settings_it_created() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
+        install_guard(&c.stage_root, exe, None).unwrap();
         assert!(settings_path(&c.stage_root).exists());
 
         assert!(teardown_guard(&c.stage_root));
@@ -432,7 +456,7 @@ mod tests {
         fs::write(settings_path(&c.stage_root), &original).unwrap();
 
         let exe = Path::new("/g/eval-magic");
-        install_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
+        install_guard(&c.stage_root, exe, None).unwrap();
         // hook present while armed
         assert!(
             fs::read_to_string(settings_path(&c.stage_root))
@@ -456,24 +480,12 @@ mod tests {
     #[test]
     fn guard_is_armed_detects_claude_or_codex_marker() {
         let c = setup();
-        install_guard(
-            &c.stage_root,
-            &c.workspace_root,
-            Path::new("/g/eval-magic"),
-            None,
-        )
-        .unwrap();
+        install_guard(&c.stage_root, Path::new("/g/eval-magic"), None).unwrap();
         assert!(guard_is_armed(&c.stage_root));
         teardown_guard(&c.stage_root);
         assert!(!guard_is_armed(&c.stage_root));
 
-        install_codex_guard(
-            &c.stage_root,
-            &c.workspace_root,
-            Path::new("/g/eval-magic"),
-            None,
-        )
-        .unwrap();
+        install_codex_guard(&c.stage_root, Path::new("/g/eval-magic"), None).unwrap();
         assert!(guard_is_armed(&c.stage_root));
     }
 
@@ -520,7 +532,7 @@ mod tests {
     fn codex_install_writes_project_hook_marker_and_manifest() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        install_codex_guard(&c.stage_root, &c.workspace_root, exe, None).unwrap();
+        install_codex_guard(&c.stage_root, exe, None).unwrap();
 
         let marker = read_json(
             &c.stage_root
@@ -529,12 +541,15 @@ mod tests {
                 .join(GUARD_MARKER),
         );
         assert_eq!(marker["active"], json!(true));
+        // The Codex guard shares the env-scoped roots: the staged `.agents/skills`
+        // dir lives inside `stage_root`, so the single env root already covers it.
+        let env = absolutize(&c.stage_root).display().to_string();
         assert!(
             marker["allowedRoots"]
                 .as_array()
                 .unwrap()
                 .iter()
-                .any(|r| r.as_str().unwrap().contains(".agents/skills"))
+                .any(|r| r.as_str().unwrap() == env)
         );
 
         let hooks = read_json(&codex_hooks_path(&c.stage_root));
@@ -575,13 +590,7 @@ mod tests {
         );
         fs::write(codex_hooks_path(&c.stage_root), &original).unwrap();
 
-        install_codex_guard(
-            &c.stage_root,
-            &c.workspace_root,
-            Path::new("/g/eval-magic"),
-            None,
-        )
-        .unwrap();
+        install_codex_guard(&c.stage_root, Path::new("/g/eval-magic"), None).unwrap();
         assert!(
             fs::read_to_string(codex_hooks_path(&c.stage_root))
                 .unwrap()

@@ -5,7 +5,10 @@ use std::path::Path;
 
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
 use crate::cli::run;
-use crate::cli::{command_target_args, resolve_iteration, run_context_from};
+use crate::cli::{
+    command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
+};
+use crate::core::DispatchMechanism;
 use crate::sandbox;
 use crate::workspace;
 
@@ -88,8 +91,19 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
 /// any iteration with uncommitted results.
 pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    // The guard lives at `<cwd>/.claude` (cwd-only, matching `teardown-guard`).
-    let torn = sandbox::teardown_guard(&std::env::current_dir()?);
+    // Disarm the guard at the invocation cwd — the in-session flow runs teardown from
+    // inside `env/`. Under Cli there is one env per (group, condition) and the human
+    // runs teardown from the iteration dir, so additionally walk each per-env marker
+    // (before `cleanup_workspace` reclaims the tree). Best-effort: a missing iteration
+    // just skips the walk; `teardown_guard` is a no-op without a marker.
+    let mut torn = sandbox::teardown_guard(&std::env::current_dir()?);
+    if ctx.run_mode.mechanism() == DispatchMechanism::Cli
+        && let Ok(dir) = iteration_dir(&ctx, args.iteration)
+    {
+        for env in staged_env_roots(&dir) {
+            torn |= sandbox::teardown_guard(&env);
+        }
+    }
     run::staging::cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
     let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
 
@@ -120,9 +134,7 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
         eprintln!(
             "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     eval-magic promote-baseline{target_args} --iteration <N>\n   or delete {}/ manually to discard.",
             ws.kept_iterations.len(),
-            Path::new("skills-workspace")
-                .join(&ctx.skill_name)
-                .display()
+            Path::new(".eval-magic").join(&ctx.skill_name).display()
         );
     }
     Ok(())

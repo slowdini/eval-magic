@@ -40,7 +40,7 @@ fn promote_baseline_copies_artifacts_and_reports() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-2");
     let cond_dir = iteration_dir.join("eval-e1").join("with_skill");
@@ -83,7 +83,7 @@ fn promote_baseline_captures_multi_run_gradings() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-2");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -130,7 +130,7 @@ fn promote_baseline_warns_when_run_cells_missing_gradings() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-2");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -165,7 +165,7 @@ fn promote_baseline_writes_notes_stub_and_reports_it() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -203,7 +203,7 @@ fn promote_baseline_warns_when_prior_notes_retained() {
 
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-2");
     fs::create_dir_all(&iteration_dir).unwrap();
@@ -263,7 +263,7 @@ fn snapshot_working_tree_copies_and_records_provenance() {
         .success()
         .stdout(contains("Snapshotted mr-review →"));
 
-    let snap = cwd.join("skills-workspace/mr-review/snapshots/wt");
+    let snap = cwd.join(".eval-magic/mr-review/snapshots/wt");
     assert_eq!(
         fs::read_to_string(snap.join("SKILL.md")).unwrap(),
         "v2 working tree\n"
@@ -291,8 +291,7 @@ fn snapshot_defaults_to_baseline_label() {
         .stdout(contains("Snapshotted mr-review"));
 
     assert_eq!(
-        fs::read_to_string(cwd.join("skills-workspace/mr-review/snapshots/baseline/SKILL.md"))
-            .unwrap(),
+        fs::read_to_string(cwd.join(".eval-magic/mr-review/snapshots/baseline/SKILL.md")).unwrap(),
         "v2 working tree\n"
     );
 }
@@ -320,7 +319,7 @@ fn snapshot_ref_reads_committed_content() {
         .success()
         .stdout(contains("Snapshotted mr-review at HEAD →"));
 
-    let snap = cwd.join("skills-workspace/mr-review/snapshots/old");
+    let snap = cwd.join(".eval-magic/mr-review/snapshots/old");
     assert_eq!(
         fs::read_to_string(snap.join("SKILL.md")).unwrap(),
         "v1 baseline\n"
@@ -345,7 +344,7 @@ fn teardown_reclaims_promoted_and_keeps_uncommitted() {
     let (skill_dir, _skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
 
     let cwd = root.join("work");
-    let skill_ws = cwd.join("skills-workspace").join("mr-review");
+    let skill_ws = cwd.join(".eval-magic").join("mr-review");
     let promoted = skill_ws.join("iteration-1");
     let kept = skill_ws.join("iteration-2");
     fs::create_dir_all(&promoted).unwrap();

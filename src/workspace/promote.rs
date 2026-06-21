@@ -269,7 +269,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
             "`eval-magic promote-baseline --iteration {}` after aggregating. The ephemeral workspace (run records, timing,",
             opts.iteration
         ),
-        "dispatch files, produced outputs) stays gitignored under `skills-workspace/`".to_string(),
+        "dispatch files, produced outputs) stays gitignored under `.eval-magic/`".to_string(),
         "and is reclaimable by `eval-magic teardown` once promoted (this commit's marker)."
             .to_string(),
         String::new(),
@@ -322,7 +322,7 @@ mod tests {
             &skill_subdir.join("SKILL.md"),
             "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
         );
-        let workspace_root = tmp.path().join("work").join("skills-workspace");
+        let workspace_root = tmp.path().join("work").join(".eval-magic");
         let iteration_dir = workspace_root
             .join("mr-review")
             .join(format!("iteration-{iteration}"));

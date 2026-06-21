@@ -6,7 +6,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::core::Harness;
+use crate::core::{Harness, RunMode};
 
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
 ///
@@ -81,7 +81,21 @@ pub struct CommonArgs {
     /// `--guard` are not yet wired for OpenCode.
     #[arg(long)]
     pub harness: Option<Harness>,
-    /// Workspace directory (defaults to `<cwd>/skills-workspace`).
+    /// Run mode: `interactive` (in-session subagents), `hybrid` (an agent
+    /// orchestrates while each dispatch shells out to the harness CLI), or
+    /// `headless` (CLI-only, no session).
+    ///
+    /// Defaults per harness — Claude Code → `interactive`, Codex/OpenCode →
+    /// `hybrid`. `hybrid`/`headless` dispatch through the harness CLI (`claude -p`,
+    /// `codex exec`) and read each task's `outputs/<harness>-events.jsonl`;
+    /// `interactive` dispatches in-session subagents. Claude Code wires all three
+    /// (`hybrid`/`headless` ride `claude -p` stream-json); Codex wires `hybrid` +
+    /// `headless`; OpenCode wires `hybrid` only. Pass the same value to every command
+    /// of a run (it selects the transcript source at `ingest`); the printed next-step
+    /// commands already carry it.
+    #[arg(long)]
+    pub run_mode: Option<RunMode>,
+    /// Workspace directory (defaults to `<cwd>/.eval-magic`).
     ///
     /// The artifact root. Pass the same value to every command of a run, including
     /// `teardown`.
@@ -192,6 +206,31 @@ pub struct GradeArgs {
     pub finalize: bool,
 }
 
+/// `switch-condition` names the condition about to be dispatched (the one to keep)
+/// on top of the common set.
+#[derive(Debug, Args)]
+pub struct SwitchConditionArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// The condition you are about to dispatch next (the one to KEEP). Its
+    /// counterpart's staged skill is removed from `env/.claude/skills/`.
+    #[arg(long)]
+    pub condition: String,
+}
+
+/// `reset-batch` names the isolation group about to be dispatched, on top of the
+/// common set.
+#[derive(Debug, Args)]
+pub struct ResetBatchArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// The isolation group you are about to dispatch next. The shared `env/`'s
+    /// working tree is wiped (keeping the staged skills + the outputs tree) and
+    /// re-seeded with this group's fixtures.
+    #[arg(long)]
+    pub group: String,
+}
+
 /// `snapshot` adds a label and an optional git ref on top of the common set.
 #[derive(Debug, Args)]
 pub struct SnapshotArgs {
@@ -268,24 +307,36 @@ pub struct RunArgs {
     /// For harnesses without project-local skill discovery. Forces the LLM-judge
     /// meta-check tier and inlines only SKILL.md (not sibling skills or sibling
     /// asset files); use the staged (default) path when the measured behavior
-    /// depends on sibling files. Also disables `--guard` — the write guard
-    /// requires staging — so no-stage runs are unguarded and rely on
-    /// `detect-stray-writes` after the fact.
+    /// depends on sibling files. The isolated env (`env/`) is still built either
+    /// way — `--no-stage` only skips populating the harness skills dir. Also
+    /// disables `--guard` — the write guard requires staging — so no-stage runs
+    /// are unguarded and rely on `detect-stray-writes` after the fact.
     #[arg(long)]
     pub no_stage: bool,
     /// Arm the write guard (PreToolUse hook) for the dispatch window.
     ///
     /// Stages a harness-native `PreToolUse` hook that *blocks* subagent
-    /// writes/installs outside the eval sandbox while dispatches run. Arm it
-    /// unless the user opts out. The marker auto-expires after 6h and is torn down
-    /// at the next run; while armed the hook fires on your own tool calls too.
-    /// If it remains armed after `finalize`, `finalize` reminds you to run
-    /// `teardown-guard` before editing source. Requires staging — incompatible
-    /// with `--no-stage`, under which guard install is skipped and the run is
-    /// unguarded.
+    /// writes/installs outside the isolated run env (the agent-under-test's cwd)
+    /// while dispatches run. Its allowed roots are the env plus the OS temp dir, so
+    /// the guard boundary matches the same env that isolates the agent's reads.
+    /// Because the harness already cwd-bounds the agent's direct file tools to the
+    /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
+    /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
+    /// redirects to absolute paths — and acting as a backstop when the isolated
+    /// session runs with relaxed permissions. Arm it unless the user opts out. The
+    /// marker auto-expires after 6h and is torn down at the next run; while armed the
+    /// hook fires on your own tool calls too. If it remains armed after `finalize`,
+    /// `finalize` reminds you to run `teardown` before editing source (which disarms
+    /// the cwd guard and every per-`(group, condition)` Cli env's guard). Requires
+    /// staging — incompatible with `--no-stage`, under which guard install is skipped
+    /// and the run is unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
+    /// Works under Claude Code's CLI run modes (`hybrid`/`headless`) too: the
+    /// `PreToolUse` hook is staged in `env/.claude/settings.local.json`, and each
+    /// `claude -p` dispatch loads it from that cwd (`cd <eval-root>`), enforcing the
+    /// same boundary as an in-session run (the recipe never passes `--bare`).
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.
@@ -352,6 +403,9 @@ pub(crate) enum Commands {
     /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
     /// (human-readable). Your agent then dispatches each task as a fresh subagent.
+    /// Also writes `RUNBOOK.md`, a followable handoff for an isolated run session
+    /// ("Read and follow RUNBOOK.md") — interactive (agent-followed) for Claude
+    /// Code, human-followed for Codex/OpenCode.
     Run(RunArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -384,9 +438,31 @@ pub(crate) enum Commands {
     /// Finalize grading after judge responses are in.
     ///
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges the judge verdicts
-    /// and writes `benchmark.json`. If a live guard remains armed, prints a
-    /// `teardown-guard` reminder before source edits. Requires `--iteration`.
+    /// and writes `benchmark.json`. If a live guard remains armed — the cwd guard, or
+    /// any per-`(group, condition)` Cli env guard — prints a `teardown` reminder before
+    /// source edits. Requires `--iteration`.
     Finalize(CommonArgs),
+    /// Switch the active condition batch in a single-session isolated run.
+    ///
+    /// Removes the *off-condition*'s staged skill from `env/.claude/skills/` so the
+    /// next batch you dispatch cannot read it — the per-condition read-isolation
+    /// barrier for an interactive isolated run (see `RUNBOOK.md`).
+    /// `--condition` names the condition you are about to
+    /// dispatch next (the one to keep); its counterpart's staged skill is removed.
+    /// Run it only after every Task subagent of the prior batch has returned — it is
+    /// a hard barrier. Idempotent; resolves the iteration from `--workspace-dir` so
+    /// it works invoked from `env/`. Requires `--iteration`.
+    SwitchCondition(SwitchConditionArgs),
+    /// Swap the active isolation batch in a single-session isolated run.
+    ///
+    /// Wipes the shared `env/` working tree (keeping `.claude/skills/` and the
+    /// `.eval-magic-outputs/` tree) and re-seeds it with `--group`'s fixtures — the
+    /// per-batch isolation barrier between eval groups in an interactive isolated run
+    /// (see `RUNBOOK.md`). `--group` names the group you are
+    /// about to dispatch next. Run it only after every Task subagent of the prior
+    /// batch has returned — it is a hard barrier. Resolves the iteration from
+    /// `--workspace-dir` so it works invoked from `env/`. Requires `--iteration`.
+    ResetBatch(ResetBatchArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
     /// Assembles a schema-valid `run.json` and backfills `timing.json` for every

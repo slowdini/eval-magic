@@ -15,12 +15,13 @@ use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{AvailableSkill, DispatchMechanism, Eval, Mode, RunContext, mechanism_for};
+use crate::core::{DispatchMechanism, Eval, Mode, RunContext};
 
 use super::RunError;
-use super::util::mode_str;
+use super::util::{insession_isolated_handoff, mode_str};
 
 mod build;
+mod envs;
 mod resolve;
 mod stage;
 
@@ -64,6 +65,10 @@ struct Resolved {
     skill_path_b: Option<String>,
     selected_evals: Vec<Eval>,
     total_evals: usize,
+    /// Isolation groups computed from the selected evals' fixtures + hints, in
+    /// config order. Always at least one group (`g1`); a single group is the
+    /// common no-conflict case.
+    groups: Vec<super::grouping::Group>,
 }
 
 /// The product of [`stage::stage_conditions`]: the staged slugs plus the
@@ -71,23 +76,31 @@ struct Resolved {
 struct Staged {
     cond_a_slug: Option<String>,
     cond_b_slug: Option<String>,
-    sibling_skills: Vec<AvailableSkill>,
+    /// Sibling skills' `(name, description)` — env-independent. `build` resolves
+    /// the on-disk path per env (Cli stages a separate env per (group, condition)).
+    sibling_meta: Vec<(String, String)>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
-    /// Whether the harness skills dir existed when `run` started — i.e. before this run staged
-    /// anything. Drives the Claude Code staged-skill discovery warning: an existing dir is already
-    /// watched, so live change detection surfaces the staged skills; a dir this run had to create
-    /// isn't watched until the session re-scans. See [`super::util::staging_discovery_warning`].
-    skills_dir_preexisted: bool,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
     let resolved = resolve::resolve_request(ctx, opts)?;
+
+    // Redirect staging into the isolated env dir. `resolve_request` has now
+    // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
+    // staging root, so the existing root-parameterized staging path follows it
+    // (every `skills_dir_for_harness(&ctx.stage_root, …)` site). eval-magic meta
+    // stays above the env in `iteration_dir`. Only `run` overrides the cwd default
+    // set in `detect_run_context`; teardown/finalize keep operating at cwd.
+    let mut owned_ctx = ctx.clone();
+    owned_ctx.stage_root = resolved.iteration_dir.join("env");
+    let ctx = &owned_ctx;
+
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
-    build::post_build(ctx, opts, &resolved, &staged)?;
+    build::post_build(ctx, opts, &resolved)?;
     print_next_steps(ctx, opts, &resolved, num_tasks);
     Ok(())
 }
@@ -142,6 +155,17 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         "Dispatch tasks:     {}",
         r.iteration_dir.join("dispatch.json").display()
     );
+
+    match ctx.run_mode.mechanism() {
+        DispatchMechanism::InSession => println!(
+            "Runbook:            {} — start a fresh session in env/ and \"Read and follow RUNBOOK.md\".",
+            ctx.stage_root.join("RUNBOOK.md").display()
+        ),
+        DispatchMechanism::Cli => println!(
+            "Runbook:            {} — a human-followed copy of the steps below.",
+            r.iteration_dir.join("RUNBOOK.md").display()
+        ),
+    }
     let run_counts: Vec<u32> = r
         .selected_evals
         .iter()
@@ -173,11 +197,14 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
-    match mechanism_for(ctx.harness) {
-        // In-session subagent dispatch (Claude Code's Task tool today).
-        DispatchMechanism::InSession => println!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task as a subagent, passing its `agent_description` verbatim as the subagent description (that string is the key that links each transcript back — without it tool calls, tokens, and duration come back empty). Then run:\n  eval-magic ingest{target_args} --iteration {iteration}\n(ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that session, add --session-id <id> or --subagents-dir <path>.)"
-        ),
+    match ctx.run_mode.mechanism() {
+        // In-session subagent dispatch (Claude Code's Task tool today). The env is
+        // built before the isolated session starts, so the summary just hands off:
+        // cd into env/, start a fresh session, "Read and follow RUNBOOK.md" — which
+        // carries the full dispatch → switch-condition → ingest → finalize loop.
+        DispatchMechanism::InSession => {
+            println!("\nNext: {}", insession_isolated_handoff(&ctx.stage_root))
+        }
         // One-shot CLI dispatch; the exact command is harness-specific.
         DispatchMechanism::Cli => println!(
             "{}",
