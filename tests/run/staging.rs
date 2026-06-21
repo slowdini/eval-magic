@@ -29,7 +29,7 @@ fn setup_direct_skill(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
 }
 
 fn direct_iteration_dir(cwd: &Path) -> PathBuf {
-    cwd.join("skills-workspace")
+    cwd.join(".eval-magic")
         .join("mr-review")
         .join("iteration-1")
 }

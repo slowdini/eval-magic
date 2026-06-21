@@ -156,13 +156,13 @@ fn dispatch_outputs_live_under_env() {
     // tempdir, so a lexical starts_with would mismatch.
     let env = fs::canonicalize(env_dir(&cwd)).unwrap();
     let iter = fs::canonicalize(iteration_dir(&cwd)).unwrap();
-    let outputs_root = env.join(".eval-magic").join("outputs");
+    let outputs_root = env.join(".eval-magic-outputs");
     for task in tasks {
         // The agent-under-test (cwd = env/) writes only inside its env.
         let outputs_dir = fs::canonicalize(task["outputs_dir"].as_str().unwrap()).unwrap();
         assert!(
             outputs_dir.starts_with(&outputs_root),
-            "outputs_dir under env/.eval-magic/outputs/: {}",
+            "outputs_dir under env/.eval-magic-outputs/: {}",
             outputs_dir.display()
         );
         // run.json / timing.json are eval-magic meta: above the env, in iteration-N/.

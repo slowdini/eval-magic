@@ -184,10 +184,7 @@ pub(super) fn write_dispatch(
                         None => format!("eval-{}/{cond_name}", ev.id),
                         Some(k) => format!("eval-{}/{cond_name}/run-{k}", ev.id),
                     };
-                    let outputs_dir = env_root
-                        .join(".eval-magic")
-                        .join("outputs")
-                        .join(outputs_rel);
+                    let outputs_dir = env_root.join(".eval-magic-outputs").join(outputs_rel);
                     fs::create_dir_all(&outputs_dir)?;
 
                     let fixtures = fixtures_by_eval

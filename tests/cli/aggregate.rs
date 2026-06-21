@@ -25,7 +25,7 @@ fn setup_agg(
     let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
     let cwd = root.join("work");
     let iteration_dir = cwd
-        .join("skills-workspace")
+        .join(".eval-magic")
         .join("mr-review")
         .join("iteration-1");
     fs::create_dir_all(&iteration_dir).unwrap();

@@ -255,7 +255,7 @@ mod tests {
 
     #[test]
     fn interactive_runbook_carries_run_specifics_and_full_loop() {
-        let dir = PathBuf::from("/work/skills-workspace/widget-skill/iteration-5");
+        let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-5");
         let book = build_runbook(&claude_ctx(&dir));
 
         // Run-specific identity.
@@ -326,7 +326,7 @@ mod tests {
 
     #[test]
     fn interactive_runbook_with_multiple_groups_carries_reset_batch_barriers() {
-        let dir = PathBuf::from("/work/skills-workspace/widget-skill/iteration-5");
+        let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-5");
         let groups = ["g1".to_string(), "g2".to_string()];
         let book = build_runbook(&RunbookContext {
             groups: &groups,
@@ -362,7 +362,7 @@ mod tests {
 
     #[test]
     fn headless_runbook_is_human_followed_cli_recipe() {
-        let dir = PathBuf::from("/work/skills-workspace/widget-skill/iteration-2");
+        let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
         let ctx = RunbookContext {
             harness: Harness::Codex,
             run_mode: RunMode::Hybrid,

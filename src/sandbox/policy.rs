@@ -51,7 +51,7 @@ static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::
             "path under .claude",
         ),
         // The same create verbs whose operand is a top-level `skills/` directory —
-        // catches a bare `skills/` left in the cwd. `skills-workspace` and other
+        // catches a bare `skills/` left in the cwd. `skills-data` and other
         // `skills`-prefixed names are excluded by the trailing `/`, whitespace, or
         // end-of-string boundary.
         (
@@ -156,7 +156,7 @@ fn absolutize(target: &str, repo_root: &Path) -> std::path::PathBuf {
 
 /// True when `target` resolves to `dir` or a descendant of it. Relative `target`s
 /// resolve against `repo_root`. `Path::starts_with` matches whole path
-/// components, so `skills-workspace2` is correctly not under `skills-workspace`.
+/// components, so `.eval-magic2` is correctly not under `.eval-magic`.
 pub fn is_under(target: &str, dir: &str, repo_root: &Path) -> bool {
     let base = absolutize(dir, repo_root);
     let abs = absolutize(target, repo_root);
@@ -189,7 +189,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const ROOTS: [&str; 2] = ["/work/skills-workspace", "/work/.claude/skills"];
+    const ROOTS: [&str; 2] = ["/work/.eval-magic", "/work/.claude/skills"];
 
     fn roots() -> Vec<String> {
         ROOTS.iter().map(|s| s.to_string()).collect()
@@ -243,37 +243,21 @@ mod tests {
     #[test]
     fn is_under_matches_dir_and_descendants() {
         let repo = Path::new("/work");
+        assert!(is_under("/work/.eval-magic", "/work/.eval-magic", repo));
         assert!(is_under(
-            "/work/skills-workspace",
-            "/work/skills-workspace",
+            "/work/.eval-magic/x/out.md",
+            "/work/.eval-magic",
             repo
         ));
-        assert!(is_under(
-            "/work/skills-workspace/x/out.md",
-            "/work/skills-workspace",
-            repo
-        ));
-        assert!(!is_under(
-            "/work/runner/run.ts",
-            "/work/skills-workspace",
-            repo
-        ));
-        // `skills-workspace2` is not under `skills-workspace` (separator boundary).
-        assert!(!is_under(
-            "/work/skills-workspace2/x",
-            "/work/skills-workspace",
-            repo
-        ));
+        assert!(!is_under("/work/runner/run.ts", "/work/.eval-magic", repo));
+        // `.eval-magic2` is not under `.eval-magic` (separator boundary).
+        assert!(!is_under("/work/.eval-magic2/x", "/work/.eval-magic", repo));
     }
 
     #[test]
     fn is_under_resolves_relative_targets_against_repo_root() {
         let repo = Path::new("/work");
-        assert!(is_under(
-            "skills-workspace/x",
-            "/work/skills-workspace",
-            repo
-        ));
+        assert!(is_under(".eval-magic/x", "/work/.eval-magic", repo));
     }
 
     #[test]
@@ -303,7 +287,7 @@ mod tests {
     fn classify_bash_allows_scoped_and_readonly_commands() {
         // Textually references an allowed root → scoped → allowed.
         assert_eq!(
-            classify_bash("echo hi > /work/skills-workspace/x/log", &roots()),
+            classify_bash("echo hi > /work/.eval-magic/x/log", &roots()),
             None
         );
         assert_eq!(classify_bash("ls -la /", &roots()), None);

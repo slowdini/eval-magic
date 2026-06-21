@@ -238,7 +238,7 @@ pub(crate) fn run_switch_condition(args: SwitchConditionArgs) -> anyhow::Result<
 
 /// Swap the active isolation batch in a single-session (in-session) isolated run:
 /// wipe the shared `env/` working tree — keeping the staged skills and the
-/// `.eval-magic/` outputs tree — and re-seed it with `--group`'s fixtures, so the
+/// `.eval-magic-outputs/` tree — and re-seed it with `--group`'s fixtures, so the
 /// next batch starts from a clean tree the prior batch's fixtures and stray writes
 /// can't taint. A hard barrier: the runbook joins every Task subagent of the prior
 /// batch first. Resolves the iteration from `--workspace-dir`, so it runs from
@@ -300,7 +300,7 @@ pub(crate) fn run_reset_batch(args: ResetBatchArgs) -> anyhow::Result<()> {
         ".agents",
         ".codex",
         ".opencode",
-        ".eval-magic",
+        ".eval-magic-outputs",
         "RUNBOOK.md",
     ];
     for entry in std::fs::read_dir(&env_dir)? {

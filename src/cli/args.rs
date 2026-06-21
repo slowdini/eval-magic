@@ -95,7 +95,7 @@ pub struct CommonArgs {
     /// commands already carry it.
     #[arg(long)]
     pub run_mode: Option<RunMode>,
-    /// Workspace directory (defaults to `<cwd>/skills-workspace`).
+    /// Workspace directory (defaults to `<cwd>/.eval-magic`).
     ///
     /// The artifact root. Pass the same value to every command of a run, including
     /// `teardown`.
@@ -456,7 +456,7 @@ pub(crate) enum Commands {
     /// Swap the active isolation batch in a single-session isolated run.
     ///
     /// Wipes the shared `env/` working tree (keeping `.claude/skills/` and the
-    /// `.eval-magic/` outputs tree) and re-seeds it with `--group`'s fixtures — the
+    /// `.eval-magic-outputs/` tree) and re-seeds it with `--group`'s fixtures — the
     /// per-batch isolation barrier between eval groups in an interactive isolated run
     /// (see `RUNBOOK.md`). `--group` names the group you are
     /// about to dispatch next. Run it only after every Task subagent of the prior

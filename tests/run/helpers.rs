@@ -31,7 +31,7 @@ pub fn setup(root: &Path, evals_json: &str) -> (PathBuf, PathBuf) {
 }
 
 pub fn iteration_dir(cwd: &Path) -> PathBuf {
-    cwd.join("skills-workspace")
+    cwd.join(".eval-magic")
         .join("mr-review")
         .join("iteration-1")
 }
