@@ -334,7 +334,7 @@ impl HarnessAdapter for CodexAdapter {
         Some(vec![
             "After all dispatches (Codex):".to_string(),
             String::new(),
-            "Run one fresh `codex exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
+            "Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
             String::new(),
             "```bash".to_string(),
             codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
@@ -372,7 +372,7 @@ impl HarnessAdapter for CodexAdapter {
     }
     fn guard_armed_message(&self) -> Option<&'static str> {
         Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
+            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
         )
     }
 }

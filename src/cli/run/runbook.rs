@@ -398,7 +398,7 @@ mod tests {
         // The CLI dispatch recipe comes from the Codex adapter; pipeline commands
         // carry --harness codex so they are copy-pasteable.
         assert!(
-            book.contains("codex exec"),
+            book.contains("codex --ask-for-approval never exec"),
             "carries the Codex CLI dispatch recipe: {book}"
         );
         assert!(
