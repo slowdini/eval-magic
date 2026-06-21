@@ -75,6 +75,45 @@ mod tests {
     }
 
     #[test]
+    fn accepts_isolation_isolated() {
+        let mut config = base();
+        config["evals"][0]["isolation"] = json!("isolated");
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        assert_eq!(
+            parsed.evals[0].isolation,
+            Some(crate::core::Isolation::Isolated)
+        );
+    }
+
+    #[test]
+    fn accepts_isolation_shared() {
+        let mut config = base();
+        config["evals"][0]["isolation"] = json!("shared");
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        assert_eq!(
+            parsed.evals[0].isolation,
+            Some(crate::core::Isolation::Shared)
+        );
+    }
+
+    #[test]
+    fn defaults_isolation_to_none_when_absent() {
+        let config = base();
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        assert_eq!(parsed.evals[0].isolation, None);
+    }
+
+    #[test]
+    fn rejects_an_unknown_isolation_value() {
+        let mut config = base();
+        config["evals"][0]["isolation"] = json!("sometimes");
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("isolation"), "error was: {err}");
+    }
+
+    #[test]
     fn rejects_a_non_kebab_case_id() {
         let mut config = base();
         config["evals"][0]["id"] = json!("Not Kebab");

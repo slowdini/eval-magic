@@ -5,7 +5,7 @@
 use anyhow::bail;
 
 use crate::adapters::{CliJudgeContext, adapter_for};
-use crate::cli::args::{CommonArgs, GradeArgs, SwitchConditionArgs};
+use crate::cli::args::{CommonArgs, GradeArgs, ResetBatchArgs, SwitchConditionArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
 use crate::cli::{iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from};
@@ -216,6 +216,104 @@ pub(crate) fn run_switch_condition(args: SwitchConditionArgs) -> anyhow::Result<
             args.condition, off.name
         ),
     }
+    Ok(())
+}
+
+/// Swap the active isolation batch in a single-session (in-session) isolated run:
+/// wipe the shared `env/` working tree — keeping the staged skills and the
+/// `.eval-magic/` outputs tree — and re-seed it with `--group`'s fixtures, so the
+/// next batch starts from a clean tree the prior batch's fixtures and stray writes
+/// can't taint. A hard barrier: the runbook joins every Task subagent of the prior
+/// batch first. Resolves the iteration from `--workspace-dir`, so it runs from
+/// `cwd = env/`.
+pub(crate) fn run_reset_batch(args: ResetBatchArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args.common)?;
+    let dir = iteration_dir(&ctx, args.common.iteration)?;
+    let env_dir = dir.join("env");
+    if !env_dir.exists() {
+        bail!("missing env dir: {}", env_dir.display());
+    }
+
+    let dispatch_path = dir.join("dispatch.json");
+    if !dispatch_path.exists() {
+        bail!("missing: {}", dispatch_path.display());
+    }
+    let dispatch: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&dispatch_path)?)?;
+    let tasks = dispatch["tasks"].as_array().cloned().unwrap_or_default();
+
+    // Groups are tagged on tasks only when there is more than one. Validate against
+    // them so a typo (or a needless reset on a single-group run) fails loudly.
+    let group_ids: std::collections::BTreeSet<&str> =
+        tasks.iter().filter_map(|t| t["group"].as_str()).collect();
+    if !group_ids.contains(args.group.as_str()) {
+        if group_ids.is_empty() {
+            bail!(
+                "unknown --group '{}'; this iteration has a single group, so reset-batch is not needed.",
+                args.group
+            );
+        }
+        bail!(
+            "unknown --group '{}'; this iteration's groups are: {}",
+            args.group,
+            group_ids.into_iter().collect::<Vec<_>>().join(", ")
+        );
+    }
+
+    // The group's declared, env-relative fixture dests (deduped across its tasks).
+    let mut dests: Vec<String> = Vec::new();
+    for t in &tasks {
+        if t["group"].as_str() != Some(args.group.as_str()) {
+            continue;
+        }
+        if let Some(fixtures) = t["fixtures"].as_array() {
+            for f in fixtures.iter().filter_map(|f| f.as_str()) {
+                if !dests.iter().any(|d| d == f) {
+                    dests.push(f.to_string());
+                }
+            }
+        }
+    }
+
+    // Full wipe: drop every entry in env/ except the staged skills, the outputs
+    // tree, and the runbook — so a prior batch's fixtures and any stray writes can't
+    // leak into this one.
+    const KEEP: &[&str] = &[
+        ".claude",
+        ".agents",
+        ".codex",
+        ".opencode",
+        ".eval-magic",
+        "RUNBOOK.md",
+    ];
+    for entry in std::fs::read_dir(&env_dir)? {
+        let entry = entry?;
+        if KEEP.iter().any(|k| entry.file_name() == **k) {
+            continue;
+        }
+        let path = entry.path();
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else {
+            std::fs::remove_file(&path)?;
+        }
+    }
+
+    // Re-seed this group's fixtures from the skill's evals/ dir.
+    for dest in &dests {
+        let src = ctx.skill_subdir.join("evals").join(dest);
+        let dst = env_dir.join(dest);
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        run::copy_entry(&src, &dst)?;
+    }
+
+    println!(
+        "Reset to group '{}': wiped the env working tree and re-seeded {} fixture(s).",
+        args.group,
+        dests.len()
+    );
     Ok(())
 }
 

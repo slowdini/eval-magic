@@ -63,6 +63,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::Ingest(args) => run_ingest(args),
         Commands::Finalize(args) => run_finalize(args),
         Commands::SwitchCondition(args) => run_switch_condition(args),
+        Commands::ResetBatch(args) => run_reset_batch(args),
         Commands::Init(args) => run_init(args),
         Commands::Validate(args) => run_validate(args),
         Commands::TeardownGuard(_) => run_teardown_guard(),

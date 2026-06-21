@@ -53,21 +53,16 @@ fn validate_fixture_rel(f: &str) -> Result<(), RunError> {
     Ok(())
 }
 
-/// Copy an eval's fixture files into `env_root`, preserving each declared relative path
-/// so the env reads like a real repo (`files: ["src/main.rs"]` → `env/src/main.rs`), and
-/// returning the env-relative paths (the agent-under-test's cwd is `env/`). Fixtures are
-/// shared across conditions and runs within the single env; `claims` dedups idempotent
-/// re-declarations and rejects cross-eval clobbers.
-pub fn copy_fixtures(
-    ev: &Eval,
-    skill_dir: &Path,
-    env_root: &Path,
-    claims: &mut FixtureClaims,
-) -> Result<Vec<String>, RunError> {
+/// Resolve an eval's declared fixtures to `(env-relative dest, source path)` pairs,
+/// validating each path stays within the env and that the source exists — without
+/// copying anything. [`super::grouping`] consumes these pairs to detect cross-eval
+/// clobbers before any env is built, and [`copy_fixtures`] reuses them, so fixture
+/// path resolution lives in exactly one place.
+pub fn fixture_pairs(ev: &Eval, skill_dir: &Path) -> Result<Vec<(String, String)>, RunError> {
     let Some(files) = ev.files.as_ref().filter(|f| !f.is_empty()) else {
         return Ok(Vec::new());
     };
-    let mut copied = Vec::new();
+    let mut pairs = Vec::with_capacity(files.len());
     for f in files {
         validate_fixture_rel(f)?;
         let src = skill_dir.join("evals").join(f);
@@ -77,15 +72,36 @@ pub fn copy_fixtures(
                 src.display()
             )));
         }
-        let already = claim_fixture_dest(claims, &ev.id, f, &src.to_string_lossy())?;
+        pairs.push((f.clone(), src.to_string_lossy().into_owned()));
+    }
+    Ok(pairs)
+}
+
+/// Copy an eval's fixture files into `env_root`, preserving each declared relative path
+/// so the env reads like a real repo (`files: ["src/main.rs"]` → `env/src/main.rs`), and
+/// returning the env-relative paths (the agent-under-test's cwd is `env/`). Fixtures are
+/// shared across conditions and runs within one env; `claims` dedups idempotent
+/// re-declarations and rejects cross-eval clobbers. Cross-eval clobbers are routed into
+/// separate isolation groups by [`super::grouping`] before this is called per group, so
+/// within a single group's env a clobber should never reach the `claims` rejection.
+pub fn copy_fixtures(
+    ev: &Eval,
+    skill_dir: &Path,
+    env_root: &Path,
+    claims: &mut FixtureClaims,
+) -> Result<Vec<String>, RunError> {
+    let pairs = fixture_pairs(ev, skill_dir)?;
+    let mut copied = Vec::with_capacity(pairs.len());
+    for (dest, source) in &pairs {
+        let already = claim_fixture_dest(claims, &ev.id, dest, source)?;
         if !already {
-            let dst = env_root.join(f);
+            let dst = env_root.join(dest);
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent)?;
             }
-            copy_entry(&src, &dst)?;
+            copy_entry(Path::new(source), &dst)?;
         }
-        copied.push(f.clone());
+        copied.push(dest.clone());
     }
     Ok(copied)
 }
@@ -103,7 +119,69 @@ mod tests {
             assertions: None,
             skill_should_trigger: None,
             runs: None,
+            isolation: None,
         }
+    }
+
+    #[test]
+    fn fixture_pairs_resolves_dest_and_source_without_copying() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        let evals = skill_dir.join("evals");
+        fs::create_dir_all(evals.join("data")).unwrap();
+        fs::write(evals.join("config.json"), "cfg").unwrap();
+        fs::write(evals.join("data/x.json"), "xx").unwrap();
+
+        let ev = eval_with_files("e1", &["config.json", "data/x.json"]);
+        let pairs = fixture_pairs(&ev, &skill_dir).unwrap();
+
+        assert_eq!(
+            pairs,
+            vec![
+                (
+                    "config.json".to_string(),
+                    evals.join("config.json").to_string_lossy().into_owned()
+                ),
+                (
+                    "data/x.json".to_string(),
+                    evals.join("data/x.json").to_string_lossy().into_owned()
+                ),
+            ]
+        );
+        // Pure: it resolves paths but copies nothing.
+        assert!(!tmp.path().join("env").exists());
+    }
+
+    #[test]
+    fn fixture_pairs_empty_when_no_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals")).unwrap();
+        let ev = eval_with_files("e1", &[]);
+        assert!(fixture_pairs(&ev, &skill_dir).unwrap().is_empty());
+    }
+
+    #[test]
+    fn fixture_pairs_rejects_escapes_and_missing_sources() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals")).unwrap();
+
+        let escaping = eval_with_files("e1", &["../escape.txt"]);
+        assert!(
+            fixture_pairs(&escaping, &skill_dir)
+                .unwrap_err()
+                .to_string()
+                .contains("relative")
+        );
+
+        let missing = eval_with_files("e1", &["nope.json"]);
+        assert!(
+            fixture_pairs(&missing, &skill_dir)
+                .unwrap_err()
+                .to_string()
+                .contains("fixture not found")
+        );
     }
 
     #[test]

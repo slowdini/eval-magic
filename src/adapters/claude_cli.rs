@@ -37,13 +37,14 @@ pub(crate) fn claude_parallel_dispatch_recipe(
     let model_arg = render_cli_model_arg(model_flag, agent_model);
     [
         "JOBS=${JOBS:-4}".to_string(),
-        "jq -j '.tasks[] | [.dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\".to_string(),
+        "jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\".to_string(),
         "  xargs -0 -P \"$JOBS\" -I{} sh -c '".to_string(),
-        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
-        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
+        "    eval_root=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
+        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
+        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f3)\"".to_string(),
         "    mkdir -p \"$outputs_dir\"".to_string(),
         format!(
-            "    cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \\"
+            "    cd \"$eval_root\" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \\"
         ),
         "      \"Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary.\" \\".to_string(),
         "      </dev/null \\".to_string(),

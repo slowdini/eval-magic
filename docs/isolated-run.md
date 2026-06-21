@@ -32,8 +32,9 @@ distinct threats have to be addressed:
 | Threat | What blocks it |
 |--------|----------------|
 | Reading the surrounding repo / installed plugins | Clean `env/` as cwd — nothing unrelated is inside it |
-| The control arm reading the *other* condition's staged skill | Per-condition staging + the `switch-condition` barrier (§4) — the off-condition's skill is physically absent during a batch |
-| A subagent writing outside the env | The cwd boundary bounds the agent's direct file tools to `env/`; `--guard` (pre-tool deny, scoped to `env/`) additionally blocks Bash-subprocess escapes the cwd boundary misses (installs, `git worktree`, redirects); `detect-stray-writes` post-pass as the portable fallback (#81) |
+| The control arm reading the *other* condition's staged skill | **In-session:** per-condition staging + the `switch-condition` barrier (§4) — the off-condition's skill is physically absent during a batch. **Cli:** each `(group, condition)` env (§3) is staged with *only* its condition's skill, so the control arm's env never contains it — no barrier needed |
+| Two evals clobbering each other's fixtures, or one mutating a fixture another reads | Setup-time isolation **grouping** (§3): conflicting fixtures auto-split into separate groups, and an `isolation: isolated` eval gets its own group. **In-session:** one env, groups swapped by the `reset-batch` barrier (§4). **Cli:** one env per `(group, condition)` |
+| A subagent writing outside the env | The cwd boundary bounds the agent's direct file tools to `env/`; `--guard` (pre-tool deny, scoped to each env) additionally blocks Bash-subprocess escapes the cwd boundary misses (installs, `git worktree`, redirects); `detect-stray-writes` post-pass as the portable fallback (#81) |
 
 **Honest caveat:** `detect-stray-writes` is **not** the backstop for the second threat inside `env/`.
 Its live-source-read detection (`src/pipeline/detect_stray_writes.rs:178-222`) flags reads of the
@@ -44,6 +45,26 @@ being physically gone/swapped (§4), not on post-hoc detection.
 ## 2 — Directory layout: `env/` vs `iteration-N/` above it
 
 eval-magic meta lives **above** the env; only the clean `env/` is the agent's cwd.
+
+**Multi-env layout (isolation grouping, #90).** The single `env/` below holds for the
+in-session path and the common single-group case. When a run has more than one isolation group
+(§3), or under Cli dispatch, the env axis expands:
+
+- **In-session** keeps the *single* `env/`. Its working tree is staged with the *first* group's
+  fixtures and swapped between groups by `reset-batch` (§4); both conditions still share it via
+  `switch-condition`.
+- **Cli** (hybrid / headless) materializes one env per `(group, condition)`:
+  `iteration-N/env-<group>-<condition>/` (e.g. `env-g1-with_skill/`, `env-g1-without_skill/`).
+  Each is a distinct cwd holding only that condition's skill (or none) and that group's fixtures,
+  so each `claude -p` / `codex exec` subprocess `cd`s into its own fully-isolated env. A
+  single-group Cli run still splits per condition (`env-g1-with_skill/` + `env-g1-without_skill/`)
+  — that is what closes the control-arm skill-leak on the Cli path (§1).
+
+The setup phase records the plan in `dispatch.json`: each task carries its `group` (omitted when
+there is a single group) and its `eval_root` (the env it runs in, for Cli), and a top-level
+`groups[]` summary lists each group's evals, rationale, and per-condition env dirs. The
+in-session single-group `dispatch.json` omits `groups`/`group`/`eval_root`, staying
+byte-identical to the pre-grouping shape.
 
 | Path | Owner | Contents | Agent-visible? |
 |------|-------|----------|----------------|
@@ -108,7 +129,40 @@ swapped) on disk before that condition's batch runs, so there is nothing to leak
 | (b) Separate session per condition (`env-with_skill/`, `env-without_skill/`) | Rejected. Strongest *physical* isolation, but each session has its own `CLAUDE_CODE_SESSION_ID`, so the loop can auto-resolve only one condition's transcripts in-session — the other forces the cross-session `--subagents-dir` dance #79 exists to kill. Also breaks the singular `env/` layout. |
 | (c) One env, weaker isolation | Rejected. Both staged skills coexist (today's behavior, `src/cli/run/orchestrate/stage.rs:129-130`); relies on the dispatch prompt + `detect-stray-writes`, which is blind to staged-copy reads inside `env/` (§1). |
 
-## 4 — The `switch-condition` mechanism
+### Isolation grouping across evals (#90)
+
+Spike #77 fixed the *condition* axis. The *eval* axis — which batches of agents-under-test can
+share an environment and which need isolation — is decided at **setup** time and written into the
+runbook, so the executing session does no isolation reasoning itself. This was the last loose end
+of the isolated-run epic; #90 is the follow-up spike that resolves it (update §2–§4 here if its
+contract changes).
+
+`compute_groups` (`src/cli/run/grouping.rs`) groups the selected evals, in config order, by a
+deterministic greedy first-fit:
+
+- Evals whose fixtures **conflict** — the same env-relative dest from a *different* source, the
+  same rule `FixtureClaims` enforces (`src/cli/run/fixtures.rs`) — land in separate groups
+  instead of erroring. (With today's `files: [path]` schema, dest and source are 1:1, so this is
+  a safety net for a future dest→source mapping; the practical trigger is the explicit hint.)
+- An eval with `isolation: isolated` (`evals.json`) always gets its own sealed singleton group —
+  the escape hatch for confounds the framework can't see, e.g. an agent that *mutates* a shared
+  fixture another eval reads.
+- Everything else shares one group. No conflicts and no hints → a single group, i.e. today's
+  behavior, byte-for-byte.
+
+**Realization is split by mechanism** (the maintainer's call, maximizing per-mechanism
+convenience):
+
+| Mechanism | Group isolation | Condition isolation |
+|-----------|-----------------|---------------------|
+| **In-session** | One `env/`, groups dispatched as sequential batches with a `reset-batch` barrier (§4) between them | `switch-condition` barrier (§4) |
+| **Cli** (hybrid/headless) | One env per `(group, condition)` — separate cwds, no barrier | Separate per-condition envs — no barrier; closes the §1 leak |
+
+In-session nests **condition-outer, group-inner**: the skill is staged once and only removed
+(never re-created mid-session, so the §4 watcher hazard never bites), while fixtures — which have
+no watcher — are swapped freely between groups.
+
+## 4 — The `switch-condition` and `reset-batch` mechanisms
 
 `switch-condition` mutates `env/.claude/skills/` between condition batches. The handler
 (`run_switch_condition`, `src/cli/commands/pipeline.rs`) reads the off-condition's recorded
@@ -132,6 +186,21 @@ be dispatched); its counterpart is the off-condition.
 > subagents of the current batch before switching. A subagent still in flight when the skill is
 > removed could observe a half-removed directory or a failed discovery, tainting the run. Conditions
 > run sequentially, batch by batch; never interleave them.
+
+**`reset-batch` — the per-group barrier (in-session only, #90).** When a run has more than one
+isolation group, the in-session runbook dispatches each group as its own batch within a
+condition, calling `eval-magic reset-batch --group <g>` between them. The handler
+(`run_reset_batch`, `src/cli/commands/pipeline.rs`) **wipes the shared `env/` working tree —
+keeping only `.claude/skills/` (the staged skills + the guard marker) and `.eval-magic/` (the
+prior batches' outputs, needed by `ingest`) — and re-seeds it with the named group's fixtures**,
+read from `dispatch.json`'s tasks and copied from the skill's `evals/` dir. The full wipe (not a
+partial fixture restore) is deliberate: it removes the prior group's fixtures *and* any stray
+files its agent wrote into the env, so the next group starts from a clean tree. Like
+`switch-condition`, it is a **hard barrier** — join every Task subagent of the prior batch first —
+and resolves the iteration from `--workspace-dir` so it runs from `cwd = env/`. It validates
+`--group` against the iteration's tagged groups, erroring (rather than wiping) on a single-group
+run where it isn't needed. The Cli path needs no `reset-batch`: each `(group, condition)` has its
+own pre-staged env.
 
 **Watcher caveat.** `env/.claude/skills/` MUST exist *before* the isolated session starts. Claude
 Code only watches skill directories that existed at session start; a directory created mid-session
@@ -202,8 +271,11 @@ gates #79); the design note records them so the contract stays fixed.
 
 - **`env/` is the agent's only cwd.** eval-magic meta stays above it in `iteration-N/`; the agent
   never reads or writes above `env/`.
-- **`switch-condition` is a barrier.** Join every Task subagent of a batch before switching; never
-  interleave conditions.
+- **`switch-condition` and `reset-batch` are barriers.** Join every Task subagent of a batch
+  before switching the condition *or* resetting the group; never interleave conditions or groups.
+- **Grouping is decided at setup, not at dispatch.** `dispatch.json`'s `groups[]` + per-task
+  `group`/`eval_root` are the plan; the executing session just follows it. In-session swaps groups
+  in one env via `reset-batch`; Cli stages one env per `(group, condition)`.
 - **`env/.claude/skills/` must pre-exist the isolated session.** Populate the env before session B
   starts so the fresh session is structural, not a watcher workaround.
 - **`detect-stray-writes` is not the isolation backstop inside `env/`.** Physical removal/swap of the
