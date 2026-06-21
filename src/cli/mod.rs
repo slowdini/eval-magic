@@ -6,7 +6,7 @@
 //! [`commands`], grouped by concern. This module is the thin coordinator: parse,
 //! dispatch, and the shared context/iteration helpers the handlers reuse.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail};
 use clap::Parser;
@@ -176,6 +176,29 @@ pub(crate) fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow:
         bail!("not found: {}", dir.display());
     }
     Ok(dir)
+}
+
+/// The env directories a run staged under `iteration_dir`: the single `env/` for
+/// the InSession mechanism, or one `env-<group>-<condition>/` per `(group, condition)`
+/// for Cli. A best-effort directory scan (returns empty when the dir can't be read),
+/// used by `teardown`/`finalize` to walk every env's write guard. Preferred over
+/// reading `dispatch.json` because it has no parse-failure mode, needs no path
+/// re-basing (recorded env dirs can be relative), and the only `env`/`env-*` children
+/// of an iteration dir are the staged envs.
+pub(crate) fn staged_env_roots(iteration_dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(iteration_dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter(|e| e.path().is_dir())
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name == "env" || name.starts_with("env-")
+        })
+        .map(|e| e.path())
+        .collect()
 }
 
 /// Resolve the subagents transcript dir for an in-session stage that reads

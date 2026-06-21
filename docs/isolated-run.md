@@ -217,6 +217,15 @@ retired in #80, leaving the clean cd-into-`env/` handoff.
 the guard's TTL: the 6h TTL comfortably covers a sequential two-batch run, so the barrier stays a pure
 remove-the-slug operation. (`tests/run/switch_condition.rs` locks the marker's survival.)
 
+**Cli multi-env disarm (#99).** Under Cli the guard is armed in each
+`env-<group>-<condition>/`, and the operator runs `teardown`/`finalize` from the iteration dir
+(not inside an env). So `teardown` walks every staged env (`staged_env_roots`, `src/cli/mod.rs`)
+and disarms each per-env marker — not just the cwd one — and `finalize`'s "guard still armed"
+reminder detects any armed env guard and points at `teardown` (the cwd-only `teardown-guard`
+can't reach them). The in-session single-`env/` path is unchanged. Relatedly, the Claude Code
+plugin-shadow preflight scans the first staged env rather than the never-created Cli `env/`, so
+a project-local `.claude/settings.json` staged as a fixture is honored.
+
 ## 5 — The loop in one session: dispatch → ingest → finalize
 
 Because there is exactly one isolated session, one `CLAUDE_CODE_SESSION_ID` resolves **both**

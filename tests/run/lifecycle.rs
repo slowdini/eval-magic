@@ -508,3 +508,100 @@ fn only_with_unknown_id_exits_nonzero() {
         .failure()
         .stderr(contains("unknown eval id(s): nope"));
 }
+
+#[test]
+fn teardown_disarms_per_group_condition_cli_guards() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+
+    // Cli (hybrid) materializes one env per (group, condition); `--guard` arms a marker
+    // in each. The human runs teardown from the iteration dir, not from inside any env,
+    // so the cwd-only disarm never reaches these per-env markers.
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--run-mode",
+            "hybrid",
+            "--guard",
+        ])
+        .assert()
+        .success();
+
+    let with_marker =
+        cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/.slow-powers-eval-guard.json");
+    let without_marker = cli_env_dir(&cwd, "g1", "without_skill")
+        .join(".claude/skills/.slow-powers-eval-guard.json");
+    assert!(with_marker.exists());
+    assert!(without_marker.exists());
+
+    // Keep the iteration (simulate uncommitted results) so the env dirs survive
+    // teardown's reclaim and we can assert the markers themselves were disarmed.
+    fs::write(
+        iteration_dir(&cwd).join("benchmark.json"),
+        "{\"delta\":{\"pass_rate\":0.4}}\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["teardown", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--run-mode", "hybrid"])
+        .assert()
+        .success()
+        .stdout(contains("write guard disarmed"));
+
+    assert!(
+        iteration_dir(&cwd).exists(),
+        "iteration kept (uncommitted results)"
+    );
+    assert!(!with_marker.exists(), "with_skill env guard disarmed");
+    assert!(!without_marker.exists(), "without_skill env guard disarmed");
+}
+
+#[test]
+fn finalize_warns_about_armed_cli_per_env_guard() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+
+    // Cli (hybrid) arms a guard in each per-(group, condition) env. finalize runs from
+    // the iteration dir, not an env, so the cwd-only check misses them; it must walk the
+    // per-env markers and remind the operator.
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--run-mode",
+            "hybrid",
+            "--guard",
+        ])
+        .assert()
+        .success();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["finalize", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--run-mode",
+            "hybrid",
+            "--iteration",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("Guard still armed"));
+}

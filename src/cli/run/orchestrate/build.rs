@@ -347,25 +347,28 @@ pub(super) fn post_build(
     opts: &RunOptions,
     r: &Resolved,
 ) -> Result<(), RunError> {
+    // Every env this run staged: one shared `env/` for in-session, one per
+    // (group, condition) for Cli. Computed once and reused below to arm the guard in
+    // each env and to point the plugin-shadow preflight at a real staged env.
+    let targets = env_targets(&EnvLayoutInput {
+        iteration_dir: &r.iteration_dir,
+        mechanism: ctx.run_mode.mechanism(),
+        groups: &r.groups,
+        cond_a: r.cond_a,
+        cond_b: r.cond_b,
+        skill_path_a: r.skill_path_a.as_deref(),
+        skill_path_b: r.skill_path_b.as_deref(),
+    });
+
     // Opt-in hard guard: a PreToolUse hook blocking subagent writes/installs
     // outside the eval sandbox while dispatches run. Armed in *every* env the run
-    // staged — one shared `env/` for in-session, one per (group, condition) for Cli
-    // — since each subprocess loads its hook from its own cwd.
+    // staged — since each subprocess loads its hook from its own cwd.
     if opts.guard && !opts.dry_run {
         if opts.no_stage {
             eprintln!("\n⚠ --guard requires staging enabled; skipping guard install.");
         } else {
             let adapter = adapter_for(ctx.harness);
             let exe = std::env::current_exe()?;
-            let targets = env_targets(&EnvLayoutInput {
-                iteration_dir: &r.iteration_dir,
-                mechanism: ctx.run_mode.mechanism(),
-                groups: &r.groups,
-                cond_a: r.cond_a,
-                cond_b: r.cond_b,
-                skill_path_a: r.skill_path_a.as_deref(),
-                skill_path_b: r.skill_path_b.as_deref(),
-            });
             for target in &targets {
                 adapter.install_guard(&target.root, &exe, None)?;
             }
@@ -384,11 +387,19 @@ pub(super) fn post_build(
     }
 
     // Plugin-shadow preflight (Claude Code): a staged skill name also discoverable
-    // from an enabled plugin or the global skills dir contaminates the run.
+    // from an enabled plugin or the global skills dir contaminates the run. Scan the
+    // first staged env, not `ctx.stage_root` — under Cli the legacy single `env/` is
+    // never created, so the project-local `.claude/settings.json` enabledPlugins the
+    // scan reads must come from a real staged env. In-session's first target *is*
+    // `env/` (== `ctx.stage_root`), so this is unchanged there.
     if ctx.harness == Harness::ClaudeCode {
         let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
         names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
-        let report = detect_plugin_shadows(&config_dir_from_env(), &ctx.stage_root, &names);
+        let scan_root = targets
+            .first()
+            .map(|t| t.root.as_path())
+            .unwrap_or(ctx.stage_root.as_path());
+        let report = detect_plugin_shadows(&config_dir_from_env(), scan_root, &names);
         if !report.shadowed.is_empty() {
             write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
             eprintln!("{}", format_shadow_banner(&report));

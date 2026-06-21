@@ -8,7 +8,9 @@ use crate::adapters::{CliJudgeContext, adapter_for};
 use crate::cli::args::{CommonArgs, GradeArgs, ResetBatchArgs, SwitchConditionArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
-use crate::cli::{iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from};
+use crate::cli::{
+    iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from, staged_env_roots,
+};
 use crate::core::{DispatchMechanism, RunContext};
 use crate::pipeline;
 use crate::sandbox;
@@ -141,8 +143,23 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     println!(
         "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown{target_args}"
     );
-    if sandbox::guard_is_armed(&ctx.stage_root) {
-        println!("⚠ Guard still armed — run `eval-magic teardown-guard` before editing source.");
+    // Warn if a guard is still armed. The cwd check covers the in-session flow (run
+    // from inside `env/`); under Cli there is one env per (group, condition), so also
+    // walk each per-env marker. `teardown` (not the cwd-only `teardown-guard`) is what
+    // disarms them all.
+    let mut armed = sandbox::guard_is_armed(&ctx.stage_root);
+    if !armed
+        && ctx.run_mode.mechanism() == DispatchMechanism::Cli
+        && let Ok(dir) = iteration_dir(&ctx, Some(iteration))
+    {
+        armed = staged_env_roots(&dir)
+            .iter()
+            .any(|env| sandbox::guard_is_armed(env));
+    }
+    if armed {
+        println!(
+            "⚠ Guard still armed — run `eval-magic teardown` to disarm before editing source."
+        );
     }
     Ok(())
 }

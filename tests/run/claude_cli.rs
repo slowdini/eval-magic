@@ -5,6 +5,7 @@
 
 use crate::helpers::*;
 use predicates::str::contains;
+use std::fs;
 
 #[test]
 fn claude_hybrid_dispatch_guidance_uses_claude_p() {
@@ -303,5 +304,66 @@ fn claude_cli_guard_installs_project_hook() {
             .join(".claude/skills/slow-powers-eval-1-with_skill__mr-review")
             .exists(),
         "the control arm's env contains no staged skill slug"
+    );
+}
+
+#[test]
+fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    // The eval stages a project-local `.claude/settings.json` into its env (fixture).
+    let evals = r#"{ "skill_name": "mr-review", "evals": [ { "id": "e1", "prompt": "p", "expected_output": "o", "files": [".claude/settings.json"] } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+
+    // A Claude config dir whose installed plugin provides a skill named like the SUT,
+    // but the plugin is NOT enabled at config level — only the project-local
+    // `.claude/settings.json` (staged into each env as a fixture) enables it. So the
+    // preflight can only see the override when it scans the real staged env; under Cli
+    // the legacy `env/` is never created, which is the bug this locks down.
+    let config = tmp.path().join("config");
+    let install = config.join("plugins/cache/shadowplug__test");
+    fs::create_dir_all(install.join("skills/mr-review")).unwrap();
+    fs::write(
+        install.join("skills/mr-review/SKILL.md"),
+        "---\nname: mr-review\ndescription: x\n---\n",
+    )
+    .unwrap();
+    fs::create_dir_all(config.join("plugins")).unwrap();
+    fs::write(
+        config.join("plugins/installed_plugins.json"),
+        format!(
+            "{{\"version\":2,\"plugins\":{{\"shadowplug@test\":[{{\"installPath\":{:?}}}]}}}}",
+            install.to_string_lossy()
+        ),
+    )
+    .unwrap();
+
+    // The fixture that, once staged into the env, enables the plugin project-locally.
+    // (No config-level settings.json — the plugin is enabled ONLY via the env's file.)
+    fs::create_dir_all(skill_dir.join("mr-review/evals/.claude")).unwrap();
+    fs::write(
+        skill_dir.join("mr-review/evals/.claude/settings.json"),
+        "{\"enabledPlugins\":{\"shadowplug@test\":true}}",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--run-mode",
+            "hybrid",
+        ])
+        .assert()
+        .success();
+
+    assert!(
+        iteration_dir(&cwd).join("plugin-shadow.json").exists(),
+        "preflight detected the project-enabled plugin shadow by scanning the staged env"
     );
 }
