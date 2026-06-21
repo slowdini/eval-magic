@@ -14,7 +14,7 @@
 //! [`HarnessAdapter::runbook_template`](crate::adapters::HarnessAdapter::runbook_template))
 //! and carry `{{TOKEN}}` placeholders the renderer fills with run-specific values.
 //! The generated `RUNBOOK.md` itself is a workspace artifact and is not version
-//! controlled (see `docs/isolated-run.md`).
+//! controlled.
 
 use std::path::Path;
 

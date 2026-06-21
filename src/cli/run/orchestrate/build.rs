@@ -133,9 +133,8 @@ pub(super) fn write_dispatch(
     let mut tasks = Vec::new();
     // Build tasks CONDITION-outer, GROUP-inner — so the in-session runbook reads
     // tasks[] top to bottom as: dispatch each (condition, group) segment, with a
-    // `reset-batch` between groups and one `switch-condition` between conditions
-    // (docs/isolated-run.md §4). A single group collapses this to the legacy
-    // condition-outer order.
+    // `reset-batch` between groups and one `switch-condition` between conditions.
+    // A single group collapses this to the legacy condition-outer order.
     for (cond_name, cond_skill_path, cond_slug) in [
         (
             r.cond_a,
@@ -178,7 +177,7 @@ pub(super) fn write_dispatch(
                     // dispatch-prompt.txt), which lives above the env.
                     fs::create_dir_all(&run_dir)?;
                     // The agent-under-test's cwd is its env, so its outputs land
-                    // *inside* it — never above its sandbox (docs/isolated-run.md §8).
+                    // *inside* it — never above its sandbox.
                     // A hidden, per-(eval, condition, run) subtree keeps concurrent
                     // same-env subagents from colliding.
                     let outputs_rel = match run_index {
