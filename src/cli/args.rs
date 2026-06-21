@@ -446,8 +446,8 @@ pub(crate) enum Commands {
     ///
     /// Removes the *off-condition*'s staged skill from `env/.claude/skills/` so the
     /// next batch you dispatch cannot read it — the per-condition read-isolation
-    /// barrier for an interactive isolated run (see `RUNBOOK.md` /
-    /// `docs/isolated-run.md`). `--condition` names the condition you are about to
+    /// barrier for an interactive isolated run (see `RUNBOOK.md`).
+    /// `--condition` names the condition you are about to
     /// dispatch next (the one to keep); its counterpart's staged skill is removed.
     /// Run it only after every Task subagent of the prior batch has returned — it is
     /// a hard barrier. Idempotent; resolves the iteration from `--workspace-dir` so
@@ -458,7 +458,7 @@ pub(crate) enum Commands {
     /// Wipes the shared `env/` working tree (keeping `.claude/skills/` and the
     /// `.eval-magic/` outputs tree) and re-seeds it with `--group`'s fixtures — the
     /// per-batch isolation barrier between eval groups in an interactive isolated run
-    /// (see `RUNBOOK.md` / `docs/isolated-run.md`). `--group` names the group you are
+    /// (see `RUNBOOK.md`). `--group` names the group you are
     /// about to dispatch next. Run it only after every Task subagent of the prior
     /// batch has returned — it is a hard barrier. Resolves the iteration from
     /// `--workspace-dir` so it works invoked from `env/`. Requires `--iteration`.
