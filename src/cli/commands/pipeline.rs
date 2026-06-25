@@ -18,7 +18,11 @@ use crate::validation;
 
 const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
 
-fn judge_dispatch_guidance(ctx: &RunContext) -> String {
+fn judge_dispatch_guidance(ctx: &RunContext, iteration: u32) -> String {
+    let iteration_dir = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"));
     match ctx.run_mode.mechanism() {
         DispatchMechanism::InSession => {
             format!("Dispatch each task as a judge subagent with:\n  {JUDGE_WORKER_PROMPT}")
@@ -26,6 +30,7 @@ fn judge_dispatch_guidance(ctx: &RunContext) -> String {
         DispatchMechanism::Cli => adapter_for(ctx.harness)
             .cli_judge_next_steps(CliJudgeContext {
                 guard: sandbox::guard_is_armed(&ctx.stage_root),
+                iteration_dir: &iteration_dir,
             })
             .unwrap_or_else(|| {
                 format!(
@@ -107,7 +112,7 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
         .and_then(|v| v.get("total_tasks").and_then(serde_json::Value::as_u64));
     let target_args = command_target_args(&ctx);
-    let judge_guidance = judge_dispatch_guidance(&ctx);
+    let judge_guidance = judge_dispatch_guidance(&ctx, iteration);
     match total_tasks {
         Some(0) => println!(
             "\n✅ Ingest complete — no judge dispatches needed.\nNext: eval-magic finalize{target_args} --iteration {iteration}"
@@ -351,13 +356,17 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         pipeline::record_runs(&dir, ctx.harness, mechanism, subagents_dir, args.overwrite)?;
 
     println!(
-        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, missing transcript: {}",
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, missing transcript: {}",
         result.recorded,
         result.skipped_existing,
         result.skipped_no_final_message,
+        result.skipped_prompt_unread,
         result.missing_transcript
     );
     if let Some(warning) = result.transcript_warning(ctx.harness, mechanism) {
+        eprintln!("{warning}");
+    }
+    if let Some(warning) = result.prompt_unread_warning() {
         eprintln!("{warning}");
     }
     Ok(())
@@ -502,7 +511,7 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             );
         }
         let target_args = command_target_args(&ctx);
-        let judge_guidance = judge_dispatch_guidance(&ctx);
+        let judge_guidance = judge_dispatch_guidance(&ctx, iteration);
         println!(
             "\nNext: {judge_guidance}\nThen run: eval-magic grade{target_args} --iteration {iteration} --finalize"
         );

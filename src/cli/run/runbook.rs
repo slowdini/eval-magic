@@ -172,7 +172,10 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
                 agent_model: ctx.agent_model,
             });
             judge_recipe = adapter
-                .cli_judge_next_steps(CliJudgeContext { guard: ctx.guard })
+                .cli_judge_next_steps(CliJudgeContext {
+                    guard: ctx.guard,
+                    iteration_dir: ctx.iteration_dir,
+                })
                 .unwrap_or_else(|| {
                     "Dispatch each judge task `ingest` listed through the same harness CLI, \
                      capturing its transcript output, then finalize."

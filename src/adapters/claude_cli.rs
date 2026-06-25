@@ -10,6 +10,7 @@
 //! block on a TTY and piped task data cannot become extra prompt context.
 
 use super::cli_command::render_cli_model_arg;
+use std::path::Path;
 
 /// Copy/pasteable Claude Code dispatch command template.
 pub(crate) fn claude_exec_command_template(
@@ -56,8 +57,13 @@ pub(crate) fn claude_parallel_dispatch_recipe(
 }
 
 /// Judge dispatch recipe over `judge-tasks.json`, one `claude -p` per task.
-pub(crate) fn claude_judge_dispatch_recipe(model_flag: Option<&str>) -> String {
+///
+/// Judges run from `judge_cwd` (the iteration dir) — a common ancestor of every
+/// judge prompt, verdict `response_path`, and agent `outputs_dir`, and a dir with
+/// no write-guard hook.
+pub(crate) fn claude_judge_dispatch_recipe(model_flag: Option<&str>, judge_cwd: &Path) -> String {
     let model_flag = model_flag.unwrap_or("--model");
+    let cwd = judge_cwd.display();
     [
         "Dispatch each judge task from judge-tasks.json with:".to_string(),
         String::new(),
@@ -73,7 +79,9 @@ pub(crate) fn claude_judge_dispatch_recipe(model_flag: Option<&str>) -> String {
         "    model_arg=\"\"; [ -n \"$model\" ] && model_arg=\"".to_string()
             + model_flag
             + " $model\"",
-        "    cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \\".to_string(),
+        format!(
+            "    cd \"{cwd}\" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \\"
+        ),
         "      \"Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.\" \\".to_string(),
         "      </dev/null \\".to_string(),
         "      > \"$response_base.claude-events.jsonl\" \\".to_string(),
@@ -89,6 +97,7 @@ mod tests {
     use super::{
         claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
     };
+    use std::path::Path;
 
     #[test]
     fn exec_template_carries_required_stream_json_flags() {
@@ -127,10 +136,12 @@ mod tests {
     }
 
     #[test]
-    fn judge_recipe_drives_claude_p() {
-        let recipe = claude_judge_dispatch_recipe(Some("--model"));
+    fn judge_recipe_runs_from_iteration_dir() {
+        let recipe = claude_judge_dispatch_recipe(Some("--model"), Path::new("/work/iter-1"));
         assert!(recipe.contains("claude -p"), "{recipe}");
         assert!(recipe.contains("judge-tasks.json"), "{recipe}");
         assert!(recipe.contains("response_path"), "{recipe}");
+        assert!(!recipe.contains("<eval-root>"), "{recipe}");
+        assert!(recipe.contains("cd \"/work/iter-1\" &&"), "{recipe}");
     }
 }

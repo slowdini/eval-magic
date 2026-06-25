@@ -1,6 +1,7 @@
 //! Codex CLI command rendering for `DispatchMechanism::Cli` guidance.
 
 use super::cli_command::render_cli_model_arg;
+use std::path::Path;
 
 /// Copy/pasteable Codex dispatch command template. Stdin is detached so a
 /// surrounding `xargs`/pipe cannot be treated as extra prompt context.
@@ -60,13 +61,20 @@ pub(crate) fn codex_parallel_dispatch_recipe(
     .join("\n")
 }
 
-pub(crate) fn codex_judge_dispatch_recipe(model_flag: Option<&str>, guard: bool) -> String {
+/// Judges run from `judge_cwd` (the iteration dir) — a common ancestor of every
+/// judge prompt, verdict `response_path`, and agent `outputs_dir`.
+pub(crate) fn codex_judge_dispatch_recipe(
+    model_flag: Option<&str>,
+    guard: bool,
+    judge_cwd: &Path,
+) -> String {
     let hook_trust = if guard {
         " --dangerously-bypass-hook-trust"
     } else {
         ""
     };
     let model_flag = model_flag.unwrap_or("-m");
+    let cwd = judge_cwd.display();
     [
         "Dispatch each judge task from judge-tasks.json with:".to_string(),
         String::new(),
@@ -81,7 +89,7 @@ pub(crate) fn codex_judge_dispatch_recipe(model_flag: Option<&str>, guard: bool)
         "    mkdir -p \"$(dirname \"$response_path\")\"".to_string(),
         "    if [ -n \"$model\" ]; then".to_string(),
         format!(
-            "      codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write{hook_trust} {model_flag} \"$model\" --json \\"
+            "      codex --ask-for-approval never exec --cd \"{cwd}\" --sandbox workspace-write{hook_trust} {model_flag} \"$model\" --json \\"
         ),
         "        \"Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.\" \\".to_string(),
         "        </dev/null \\".to_string(),
@@ -89,7 +97,7 @@ pub(crate) fn codex_judge_dispatch_recipe(model_flag: Option<&str>, guard: bool)
         "        2> \"$response_base.codex-stderr.log\"".to_string(),
         "    else".to_string(),
         format!(
-            "      codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write{hook_trust} --json \\"
+            "      codex --ask-for-approval never exec --cd \"{cwd}\" --sandbox workspace-write{hook_trust} --json \\"
         ),
         "        \"Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.\" \\".to_string(),
         "        </dev/null \\".to_string(),
@@ -107,6 +115,7 @@ mod tests {
     use super::{
         codex_exec_command_template, codex_judge_dispatch_recipe, codex_parallel_dispatch_recipe,
     };
+    use std::path::Path;
 
     #[test]
     fn exec_template_places_approval_policy_before_exec() {
@@ -133,19 +142,20 @@ mod tests {
 
     #[test]
     fn judge_recipe_places_approval_policy_before_exec() {
-        let recipe = codex_judge_dispatch_recipe(Some("-m"), true);
+        let recipe = codex_judge_dispatch_recipe(Some("-m"), true, Path::new("/work/iter-1"));
 
         assert!(
             recipe.contains(
-                "      codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust -m \"$model\" --json \\"
+                "      codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write --dangerously-bypass-hook-trust -m \"$model\" --json \\"
             ),
             "{recipe}"
         );
         assert!(
             recipe.contains(
-                "      codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust --json \\"
+                "      codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write --dangerously-bypass-hook-trust --json \\"
             ),
             "{recipe}"
         );
+        assert!(!recipe.contains("<eval-root>"), "{recipe}");
     }
 }
