@@ -270,7 +270,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         run_record_path: cond_dir.join("run.json").to_string_lossy().into_owned(),
         timing_path: cond_dir.join("timing.json").to_string_lossy().into_owned(),
         agent_description,
-        dispatch_prompt_path: cond_dir
+        dispatch_prompt_path: Path::new(opts.outputs_dir)
             .join("dispatch-prompt.txt")
             .to_string_lossy()
             .into_owned(),
@@ -681,9 +681,11 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_prompt_path_under_cond_dir() {
+    fn dispatch_prompt_path_under_outputs_dir() {
         let task = build_dispatch_task(&base_opts()).unwrap();
-        assert_eq!(task.dispatch_prompt_path, "/tmp/cond/dispatch-prompt.txt");
+        assert_eq!(task.dispatch_prompt_path, "/tmp/out/dispatch-prompt.txt");
+        assert_eq!(task.run_record_path, "/tmp/cond/run.json");
+        assert_eq!(task.timing_path, "/tmp/cond/timing.json");
     }
 
     const SAMPLE_DIRECTORY: &str = "## Active Skills Directory\n\n* **`test-driven-development`**\n  * *Trigger:* Use whenever implementing code.\n* **`systematic-debugging`**\n  * *Trigger:* Use when debugging.";

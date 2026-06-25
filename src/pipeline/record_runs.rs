@@ -31,8 +31,7 @@ struct DispatchFile {
 }
 
 /// The subset of a dispatch task record-runs consumes. `dispatch.json` carries
-/// more fields (e.g. `staged_skill_slug`, `dispatch_prompt_path`); serde ignores
-/// the extras.
+/// more fields (e.g. `staged_skill_slug`); serde ignores the extras.
 #[derive(Debug, Deserialize)]
 struct DispatchTask {
     eval_id: String,
@@ -46,6 +45,8 @@ struct DispatchTask {
     run_record_path: String,
     timing_path: String,
     agent_description: String,
+    #[serde(default)]
+    dispatch_prompt_path: String,
 }
 
 /// Tally of what record-runs did across the dispatch's tasks.
@@ -55,6 +56,7 @@ pub struct RecordRunsResult {
     pub skipped_existing: usize,
     pub skipped_no_final_message: usize,
     pub missing_transcript: usize,
+    pub skipped_prompt_unread: usize,
 }
 
 impl RecordRunsResult {
@@ -102,6 +104,24 @@ impl RecordRunsResult {
              assertions will grade unverifiable."
         ))
     }
+
+    /// A loud, actionable warning when one or more dispatches were excluded
+    /// because their transcript shows a failed read of the dispatch prompt — the
+    /// agent never received its instructions, so the result is a no-op, not data.
+    /// `None` when none were flagged.
+    pub fn prompt_unread_warning(&self) -> Option<String> {
+        if self.skipped_prompt_unread == 0 {
+            return None;
+        }
+        let n = self.skipped_prompt_unread;
+        let plural = if n == 1 { "" } else { "es" };
+        Some(format!(
+            "⚠ {n} dispatch{plural} skipped — the transcript shows a failed read of the dispatch \
+             prompt (the agent never received its instructions). These are NOT recorded, so they \
+             cannot be graded as data. Check the env/sandbox can reach each task's \
+             `dispatch_prompt_path`, then re-dispatch."
+        ))
+    }
 }
 
 /// Assemble `run.json` + `timing.json` for every task in
@@ -137,6 +157,19 @@ pub fn record_runs(
         if run_record_path.exists() && !overwrite {
             // An agent/operator already wrote this run.json — leave it untouched.
             result.skipped_existing += 1;
+        } else if let Some(summary) = &summary
+            && prompt_read_failed(
+                summary,
+                &task.dispatch_prompt_path,
+                &prompt_sentinel(&task.dispatch_prompt_path),
+            )
+        {
+            // The transcript shows the agent tried to read its prompt and the
+            // read returned an error, not the prompt — it never received its
+            // instructions. Skip both run.json and timing so the no-op can't be
+            // graded as data.
+            result.skipped_prompt_unread += 1;
+            continue;
         } else {
             let final_message_path = Path::new(&task.outputs_dir).join("final-message.md");
             let final_message = if final_message_path.exists() {
@@ -190,6 +223,58 @@ pub fn record_runs(
     }
 
     Ok(result)
+}
+
+/// Positive evidence that the agent tried to read its dispatch prompt and
+/// failed: the transcript has a tool call referencing `prompt_path`, yet no such
+/// call returned the prompt's content (its distinctive first-line `sentinel`).
+///
+/// A run that never references the prompt path is NOT flagged — absence is not
+/// proof of failure (an in-session subagent can receive the prompt another way),
+/// and requiring positive evidence keeps the check free of false positives.
+/// Returns `false` when `sentinel` is empty (the prompt file was missing or
+/// unreadable, so the read cannot be judged).
+fn prompt_read_failed(summary: &TranscriptSummary, prompt_path: &str, sentinel: &str) -> bool {
+    if sentinel.is_empty() {
+        return false;
+    }
+    let mut referenced = false;
+    let mut delivered = false;
+    for inv in &summary.tool_invocations {
+        let mentions_prompt = inv
+            .args
+            .as_ref()
+            .is_some_and(|a| a.to_string().contains(prompt_path));
+        if !mentions_prompt {
+            continue;
+        }
+        referenced = true;
+        if inv
+            .result
+            .as_ref()
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|r| r.contains(sentinel))
+        {
+            delivered = true;
+        }
+    }
+    referenced && !delivered
+}
+
+/// The dispatch prompt's distinctive first non-empty line, used as the sentinel
+/// for [`prompt_read_failed`]. Empty when the prompt file is missing/unreadable.
+fn prompt_sentinel(prompt_path: &str) -> String {
+    if prompt_path.is_empty() {
+        return String::new();
+    }
+    fs::read_to_string(prompt_path)
+        .ok()
+        .and_then(|p| {
+            p.lines()
+                .find(|l| !l.trim().is_empty())
+                .map(|l| l.trim().to_string())
+        })
+        .unwrap_or_default()
 }
 
 /// Resolve a task's transcript summary, keyed on the dispatch mechanism: a
@@ -297,6 +382,117 @@ mod tests {
             json!({"type": "result", "subtype": "success", "is_error": false, "result": final_text, "duration_ms": 30_000, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5}}),
         ];
         fs::write(outputs_dir.join("claude-events.jsonl"), jsonl(&lines)).unwrap();
+    }
+
+    /// A `claude -p` events fixture where the agent reads its dispatch prompt:
+    /// a `Read` tool call whose `input.file_path` is `prompt_path`, a
+    /// `tool_result` carrying `read_result` (the file content on success, an
+    /// error string on a denied/out-of-cwd read), and a terminal `result` event.
+    fn write_claude_events_prompt_read(
+        outputs_dir: &Path,
+        prompt_path: &str,
+        read_result: &str,
+        final_text: &str,
+    ) {
+        let lines = vec![
+            json!({"type": "system", "subtype": "init", "cwd": "/env"}),
+            json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Read", "input": {"file_path": prompt_path}}]}}),
+            json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": read_result}]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false, "result": final_text, "duration_ms": 30_000, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5}}),
+        ];
+        fs::write(outputs_dir.join("claude-events.jsonl"), jsonl(&lines)).unwrap();
+    }
+
+    const PROMPT_SENTINEL: &str =
+        "You are executing a single test case for a skill evaluation framework.";
+
+    #[test]
+    fn flags_dispatch_whose_prompt_read_failed() {
+        // A dispatch that couldn't read its prompt still exits 0 and emits a
+        // final message — but the run is a silent no-op, not data (issue #109).
+        let tmp = TempDir::new().unwrap();
+        let iter = tmp.path();
+        let paths = write_iteration(
+            iter,
+            &[FixtureTask {
+                eval_id: "e1",
+                condition: "with_skill",
+                final_message: Some("I could not read the prompt file."),
+            }],
+        );
+        let prompt_path = iter
+            .join("eval-e1")
+            .join("with_skill")
+            .join("dispatch-prompt.txt");
+        fs::write(
+            &prompt_path,
+            format!("{PROMPT_SENTINEL}\n\nUser request:\ndo it"),
+        )
+        .unwrap();
+        // The transcript shows a Read of the prompt path that ERRORED — the
+        // result is a denial, not the prompt content.
+        write_claude_events_prompt_read(
+            &paths[0].outputs_dir,
+            &prompt_path.to_string_lossy(),
+            "<tool_use_error>File is outside the allowed working directory.</tool_use_error>",
+            "I could not read the prompt file.",
+        );
+
+        let result = record_runs(
+            iter,
+            Harness::ClaudeCode,
+            DispatchMechanism::Cli,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.skipped_prompt_unread, 1);
+        assert_eq!(result.recorded, 0);
+        assert!(!paths[0].run_record_path.exists());
+    }
+
+    #[test]
+    fn records_dispatch_when_prompt_read_succeeded() {
+        // The same shape, but the Read returned the prompt content (Read echoes
+        // it with a line-number prefix) — a legitimate run, recorded as data.
+        let tmp = TempDir::new().unwrap();
+        let iter = tmp.path();
+        let paths = write_iteration(
+            iter,
+            &[FixtureTask {
+                eval_id: "e1",
+                condition: "with_skill",
+                final_message: Some("Done."),
+            }],
+        );
+        let prompt_path = iter
+            .join("eval-e1")
+            .join("with_skill")
+            .join("dispatch-prompt.txt");
+        fs::write(
+            &prompt_path,
+            format!("{PROMPT_SENTINEL}\n\nUser request:\ndo it"),
+        )
+        .unwrap();
+        write_claude_events_prompt_read(
+            &paths[0].outputs_dir,
+            &prompt_path.to_string_lossy(),
+            &format!("     1→{PROMPT_SENTINEL}\n     2→\n     3→User request:"),
+            "Done.",
+        );
+
+        let result = record_runs(
+            iter,
+            Harness::ClaudeCode,
+            DispatchMechanism::Cli,
+            None,
+            false,
+        )
+        .unwrap();
+
+        assert_eq!(result.recorded, 1);
+        assert_eq!(result.skipped_prompt_unread, 0);
     }
 
     struct FixtureTask {
