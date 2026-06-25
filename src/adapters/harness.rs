@@ -120,7 +120,7 @@ pub trait HarnessAdapter {
     /// The post-`grade` / post-`ingest` judge dispatch guidance for a
     /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness. `None`
     /// leaves the generic in-session-style judge handoff in place.
-    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext) -> Option<String> {
+    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext<'_>) -> Option<String> {
         None
     }
 
@@ -195,8 +195,9 @@ pub struct CliManifestContext<'a> {
 
 /// Context for rendering a harness's one-shot CLI judge-dispatch guidance.
 #[derive(Debug, Clone, Copy)]
-pub struct CliJudgeContext {
+pub struct CliJudgeContext<'a> {
     pub guard: bool,
+    pub iteration_dir: &'a Path,
 }
 
 impl HarnessAdapter for ClaudeCodeAdapter {
@@ -261,8 +262,11 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             String::new(),
         ])
     }
-    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext) -> Option<String> {
-        Some(claude_judge_dispatch_recipe(self.cli_model_flag()))
+    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
+        Some(claude_judge_dispatch_recipe(
+            self.cli_model_flag(),
+            ctx.iteration_dir,
+        ))
     }
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_transcript(path)
@@ -350,10 +354,11 @@ impl HarnessAdapter for CodexAdapter {
             String::new(),
         ])
     }
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext) -> Option<String> {
+    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
         Some(codex_judge_dispatch_recipe(
             self.cli_model_flag(),
             ctx.guard,
+            ctx.iteration_dir,
         ))
     }
     fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {

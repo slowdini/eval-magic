@@ -173,13 +173,13 @@ pub(super) fn write_dispatch(
                     } else {
                         (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
                     };
-                    // Create the per-run meta dir (run.json / timing.json /
-                    // dispatch-prompt.txt), which lives above the env.
+                    // Create the per-run meta dir (run.json / timing.json), which
+                    // lives above the env.
                     fs::create_dir_all(&run_dir)?;
                     // The agent-under-test's cwd is its env, so its outputs land
-                    // *inside* it — never above its sandbox.
-                    // A hidden, per-(eval, condition, run) subtree keeps concurrent
-                    // same-env subagents from colliding.
+                    // *inside* it — never above its sandbox. A hidden,
+                    // per-(eval, condition, run) subtree keeps concurrent same-env
+                    // subagents from colliding.
                     let outputs_rel = match run_index {
                         None => format!("eval-{}/{cond_name}", ev.id),
                         Some(k) => format!("eval-{}/{cond_name}/run-{k}", ev.id),
