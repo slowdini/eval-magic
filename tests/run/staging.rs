@@ -148,7 +148,9 @@ fn plan_mode_injects_profile_and_records_flag() {
         let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
         assert!(prompt.contains("<system-reminder>"));
         assert!(prompt.contains("Plan mode is active"));
-        assert!(prompt.contains("ExitPlanMode"));
+        // The shared profile is harness-agnostic: no Claude-specific ExitPlanMode rail.
+        assert!(prompt.contains("for the user's approval"));
+        assert!(!prompt.contains("ExitPlanMode"));
     }
 }
 

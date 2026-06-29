@@ -349,13 +349,13 @@ pub struct RunArgs {
     /// to clobber an existing dir; registered for next-run cleanup.
     #[arg(long)]
     pub stage_name: Option<String>,
-    /// Inject the harness's plan-mode profile as an operating-context layer.
+    /// Inject the shared plan-mode profile as an operating-context layer.
     ///
-    /// Injects the harness's verbatim plan-mode procedure
-    /// (`profiles/<harness>/plan-mode.md`) as a `<system-reminder>` in every
-    /// dispatch, identical across arms. Opt-in, for plan-mode-relevant skills.
-    /// A harness with no profile aborts. It is text the subagent reads, not a
-    /// real injected mode.
+    /// Injects the shared, harness-agnostic plan-mode procedure
+    /// (`profiles/shared/plan-mode.md`) as a `<system-reminder>` in every
+    /// dispatch, identical across arms and harnesses. Opt-in, for
+    /// plan-mode-relevant skills. It is text the subagent reads, not a real
+    /// injected mode.
     #[arg(long)]
     pub plan_mode: bool,
     /// Runs per condition cell, for variance reduction (default: 1).

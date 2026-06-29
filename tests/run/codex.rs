@@ -154,8 +154,10 @@ fn codex_plan_mode_injects_profile_and_records_flag() {
             assert!(prompt.contains("## Skills"));
         }
         assert!(prompt.contains("<system-reminder>"));
-        assert!(prompt.contains("Codex plan mode is active"));
-        assert!(prompt.contains("<proposed_plan>"));
+        // Shared, harness-agnostic profile: same text every harness sees, with no
+        // Codex-specific <proposed_plan> block or Claude-specific ExitPlanMode rail.
+        assert!(prompt.contains("Plan mode is active"));
+        assert!(!prompt.contains("<proposed_plan>"));
         assert!(!prompt.contains("ExitPlanMode"));
     }
 }

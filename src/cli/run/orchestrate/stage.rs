@@ -32,9 +32,9 @@ pub(super) fn stage_conditions(
     };
 
     let plan_mode_content = if opts.plan_mode {
-        let profile = resolve_plan_mode_profile(ctx.harness)?;
+        let profile = resolve_plan_mode_profile();
         println!(
-            "  plan-mode: injecting {} plan-mode profile as operating context (issue #142; necessary-not-sufficient fidelity layer)",
+            "  plan-mode: injecting the shared plan-mode profile as operating context for {} (issue #142; necessary-not-sufficient fidelity layer)",
             harness_label(ctx.harness)
         );
         Some(profile.to_string())
