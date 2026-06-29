@@ -8,10 +8,8 @@ use crate::adapters::{CliJudgeContext, adapter_for};
 use crate::cli::args::{CommonArgs, GradeArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
-use crate::cli::{
-    iteration_dir, resolve_iteration, resolve_subagents_dir, run_context_from, staged_env_roots,
-};
-use crate::core::{DispatchMechanism, RunContext};
+use crate::cli::{iteration_dir, resolve_iteration, run_context_from, staged_env_roots};
+use crate::core::RunContext;
 use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
@@ -23,21 +21,16 @@ fn judge_dispatch_guidance(ctx: &RunContext, iteration: u32) -> String {
         .workspace_root
         .join(&ctx.skill_name)
         .join(format!("iteration-{iteration}"));
-    match ctx.run_mode.mechanism() {
-        DispatchMechanism::InSession => {
-            format!("Dispatch each task as a judge subagent with:\n  {JUDGE_WORKER_PROMPT}")
-        }
-        DispatchMechanism::Cli => adapter_for(ctx.harness)
-            .cli_judge_next_steps(CliJudgeContext {
-                guard: sandbox::guard_is_armed(&ctx.stage_root),
-                iteration_dir: &iteration_dir,
-            })
-            .unwrap_or_else(|| {
-                format!(
-                    "Dispatch each task from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nModel selection is recorded in judge-tasks.json, but this harness adapter has no judge CLI recipe wired yet."
-                )
-            }),
-    }
+    adapter_for(ctx.harness)
+        .cli_judge_next_steps(CliJudgeContext {
+            guard: sandbox::guard_is_armed(&ctx.stage_root),
+            iteration_dir: &iteration_dir,
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "Dispatch each task from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nModel selection is recorded in judge-tasks.json, but this harness adapter has no judge CLI recipe wired yet."
+            )
+        })
 }
 
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
@@ -54,10 +47,6 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
         harness: Some(step.harness),
         run_mode: Some(step.run_mode),
         workspace_dir: step.workspace_dir.clone(),
-        // The chain carries the already-resolved absolute subagents dir, so the
-        // session id is no longer needed downstream.
-        subagents_dir: step.subagents_dir.clone(),
-        session_id: None,
         only: None,
         skip: None,
         overwrite: false,
@@ -80,12 +69,6 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
-    let resolved = resolve_subagents_dir(
-        ctx.run_mode.mechanism(),
-        args.subagents_dir.as_deref(),
-        args.session_id.as_deref(),
-    )?;
-    let resolved = resolved.as_ref().map(|p| p.to_string_lossy().into_owned());
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
         skill_dir: args.skill_dir.as_deref(),
@@ -93,7 +76,6 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         iteration,
         harness: ctx.harness,
         run_mode: ctx.run_mode,
-        subagents_dir: resolved.as_deref(),
         workspace_dir: args.workspace_dir.as_deref(),
     });
     if let Some(failed) = run::steps::run_steps(&steps, run_step) {
@@ -138,7 +120,6 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
         iteration,
         harness: ctx.harness,
         run_mode: ctx.run_mode,
-        subagents_dir: None,
         workspace_dir: args.workspace_dir.as_deref(),
     });
     if let Some(failed) = run::steps::run_steps(&steps, run_step) {
@@ -148,15 +129,11 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
     println!(
         "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown{target_args}"
     );
-    // Warn if a guard is still armed. The cwd check covers the in-session flow (run
-    // from inside `env/`); under Cli there is one env per (group, condition), so also
-    // walk each per-env marker. `teardown` (not the cwd-only `teardown-guard`) is what
-    // disarms them all.
+    // Warn if a guard is still armed. There is one env per (group, condition), so
+    // walk each per-env marker as well as the cwd. `teardown` (not the cwd-only
+    // `teardown-guard`) is what disarms them all.
     let mut armed = sandbox::guard_is_armed(&ctx.stage_root);
-    if !armed
-        && ctx.run_mode.mechanism() == DispatchMechanism::Cli
-        && let Ok(dir) = iteration_dir(&ctx, Some(iteration))
-    {
+    if !armed && let Ok(dir) = iteration_dir(&ctx, Some(iteration)) {
         armed = staged_env_roots(&dir)
             .iter()
             .any(|env| sandbox::guard_is_armed(env));
@@ -173,17 +150,8 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
 /// `dispatch.json`.
 pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let mechanism = ctx.run_mode.mechanism();
-    let resolved = resolve_subagents_dir(
-        mechanism,
-        args.subagents_dir.as_deref(),
-        args.session_id.as_deref(),
-    )?;
-    let subagents_dir = resolved.as_deref();
-
     let dir = iteration_dir(&ctx, args.iteration)?;
-    let result =
-        pipeline::record_runs(&dir, ctx.harness, mechanism, subagents_dir, args.overwrite)?;
+    let result = pipeline::record_runs(&dir, ctx.harness, args.overwrite)?;
 
     println!(
         "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, missing transcript: {}",
@@ -193,7 +161,7 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         result.skipped_prompt_unread,
         result.missing_transcript
     );
-    if let Some(warning) = result.transcript_warning(ctx.harness, mechanism) {
+    if let Some(warning) = result.transcript_warning(ctx.harness) {
         eprintln!("{warning}");
     }
     if let Some(warning) = result.prompt_unread_warning() {
@@ -206,17 +174,8 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
 /// the iteration.
 pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let mechanism = ctx.run_mode.mechanism();
-    let resolved = resolve_subagents_dir(
-        mechanism,
-        args.subagents_dir.as_deref(),
-        args.session_id.as_deref(),
-    )?;
-    let subagents_dir = resolved.as_deref();
-
     let dir = iteration_dir(&ctx, args.iteration)?;
-    let result =
-        pipeline::fill_transcripts(&dir, ctx.harness, mechanism, subagents_dir, args.overwrite)?;
+    let result = pipeline::fill_transcripts(&dir, ctx.harness, args.overwrite)?;
 
     println!(
         "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
@@ -274,7 +233,7 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     let clean = t.violations == 0 && t.warnings == 0 && t.live_source_reads == 0;
     if clean && report.invocations_inspected == 0 {
         eprintln!(
-            "⚠ Unverifiable — 0 transcript tool-calls inspected. Stray-write detection had nothing to check (every run's tool_invocations is empty); link transcripts first, then re-run (see the record-runs warning about passing agent_description verbatim / pointing --subagents-dir at the right session)."
+            "⚠ Unverifiable — 0 transcript tool-calls inspected. Stray-write detection had nothing to check (every run's tool_invocations is empty); link transcripts first, then re-run (confirm each task's `outputs/<harness>-events.jsonl` exists — see the record-runs warning)."
         );
     } else if clean {
         println!("✓ No out-of-bounds writes or live-source reads detected.");

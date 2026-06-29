@@ -4,8 +4,8 @@
 //! --output-format stream-json --verbose` writes (captured per task as
 //! `outputs/claude-events.jsonl`). The `assistant`/`user` events wrap a full
 //! Anthropic Messages object under `message`, so tool-call extraction is shared
-//! with the in-session [`claude_code_transcript`](super::claude_code_transcript)
-//! parser. The differences are all in the envelope: there are no per-line
+//! with the [`claude_code_transcript`](super::claude_code_transcript) record
+//! types. The differences are all in the envelope: there are no per-line
 //! timestamps, and a terminal `result` event carries the authoritative final
 //! text, wall-clock duration, and token usage. `system`, `rate_limit_event`, and
 //! any other non-message events are ignored (they don't deserialize into an
@@ -35,7 +35,7 @@ struct ResultEvent {
     usage: Option<UsageRecord>,
 }
 
-/// Parse the event stream into ordered tool invocations. Reuses the in-session
+/// Parse the event stream into ordered tool invocations. Reuses the shared
 /// extractor: non-message events deserialize into records the extractor skips.
 pub fn parse_claude_stream_json(path: &Path) -> io::Result<Vec<ToolInvocation>> {
     Ok(extract_invocations(&read_records(path)?))

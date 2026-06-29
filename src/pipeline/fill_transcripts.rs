@@ -2,9 +2,10 @@
 //!
 //! Walks the iteration's `eval-*`
 //! directories and, for each `(eval, condition)` `run.json`, populates
-//! `tool_invocations` from the persisted transcript (Claude Code subagent JSONL
-//! resolved by the task's `agent_description`, or Codex `codex-events.jsonl`).
-//! Records that already carry invocations are skipped unless `overwrite`.
+//! `tool_invocations` from the events file the harness CLI wrote under the task's
+//! `outputs_dir` (e.g. Codex's `codex-events.jsonl`, Claude Code's
+//! `claude-events.jsonl`). Records that already carry invocations are skipped
+//! unless `overwrite`.
 
 use std::collections::HashMap;
 use std::fs;
@@ -12,8 +13,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::adapters::{adapter_for, find_by_description};
-use crate::core::{ConditionsRecord, DispatchMechanism, Harness, RunRecord, ToolInvocation};
+use crate::adapters::adapter_for;
+use crate::core::{ConditionsRecord, Harness, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::pipeline::slots::{run_key, run_slots};
@@ -40,36 +41,7 @@ struct DispatchRef {
     #[serde(default)]
     run_index: Option<u32>,
     #[serde(default)]
-    agent_description: Option<String>,
-    #[serde(default)]
     outputs_dir: Option<String>,
-}
-
-/// The canonical dispatch description for an `(eval, condition, run)` run.
-///
-/// The runner writes a unique `agent_description` per task into `dispatch.json`
-/// (namespaced with the iteration + run nonce); reading it back binds each run to
-/// the exact agent that produced it. Falls back to the
-/// `<eval_id>:<condition>[:r<k>]` reconstruction when `dispatch.json` is absent,
-/// malformed, or missing the task (hand-authored/operator runs).
-pub fn resolve_agent_description(
-    iteration_dir: &Path,
-    eval_id: &str,
-    condition: &str,
-    run_index: Option<u32>,
-) -> String {
-    let dispatch_path = iteration_dir.join("dispatch.json");
-    if let Ok(raw) = fs::read_to_string(&dispatch_path)
-        && let Ok(env) = serde_json::from_str::<DispatchEnvelope>(&raw)
-        && let Some(tasks) = env.tasks
-        && let Some(task) = tasks
-            .iter()
-            .find(|t| t.eval_id == eval_id && t.condition == condition && t.run_index == run_index)
-        && let Some(desc) = &task.agent_description
-    {
-        return desc.clone();
-    }
-    run_key(eval_id, condition, run_index)
 }
 
 /// Populate `tool_invocations` for every `run.json` under `iteration_dir`. See
@@ -77,8 +49,6 @@ pub fn resolve_agent_description(
 pub fn fill_transcripts(
     iteration_dir: &Path,
     harness: Harness,
-    mechanism: DispatchMechanism,
-    subagents_dir: Option<&Path>,
     overwrite: bool,
 ) -> Result<FillTranscriptsResult, PipelineError> {
     let conditions_path = iteration_dir.join("conditions.json");
@@ -131,18 +101,8 @@ pub fn fill_transcripts(
                     .cloned()
                     .unwrap_or_else(|| slot.dir.join("outputs").to_string_lossy().into_owned());
 
-                // Resolve the in-session description lazily — only the InSession
-                // branch needs it, so a Cli run skips the dispatch.json re-read.
-                let description = (mechanism == DispatchMechanism::InSession).then(|| {
-                    resolve_agent_description(iteration_dir, eval_id, cond, slot.run_index)
-                });
-                let Some(invocations) = invocations_for_run(
-                    harness,
-                    mechanism,
-                    subagents_dir,
-                    description.as_deref(),
-                    Path::new(&outputs_dir),
-                ) else {
+                let Some(invocations) = invocations_for_run(harness, Path::new(&outputs_dir))
+                else {
                     result.missing += 1;
                     continue;
                 };
@@ -174,34 +134,15 @@ fn outputs_dirs_by_key(iteration_dir: &Path) -> HashMap<String, String> {
     out
 }
 
-/// Parse the invocations for one run, keyed on the dispatch mechanism: a
-/// `Cli`-mechanism harness reads the events file its CLI wrote under
-/// `outputs_dir` (e.g. Codex's `codex-events.jsonl`, Claude Code hybrid's
-/// `claude-events.jsonl`); an `InSession` harness reads the subagent transcript
-/// matched by `description` (resolved by the caller).
-fn invocations_for_run(
-    harness: Harness,
-    mechanism: DispatchMechanism,
-    subagents_dir: Option<&Path>,
-    description: Option<&str>,
-    outputs_dir: &Path,
-) -> Option<Vec<ToolInvocation>> {
-    match mechanism {
-        DispatchMechanism::Cli => {
-            let events_path = outputs_dir.join(adapter_for(harness).cli_events_filename()?);
-            if !events_path.exists() {
-                return None;
-            }
-            adapter_for(harness).parse_cli_events(&events_path).ok()
-        }
-        DispatchMechanism::InSession => {
-            let subagent =
-                find_by_description(subagents_dir.unwrap_or_else(|| Path::new("")), description?)?;
-            adapter_for(harness)
-                .parse_transcript(&subagent.jsonl_path)
-                .ok()
-        }
+/// Parse the invocations for one run: read the events file the harness CLI wrote
+/// under `outputs_dir` (e.g. Codex's `codex-events.jsonl`, Claude Code's
+/// `claude-events.jsonl`). Returns `None` when no events file is found.
+fn invocations_for_run(harness: Harness, outputs_dir: &Path) -> Option<Vec<ToolInvocation>> {
+    let events_path = outputs_dir.join(adapter_for(harness).cli_events_filename()?);
+    if !events_path.exists() {
+        return None;
     }
+    adapter_for(harness).parse_cli_events(&events_path).ok()
 }
 
 #[cfg(test)]
@@ -244,66 +185,6 @@ mod tests {
         fs::write(path, serde_json::to_string_pretty(&record).unwrap()).unwrap();
     }
 
-    // --- resolveAgentDescription ---
-
-    #[test]
-    fn returns_the_namespaced_agent_description_from_dispatch() {
-        let root = TempDir::new().unwrap();
-        let dir = root.path().join("iter-canonical");
-        write_dispatch(
-            &dir,
-            json!([
-                {"eval_id": "crash", "condition": "with_skill", "agent_description": "crash:with_skill:i3-abc123"},
-                {"eval_id": "crash", "condition": "without_skill", "agent_description": "crash:without_skill:i3-abc123"}
-            ]),
-        );
-        assert_eq!(
-            resolve_agent_description(&dir, "crash", "with_skill", None),
-            "crash:with_skill:i3-abc123"
-        );
-        assert_eq!(
-            resolve_agent_description(&dir, "crash", "without_skill", None),
-            "crash:without_skill:i3-abc123"
-        );
-    }
-
-    #[test]
-    fn falls_back_to_legacy_reconstruction_when_dispatch_absent() {
-        let root = TempDir::new().unwrap();
-        let dir = root.path().join("iter-no-dispatch");
-        fs::create_dir_all(&dir).unwrap();
-        assert_eq!(
-            resolve_agent_description(&dir, "crash", "with_skill", None),
-            "crash:with_skill"
-        );
-    }
-
-    #[test]
-    fn falls_back_when_task_missing_from_dispatch() {
-        let root = TempDir::new().unwrap();
-        let dir = root.path().join("iter-partial");
-        write_dispatch(
-            &dir,
-            json!([{"eval_id": "other", "condition": "with_skill", "agent_description": "other:with_skill:i1-x"}]),
-        );
-        assert_eq!(
-            resolve_agent_description(&dir, "crash", "with_skill", None),
-            "crash:with_skill"
-        );
-    }
-
-    #[test]
-    fn falls_back_when_dispatch_malformed() {
-        let root = TempDir::new().unwrap();
-        let dir = root.path().join("iter-malformed");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("dispatch.json"), "{ not valid json").unwrap();
-        assert_eq!(
-            resolve_agent_description(&dir, "crash", "with_skill", None),
-            "crash:with_skill"
-        );
-    }
-
     // --- fillTranscripts ---
 
     #[test]
@@ -342,14 +223,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = fill_transcripts(
-            &iteration_dir,
-            Harness::ClaudeCode,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = fill_transcripts(&iteration_dir, Harness::ClaudeCode, false).unwrap();
         assert_eq!(result.filled, 1);
         assert_eq!(result.missing, 0);
 
@@ -393,14 +267,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = fill_transcripts(
-            &iteration_dir,
-            Harness::Codex,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = fill_transcripts(&iteration_dir, Harness::Codex, false).unwrap();
         assert_eq!(result.filled, 1);
         assert_eq!(result.missing, 0);
 
@@ -443,14 +310,7 @@ mod tests {
             .unwrap();
         }
 
-        let result = fill_transcripts(
-            &iteration_dir,
-            Harness::Codex,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = fill_transcripts(&iteration_dir, Harness::Codex, false).unwrap();
         assert_eq!(result.filled, 2);
         assert_eq!(result.missing, 0);
 

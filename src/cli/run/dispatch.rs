@@ -14,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
-use crate::core::{AvailableSkill, DispatchMechanism, Eval, Harness};
+use crate::core::{AvailableSkill, Eval, Harness};
 
 use super::RunError;
 
@@ -43,9 +43,8 @@ pub struct DispatchTask {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// The agent-under-test's cwd for this task (its env dir). Absent in the
-    /// single-group case, where the Cli recipe's `<eval-root>` placeholder still
-    /// resolves to `env/`; present (per `(group, condition)`) for multi-group Cli.
+    /// The agent-under-test's cwd for this task — its per-`(group, condition)` env
+    /// dir, which the CLI dispatch recipe's `<eval-root>` placeholder resolves to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_root: Option<String>,
     #[serde(default, skip_serializing)]
@@ -381,7 +380,6 @@ pub use crate::core::Mode;
 #[derive(Debug, Clone, Copy)]
 pub struct ManifestContext<'a> {
     pub harness: Harness,
-    pub mechanism: DispatchMechanism,
     pub guard: bool,
     pub agent_model: Option<&'a str>,
 }
@@ -413,25 +411,19 @@ pub fn build_manifest(
         String::new(),
         "## How to use this manifest".to_string(),
         String::new(),
-        "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the subagent with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
-        String::new(),
-        "**Transcript correlation:** Each task has an `agent_description` field of the form `<eval_id>:<condition>[:r<k>]:i<N>-<nonce>` (the `r<k>` segment appears only in multi-run cells, naming the 1-based run index). When dispatching the subagent via the host's primitive (e.g. Claude Code's Agent tool), pass this string verbatim as the dispatch `description` — do not reconstruct it. The per-run nonce keeps descriptions unique across iterations sharing one session's subagents dir, so the transcript adapter correlates each subagent's persisted transcript back to the right `(eval, condition, run)` slot without collisions.".to_string(),
+        "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
     ];
-    // Only a Cli-dispatch run emits a CLI recipe section; an in-session run
-    // (e.g. interactive Claude Code) gets the generic ingest guidance below.
-    if context.mechanism == DispatchMechanism::Cli
-        && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
-            guard: context.guard,
-            agent_model: context.agent_model,
-        })
-    {
+    if let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
+        guard: context.guard,
+        agent_model: context.agent_model,
+    }) {
         header.extend(lines);
     }
     header.extend([
-        "After all dispatches (Claude Code only):".to_string(),
+        "After all dispatches:".to_string(),
         String::new(),
-        "1. Run `eval-magic ingest` (it auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside the dispatching session, pass `--session-id <id>` or `--subagents-dir <path>`) — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the subagent's own `outputs/final-message.md` + the persisted transcript, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
+        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
         "2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize` for the benchmark.".to_string(),
         String::new(),
         "On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.".to_string(),

@@ -70,12 +70,10 @@ pub(super) fn stage_conditions(
         ));
     }
 
-    // The environments to stage: one shared `env/` for in-session (hosting both
-    // conditions + the first group's fixtures), or one per (group, condition) for
-    // Cli (each with only its condition's skill + its group's fixtures).
+    // The environments to stage: one per (group, condition), each with only its
+    // condition's skill + its group's fixtures.
     let targets = env_targets(&EnvLayoutInput {
         iteration_dir: &r.iteration_dir,
-        mechanism: ctx.run_mode.mechanism(),
         groups: &r.groups,
         cond_a: r.cond_a,
         cond_b: r.cond_b,
@@ -89,7 +87,7 @@ pub(super) fn stage_conditions(
     for target in &targets {
         // Disarm a prior run's guard before re-staging, so a crashed run can't leave
         // the write-blocking hook armed across runs. Created unconditionally — even
-        // under --no-stage, fixtures (and the in-session RUNBOOK) still land here.
+        // under --no-stage, each env's fixtures still land here.
         teardown_guard(&target.root);
         fs::create_dir_all(&target.root)?;
 

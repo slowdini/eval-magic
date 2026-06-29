@@ -11,8 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail};
 use clap::Parser;
 
-use crate::adapters::{config_dir_from_env, resolve_subagents_dir_for_session};
-use crate::core::{DetectInput, DispatchMechanism, RunContext, detect_run_context};
+use crate::core::{DetectInput, RunContext, detect_run_context};
 
 mod args;
 mod commands;
@@ -39,8 +38,6 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
             harness: None,
             run_mode: None,
             workspace_dir: None,
-            subagents_dir: None,
-            session_id: None,
             only: None,
             skip: None,
             overwrite: false,
@@ -116,10 +113,10 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
 /// Always names `--skill-dir`, `--skill`, and `--workspace-dir` (all three are
 /// always populated in [`RunContext`] and always re-resolve), so the printed
 /// "Next:" commands are copy-pasteable from any cwd — not just the one `run`
-/// happened to start in. The absolute `--workspace-dir` is what lets the isolated
-/// session run `ingest`/`finalize`/`switch-condition` from `cwd = iteration-N/env/`:
-/// without it, `workspace_root` would default to `<cwd>/.eval-magic`
-/// (`detect_run_context`) and the iteration tree above the env would not resolve.
+/// happened to start in. The absolute `--workspace-dir` is what lets the human
+/// run `ingest`/`finalize` from a per-`(group, condition)` env dir: without it,
+/// `workspace_root` would default to `<cwd>/.eval-magic` (`detect_run_context`)
+/// and the iteration tree above the env would not resolve.
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
     format!(
         " --skill-dir {} --skill {} --workspace-dir {} --run-mode {}",
@@ -176,13 +173,12 @@ pub(crate) fn iteration_dir(ctx: &RunContext, iteration: Option<u32>) -> anyhow:
     Ok(dir)
 }
 
-/// The env directories a run staged under `iteration_dir`: the single `env/` for
-/// the InSession mechanism, or one `env-<group>-<condition>/` per `(group, condition)`
-/// for Cli. A best-effort directory scan (returns empty when the dir can't be read),
-/// used by `teardown`/`finalize` to walk every env's write guard. Preferred over
-/// reading `dispatch.json` because it has no parse-failure mode, needs no path
-/// re-basing (recorded env dirs can be relative), and the only `env`/`env-*` children
-/// of an iteration dir are the staged envs.
+/// The env directories a run staged under `iteration_dir`: one
+/// `env-<group>-<condition>/` per `(group, condition)`. A best-effort directory
+/// scan (returns empty when the dir can't be read), used by `teardown`/`finalize`
+/// to walk every env's write guard. Preferred over reading `dispatch.json` because
+/// it has no parse-failure mode, needs no path re-basing (recorded env dirs can be
+/// relative), and the only `env-*` children of an iteration dir are the staged envs.
 pub(crate) fn staged_env_roots(iteration_dir: &Path) -> Vec<PathBuf> {
     let Ok(entries) = std::fs::read_dir(iteration_dir) else {
         return Vec::new();
@@ -197,57 +193,6 @@ pub(crate) fn staged_env_roots(iteration_dir: &Path) -> Vec<PathBuf> {
         })
         .map(|e| e.path())
         .collect()
-}
-
-/// Resolve the subagents transcript dir for an in-session stage that reads
-/// transcripts. The subagents dir is the `InSession` transcript source, so this
-/// is keyed on the dispatch *mechanism*, not the harness: `Cli`-mechanism runs
-/// (Codex; Claude Code hybrid/headless) read each task's `outputs/<events>.jsonl`
-/// and resolve to `None` — they must never bail on a missing
-/// `CLAUDE_CODE_SESSION_ID`. For the `InSession` mechanism (Claude Code
-/// interactive), precedence is: an explicit `--subagents-dir` (validated to
-/// exist) wins; otherwise resolve from a session id — the `--session-id` flag if
-/// given, else the `CLAUDE_CODE_SESSION_ID` env var Claude Code sets in the
-/// orchestrating agent's shell — locating
-/// `<config>/projects/<cwd-slug>/<session-id>/subagents/` (scanning `projects/*`
-/// if the cwd slug differs).
-pub(crate) fn resolve_subagents_dir(
-    mechanism: DispatchMechanism,
-    subagents_dir: Option<&str>,
-    session_id: Option<&str>,
-) -> anyhow::Result<Option<PathBuf>> {
-    if mechanism != DispatchMechanism::InSession {
-        return Ok(None);
-    }
-    if let Some(dir) = subagents_dir {
-        let path = PathBuf::from(dir);
-        if !path.exists() {
-            bail!("subagents-dir not found: {}", path.display());
-        }
-        return Ok(Some(path));
-    }
-    let session = session_id
-        .map(str::to_string)
-        .or_else(|| std::env::var("CLAUDE_CODE_SESSION_ID").ok())
-        .filter(|s| !s.trim().is_empty());
-    let Some(session) = session else {
-        bail!(
-            "could not auto-resolve the subagents dir: CLAUDE_CODE_SESSION_ID is not set. \
-             Re-run inside the Claude Code session that dispatched the subagents, or pass \
-             --session-id <id> or --subagents-dir <path>."
-        );
-    };
-    let config_dir = config_dir_from_env();
-    let cwd = std::env::current_dir()?;
-    match resolve_subagents_dir_for_session(&config_dir, &cwd, &session) {
-        Some(path) => Ok(Some(path)),
-        None => bail!(
-            "no subagents dir found for session {session} under {}/projects/. The session may \
-             not have dispatched any subagents (or lives under a different CLAUDE_CONFIG_DIR). \
-             Pass --subagents-dir <path> to override.",
-            config_dir.display()
-        ),
-    }
 }
 
 #[cfg(test)]
@@ -310,11 +255,10 @@ mod tests {
         assert_eq!(resolved.skill_subdir, ctx.skill_subdir);
     }
 
-    /// The isolated session runs `ingest`/`finalize`/`switch-condition` from
-    /// `cwd = iteration-N/env/`. Without an explicit workspace root those commands
-    /// default `workspace_root` to `<cwd>/.eval-magic` and bail "not found",
-    /// so the selector must carry an absolute `--workspace-dir` pointing at the
-    /// real workspace above the env.
+    /// The human runs `ingest`/`finalize` from a per-`(group, condition)` env dir.
+    /// Without an explicit workspace root those commands default `workspace_root`
+    /// to `<cwd>/.eval-magic` and bail "not found", so the selector must carry an
+    /// absolute `--workspace-dir` pointing at the real workspace above the env.
     #[test]
     fn target_args_carry_absolute_workspace_dir() {
         let tmp = TempDir::new().unwrap();
@@ -356,56 +300,5 @@ mod tests {
         })
         .unwrap();
         assert_eq!(resolved.workspace_root, ctx.workspace_root);
-    }
-
-    #[test]
-    fn resolve_subagents_dir_is_none_for_cli_mechanism() {
-        // The subagents dir is the InSession transcript source. Cli-mechanism
-        // runs (Codex; Claude Code hybrid/headless) read each task's events file,
-        // so resolution is a no-op — and must NOT bail on a missing
-        // CLAUDE_CODE_SESSION_ID. This is the regression: the old harness-keyed
-        // gate forced session resolution for Claude Code and aborted under
-        // hybrid/headless. The Cli arm returns before reading any env var, so this
-        // is deterministic regardless of the test runner's environment.
-        assert_eq!(
-            resolve_subagents_dir(DispatchMechanism::Cli, None, None).unwrap(),
-            None
-        );
-        // A passed --subagents-dir is ignored in Cli mode (the events file is the
-        // source), so it resolves to None without touching the filesystem.
-        assert_eq!(
-            resolve_subagents_dir(DispatchMechanism::Cli, Some("/whatever"), None).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn resolve_subagents_dir_uses_existing_explicit_dir() {
-        // InSession (Claude Code interactive): an explicit, existing
-        // --subagents-dir wins over any session-id resolution.
-        let tmp = TempDir::new().unwrap();
-        let resolved = resolve_subagents_dir(
-            DispatchMechanism::InSession,
-            Some(&tmp.path().display().to_string()),
-            None,
-        )
-        .unwrap();
-        assert_eq!(resolved, Some(tmp.path().to_path_buf()));
-    }
-
-    #[test]
-    fn resolve_subagents_dir_errors_when_explicit_dir_missing() {
-        // InSession with an explicit --subagents-dir that doesn't exist is a hard
-        // error (not a silent fallback to session-id resolution).
-        let err = resolve_subagents_dir(
-            DispatchMechanism::InSession,
-            Some("/no/such/subagents/dir/xyz"),
-            None,
-        )
-        .unwrap_err();
-        assert!(
-            err.to_string().contains("subagents-dir not found"),
-            "got: {err}"
-        );
     }
 }

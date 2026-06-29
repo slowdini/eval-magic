@@ -13,16 +13,14 @@ EXAMPLES:
 
   # Mode A — evaluate a new skill (with vs. without)
   eval-magic run --guard
-  # run builds the isolated env/ + RUNBOOK.md, then prints a handoff:
-  #   cd into env/, start a fresh session, say \"Read and follow RUNBOOK.md\".
-  # The fresh session walks the whole loop below from inside env/:
-  #   …dispatch each task in dispatch.json as a fresh subagent…
-  #   eval-magic ingest      # auto-resolves --subagents-dir from CLAUDE_CODE_SESSION_ID
-  #                          # (override: --session-id <id> or --subagents-dir <path>)
+  # run builds per-(group, condition) envs + RUNBOOK.md (a human-followed recipe).
+  # Follow it to dispatch each task in dispatch.json via `claude -p`, capturing each
+  # task's outputs/claude-events.jsonl, then:
+  #   eval-magic ingest      # reads each task's outputs/claude-events.jsonl
   #   …dispatch each judge task ingest listed…
   #   eval-magic finalize
   #   eval-magic teardown
-  eval-magic promote-baseline   # optional, from the prep session once benchmark.json lands
+  eval-magic promote-baseline   # optional, once benchmark.json lands
 
   # Mode B — evaluate a language change (edit-first)
   eval-magic snapshot --ref HEAD

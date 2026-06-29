@@ -56,79 +56,6 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
     )
 }
 
-/// The shared dispatch-instruction body, parameterized on the `tasks[]` filter so
-/// the condition-only and condition+group variants stay in lockstep.
-fn insession_dispatch_instruction(filter: &str) -> String {
-    format!(
-        "iterate the `tasks[]` entries in dispatch.json whose {filter} and \
-         dispatch each as a subagent, passing its `agent_description` verbatim as the subagent \
-         description (that string is the key that links each transcript back — without it tool \
-         calls, tokens, and duration come back empty)."
-    )
-}
-
-/// Dispatch instruction for one condition batch: iterate the matching `tasks[]`
-/// and dispatch each as a subagent with its `agent_description` verbatim. A building
-/// block of the interactive runbook's per-condition steps ([`super::runbook`]).
-pub(crate) fn insession_dispatch_batch(condition: &str) -> String {
-    insession_dispatch_instruction(&format!("`condition` is `{condition}`"))
-}
-
-/// Dispatch instruction for one `(condition, group)` segment — used when a run has
-/// more than one isolation group, so each group's batch dispatches separately with
-/// a [`insession_reset_batch_command`] barrier between groups ([`super::runbook`]).
-pub(crate) fn insession_dispatch_segment(condition: &str, group: &str) -> String {
-    insession_dispatch_instruction(&format!(
-        "`condition` is `{condition}` and `group` is `{group}`"
-    ))
-}
-
-/// The `reset-batch` barrier command between isolation-group batches: wipe the
-/// env working tree and re-seed it with `group`'s fixtures before dispatching it.
-/// A building block of the interactive runbook ([`super::runbook`]).
-pub(crate) fn insession_reset_batch_command(
-    target_args: &str,
-    iteration: u32,
-    group: &str,
-) -> String {
-    format!("eval-magic reset-batch{target_args} --iteration {iteration} --group {group}")
-}
-
-/// The `switch-condition` barrier command between batches: name the condition about
-/// to be dispatched (the one to keep). A building block of the interactive runbook
-/// ([`super::runbook`]).
-pub(crate) fn insession_switch_command(target_args: &str, iteration: u32, keep: &str) -> String {
-    format!("eval-magic switch-condition{target_args} --iteration {iteration} --condition {keep}")
-}
-
-/// The `ingest` hand-off command + its session-resolution hint. A building block of
-/// the interactive runbook ([`super::runbook`]).
-pub(crate) fn insession_ingest_command(target_args: &str, iteration: u32) -> String {
-    format!(
-        "eval-magic ingest{target_args} --iteration {iteration}\n\
-         (ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that \
-         session, add --session-id <id> or --subagents-dir <path>.)"
-    )
-}
-
-/// The post-`run` handoff for the isolated in-session flow: cd into the env, start a
-/// *fresh* Claude Code session there, and have it read `RUNBOOK.md` — which carries the
-/// full dispatch → switch-condition → ingest → finalize loop. The env (incl.
-/// `env/.claude/skills/`) is built before that session starts, so the fresh session is
-/// structural, not a watcher workaround; the orchestrator no longer juggles the dispatch
-/// loop itself.
-pub(crate) fn insession_isolated_handoff(env_dir: &Path) -> String {
-    format!(
-        "start the isolated run in a fresh session:\n  \
-         1. cd {env}\n  \
-         2. start a fresh Claude Code session there (`claude`)\n  \
-         3. say: Read and follow RUNBOOK.md\n\
-         RUNBOOK.md walks the whole loop (dispatch → switch-condition → ingest → finalize) and \
-         writes benchmark.json; resume here to read it.",
-        env = env_dir.display()
-    )
-}
-
 /// Resolve the shared, harness-agnostic plan-mode procedure profile injected by
 /// `--plan-mode`. A compile-time bundled asset, mirroring the schema embedding in
 /// `validation`.
@@ -168,10 +95,9 @@ pub(crate) fn validate_harness_run_options(
 }
 
 /// A per-run nonce (`<millis-base36>-<6 hex>`) that namespaces dispatch
-/// descriptions so transcripts can't collide across iterations sharing one parent
-/// session's subagents dir. With no RNG crate, the low bits of the
-/// sub-millisecond clock supply the entropy — enough, since the base36 millis
-/// prefix already differs between runs.
+/// descriptions so they stay unique across iterations of the same skill. With no
+/// RNG crate, the low bits of the sub-millisecond clock supply the entropy —
+/// enough, since the base36 millis prefix already differs between runs.
 pub(crate) fn make_run_nonce() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -258,16 +184,6 @@ mod tests {
     }
 
     #[test]
-    fn claude_interactive_allows_guard() {
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Interactive);
-        let opts = RunOptions {
-            guard: true,
-            ..Default::default()
-        };
-        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
-    }
-
-    #[test]
     fn unguarded_notice_when_no_stage() {
         let notice = unguarded_notice(true).unwrap();
         assert!(
@@ -283,30 +199,6 @@ mod tests {
     #[test]
     fn no_unguarded_notice_when_staging() {
         assert!(unguarded_notice(false).is_none());
-    }
-
-    #[test]
-    fn isolated_handoff_points_into_env_and_at_the_runbook() {
-        let env = Path::new("/work/.eval-magic/widget/iteration-3/env");
-        let handoff = insession_isolated_handoff(env);
-        assert!(
-            handoff.contains("/work/.eval-magic/widget/iteration-3/env"),
-            "names the env to cd into: {handoff}"
-        );
-        assert!(handoff.contains("cd "), "spells out the cd step: {handoff}");
-        assert!(
-            handoff.contains("Read and follow RUNBOOK.md"),
-            "hands off to the runbook in a fresh session: {handoff}"
-        );
-        assert!(
-            handoff.contains("fresh"),
-            "names the fresh isolated session: {handoff}"
-        );
-        // The handoff replaces the old printed dispatch loop — it must not re-print it.
-        assert!(
-            !handoff.contains("one batch at a time"),
-            "the dispatch loop lives in RUNBOOK.md now, not the summary: {handoff}"
-        );
     }
 
     #[test]

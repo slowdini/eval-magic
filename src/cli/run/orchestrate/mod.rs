@@ -15,10 +15,10 @@ use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{DispatchMechanism, Eval, Mode, RunContext};
+use crate::core::{Eval, Mode, RunContext};
 
 use super::RunError;
-use super::util::{insession_isolated_handoff, mode_str};
+use super::util::mode_str;
 
 mod build;
 mod envs;
@@ -156,16 +156,10 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         r.iteration_dir.join("dispatch.json").display()
     );
 
-    match ctx.run_mode.mechanism() {
-        DispatchMechanism::InSession => println!(
-            "Runbook:            {} — start a fresh session in env/ and \"Read and follow RUNBOOK.md\".",
-            ctx.stage_root.join("RUNBOOK.md").display()
-        ),
-        DispatchMechanism::Cli => println!(
-            "Runbook:            {} — a human-followed copy of the steps below.",
-            r.iteration_dir.join("RUNBOOK.md").display()
-        ),
-    }
+    println!(
+        "Runbook:            {} — a human-followed copy of the steps below.",
+        r.iteration_dir.join("RUNBOOK.md").display()
+    );
     let run_counts: Vec<u32> = r
         .selected_evals
         .iter()
@@ -197,23 +191,14 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
-    match ctx.run_mode.mechanism() {
-        // In-session subagent dispatch (Claude Code's Task tool today). The env is
-        // built before the isolated session starts, so the summary just hands off:
-        // cd into env/, start a fresh session, "Read and follow RUNBOOK.md" — which
-        // carries the full dispatch → switch-condition → ingest → finalize loop.
-        DispatchMechanism::InSession => {
-            println!("\nNext: {}", insession_isolated_handoff(&ctx.stage_root))
-        }
-        // One-shot CLI dispatch; the exact command is harness-specific.
-        DispatchMechanism::Cli => println!(
-            "{}",
-            adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {
-                guard: opts.guard,
-                target_args: &target_args,
-                iteration,
-                agent_model: opts.agent_model,
-            })
-        ),
-    }
+    // One-shot CLI dispatch; the exact command is harness-specific.
+    println!(
+        "{}",
+        adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {
+            guard: opts.guard,
+            target_args: &target_args,
+            iteration,
+            agent_model: opts.agent_model,
+        })
+    );
 }

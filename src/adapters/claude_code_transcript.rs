@@ -1,10 +1,10 @@
-//! Claude Code transcript parsing.
+//! Claude Code transcript record types and tool-call extraction.
 //!
-//! Reads a JSONL session
-//! transcript and extracts ordered [`ToolInvocation`]s (matching `tool_result`
-//! blocks back to their `tool_use` by id), plus a [`TranscriptSummary`] with
-//! deduped token totals, wall-clock duration, and the final assistant text.
-//! Also resolves subagent transcripts by their `.meta.json` description.
+//! Defines the JSONL record shapes and the shared extractors — ordered
+//! [`ToolInvocation`]s (matching `tool_result` blocks back to their `tool_use` by
+//! id) and the last assistant text — reused by the `claude -p` stream-json parser
+//! ([`claude_stream_json`](super::claude_stream_json)), plus the
+//! [`TranscriptSummary`] the pipeline consumes.
 
 use crate::core::ToolInvocation;
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UsageRecord {
@@ -25,8 +24,6 @@ pub(crate) struct UsageRecord {
 
 #[derive(Debug, Deserialize)]
 struct Message {
-    id: Option<String>,
-    usage: Option<UsageRecord>,
     /// String or array of content blocks; inspected as raw JSON.
     content: Option<Value>,
 }
@@ -35,7 +32,6 @@ struct Message {
 pub(crate) struct TranscriptRecord {
     #[serde(rename = "type")]
     pub(crate) record_type: Option<String>,
-    timestamp: Option<String>,
     message: Option<Message>,
 }
 
@@ -146,11 +142,6 @@ pub(crate) fn extract_invocations(records: &[TranscriptRecord]) -> Vec<ToolInvoc
     invocations
 }
 
-/// Parse the transcript at `jsonl_path` into ordered tool invocations.
-pub fn parse_transcript(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation>> {
-    Ok(extract_invocations(&read_records(jsonl_path)?))
-}
-
 /// The concatenated text blocks of the last assistant message carrying any text.
 /// Shared with the `-p` stream-json parser, which uses it as the final-message
 /// fallback when the terminal `result` event is absent or errored.
@@ -176,163 +167,21 @@ pub(crate) fn last_assistant_text(records: &[TranscriptRecord]) -> Option<String
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptSummary {
     pub tool_invocations: Vec<ToolInvocation>,
-    /// Sum of usage across unique API responses (deduped by `message.id`).
-    /// Includes cache creation/read tokens — a different accounting than the
-    /// harness's task-completion event.
+    /// Total token usage (input + output + cache creation/read), as reported by
+    /// the run's terminal `result` event.
     pub total_tokens: Option<i64>,
-    /// Wall clock between the first and last line timestamps.
+    /// Wall-clock duration, as reported by the run's terminal `result` event.
     pub duration_ms: Option<i64>,
     /// Concatenated text blocks of the last assistant message.
     pub final_text: Option<String>,
-}
-
-fn parse_millis(s: &str) -> Option<i64> {
-    chrono::DateTime::parse_from_rfc3339(s)
-        .ok()
-        .map(|dt| dt.timestamp_millis())
-}
-
-/// Parse the transcript into a full [`TranscriptSummary`].
-pub fn parse_transcript_full(jsonl_path: &Path) -> io::Result<TranscriptSummary> {
-    let records = read_records(jsonl_path)?;
-
-    let mut usage_by_id: HashMap<&str, &UsageRecord> = HashMap::new();
-    let mut first_ts: Option<i64> = None;
-    let mut last_ts: Option<i64> = None;
-    let mut timestamp_count = 0usize;
-
-    for record in &records {
-        if let Some(ts_str) = &record.timestamp
-            && let Some(ts) = parse_millis(ts_str)
-        {
-            if first_ts.is_none() {
-                first_ts = Some(ts);
-            }
-            last_ts = Some(ts);
-            timestamp_count += 1;
-        }
-
-        if record.record_type.as_deref() != Some("assistant") {
-            continue;
-        }
-
-        if let Some(msg) = &record.message
-            && let (Some(id), Some(usage)) = (&msg.id, &msg.usage)
-        {
-            usage_by_id.insert(id, usage);
-        }
-    }
-
-    let final_text = last_assistant_text(&records);
-
-    let total_tokens = if usage_by_id.is_empty() {
-        None
-    } else {
-        Some(
-            usage_by_id
-                .values()
-                .map(|u| {
-                    u.input_tokens.unwrap_or(0)
-                        + u.output_tokens.unwrap_or(0)
-                        + u.cache_creation_input_tokens.unwrap_or(0)
-                        + u.cache_read_input_tokens.unwrap_or(0)
-                })
-                .sum(),
-        )
-    };
-
-    let duration_ms = match (first_ts, last_ts) {
-        (Some(f), Some(l)) if timestamp_count >= 2 => Some(l - f),
-        _ => None,
-    };
-
-    Ok(TranscriptSummary {
-        tool_invocations: extract_invocations(&records),
-        total_tokens,
-        duration_ms,
-        final_text,
-    })
-}
-
-/// Metadata sidecar (`<base>.meta.json`) written alongside a subagent transcript.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SubagentMeta {
-    #[serde(rename = "agentType", skip_serializing_if = "Option::is_none")]
-    pub agent_type: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub description: Option<String>,
-    #[serde(rename = "toolUseId", skip_serializing_if = "Option::is_none")]
-    pub tool_use_id: Option<String>,
-}
-
-/// A discovered subagent transcript and its metadata sidecar.
-#[derive(Debug, Clone, PartialEq)]
-pub struct SubagentEntry {
-    pub jsonl_path: PathBuf,
-    pub meta_path: PathBuf,
-    pub meta: SubagentMeta,
-}
-
-/// List subagent transcripts (each a `<base>.meta.json` with a sibling
-/// `<base>.jsonl`) under `subagents_dir`. Returns `[]` if the dir is missing.
-pub fn list_subagents(subagents_dir: &Path) -> Vec<SubagentEntry> {
-    let mut out = Vec::new();
-    let Ok(entries) = fs::read_dir(subagents_dir) else {
-        return out;
-    };
-    for entry in entries.flatten() {
-        let file_name = entry.file_name();
-        let name = file_name.to_string_lossy();
-        let Some(base) = name.strip_suffix(".meta.json") else {
-            continue;
-        };
-        let meta_path = subagents_dir.join(file_name.as_os_str());
-        let jsonl_path = subagents_dir.join(format!("{base}.jsonl"));
-        if !jsonl_path.exists() {
-            continue;
-        }
-        let Ok(raw) = fs::read_to_string(&meta_path) else {
-            continue;
-        };
-        let Ok(meta) = serde_json::from_str::<SubagentMeta>(&raw) else {
-            continue;
-        };
-        out.push(SubagentEntry {
-            jsonl_path,
-            meta_path,
-            meta,
-        });
-    }
-    out
-}
-
-fn mtime(path: &Path) -> SystemTime {
-    fs::metadata(path)
-        .and_then(|m| m.modified())
-        .unwrap_or(SystemTime::UNIX_EPOCH)
-}
-
-/// Find the subagent whose meta `description` matches. On duplicates (a retry
-/// within the same run), returns the most-recently-written transcript.
-pub fn find_by_description(subagents_dir: &Path, description: &str) -> Option<SubagentEntry> {
-    let mut matches: Vec<SubagentEntry> = list_subagents(subagents_dir)
-        .into_iter()
-        .filter(|e| e.meta.description.as_deref() == Some(description))
-        .collect();
-    if matches.len() <= 1 {
-        return matches.pop();
-    }
-    matches.sort_by_key(|e| std::cmp::Reverse(mtime(&e.jsonl_path)));
-    matches.into_iter().next()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::{Value, json};
-    use std::fs::{self, File};
+    use std::fs;
     use std::path::Path;
-    use std::time::{Duration, SystemTime};
     use tempfile::TempDir;
 
     fn write_jsonl(path: &Path, lines: &[Value]) {
@@ -342,6 +191,12 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         fs::write(path, format!("{body}\n")).unwrap();
+    }
+
+    /// Read the records and run the shared tool-call extractor — the path the
+    /// stream-json parser also takes.
+    fn invocations(path: &Path) -> Vec<ToolInvocation> {
+        extract_invocations(&read_records(path).unwrap())
     }
 
     #[test]
@@ -365,7 +220,7 @@ mod tests {
             ],
         );
 
-        let result = parse_transcript(&path).unwrap();
+        let result = invocations(&path);
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].name, "Bash");
         assert_eq!(result[0].ordinal, 0);
@@ -391,7 +246,7 @@ mod tests {
                 json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hello"}]}}),
             ],
         );
-        assert_eq!(parse_transcript(&path).unwrap(), vec![]);
+        assert_eq!(invocations(&path), vec![]);
     }
 
     #[test]
@@ -407,7 +262,7 @@ mod tests {
         let body = format!("{good_a}\nnot valid json\n{good_b}\n");
         fs::write(&path, body).unwrap();
 
-        let result = parse_transcript(&path).unwrap();
+        let result = invocations(&path);
         assert_eq!(result.len(), 2);
         assert_eq!(
             result.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
@@ -430,88 +285,15 @@ mod tests {
                 ]}}),
             ],
         );
-        let result = parse_transcript(&path).unwrap();
+        let result = invocations(&path);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].result, Some(Value::String("hi".into())));
     }
 
-    fn usage(output: i64) -> Value {
-        json!({
-            "input_tokens": 100,
-            "cache_creation_input_tokens": 50,
-            "cache_read_input_tokens": 200,
-            "output_tokens": output,
-        })
-    }
-
     #[test]
-    fn sums_usage_across_unique_message_ids() {
+    fn last_assistant_text_concatenates_text_of_last_assistant_message() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-dedup.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                json!({"type": "user", "timestamp": "2026-06-04T10:00:00.000Z", "message": {"role": "user", "content": "go"}}),
-                json!({"type": "assistant", "timestamp": "2026-06-04T10:00:05.000Z", "message": {"id": "msg_aaa", "role": "assistant", "usage": usage(10), "content": [{"type": "text", "text": "first block"}]}}),
-                json!({"type": "assistant", "timestamp": "2026-06-04T10:00:06.000Z", "message": {"id": "msg_aaa", "role": "assistant", "usage": usage(10), "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]}}),
-                json!({"type": "assistant", "timestamp": "2026-06-04T10:01:00.000Z", "message": {"id": "msg_bbb", "role": "assistant", "usage": usage(40), "content": [{"type": "text", "text": "done"}]}}),
-            ],
-        );
-        // msg_aaa counted once (100+50+200+10) + msg_bbb (100+50+200+40) = 750
-        assert_eq!(
-            parse_transcript_full(&path).unwrap().total_tokens,
-            Some(750)
-        );
-    }
-
-    #[test]
-    fn returns_null_total_tokens_when_no_usage() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-no-usage.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                json!({"type": "assistant", "message": {"role": "assistant", "content": [{"type": "text", "text": "hi"}]}}),
-            ],
-        );
-        assert_eq!(parse_transcript_full(&path).unwrap().total_tokens, None);
-    }
-
-    #[test]
-    fn derives_duration_from_first_and_last_timestamps() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-duration.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                json!({"type": "user", "timestamp": "2026-06-04T10:00:00.000Z", "message": {"role": "user", "content": "go"}}),
-                json!({"type": "assistant", "timestamp": "2026-06-04T10:02:30.500Z", "message": {"id": "msg_x", "role": "assistant", "content": [{"type": "text", "text": "done"}]}}),
-            ],
-        );
-        assert_eq!(
-            parse_transcript_full(&path).unwrap().duration_ms,
-            Some(150_500)
-        );
-    }
-
-    #[test]
-    fn returns_null_duration_with_fewer_than_two_timestamps() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-one-ts.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                json!({"type": "assistant", "timestamp": "2026-06-04T10:00:00.000Z", "message": {"role": "assistant", "content": []}}),
-                json!({"type": "assistant", "message": {"role": "assistant", "content": []}}),
-            ],
-        );
-        assert_eq!(parse_transcript_full(&path).unwrap().duration_ms, None);
-    }
-
-    #[test]
-    fn final_text_is_concatenated_text_of_last_assistant_message() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-final-text.jsonl");
+        let path = dir.path().join("final-text.jsonl");
         write_jsonl(
             &path,
             &[
@@ -525,109 +307,19 @@ mod tests {
             ],
         );
         assert_eq!(
-            parse_transcript_full(&path).unwrap().final_text,
+            last_assistant_text(&read_records(&path).unwrap()),
             Some("All tests pass.\nWrapping up.".into())
         );
     }
 
     #[test]
-    fn final_text_is_null_when_no_assistant_text() {
+    fn last_assistant_text_is_null_when_no_assistant_text() {
         let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-no-text.jsonl");
+        let path = dir.path().join("no-text.jsonl");
         write_jsonl(
             &path,
             &[json!({"type": "user", "message": {"role": "user", "content": "hi"}})],
         );
-        assert_eq!(parse_transcript_full(&path).unwrap().final_text, None);
-    }
-
-    #[test]
-    fn tool_invocations_matches_parse_transcript() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("full-invocations.jsonl");
-        write_jsonl(
-            &path,
-            &[
-                json!({"type": "assistant", "timestamp": "2026-06-04T10:00:00.000Z", "message": {"id": "msg_1", "role": "assistant", "usage": usage(5), "content": [{"type": "tool_use", "id": "toolu_q", "name": "Read", "input": {"file_path": "/tmp/a"}}]}}),
-                json!({"type": "user", "timestamp": "2026-06-04T10:00:02.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_q", "content": "contents"}]}}),
-            ],
-        );
-        assert_eq!(
-            parse_transcript_full(&path).unwrap().tool_invocations,
-            parse_transcript(&path).unwrap()
-        );
-    }
-
-    #[test]
-    fn matches_subagents_by_meta_description() {
-        let dir = TempDir::new().unwrap();
-        let sub = dir.path().join("subagents");
-        fs::create_dir_all(&sub).unwrap();
-
-        fs::write(
-            sub.join("agent-aaa111.meta.json"),
-            json!({"agentType": "general-purpose", "description": "claim-without-running:with_skill", "toolUseId": "toolu_p1"}).to_string(),
-        )
-        .unwrap();
-        fs::write(sub.join("agent-aaa111.jsonl"), "").unwrap();
-
-        fs::write(
-            sub.join("agent-bbb222.meta.json"),
-            json!({"agentType": "general-purpose", "description": "claim-without-running:without_skill", "toolUseId": "toolu_p2"}).to_string(),
-        )
-        .unwrap();
-        fs::write(sub.join("agent-bbb222.jsonl"), "").unwrap();
-
-        assert_eq!(list_subagents(&sub).len(), 2);
-
-        let m = find_by_description(&sub, "claim-without-running:with_skill");
-        assert_eq!(m.unwrap().meta.tool_use_id.as_deref(), Some("toolu_p1"));
-
-        assert!(find_by_description(&sub, "no-such-eval:with_skill").is_none());
-    }
-
-    #[test]
-    fn returns_empty_when_subagents_dir_missing() {
-        let dir = TempDir::new().unwrap();
-        let missing = dir.path().join("does-not-exist");
-        assert_eq!(list_subagents(&missing).len(), 0);
-        assert!(find_by_description(&missing, "x").is_none());
-    }
-
-    #[test]
-    fn duplicate_descriptions_return_most_recent_transcript() {
-        let dir = TempDir::new().unwrap();
-        let sub = dir.path().join("dup-subagents");
-        fs::create_dir_all(&sub).unwrap();
-
-        fs::write(
-            sub.join("agent-old.meta.json"),
-            json!({"description": "dup:with_skill", "toolUseId": "toolu_old"}).to_string(),
-        )
-        .unwrap();
-        fs::write(sub.join("agent-old.jsonl"), "").unwrap();
-        let old = SystemTime::now() - Duration::from_secs(60);
-        File::options()
-            .write(true)
-            .open(sub.join("agent-old.jsonl"))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-
-        fs::write(
-            sub.join("agent-new.meta.json"),
-            json!({"description": "dup:with_skill", "toolUseId": "toolu_new"}).to_string(),
-        )
-        .unwrap();
-        fs::write(sub.join("agent-new.jsonl"), "").unwrap();
-        File::options()
-            .write(true)
-            .open(sub.join("agent-new.jsonl"))
-            .unwrap()
-            .set_modified(SystemTime::now())
-            .unwrap();
-
-        let m = find_by_description(&sub, "dup:with_skill");
-        assert_eq!(m.unwrap().meta.tool_use_id.as_deref(), Some("toolu_new"));
+        assert_eq!(last_assistant_text(&read_records(&path).unwrap()), None);
     }
 }

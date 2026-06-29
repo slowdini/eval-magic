@@ -1,7 +1,8 @@
 //! Isolation-group batching during `run`: how the setup phase groups evals into
-//! environments and records the plan in `dispatch.json`. Covers the in-session
-//! single-env (byte-compat) path, the Cli per-(group, condition) split that closes
-//! the condition-isolation gap, and the explicit `isolation: isolated` hint.
+//! environments and records the plan in `dispatch.json`. Covers the per-(group,
+//! condition) env split that closes the condition-isolation gap — emitted for every
+//! run now, including the bare default invocation — and the explicit
+//! `isolation: isolated` hint that fans a second group out into its own envs.
 
 use crate::helpers::*;
 use serde_json::json;
@@ -17,7 +18,7 @@ fn write_fixtures(skill_dir: &std::path::Path) {
 }
 
 #[test]
-fn insession_single_group_omits_groups_key_and_stays_bare_env() {
+fn single_group_emits_groups_key_and_per_condition_envs() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -28,17 +29,27 @@ fn insession_single_group_omits_groups_key_and_stays_bare_env() {
         .assert()
         .success();
 
-    // The common no-conflict in-session case is byte-identical to the pre-grouping
-    // shape: a bare env/, no `groups` summary, and no per-task group/eval_root keys.
-    assert!(env_dir(&cwd).exists());
+    // Even the bare default invocation now splits the env per (group, condition) and
+    // always records a `groups` summary — the single-env, no-groups shape is gone.
+    assert!(cli_env_dir(&cwd, "g1", "with_skill").exists());
+    assert!(cli_env_dir(&cwd, "g1", "without_skill").exists());
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert!(
-        dispatch.get("groups").is_none(),
-        "single-group in-session omits the groups summary: {dispatch}"
-    );
+    let groups = dispatch["groups"]
+        .as_array()
+        .expect("groups summary present even for a single group");
+    assert_eq!(groups.len(), 1);
+    assert_eq!(groups[0]["id"], "g1");
+
+    // A single group means no per-task group tag, but each task still carries the
+    // per-condition env it runs in via eval_root.
     for task in dispatch["tasks"].as_array().unwrap() {
-        assert!(task.get("group").is_none(), "no group tag: {task}");
-        assert!(task.get("eval_root").is_none(), "no eval_root: {task}");
+        assert!(task.get("group").is_none(), "single group: no tag: {task}");
+        let cond = task["condition"].as_str().unwrap();
+        let eval_root = task["eval_root"].as_str().expect("task carries eval_root");
+        assert!(
+            eval_root.ends_with(&format!("env-g1-{cond}")),
+            "eval_root points at the per-condition env: {eval_root}"
+        );
     }
 }
 
@@ -105,7 +116,7 @@ fn cli_single_group_emits_groups_and_splits_env_per_condition() {
 }
 
 #[test]
-fn isolated_hint_splits_into_two_groups_in_session() {
+fn isolated_hint_splits_into_two_groups() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), TWO_EVALS_ONE_ISOLATED);
     write_fixtures(&skill_dir);
@@ -133,7 +144,7 @@ fn isolated_hint_splits_into_two_groups_in_session() {
         groups[1]["rationale"]
     );
 
-    // Tasks are tagged with their group.
+    // With two groups, tasks are tagged with their group.
     let e2_task = dispatch["tasks"]
         .as_array()
         .unwrap()
@@ -142,12 +153,23 @@ fn isolated_hint_splits_into_two_groups_in_session() {
         .unwrap();
     assert_eq!(e2_task["group"], "g2");
 
-    // In-session stages only the FIRST group's fixtures into the one env up front;
-    // the isolated group's fixtures are swapped in later by reset-batch.
-    assert_eq!(read_str(&env_dir(&cwd).join("a.txt")), "AAA");
+    // Each group gets its own per-condition envs, holding only that group's fixtures —
+    // g1's a.txt never leaks into g2's env and vice versa.
+    assert_eq!(
+        read_str(&cli_env_dir(&cwd, "g1", "with_skill").join("a.txt")),
+        "AAA"
+    );
     assert!(
-        !env_dir(&cwd).join("b.txt").exists(),
-        "the isolated group's fixture is not staged into the shared env up front"
+        !cli_env_dir(&cwd, "g1", "with_skill").join("b.txt").exists(),
+        "the isolated group's fixture is not staged into g1's env"
+    );
+    assert_eq!(
+        read_str(&cli_env_dir(&cwd, "g2", "with_skill").join("b.txt")),
+        "BBB"
+    );
+    assert!(
+        !cli_env_dir(&cwd, "g2", "with_skill").join("a.txt").exists(),
+        "g1's fixture is not staged into the isolated group's env"
     );
 }
 

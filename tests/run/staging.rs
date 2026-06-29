@@ -64,9 +64,9 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
         .assert()
         .success()
         .stdout(contains("Preparing mr-review iteration-1 (new-skill)"))
-        // The run summary now hands off to the isolated session; the pipeline
-        // commands live in the RUNBOOK (asserted below), not the printed summary.
-        .stdout(contains("Read and follow RUNBOOK.md"));
+        // The run summary points at the human-followed RUNBOOK (a copy of the dispatch
+        // steps); the auto-derived pipeline commands are threaded into it (asserted below).
+        .stdout(contains("RUNBOOK.md"));
 
     assert!(
         direct_iteration_dir(&skill_sub)
@@ -79,13 +79,10 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
     );
 
     // Run from inside the skill dir with no args: the auto-derived target selector
-    // (`command_target_args`) is threaded into the RUNBOOK's pipeline commands.
-    let runbook = read_str(
-        &direct_iteration_dir(&skill_sub)
-            .join("env")
-            .join("RUNBOOK.md"),
-    );
-    assert!(runbook.contains("eval-magic ingest --skill-dir"));
+    // (`command_target_args`) is threaded into the RUNBOOK's pipeline commands. The
+    // RUNBOOK lives in the iteration dir (Cli dispatch has no single env/).
+    let runbook = read_str(&direct_iteration_dir(&skill_sub).join("RUNBOOK.md"));
+    assert!(runbook.contains("ingest --skill-dir"));
     assert!(runbook.contains("--skill mr-review --workspace-dir"));
     assert!(runbook.contains("--iteration 1"));
 
@@ -194,7 +191,7 @@ fn stage_name_threads_verbatim_name_and_registers_cleanup() {
         .assert()
         .success();
 
-    let skills_dir = env_dir(&cwd).join(".claude/skills");
+    let skills_dir = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills");
     assert_eq!(staged_entries(&skills_dir), vec!["mr-review"]);
 
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
@@ -231,10 +228,10 @@ fn stage_name_threads_verbatim_name_and_registers_cleanup() {
 fn stage_name_refuses_to_clobber_preexisting_dir() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // Staging now lands in env/.claude/skills, which is fresh per iteration.
-    // The clobber guard still matters on a re-run (--iteration 1) where the env
-    // already holds an untracked skill dir; pre-seed that and confirm it is preserved.
-    let preexisting = env_dir(&cwd).join(".claude/skills/my-real-skill");
+    // Staging now lands in env-g1-with_skill/.claude/skills, which is fresh per
+    // iteration. The clobber guard still matters on a re-run (--iteration 1) where the
+    // env already holds an untracked skill dir; pre-seed that and confirm it is preserved.
+    let preexisting = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/my-real-skill");
     fs::create_dir_all(&preexisting).unwrap();
     fs::write(preexisting.join("SKILL.md"), "USER OWNED").unwrap();
 

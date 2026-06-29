@@ -128,8 +128,8 @@ pub struct ConditionsRecord {
     /// `None` on older artifacts written before run-mode selection existed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_mode: Option<RunMode>,
-    /// Per-run nonce; namespaces dispatch descriptions so transcripts can't
-    /// collide across iterations sharing one parent session's subagents dir.
+    /// Per-run nonce; namespaces dispatch descriptions so they stay unique across
+    /// iterations of the same skill.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_nonce: Option<String>,
     /// The `--runs` value the iteration was built with (provenance; per-eval

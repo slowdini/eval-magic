@@ -1,7 +1,6 @@
 //! Claude Code CLI run modes (`--run-mode hybrid` / `headless`): `claude -p`
 //! stream-json dispatch guidance, run-mode persistence + defaulting, the
-//! human-followed runbook, the write guard under Cli dispatch, and the remaining
-//! run-mode combo rejections (Codex interactive).
+//! human-followed runbook, and the write guard under Cli dispatch.
 
 use crate::helpers::*;
 use predicates::str::contains;
@@ -70,31 +69,6 @@ fn claude_hybrid_dispatch_guidance_includes_agent_model_when_provided() {
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     assert!(stdout.contains("claude -p --output-format stream-json"));
     assert!(stdout.contains("--model opus"));
-}
-
-#[test]
-fn claude_defaults_to_interactive_handoff() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "claude-code",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    // No --run-mode → interactive default; no CLI recipe in the manifest.
-    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
-    assert_eq!(conditions["run_mode"], "interactive");
-    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
-    assert!(!manifest.contains("claude -p"));
 }
 
 #[test]
@@ -224,29 +198,6 @@ fn claude_hybrid_record_runs_does_not_require_a_session_id() {
         .assert()
         .success()
         .stdout(contains("Recorded:"));
-}
-
-#[test]
-fn codex_rejects_run_mode_interactive() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "codex",
-            "--run-mode",
-            "interactive",
-            "--dry-run",
-        ])
-        .assert()
-        .failure()
-        .stderr(contains("interactive"))
-        .stderr(contains("codex"));
 }
 
 #[test]
