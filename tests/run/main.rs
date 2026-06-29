@@ -15,7 +15,5 @@ mod env_layout;
 mod grouping;
 mod lifecycle;
 mod opencode;
-mod reset_batch;
 mod runbook;
 mod staging;
-mod switch_condition;
