@@ -62,9 +62,6 @@ pub trait HarnessAdapter {
     /// when the staged identifier can't be resolved.
     fn skill_unresolved_phrase(&self) -> &'static str;
 
-    /// The verbatim plan-mode procedure profile bundled for this harness.
-    fn plan_mode_profile(&self) -> &'static str;
-
     /// Wrap a plan-mode profile as a `<system-reminder>` operating-context
     /// layer. The default usually suffices.
     fn render_plan_mode_context(&self, profile_text: &str) -> String {
@@ -222,9 +219,6 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn skill_unresolved_phrase(&self) -> &'static str {
         "If the Skill tool cannot resolve that identifier"
     }
-    fn plan_mode_profile(&self) -> &'static str {
-        include_str!("../../profiles/claude-code/plan-mode.md")
-    }
     fn runbook_template(&self) -> &'static str {
         include_str!("../../profiles/claude-code/runbook.md")
     }
@@ -317,9 +311,6 @@ impl HarnessAdapter for CodexAdapter {
     fn skill_unresolved_phrase(&self) -> &'static str {
         "If it does not load as a Codex skill"
     }
-    fn plan_mode_profile(&self) -> &'static str {
-        include_str!("../../profiles/codex/plan-mode.md")
-    }
     fn cli_events_filename(&self) -> Option<&'static str> {
         Some("codex-events.jsonl")
     }
@@ -403,9 +394,6 @@ impl HarnessAdapter for OpenCodeAdapter {
     }
     fn skill_unresolved_phrase(&self) -> &'static str {
         "If it does not load as an OpenCode skill"
-    }
-    fn plan_mode_profile(&self) -> &'static str {
-        include_str!("../../profiles/opencode/plan-mode.md")
     }
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         let model_note = if ctx.agent_model.is_some() {

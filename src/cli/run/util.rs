@@ -129,11 +129,11 @@ pub(crate) fn insession_isolated_handoff(env_dir: &Path) -> String {
     )
 }
 
-/// Resolve the verbatim plan-mode procedure profile for a harness.
-/// The profile is a compile-time bundled asset, mirroring the schema embedding in
+/// Resolve the shared, harness-agnostic plan-mode procedure profile injected by
+/// `--plan-mode`. A compile-time bundled asset, mirroring the schema embedding in
 /// `validation`.
-pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str, RunError> {
-    Ok(adapter_for(harness).plan_mode_profile())
+pub(crate) fn resolve_plan_mode_profile() -> &'static str {
+    include_str!("../../../profiles/shared/plan-mode.md")
 }
 
 /// Reject run options not supported by the selected harness's current mechanism.
@@ -310,23 +310,18 @@ mod tests {
     }
 
     #[test]
-    fn opencode_plan_mode_profile_resolves() {
-        let profile = resolve_plan_mode_profile(Harness::OpenCode).unwrap();
-        assert!(profile.contains("OpenCode plan mode is active"));
-        assert!(profile.contains("plan agent"));
+    fn plan_mode_profile_is_shared_and_harness_agnostic() {
+        let profile = resolve_plan_mode_profile();
+        assert!(profile.contains("Plan mode is active"));
+        // Harness-agnostic content: no Claude-specific ExitPlanMode rail or
+        // Codex-specific <proposed_plan> block.
+        assert!(!profile.contains("ExitPlanMode"));
+        assert!(!profile.contains("<proposed_plan>"));
     }
 
     #[test]
     fn harness_label_opencode() {
         assert_eq!(harness_label(Harness::OpenCode), "opencode");
-    }
-
-    #[test]
-    fn codex_plan_mode_profile_resolves() {
-        let profile = resolve_plan_mode_profile(Harness::Codex).unwrap();
-        assert!(profile.contains("Codex plan mode is active"));
-        assert!(profile.contains("<proposed_plan>"));
-        assert!(!profile.contains("ExitPlanMode"));
     }
 
     #[test]

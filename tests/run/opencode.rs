@@ -141,7 +141,8 @@ fn opencode_plan_mode_injects_profile_and_records_flag() {
             assert!(prompt.contains("<available_skills>"));
         }
         assert!(prompt.contains("<system-reminder>"));
-        assert!(prompt.contains("OpenCode plan mode is active"));
+        // Shared, harness-agnostic profile: same text every harness sees.
+        assert!(prompt.contains("Plan mode is active"));
         assert!(!prompt.contains("ExitPlanMode"));
     }
 }
