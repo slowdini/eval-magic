@@ -5,8 +5,8 @@
 //! from sources already on disk: carry-over fields from the dispatch task, the
 //! `final_message` (from `<outputs_dir>/final-message.md`, falling back to the
 //! transcript's last assistant text), and `tool_invocations`/tokens/duration from
-//! the persisted transcript (Claude Code subagent JSONL or Codex
-//! `codex-events.jsonl`).
+//! each task's events file (`outputs/<harness>-events.jsonl` — Claude Code's
+//! `claude -p` stream-json or Codex's `codex-events.jsonl`).
 //!
 //! Existing records always win: an agent/operator-written `run.json` is skipped
 //! without `overwrite`, and `timing.json` is backfill-only — completion-event
@@ -18,8 +18,8 @@ use std::path::Path;
 
 use serde::Deserialize;
 
-use crate::adapters::{TranscriptSummary, adapter_for, find_by_description};
-use crate::core::{DispatchMechanism, Harness, RunRecord, TimingRecord, TimingSource};
+use crate::adapters::{TranscriptSummary, adapter_for};
+use crate::core::{Harness, RunRecord, TimingRecord, TimingSource};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::validation::{SchemaName, validate_against_schema};
@@ -44,7 +44,6 @@ struct DispatchTask {
     outputs_dir: String,
     run_record_path: String,
     timing_path: String,
-    agent_description: String,
     #[serde(default)]
     dispatch_prompt_path: String,
 }
@@ -63,14 +62,9 @@ impl RecordRunsResult {
     /// A loud, actionable warning when runs were recorded from `final-message.md`
     /// but their transcripts didn't link — leaving `tool_invocations`/tokens/
     /// duration empty so `transcript_check` assertions silently grade
-    /// unverifiable. `None` when every run matched its transcript. The hint is
-    /// tailored to how the harness correlates transcripts (description match vs.
-    /// the Codex events file).
-    pub fn transcript_warning(
-        &self,
-        harness: Harness,
-        mechanism: DispatchMechanism,
-    ) -> Option<String> {
+    /// unverifiable. `None` when every run matched its transcript. The hint names
+    /// the per-task events file the harness CLI was expected to write.
+    pub fn transcript_warning(&self, harness: Harness) -> Option<String> {
         if self.missing_transcript == 0 {
             return None;
         }
@@ -82,23 +76,10 @@ impl RecordRunsResult {
         } else {
             format!("⚠ {n} run{plural} missing a transcript")
         };
-        // The cause is keyed on the dispatch mechanism, not the harness: a
-        // Cli-dispatch run (Codex, or Claude Code in hybrid/headless) misses the
-        // per-task events file; an in-session run misses the subagent transcript.
-        let cause = match mechanism {
-            DispatchMechanism::Cli => {
-                let file = adapter_for(harness)
-                    .cli_events_filename()
-                    .unwrap_or("the events file");
-                format!("expected `outputs/{file}` was not found")
-            }
-            DispatchMechanism::InSession => {
-                "did you pass each task's `agent_description` verbatim as the subagent \
-                 description? If so, confirm `--subagents-dir` points at the parent session's \
-                 subagents dir"
-                    .to_string()
-            }
-        };
+        let file = adapter_for(harness)
+            .cli_events_filename()
+            .unwrap_or("the events file");
+        let cause = format!("expected `outputs/{file}` was not found");
         Some(format!(
             "{lead} — {cause}; tool_invocations/tokens/duration are empty, so transcript_check \
              assertions will grade unverifiable."
@@ -130,8 +111,6 @@ impl RecordRunsResult {
 pub fn record_runs(
     iteration_dir: &Path,
     harness: Harness,
-    mechanism: DispatchMechanism,
-    subagents_dir: Option<&Path>,
     overwrite: bool,
 ) -> Result<RecordRunsResult, PipelineError> {
     let dispatch_path = iteration_dir.join("dispatch.json");
@@ -148,7 +127,7 @@ pub fn record_runs(
 
     let mut result = RecordRunsResult::default();
     for task in &tasks {
-        let summary = transcript_summary_for_task(harness, mechanism, subagents_dir, task);
+        let summary = transcript_summary_for_task(harness, task);
         if summary.is_none() {
             result.missing_transcript += 1;
         }
@@ -230,7 +209,7 @@ pub fn record_runs(
 /// call returned the prompt's content (its distinctive first-line `sentinel`).
 ///
 /// A run that never references the prompt path is NOT flagged — absence is not
-/// proof of failure (an in-session subagent can receive the prompt another way),
+/// proof of failure (the agent can receive the prompt another way),
 /// and requiring positive evidence keeps the check free of false positives.
 /// Returns `false` when `sentinel` is empty (the prompt file was missing or
 /// unreadable, so the read cannot be judged).
@@ -277,38 +256,18 @@ fn prompt_sentinel(prompt_path: &str) -> String {
         .unwrap_or_default()
 }
 
-/// Resolve a task's transcript summary, keyed on the dispatch mechanism: a
-/// `Cli`-mechanism harness reads the events file its CLI wrote under the task's
-/// outputs dir (e.g. Codex's `codex-events.jsonl`); an `InSession` harness reads
-/// the subagent transcript matched by the task's `agent_description`. Returns
-/// `None` when no transcript is found.
-fn transcript_summary_for_task(
-    harness: Harness,
-    mechanism: DispatchMechanism,
-    subagents_dir: Option<&Path>,
-    task: &DispatchTask,
-) -> Option<TranscriptSummary> {
-    match mechanism {
-        DispatchMechanism::Cli => {
-            let events_path =
-                Path::new(&task.outputs_dir).join(adapter_for(harness).cli_events_filename()?);
-            if !events_path.exists() {
-                return None;
-            }
-            adapter_for(harness)
-                .parse_cli_events_full(&events_path)
-                .ok()
-        }
-        DispatchMechanism::InSession => {
-            let subagent = find_by_description(
-                subagents_dir.unwrap_or_else(|| Path::new("")),
-                &task.agent_description,
-            )?;
-            adapter_for(harness)
-                .parse_transcript_full(&subagent.jsonl_path)
-                .ok()
-        }
+/// Resolve a task's transcript summary: read the events file the harness CLI
+/// wrote under the task's outputs dir (e.g. Codex's `codex-events.jsonl`, Claude
+/// Code's `claude-events.jsonl`). Returns `None` when no transcript is found.
+fn transcript_summary_for_task(harness: Harness, task: &DispatchTask) -> Option<TranscriptSummary> {
+    let events_path =
+        Path::new(&task.outputs_dir).join(adapter_for(harness).cli_events_filename()?);
+    if !events_path.exists() {
+        return None;
     }
+    adapter_for(harness)
+        .parse_cli_events_full(&events_path)
+        .ok()
 }
 
 #[cfg(test)]
@@ -318,12 +277,6 @@ mod tests {
     use std::path::PathBuf;
     use tempfile::TempDir;
 
-    /// Token math for `transcript_lines`: msg_1 (100+20+30+50) + msg_2
-    /// (200+40+0+60) = 500.
-    const TRANSCRIPT_TOKENS: i64 = 500;
-    /// 10:00:00.000 → 10:01:00.000.
-    const TRANSCRIPT_DURATION_MS: i64 = 60_000;
-
     fn jsonl(lines: &[Value]) -> String {
         let body = lines
             .iter()
@@ -331,33 +284,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         format!("{body}\n")
-    }
-
-    /// A minimal transcript with usage, timestamps, one tool call, and final text.
-    fn transcript_lines(final_text: &str) -> Vec<Value> {
-        vec![
-            json!({"type": "user", "timestamp": "2026-06-04T10:00:00.000Z", "message": {"role": "user", "content": "go"}}),
-            json!({"type": "assistant", "timestamp": "2026-06-04T10:00:10.000Z", "message": {
-                "id": "msg_1", "role": "assistant",
-                "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 30, "cache_read_input_tokens": 50},
-                "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}]
-            }}),
-            json!({"type": "user", "timestamp": "2026-06-04T10:00:12.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}}),
-            json!({"type": "assistant", "timestamp": "2026-06-04T10:01:00.000Z", "message": {
-                "id": "msg_2", "role": "assistant",
-                "usage": {"input_tokens": 200, "output_tokens": 40, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 60},
-                "content": [{"type": "text", "text": final_text}]
-            }}),
-        ]
-    }
-
-    fn write_subagent(subagents_dir: &Path, name: &str, description: &str, lines: &[Value]) {
-        fs::write(
-            subagents_dir.join(format!("{name}.meta.json")),
-            json!({"agentType": "general-purpose", "description": description}).to_string(),
-        )
-        .unwrap();
-        fs::write(subagents_dir.join(format!("{name}.jsonl")), jsonl(lines)).unwrap();
     }
 
     fn write_codex_events(outputs_dir: &Path, final_text: &str) {
@@ -438,14 +364,7 @@ mod tests {
             "I could not read the prompt file.",
         );
 
-        let result = record_runs(
-            iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = record_runs(iter, Harness::ClaudeCode, false).unwrap();
 
         assert_eq!(result.skipped_prompt_unread, 1);
         assert_eq!(result.recorded, 0);
@@ -482,14 +401,7 @@ mod tests {
             "Done.",
         );
 
-        let result = record_runs(
-            iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = record_runs(iter, Harness::ClaudeCode, false).unwrap();
 
         assert_eq!(result.recorded, 1);
         assert_eq!(result.skipped_prompt_unread, 0);
@@ -591,20 +503,18 @@ mod tests {
             .exists()
     }
 
-    /// `(iteration_dir, subagents_dir)` under a fresh temp root.
-    fn dirs(root: &TempDir) -> (PathBuf, PathBuf) {
+    /// The iteration dir under a fresh temp root.
+    fn dirs(root: &TempDir) -> PathBuf {
         let iteration_dir = root.path().join("iter");
-        let subagents_dir = root.path().join("sub");
         fs::create_dir_all(&iteration_dir).unwrap();
-        fs::create_dir_all(&subagents_dir).unwrap();
-        (iteration_dir, subagents_dir)
+        iteration_dir
     }
 
     #[test]
     fn assembles_run_and_timing_for_every_task_from_disk() {
         let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
-        write_iteration(
+        let iter = dirs(&root);
+        let paths = write_iteration(
             &iter,
             &[
                 FixtureTask {
@@ -619,27 +529,10 @@ mod tests {
                 },
             ],
         );
-        write_subagent(
-            &sub,
-            "agent-a",
-            "crash:with_skill:i1-nonce1",
-            &transcript_lines("unused"),
-        );
-        write_subagent(
-            &sub,
-            "agent-b",
-            "crash:without_skill:i1-nonce1",
-            &transcript_lines("unused"),
-        );
+        write_claude_events(&paths[0].outputs_dir, "unused");
+        write_claude_events(&paths[1].outputs_dir, "unused");
 
-        let result = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap();
+        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
         assert_eq!(result.recorded, 2);
         assert_eq!(result.missing_transcript, 0);
 
@@ -661,15 +554,15 @@ mod tests {
         );
 
         let timing = read_timing_value(&iter, "crash", "with_skill");
-        assert_eq!(timing["total_tokens"], json!(TRANSCRIPT_TOKENS));
-        assert_eq!(timing["duration_ms"], json!(TRANSCRIPT_DURATION_MS));
+        assert_eq!(timing["total_tokens"], json!(125));
+        assert_eq!(timing["duration_ms"], json!(30_000));
         assert_eq!(timing["source"], json!("transcript"));
     }
 
     #[test]
     fn carries_run_index_from_dispatch_task_into_each_run_record() {
         let root = TempDir::new().unwrap();
-        let (iter, _sub) = dirs(&root);
+        let iter = dirs(&root);
         let cond_dir = iter.join("eval-crash").join("with_skill");
         let mut serialized = Vec::new();
         for k in [1u32, 2] {
@@ -702,8 +595,7 @@ mod tests {
         )
         .unwrap();
 
-        let result =
-            record_runs(&iter, Harness::Codex, DispatchMechanism::Cli, None, false).unwrap();
+        let result = record_runs(&iter, Harness::Codex, false).unwrap();
         assert_eq!(result.recorded, 2);
 
         for k in [1u32, 2] {
@@ -718,7 +610,7 @@ mod tests {
     #[test]
     fn assembles_codex_records_from_each_tasks_events() {
         let root = TempDir::new().unwrap();
-        let (iter, _sub) = dirs(&root);
+        let iter = dirs(&root);
         let paths = write_iteration(
             &iter,
             &[FixtureTask {
@@ -729,8 +621,7 @@ mod tests {
         );
         write_codex_events(&paths[0].outputs_dir, "Codex final.");
 
-        let result =
-            record_runs(&iter, Harness::Codex, DispatchMechanism::Cli, None, false).unwrap();
+        let result = record_runs(&iter, Harness::Codex, false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 0);
 
@@ -751,7 +642,7 @@ mod tests {
     #[test]
     fn falls_back_to_codex_final_agent_message_when_final_message_md_missing() {
         let root = TempDir::new().unwrap();
-        let (iter, _sub) = dirs(&root);
+        let iter = dirs(&root);
         let paths = write_iteration(
             &iter,
             &[FixtureTask {
@@ -762,8 +653,7 @@ mod tests {
         );
         write_codex_events(&paths[0].outputs_dir, "Closing summary from Codex.");
 
-        let result =
-            record_runs(&iter, Harness::Codex, DispatchMechanism::Cli, None, false).unwrap();
+        let result = record_runs(&iter, Harness::Codex, false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(
             read_run(&iter, "crash", "with_skill").final_message,
@@ -774,7 +664,7 @@ mod tests {
     #[test]
     fn skips_existing_run_without_overwrite_then_replaces_with_it() {
         let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
+        let iter = dirs(&root);
         let paths = write_iteration(
             &iter,
             &[FixtureTask {
@@ -783,12 +673,7 @@ mod tests {
                 final_message: Some("New."),
             }],
         );
-        write_subagent(
-            &sub,
-            "agent-a",
-            "crash:with_skill:i1-nonce1",
-            &transcript_lines("unused"),
-        );
+        write_claude_events(&paths[0].outputs_dir, "unused");
         let hand_written = json!({
             "eval_id": "crash", "condition": "with_skill",
             "skill_path": "/staged/skill/SKILL.md", "prompt": "Do the crash task",
@@ -796,14 +681,7 @@ mod tests {
         });
         fs::write(&paths[0].run_record_path, hand_written.to_string()).unwrap();
 
-        let skipped = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap();
+        let skipped = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
         assert_eq!(skipped.recorded, 0);
         assert_eq!(skipped.skipped_existing, 1);
         assert_eq!(
@@ -811,14 +689,7 @@ mod tests {
             "Agent-authored."
         );
 
-        let replaced = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            true,
-        )
-        .unwrap();
+        let replaced = record_runs(&iter, Harness::ClaudeCode, true).unwrap();
         assert_eq!(replaced.recorded, 1);
         assert_eq!(read_run(&iter, "crash", "with_skill").final_message, "New.");
     }
@@ -826,7 +697,7 @@ mod tests {
     #[test]
     fn backfills_timing_only_when_absent() {
         let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
+        let iter = dirs(&root);
         let paths = write_iteration(
             &iter,
             &[FixtureTask {
@@ -835,26 +706,14 @@ mod tests {
                 final_message: Some("Done."),
             }],
         );
-        write_subagent(
-            &sub,
-            "agent-a",
-            "crash:with_skill:i1-nonce1",
-            &transcript_lines("unused"),
-        );
+        write_claude_events(&paths[0].outputs_dir, "unused");
         fs::write(
             &paths[0].timing_path,
             json!({"total_tokens": 12345, "duration_ms": 9000}).to_string(),
         )
         .unwrap();
 
-        record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap();
+        record_runs(&iter, Harness::ClaudeCode, false).unwrap();
 
         // Agent-captured completion-event timing wins; not overwritten.
         let timing = read_timing_value(&iter, "crash", "with_skill");
@@ -864,43 +723,9 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_transcript_final_assistant_text_when_final_message_md_missing() {
-        let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
-        write_iteration(
-            &iter,
-            &[FixtureTask {
-                eval_id: "crash",
-                condition: "with_skill",
-                final_message: None,
-            }],
-        );
-        write_subagent(
-            &sub,
-            "agent-a",
-            "crash:with_skill:i1-nonce1",
-            &transcript_lines("Closing summary from transcript."),
-        );
-
-        let result = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap();
-        assert_eq!(result.recorded, 1);
-        assert_eq!(
-            read_run(&iter, "crash", "with_skill").final_message,
-            "Closing summary from transcript."
-        );
-    }
-
-    #[test]
     fn skips_the_slot_entirely_when_no_final_message_source_exists() {
         let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
+        let iter = dirs(&root);
         write_iteration(
             &iter,
             &[FixtureTask {
@@ -911,14 +736,7 @@ mod tests {
         );
         // No final-message.md, no transcript.
 
-        let result = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap();
+        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
         assert_eq!(result.recorded, 0);
         assert_eq!(result.skipped_no_final_message, 1);
         assert!(!run_exists(&iter, "crash", "with_skill"));
@@ -928,7 +746,7 @@ mod tests {
     #[test]
     fn writes_empty_invocations_and_no_timing_when_transcript_missing() {
         let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
+        let iter = dirs(&root);
         write_iteration(
             &iter,
             &[FixtureTask {
@@ -937,16 +755,9 @@ mod tests {
                 final_message: Some("Done."),
             }],
         );
-        // final-message.md exists but no subagent transcript matches.
+        // final-message.md exists but no events file is present.
 
-        let result = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap();
+        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 1);
 
@@ -959,16 +770,9 @@ mod tests {
     #[test]
     fn errors_when_dispatch_json_is_absent() {
         let root = TempDir::new().unwrap();
-        let (iter, sub) = dirs(&root);
+        let iter = dirs(&root);
         // Hand-authored/operator runs have no dispatch.json — the manual path owns them.
-        let err = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::InSession,
-            Some(&sub),
-            false,
-        )
-        .unwrap_err();
+        let err = record_runs(&iter, Harness::ClaudeCode, false).unwrap_err();
         assert!(
             err.to_string().contains("dispatch.json"),
             "error was: {err}"
@@ -982,36 +786,7 @@ mod tests {
             missing_transcript: 0,
             ..Default::default()
         };
-        assert!(
-            result
-                .transcript_warning(Harness::ClaudeCode, DispatchMechanism::InSession)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn claude_code_warning_names_agent_description_when_all_runs_miss() {
-        let result = RecordRunsResult {
-            recorded: 8,
-            missing_transcript: 8,
-            ..Default::default()
-        };
-        let warning = result
-            .transcript_warning(Harness::ClaudeCode, DispatchMechanism::InSession)
-            .unwrap();
-        assert!(warning.contains("8"), "names the count: {warning}");
-        assert!(
-            warning.contains("agent_description"),
-            "points at the load-bearing key: {warning}"
-        );
-        assert!(
-            warning.to_lowercase().contains("verbatim"),
-            "says pass it verbatim: {warning}"
-        );
-        assert!(
-            warning.contains("--subagents-dir"),
-            "offers the other likely cause: {warning}"
-        );
+        assert!(result.transcript_warning(Harness::ClaudeCode).is_none());
     }
 
     #[test]
@@ -1021,9 +796,7 @@ mod tests {
             missing_transcript: 1,
             ..Default::default()
         };
-        let warning = result
-            .transcript_warning(Harness::ClaudeCode, DispatchMechanism::InSession)
-            .unwrap();
+        let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
         assert!(warning.contains('1'), "names the count: {warning}");
     }
 
@@ -1034,9 +807,7 @@ mod tests {
             missing_transcript: 2,
             ..Default::default()
         };
-        let warning = result
-            .transcript_warning(Harness::Codex, DispatchMechanism::Cli)
-            .unwrap();
+        let warning = result.transcript_warning(Harness::Codex).unwrap();
         assert!(
             warning.contains("codex-events.jsonl"),
             "names the Codex source: {warning}"
@@ -1050,7 +821,7 @@ mod tests {
     #[test]
     fn assembles_claude_hybrid_records_from_each_tasks_events() {
         let root = TempDir::new().unwrap();
-        let (iter, _sub) = dirs(&root);
+        let iter = dirs(&root);
         let paths = write_iteration(
             &iter,
             &[FixtureTask {
@@ -1061,14 +832,7 @@ mod tests {
         );
         write_claude_events(&paths[0].outputs_dir, "Closing summary.");
 
-        let result = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 0);
 
@@ -1091,7 +855,7 @@ mod tests {
         // Claude `-p` has no --output-last-message, so the result event's text is
         // the primary final-message source.
         let root = TempDir::new().unwrap();
-        let (iter, _sub) = dirs(&root);
+        let iter = dirs(&root);
         let paths = write_iteration(
             &iter,
             &[FixtureTask {
@@ -1102,14 +866,7 @@ mod tests {
         );
         write_claude_events(&paths[0].outputs_dir, "Closing summary from claude -p.");
 
-        let result = record_runs(
-            &iter,
-            Harness::ClaudeCode,
-            DispatchMechanism::Cli,
-            None,
-            false,
-        )
-        .unwrap();
+        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(
             read_run(&iter, "crash", "with_skill").final_message,
@@ -1124,9 +881,7 @@ mod tests {
             missing_transcript: 2,
             ..Default::default()
         };
-        let warning = result
-            .transcript_warning(Harness::ClaudeCode, DispatchMechanism::Cli)
-            .unwrap();
+        let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
         assert!(
             warning.contains("claude-events.jsonl"),
             "names the Claude hybrid source: {warning}"

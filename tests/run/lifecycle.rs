@@ -11,8 +11,8 @@ use std::path::Path;
 fn guard_installs_pretooluse_hook_under_env() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // The guard arms inside the isolated env — the agent-under-test's cwd.
-    let settings = env_dir(&cwd).join(".claude/settings.local.json");
+    // The guard arms inside each per-(group, condition) env — the agent-under-test's cwd.
+    let settings = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/settings.local.json");
 
     skill_eval()
         .current_dir(&cwd)
@@ -48,13 +48,16 @@ fn guard_installs_pretooluse_hook_under_env() {
 }
 
 #[test]
-fn finalize_does_not_warn_about_env_scoped_guard_from_cwd() {
+fn finalize_warns_about_armed_per_env_guard_for_default_run() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // The guard arms inside the env; `finalize` checks the invocation cwd, where no
-    // guard lives, so it does not warn. The env-scoped guard is harmless to the operator's
-    // cwd (it only loads when cwd = env); the in-env loop handles it within the session.
-    let marker = env_dir(&cwd).join(".claude/skills/.slow-powers-eval-guard.json");
+    // The bare default run is hybrid: `--guard` arms a marker in each per-(group,
+    // condition) env. `finalize` runs from the invocation cwd, not inside any env, but
+    // the reworked finalize walks the per-env markers, so it reminds the operator the
+    // guard is still armed. (finalize only warns; `teardown` disarms — the marker
+    // survives finalize.)
+    let marker =
+        cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/.slow-powers-eval-guard.json");
 
     skill_eval()
         .current_dir(&cwd)
@@ -72,7 +75,7 @@ fn finalize_does_not_warn_about_env_scoped_guard_from_cwd() {
         .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success()
-        .stdout(contains("Guard still armed").not());
+        .stdout(contains("Guard still armed"));
 
     assert!(marker.exists());
 }
@@ -105,8 +108,8 @@ fn finalize_does_not_warn_when_guard_is_not_armed() {
 fn teardown_reclaims_workspace_and_env_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    let settings = env_dir(&cwd).join(".claude/settings.local.json");
-    let staged = env_dir(&cwd).join(".claude/skills");
+    let settings = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/settings.local.json");
+    let staged = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills");
 
     skill_eval()
         .current_dir(&cwd)
@@ -355,8 +358,8 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
                     .join(cond)
                     .join(format!("run-{k}"));
                 assert!(run_dir.is_dir(), "missing meta run dir {run_dir:?}");
-                // Per-run outputs dir inside the env.
-                let out_dir = env_dir(&cwd)
+                // Per-run outputs dir inside the condition's env.
+                let out_dir = cli_env_dir(&cwd, "g1", cond)
                     .join(".eval-magic-outputs")
                     .join(format!("eval-{eval}"))
                     .join(cond)
@@ -396,8 +399,10 @@ fn runs_one_keeps_flat_single_run_layout() {
     let cond_dir = iteration_dir(&cwd).join("eval-e1").join("with_skill");
     assert!(cond_dir.is_dir());
     assert!(!cond_dir.join("run-1").exists());
-    // Outputs live inside the env, flat (no run-1/ segment) for a single-run cell.
-    let out_dir = env_dir(&cwd).join(".eval-magic-outputs/eval-e1/with_skill");
+    // Outputs live inside the condition's env, flat (no run-1/ segment) for a
+    // single-run cell.
+    let out_dir =
+        cli_env_dir(&cwd, "g1", "with_skill").join(".eval-magic-outputs/eval-e1/with_skill");
     assert!(out_dir.is_dir());
     assert!(!out_dir.join("run-1").exists());
 }

@@ -75,24 +75,21 @@ pub struct CommonArgs {
     /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
     /// Claude Code and Codex both support staged skills, transcript ingest, and
-    /// `--guard`. Codex stages skills under `.agents/skills` and reads each
-    /// task's `outputs/codex-events.jsonl` instead of a subagents dir.
+    /// `--guard`. Each reads its own per-task events file (`claude-events.jsonl`,
+    /// `codex-events.jsonl`); Codex stages skills under `.agents/skills`.
     /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
     /// `--guard` are not yet wired for OpenCode.
     #[arg(long)]
     pub harness: Option<Harness>,
-    /// Run mode: `interactive` (in-session subagents), `hybrid` (an agent
-    /// orchestrates while each dispatch shells out to the harness CLI), or
-    /// `headless` (CLI-only, no session).
+    /// Run mode: `hybrid` (an agent orchestrates while each dispatch shells out to
+    /// the harness CLI) or `headless` (CLI-only, no session).
     ///
-    /// Defaults per harness — Claude Code → `interactive`, Codex/OpenCode →
-    /// `hybrid`. `hybrid`/`headless` dispatch through the harness CLI (`claude -p`,
-    /// `codex exec`) and read each task's `outputs/<harness>-events.jsonl`;
-    /// `interactive` dispatches in-session subagents. Claude Code wires all three
-    /// (`hybrid`/`headless` ride `claude -p` stream-json); Codex wires `hybrid` +
-    /// `headless`; OpenCode wires `hybrid` only. Pass the same value to every command
-    /// of a run (it selects the transcript source at `ingest`); the printed next-step
-    /// commands already carry it.
+    /// Every harness defaults to `hybrid`. Both modes dispatch through the harness
+    /// CLI (`claude -p`, `codex exec`) and read each task's
+    /// `outputs/<harness>-events.jsonl`; they differ only in whether an agent or a
+    /// human drives the loop. Claude Code and Codex wire both modes; OpenCode wires
+    /// `hybrid` only. Pass the same value to every command of a run; the printed
+    /// next-step commands already carry it.
     #[arg(long)]
     pub run_mode: Option<RunMode>,
     /// Workspace directory (defaults to `<cwd>/.eval-magic`).
@@ -101,25 +98,6 @@ pub struct CommonArgs {
     /// `teardown`.
     #[arg(long)]
     pub workspace_dir: Option<String>,
-    /// Subagents transcript dir (Claude Code only), e.g.
-    /// `~/.claude/projects/<slug>/<session-id>/subagents/`.
-    ///
-    /// Where Claude Code persisted subagent transcripts. `ingest`/`record-runs`/
-    /// `fill-transcripts` read it to populate `tool_invocations`, tokens, and
-    /// duration. Optional: when omitted it is auto-resolved from `--session-id`
-    /// (or the `CLAUDE_CODE_SESSION_ID` env var); pass it explicitly only to
-    /// override. Not used for Codex, which reads `outputs/codex-events.jsonl`.
-    #[arg(long)]
-    pub subagents_dir: Option<String>,
-    /// Parent session id for auto-resolving `--subagents-dir` (Claude Code only).
-    ///
-    /// Defaults to the `CLAUDE_CODE_SESSION_ID` env var that Claude Code sets in
-    /// the orchestrating agent's shell. `ingest`/`record-runs`/`fill-transcripts`
-    /// use it to locate `<config>/projects/<cwd-slug>/<session-id>/subagents/`
-    /// (scanning `projects/*` if the cwd slug differs). Pass it only when running
-    /// outside that session; an explicit `--subagents-dir` overrides it.
-    #[arg(long)]
-    pub session_id: Option<String>,
     /// Restrict to these eval ids (comma-separated).
     ///
     /// Mutually exclusive with `--skip`; every named id must exist or the run
@@ -204,31 +182,6 @@ pub struct GradeArgs {
     /// Merge judge responses instead of emitting judge tasks.
     #[arg(long)]
     pub finalize: bool,
-}
-
-/// `switch-condition` names the condition about to be dispatched (the one to keep)
-/// on top of the common set.
-#[derive(Debug, Args)]
-pub struct SwitchConditionArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    /// The condition you are about to dispatch next (the one to KEEP). Its
-    /// counterpart's staged skill is removed from `env/.claude/skills/`.
-    #[arg(long)]
-    pub condition: String,
-}
-
-/// `reset-batch` names the isolation group about to be dispatched, on top of the
-/// common set.
-#[derive(Debug, Args)]
-pub struct ResetBatchArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    /// The isolation group you are about to dispatch next. The shared `env/`'s
-    /// working tree is wiped (keeping the staged skills + the outputs tree) and
-    /// re-seeded with this group's fixtures.
-    #[arg(long)]
-    pub group: String,
 }
 
 /// `snapshot` adds a label and an optional git ref on top of the common set.
@@ -333,10 +286,10 @@ pub struct RunArgs {
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
-    /// Works under Claude Code's CLI run modes (`hybrid`/`headless`) too: the
-    /// `PreToolUse` hook is staged in `env/.claude/settings.local.json`, and each
-    /// `claude -p` dispatch loads it from that cwd (`cd <eval-root>`), enforcing the
-    /// same boundary as an in-session run (the recipe never passes `--bare`).
+    /// Under Claude Code the `PreToolUse` hook is staged in each env's
+    /// `.claude/settings.local.json`, and each `claude -p` dispatch loads it from
+    /// that cwd (`cd <eval-root>`), enforcing the eval boundary (the recipe never
+    /// passes `--bare`).
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.
@@ -373,10 +326,9 @@ pub struct RunArgs {
     /// Agent-under-test model for CLI dispatches; otherwise recorded as
     /// provenance.
     ///
-    /// For `Cli`-mechanism harnesses such as Codex, the run's dispatch recipes
-    /// include the harness-native model flag when the adapter supports one. For
-    /// in-session dispatch, the runner cannot select the model, so the value is
-    /// persisted to `conditions.json` for `promote-baseline`.
+    /// The run's dispatch recipes include the harness-native model flag when the
+    /// adapter supports one (e.g. Codex's `-m`, Claude Code's `--model`); otherwise
+    /// the value is persisted to `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub agent_model: Option<String>,
     /// Default judge model for emitted judge tasks.
@@ -402,10 +354,9 @@ pub(crate) enum Commands {
     ///
     /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
-    /// (human-readable). Your agent then dispatches each task as a fresh subagent.
-    /// Also writes `RUNBOOK.md`, a followable handoff for an isolated run session
-    /// ("Read and follow RUNBOOK.md") — interactive (agent-followed) for Claude
-    /// Code, human-followed for Codex/OpenCode.
+    /// (human-readable). Dispatch each task through the harness CLI (`claude -p`,
+    /// `codex exec`). Also writes `RUNBOOK.md`, a human-followable handoff for the
+    /// run ("Read and follow RUNBOOK.md").
     Run(RunArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -430,10 +381,8 @@ pub(crate) enum Commands {
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
     /// writes, grades `transcript_check` assertions, then stops at the judge
     /// hand-off, listing a judge task per `llm_judge` assertion. Requires
-    /// `--iteration`; Claude Code auto-resolves the subagents dir from the session
-    /// id (override with `--subagents-dir`), while Codex reads each task's
-    /// `outputs/codex-events.jsonl`. Re-running after a fix is safe — every
-    /// sub-step skips work already done.
+    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl`.
+    /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///
@@ -442,39 +391,18 @@ pub(crate) enum Commands {
     /// any per-`(group, condition)` Cli env guard — prints a `teardown` reminder before
     /// source edits. Requires `--iteration`.
     Finalize(CommonArgs),
-    /// Switch the active condition batch in a single-session isolated run.
-    ///
-    /// Removes the *off-condition*'s staged skill from `env/.claude/skills/` so the
-    /// next batch you dispatch cannot read it — the per-condition read-isolation
-    /// barrier for an interactive isolated run (see `RUNBOOK.md`).
-    /// `--condition` names the condition you are about to
-    /// dispatch next (the one to keep); its counterpart's staged skill is removed.
-    /// Run it only after every Task subagent of the prior batch has returned — it is
-    /// a hard barrier. Idempotent; resolves the iteration from `--workspace-dir` so
-    /// it works invoked from `env/`. Requires `--iteration`.
-    SwitchCondition(SwitchConditionArgs),
-    /// Swap the active isolation batch in a single-session isolated run.
-    ///
-    /// Wipes the shared `env/` working tree (keeping `.claude/skills/` and the
-    /// `.eval-magic-outputs/` tree) and re-seeds it with `--group`'s fixtures — the
-    /// per-batch isolation barrier between eval groups in an interactive isolated run
-    /// (see `RUNBOOK.md`). `--group` names the group you are
-    /// about to dispatch next. Run it only after every Task subagent of the prior
-    /// batch has returned — it is a hard barrier. Resolves the iteration from
-    /// `--workspace-dir` so it works invoked from `env/`. Requires `--iteration`.
-    ResetBatch(ResetBatchArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
     /// Assembles a schema-valid `run.json` and backfills `timing.json` for every
     /// task in a runner-built iteration, from `dispatch.json` +
-    /// `outputs/final-message.md` + the persisted transcript. Never clobbers
-    /// existing records without `--overwrite`; transcript-derived timing carries
-    /// `"source": "transcript"`. Folded into `ingest`.
+    /// `outputs/final-message.md` + each task's `outputs/<harness>-events.jsonl`.
+    /// Never clobbers existing records without `--overwrite`; transcript-derived
+    /// timing carries `"source": "transcript"`. Folded into `ingest`.
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///
-    /// Matches each `(eval, condition)` to a subagent transcript by description and
-    /// populates `tool_invocations` in `run.json`. Subsumed by `record-runs` for
+    /// Reads each task's `outputs/<harness>-events.jsonl` and populates
+    /// `tool_invocations` in `run.json`. Subsumed by `record-runs` for
     /// runner-built iterations; still the tool for filling a pre-existing (hand- or
     /// agent-written) `run.json`.
     FillTranscripts(CommonArgs),

@@ -1,4 +1,4 @@
-//! Codex CLI command rendering for `DispatchMechanism::Cli` guidance.
+//! Codex CLI command rendering (`codex exec`) for dispatch guidance.
 
 use super::cli_command::render_cli_model_arg;
 use std::path::Path;

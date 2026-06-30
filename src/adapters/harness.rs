@@ -23,8 +23,7 @@ use super::codex_cli::{
 };
 use super::{
     parse_claude_stream_json, parse_claude_stream_json_full, parse_codex_events,
-    parse_codex_events_full, parse_transcript, parse_transcript_full,
-    render_available_skills_block, render_codex_available_skills_block,
+    parse_codex_events_full, render_available_skills_block, render_codex_available_skills_block,
     render_opencode_available_skills_block,
 };
 
@@ -72,76 +71,46 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
-    /// The **interactive** (agent-followed) `RUNBOOK.md` template a harness uses
-    /// under [`InSession`](crate::core::DispatchMechanism::InSession) dispatch,
-    /// carrying `{{TOKEN}}` placeholders the run fills. The default is the shared
-    /// headless template (harmless for the Cli-only harnesses that never read it
-    /// via this path); [`InSession`](crate::core::DispatchMechanism::InSession)
-    /// harnesses override it. The Cli-dispatch runbook always uses
-    /// [`HEADLESS_RUNBOOK_TEMPLATE`], selected by mechanism in `build_runbook`.
-    fn runbook_template(&self) -> &'static str {
-        HEADLESS_RUNBOOK_TEMPLATE
-    }
-
-    /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
-    /// filename (under a task's `outputs/` dir) its one-shot CLI writes the
-    /// transcript to. `None` when the harness dispatches in-session (no local
-    /// transcript) or has no Cli-mechanism transcript wired yet.
+    /// The filename (under a task's `outputs/` dir) this harness's one-shot CLI
+    /// writes the captured transcript to. `None` when the harness has no
+    /// transcript ingest wired yet (e.g. OpenCode).
     fn cli_events_filename(&self) -> Option<&'static str> {
         None
     }
 
-    /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
-    /// native model-selection flag accepted by the harness CLI. `None` means the
-    /// adapter has no model-selection support wired yet.
+    /// The native model-selection flag accepted by this harness's CLI. `None`
+    /// means the adapter has no model-selection support wired yet.
     fn cli_model_flag(&self) -> Option<&'static str> {
         None
     }
 
-    /// The `Next:` guidance printed after `run` for a
-    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness: how to
-    /// dispatch each task through this harness's one-shot CLI and then ingest.
-    /// Empty for in-session harnesses (their guidance is the mechanism's, not the
-    /// adapter's).
+    /// The `Next:` guidance printed after `run`: how to dispatch each task through
+    /// this harness's one-shot CLI and then ingest. Empty when the adapter has no
+    /// dispatch recipe wired.
     fn cli_next_steps(&self, _ctx: CliDispatchContext<'_>) -> String {
         String::new()
     }
 
-    /// Extra `dispatch-manifest.md` lines describing this harness's Cli dispatch
+    /// Extra `dispatch-manifest.md` lines describing this harness's dispatch
     /// recipe (command template, parallel recipe, ingest note). `None` when the
-    /// harness contributes no Cli-specific manifest section.
+    /// harness contributes no manifest section.
     fn cli_manifest_section(&self, _ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
         None
     }
 
-    /// The post-`grade` / post-`ingest` judge dispatch guidance for a
-    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness. `None`
-    /// leaves the generic in-session-style judge handoff in place.
+    /// The post-`grade` / post-`ingest` judge dispatch guidance for this harness.
+    /// `None` leaves the generic judge handoff in place.
     fn cli_judge_next_steps(&self, _ctx: CliJudgeContext<'_>) -> Option<String> {
         None
     }
 
-    /// Parse a persisted transcript into its ordered tool invocations.
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>>;
+    /// Parse the events file this harness's one-shot CLI wrote (the captured
+    /// transcript) into ordered tool invocations.
+    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>>;
 
-    /// Parse a persisted transcript into the full summary: tool invocations,
-    /// deduped token usage, duration, and final message text.
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary>;
-
-    /// Parse a [`Cli`](crate::core::DispatchMechanism::Cli)-mechanism events file
-    /// (the harness CLI's captured output) into ordered tool invocations. Defaults
-    /// to [`parse_transcript`](Self::parse_transcript): for Codex/OpenCode the
-    /// on-disk parser already *is* the events parser, so the default is correct;
-    /// Claude Code overrides it, because its `parse_transcript` is the in-session
-    /// subagent parser while its Cli events are `claude -p` stream-json.
-    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        self.parse_transcript(path)
-    }
-
-    /// The full-summary counterpart of [`parse_cli_events`](Self::parse_cli_events).
-    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        self.parse_transcript_full(path)
-    }
+    /// The full-summary counterpart of [`parse_cli_events`](Self::parse_cli_events):
+    /// tool invocations, deduped token usage, duration, and final message text.
+    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary>;
 
     /// Arm the write guard using this harness's native pre-tool hook surface,
     /// returning the staged marker path. The guard's allowed roots are derived
@@ -164,9 +133,8 @@ pub trait HarnessAdapter {
     }
 }
 
-/// The shared **headless** (human-followed) `RUNBOOK.md` template used by every
-/// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch run, regardless of
-/// harness (Codex, OpenCode, and Claude Code in hybrid/headless).
+/// The shared (human-followed) `RUNBOOK.md` template used by every run,
+/// regardless of harness (Claude Code, Codex, OpenCode).
 pub const HEADLESS_RUNBOOK_TEMPLATE: &str =
     include_str!("../../profiles/shared/runbook-headless.md");
 
@@ -219,9 +187,6 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn skill_unresolved_phrase(&self) -> &'static str {
         "If the Skill tool cannot resolve that identifier"
     }
-    fn runbook_template(&self) -> &'static str {
-        include_str!("../../profiles/claude-code/runbook.md")
-    }
     fn cli_events_filename(&self) -> Option<&'static str> {
         Some("claude-events.jsonl")
     }
@@ -262,12 +227,6 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             ctx.iteration_dir,
         ))
     }
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_transcript(path)
-    }
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_transcript_full(path)
-    }
     fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_claude_stream_json(path)
     }
@@ -284,7 +243,7 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
     fn guard_armed_message(&self) -> Option<&'static str> {
         Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches —\n   both in-session subagents and `claude -p` (hybrid/headless), which loads the\n   hook from the env cwd each dispatch runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
+            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   Each `claude -p` dispatch loads the hook from the env cwd it runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
         )
     }
 }
@@ -352,10 +311,10 @@ impl HarnessAdapter for CodexAdapter {
             ctx.iteration_dir,
         ))
     }
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
+    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_codex_events(path)
     }
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
+    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
         parse_codex_events_full(path)
     }
     fn install_guard(
@@ -407,15 +366,20 @@ impl HarnessAdapter for OpenCodeAdapter {
             iteration = ctx.iteration
         )
     }
-    // OpenCode transcript ingest is not yet wired. In the current dispatch flow
-    // this is unreachable (no subagents dir and no events file), so delegating to
-    // the shared JSONL parser preserves the pre-refactor behavior of the
-    // transcript-source branch until OpenCode ingest lands.
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_transcript(path)
+    // OpenCode transcript ingest is not yet wired: its `cli_events_filename` is
+    // `None`, so the ingest pipeline never reaches these parsers. They error
+    // rather than parse until OpenCode ingest lands.
+    fn parse_cli_events(&self, _path: &Path) -> io::Result<Vec<ToolInvocation>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "opencode transcript ingest is not yet wired",
+        ))
     }
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_transcript_full(path)
+    fn parse_cli_events_full(&self, _path: &Path) -> io::Result<TranscriptSummary> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "opencode transcript ingest is not yet wired",
+        ))
     }
     fn install_guard(
         &self,
@@ -542,10 +506,6 @@ mod tests {
         assert_eq!(summary.duration_ms, Some(5637));
         assert_eq!(summary.tool_invocations.len(), 1);
         assert_eq!(summary.tool_invocations[0].name, "Bash");
-
-        // The on-disk parser would find no duration here (no line timestamps),
-        // proving parse_cli_events_full routes to the stream-json parser.
-        assert_eq!(a.parse_transcript_full(&path).unwrap().duration_ms, None);
     }
 
     #[test]

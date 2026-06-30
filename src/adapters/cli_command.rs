@@ -1,4 +1,4 @@
-//! Shared rendering helpers for `DispatchMechanism::Cli` command templates
+//! Shared rendering helpers for harness CLI command templates
 //! (Codex's `codex exec`, Claude Code's `claude -p`).
 
 /// Quote a value for a POSIX shell only when it contains anything outside a
