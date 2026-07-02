@@ -188,7 +188,7 @@ mod tests {
     // --- fillTranscripts ---
 
     #[test]
-    fn fills_a_claude_hybrid_run_record_from_outputs_events() {
+    fn fills_a_claude_run_record_from_outputs_events() {
         let root = TempDir::new().unwrap();
         let iteration_dir: PathBuf = root.path().join("iter-claude-fill");
         let cond_dir = iteration_dir.join("eval-crash").join("with_skill");
@@ -202,8 +202,7 @@ mod tests {
                 "mode": "new-skill",
                 "conditions": [{"name": "with_skill", "skill_path": "/skill/SKILL.md"}],
                 "timestamp": "2026-06-07T00:00:00.000Z",
-                "harness": "claude-code",
-                "run_mode": "hybrid"
+                "harness": "claude-code"
             })
             .to_string(),
         )

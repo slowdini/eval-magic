@@ -13,7 +13,7 @@
 //! parameter; the production runner — which maps each [`StepKind`] to its stage
 //! handler — lives in [`crate::cli`] alongside those handlers.
 
-use crate::core::{Harness, RunMode};
+use crate::core::Harness;
 
 /// Which post-dispatch stage a [`StepCommand`] runs. The production runner
 /// matches on this to call the corresponding handler; tests assert on it.
@@ -37,9 +37,6 @@ pub struct StepCommand {
     pub skill: Option<String>,
     pub iteration: u32,
     pub harness: Harness,
-    /// The run mode, re-derived at each stage. Round-trips through `CommonArgs`
-    /// exactly like `harness`, so ingest sub-stages don't silently re-default it.
-    pub run_mode: RunMode,
     pub workspace_dir: Option<String>,
 }
 
@@ -50,7 +47,6 @@ pub struct StepParams<'a> {
     pub skill: Option<&'a str>,
     pub iteration: u32,
     pub harness: Harness,
-    pub run_mode: RunMode,
     pub workspace_dir: Option<&'a str>,
 }
 
@@ -61,7 +57,6 @@ impl Default for StepParams<'_> {
             skill: None,
             iteration: 0,
             harness: Harness::ClaudeCode,
-            run_mode: RunMode::Hybrid,
             workspace_dir: None,
         }
     }
@@ -76,7 +71,6 @@ impl StepParams<'_> {
             skill: self.skill.map(str::to_string),
             iteration: self.iteration,
             harness: self.harness,
-            run_mode: self.run_mode,
             workspace_dir: self.workspace_dir.map(str::to_string),
         }
     }
@@ -169,7 +163,6 @@ mod tests {
             skill: Some("mr-review"),
             iteration: 2,
             harness: Harness::Codex,
-            run_mode: RunMode::Hybrid,
             ..Default::default()
         });
         assert_eq!(
@@ -208,7 +201,6 @@ mod tests {
             skill: None,
             iteration: 0,
             harness: Harness::ClaudeCode,
-            run_mode: RunMode::Hybrid,
             workspace_dir: None,
         }
     }

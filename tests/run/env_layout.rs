@@ -133,9 +133,9 @@ fn dispatch_tasks_grouped_by_condition() {
         .collect();
     assert_eq!(conds.len(), 4, "2 evals × 2 conditions: {conds:?}");
 
-    // All with_skill tasks precede all without_skill tasks, so the runbook's
-    // "dispatch all of cond A → switch-condition → dispatch all of cond B" batches
-    // map to a straight top-to-bottom read of tasks[].
+    // All with_skill tasks precede all without_skill tasks, so a straight
+    // top-to-bottom read of tasks[] dispatches condition A's batch, then
+    // condition B's — each from its own per-(group, condition) env.
     let first_b = conds.iter().position(|c| c == "without_skill").unwrap();
     assert!(
         conds[..first_b].iter().all(|c| c == "with_skill"),

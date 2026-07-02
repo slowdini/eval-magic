@@ -1,13 +1,12 @@
-//! Claude Code CLI run modes (`--run-mode hybrid` / `headless`): `claude -p`
-//! stream-json dispatch guidance, run-mode persistence + defaulting, the
-//! human-followed runbook, and the write guard under Cli dispatch.
+//! Claude Code CLI dispatch: `claude -p` stream-json dispatch guidance, the
+//! human-followed runbook, and the write guard under CLI dispatch.
 
 use crate::helpers::*;
 use predicates::str::contains;
 use std::fs;
 
 #[test]
-fn claude_hybrid_dispatch_guidance_uses_claude_p() {
+fn claude_dispatch_guidance_uses_claude_p() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     let assert = skill_eval()
@@ -21,8 +20,6 @@ fn claude_hybrid_dispatch_guidance_uses_claude_p() {
             "new-skill",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
         ])
         .assert()
         .success();
@@ -41,13 +38,10 @@ fn claude_hybrid_dispatch_guidance_uses_claude_p() {
 
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
     assert_eq!(conditions["harness"], "claude-code");
-    assert_eq!(conditions["run_mode"], "hybrid");
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["run_mode"], "hybrid");
 }
 
 #[test]
-fn claude_hybrid_dispatch_guidance_includes_agent_model_when_provided() {
+fn claude_dispatch_guidance_includes_agent_model_when_provided() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     let assert = skill_eval()
@@ -59,8 +53,6 @@ fn claude_hybrid_dispatch_guidance_includes_agent_model_when_provided() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--agent-model",
             "opus",
         ])
@@ -72,7 +64,7 @@ fn claude_hybrid_dispatch_guidance_includes_agent_model_when_provided() {
 }
 
 #[test]
-fn claude_hybrid_runbook_is_human_followed_cli_recipe() {
+fn claude_run_writes_human_followed_runbook() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -84,62 +76,21 @@ fn claude_hybrid_runbook_is_human_followed_cli_recipe() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--dry-run",
         ])
         .assert()
         .success();
 
-    // Cli dispatches from per-(group, condition) envs, so the human-followed
-    // runbook lives in the iteration dir, not a single env/.
-    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
-    assert!(
-        runbook.contains("human driving"),
-        "hybrid uses the human-followed template: {runbook}"
-    );
-    assert!(
-        runbook.contains("claude -p"),
-        "carries the claude -p dispatch recipe: {runbook}"
-    );
-}
-
-#[test]
-fn claude_headless_records_mode_and_human_runbook() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "claude-code",
-            "--run-mode",
-            "headless",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    // Headless rides the same Cli mechanism as hybrid; the run mode is persisted
-    // distinctly so every post-dispatch command can carry it.
-    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
-    assert_eq!(conditions["run_mode"], "headless");
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["run_mode"], "headless");
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("claude -p --output-format stream-json"));
 
-    // The runbook is the shared human-followed template carrying the claude -p
-    // recipe and headless-threaded pipeline commands. Cli has no single env/, so
-    // it lives in the iteration dir.
+    // Each task dispatches from its own per-(group, condition) env, so the shared
+    // human-followed runbook lives in the iteration dir, above those envs, and
+    // carries the claude -p recipe plus the --harness-threaded pipeline commands.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
-        "headless uses the human-followed template: {runbook}"
+        "uses the human-followed template: {runbook}"
     );
     assert!(
         runbook.contains("claude -p"),
@@ -150,43 +101,28 @@ fn claude_headless_records_mode_and_human_runbook() {
         "pipeline commands carry --harness claude-code: {runbook}"
     );
     assert!(
-        runbook.contains("--run-mode headless"),
-        "pipeline commands carry the headless run mode: {runbook}"
-    );
-    assert!(
         !runbook.contains("{{"),
         "no unsubstituted tokens: {runbook}"
     );
 }
 
 #[test]
-fn claude_hybrid_record_runs_does_not_require_a_session_id() {
-    // Regression: hybrid/headless ride the Cli mechanism and read each task's
-    // claude-events.jsonl, never the in-session subagents dir. Resolving that dir
-    // is gated on the dispatch mechanism, not the harness, so `record-runs` in
-    // hybrid mode must NOT bail on a missing CLAUDE_CODE_SESSION_ID — the way the
-    // old harness-keyed gate did for `--harness claude-code`. This is the
-    // documented headless path (no session at all).
+fn claude_record_runs_does_not_require_a_session_id() {
+    // Regression: CLI dispatch reads each task's claude-events.jsonl, never an
+    // in-session subagents dir, so `record-runs --harness claude-code` must NOT
+    // bail on a missing CLAUDE_CODE_SESSION_ID.
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "claude-code",
-            "--run-mode",
-            "hybrid",
-        ])
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
         .assert()
         .success();
 
-    // No session id in the environment, and none passed — the pre-fix code aborted
-    // here with "could not auto-resolve the subagents dir". The fix returns early
-    // for the Cli mechanism, so record-runs proceeds to its summary.
+    // No session id in the environment, and none passed — record-runs proceeds to
+    // its summary rather than aborting on an unresolved subagents dir.
     skill_eval()
         .current_dir(&cwd)
         .env_remove("CLAUDE_CODE_SESSION_ID")
@@ -194,7 +130,7 @@ fn claude_hybrid_record_runs_does_not_require_a_session_id() {
         .arg(&skill_dir)
         .args(["--skill", "mr-review", "--workspace-dir"])
         .arg(cwd.join(".eval-magic"))
-        .args(["--harness", "claude-code", "--run-mode", "hybrid"])
+        .args(["--harness", "claude-code"])
         .assert()
         .success()
         .stdout(contains("Recorded:"));
@@ -213,8 +149,6 @@ fn claude_cli_guard_installs_project_hook() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--guard",
         ])
         .assert()
@@ -302,14 +236,7 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
         .env("CLAUDE_CONFIG_DIR", &config)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "claude-code",
-            "--run-mode",
-            "hybrid",
-        ])
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
         .assert()
         .success();
 
@@ -317,4 +244,73 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
         iteration_dir(&cwd).join("plugin-shadow.json").exists(),
         "preflight detected the project-enabled plugin shadow by scanning the staged env"
     );
+}
+
+#[test]
+fn run_omits_run_mode_from_every_artifact_and_command() {
+    // The run-mode vocabulary is retired: there is one CLI dispatch path, so no
+    // artifact records a run mode and no printed/threaded command carries the flag.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("--run-mode"),
+        "printed next-step commands carry no --run-mode: {stdout}"
+    );
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert!(
+        conditions.get("run_mode").is_none(),
+        "conditions.json carries no run_mode: {conditions}"
+    );
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert!(
+        dispatch.get("run_mode").is_none(),
+        "dispatch.json carries no run_mode: {dispatch}"
+    );
+    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    assert!(
+        !runbook.contains("--run-mode"),
+        "runbook pipeline commands carry no --run-mode: {runbook}"
+    );
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(
+        !manifest.contains("--run-mode"),
+        "dispatch manifest carries no --run-mode: {manifest}"
+    );
+}
+
+#[test]
+fn run_mode_flag_is_rejected() {
+    // `--run-mode` is fully removed, not a hidden no-op: clap rejects it.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--run-mode",
+            "hybrid",
+            "--dry-run",
+        ])
+        .assert()
+        .failure();
 }

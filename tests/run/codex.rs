@@ -305,41 +305,27 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
 }
 
 #[test]
-fn codex_headless_records_mode_and_human_runbook() {
+fn codex_run_writes_human_followed_runbook() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "codex",
-            "--run-mode",
-            "headless",
-            "--dry-run",
-        ])
+        .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
         .assert()
         .success();
 
-    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
-    assert_eq!(conditions["run_mode"], "headless");
-
-    // Cli has no single env/, so the human-followed runbook lives in the iteration dir.
+    // Each task dispatches from its own per-(group, condition) env, so the
+    // human-followed runbook lives in the iteration dir, above those envs.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
-        "headless uses the human-followed template: {runbook}"
+        "uses the human-followed template: {runbook}"
     );
     assert!(
         runbook.contains("codex --ask-for-approval never exec"),
         "carries the Codex CLI dispatch recipe: {runbook}"
-    );
-    assert!(
-        runbook.contains("--run-mode headless"),
-        "pipeline commands carry the headless run mode: {runbook}"
     );
 }
 

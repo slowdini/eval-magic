@@ -519,7 +519,7 @@ fn teardown_disarms_per_group_condition_cli_guards() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
 
-    // Cli (hybrid) materializes one env per (group, condition); `--guard` arms a marker
+    // CLI dispatch materializes one env per (group, condition); `--guard` arms a marker
     // in each. The human runs teardown from the iteration dir, not from inside any env,
     // so the cwd-only disarm never reaches these per-env markers.
     skill_eval()
@@ -531,8 +531,6 @@ fn teardown_disarms_per_group_condition_cli_guards() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--guard",
         ])
         .assert()
@@ -557,7 +555,7 @@ fn teardown_disarms_per_group_condition_cli_guards() {
         .current_dir(&cwd)
         .args(["teardown", "--skill-dir"])
         .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--run-mode", "hybrid"])
+        .args(["--skill", "mr-review"])
         .assert()
         .success()
         .stdout(contains("write guard disarmed"));
@@ -575,7 +573,7 @@ fn finalize_warns_about_armed_cli_per_env_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
 
-    // Cli (hybrid) arms a guard in each per-(group, condition) env. finalize runs from
+    // CLI dispatch arms a guard in each per-(group, condition) env. finalize runs from
     // the iteration dir, not an env, so the cwd-only check misses them; it must walk the
     // per-env markers and remind the operator.
     skill_eval()
@@ -587,8 +585,6 @@ fn finalize_warns_about_armed_cli_per_env_guard() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--guard",
         ])
         .assert()
@@ -598,14 +594,7 @@ fn finalize_warns_about_armed_cli_per_env_guard() {
         .current_dir(&cwd)
         .args(["finalize", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--run-mode",
-            "hybrid",
-            "--iteration",
-            "1",
-        ])
+        .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success()
         .stdout(contains("Guard still armed"));

@@ -6,7 +6,7 @@
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::core::{Harness, RunMode};
+use crate::core::Harness;
 
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
 ///
@@ -81,17 +81,6 @@ pub struct CommonArgs {
     /// `--guard` are not yet wired for OpenCode.
     #[arg(long)]
     pub harness: Option<Harness>,
-    /// Run mode: `hybrid` (an agent orchestrates while each dispatch shells out to
-    /// the harness CLI) or `headless` (CLI-only, no session).
-    ///
-    /// Every harness defaults to `hybrid`. Both modes dispatch through the harness
-    /// CLI (`claude -p`, `codex exec`) and read each task's
-    /// `outputs/<harness>-events.jsonl`; they differ only in whether an agent or a
-    /// human drives the loop. Claude Code and Codex wire both modes; OpenCode wires
-    /// `hybrid` only. Pass the same value to every command of a run; the printed
-    /// next-step commands already carry it.
-    #[arg(long)]
-    pub run_mode: Option<RunMode>,
     /// Workspace directory (defaults to `<cwd>/.eval-magic`).
     ///
     /// The artifact root. Pass the same value to every command of a run, including

@@ -1,4 +1,4 @@
-//! The `run` orchestrator and its run-mode variants.
+//! The `run` orchestrator.
 //!
 //! Split into focused sub-orchestrators:
 //!

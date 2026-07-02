@@ -9,8 +9,6 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::core::run_mode::{RunMode, resolve_run_mode};
-
 /// The agent harness an eval runs against. Single source of truth, shared with
 /// the CLI layer (it derives `clap::ValueEnum` so flags can parse it directly).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
@@ -39,9 +37,6 @@ pub struct RunContext {
     pub stage_root: PathBuf,
     pub bootstrap_path: Option<PathBuf>,
     pub harness: Harness,
-    /// The resolved run mode (the dispatch mechanism + who drives the loop).
-    /// Resolved per harness from the `--run-mode` flag in [`detect_run_context`].
-    pub run_mode: RunMode,
 }
 
 /// Already-parsed flag values handed to [`detect_run_context`]. `clap` owns the
@@ -54,7 +49,6 @@ pub struct DetectInput {
     pub bootstrap: Option<String>,
     pub workspace_dir: Option<String>,
     pub harness: Option<Harness>,
-    pub run_mode: Option<RunMode>,
     pub cwd: Option<PathBuf>,
 }
 
@@ -77,8 +71,6 @@ pub enum ContextError {
     SkillNotFound(String),
     #[error("--bootstrap file not found: {0}")]
     BootstrapNotFound(String),
-    #[error("{0}")]
-    UnsupportedRunMode(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -212,8 +204,6 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
     let stage_root = cwd;
 
     let harness = input.harness.unwrap_or_default();
-    let run_mode =
-        resolve_run_mode(harness, input.run_mode).map_err(ContextError::UnsupportedRunMode)?;
 
     Ok(RunContext {
         skill_dir,
@@ -225,7 +215,6 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
         stage_root,
         bootstrap_path,
         harness,
-        run_mode,
     })
 }
 
