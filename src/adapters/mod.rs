@@ -1,7 +1,7 @@
 //! The harness adapter layer.
 //!
 //! [`harness`] defines the [`HarnessAdapter`] trait — the single API generic
-//! run-mode code uses to reach harness-specific behavior. The per-harness
+//! dispatch code uses to reach harness-specific behavior. The per-harness
 //! session renderers + transcript parsers it delegates to live in the sibling
 //! submodules, plus plugin-shadow detection. The submodules are re-exported
 //! flat so downstream code writes `crate::adapters::<fn>`.
@@ -20,7 +20,7 @@ pub mod plugin_shadow;
 
 pub use harness::{
     ClaudeCodeAdapter, CliDispatchContext, CliJudgeContext, CliManifestContext, CodexAdapter,
-    HEADLESS_RUNBOOK_TEMPLATE, HarnessAdapter, OpenCodeAdapter, adapter_for,
+    HarnessAdapter, OpenCodeAdapter, RUNBOOK_TEMPLATE, adapter_for,
 };
 
 pub use claude_code_session::{render_available_skills_block, render_plan_mode_context};

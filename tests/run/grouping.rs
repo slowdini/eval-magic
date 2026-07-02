@@ -68,8 +68,6 @@ fn cli_single_group_emits_groups_and_splits_env_per_condition() {
             "new-skill",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--dry-run",
         ])
         .assert()
@@ -182,15 +180,7 @@ fn isolated_hint_splits_into_separate_envs_cli() {
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "codex",
-            "--run-mode",
-            "hybrid",
-            "--dry-run",
-        ])
+        .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
         .assert()
         .success();
 

@@ -1,4 +1,4 @@
-//! The harness adapter API — the single seam between generic run-mode code and
+//! The harness adapter API — the single seam between generic dispatch code and
 //! harness-specific behavior.
 //!
 //! Every harness-specific concern hangs off the [`HarnessAdapter`] trait: how
@@ -27,7 +27,7 @@ use super::{
     render_opencode_available_skills_block,
 };
 
-/// The behavior that varies by harness. Generic run-mode code depends on this
+/// The behavior that varies by harness. Generic dispatch code depends on this
 /// trait, never on a concrete harness variant.
 pub trait HarnessAdapter {
     /// The kebab-case identifier used in CLI flags, `dispatch.json`, and the
@@ -135,8 +135,7 @@ pub trait HarnessAdapter {
 
 /// The shared (human-followed) `RUNBOOK.md` template used by every run,
 /// regardless of harness (Claude Code, Codex, OpenCode).
-pub const HEADLESS_RUNBOOK_TEMPLATE: &str =
-    include_str!("../../profiles/shared/runbook-headless.md");
+pub const RUNBOOK_TEMPLATE: &str = include_str!("../../profiles/shared/runbook.md");
 
 pub struct ClaudeCodeAdapter;
 pub struct CodexAdapter;
@@ -203,7 +202,7 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
     fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
         Some(vec![
-            "After all dispatches (Claude Code hybrid):".to_string(),
+            "After all dispatches (Claude Code):".to_string(),
             String::new(),
             "Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.".to_string(),
             String::new(),
@@ -217,7 +216,7 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             claude_parallel_dispatch_recipe(self.cli_model_flag(), ctx.agent_model),
             "```".to_string(),
             String::new(),
-            "Then run `eval-magic ingest --harness claude-code --run-mode hybrid`; Claude hybrid ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
+            "Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
             String::new(),
         ])
     }

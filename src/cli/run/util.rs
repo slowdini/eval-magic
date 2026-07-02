@@ -137,11 +137,11 @@ pub(crate) fn harness_label(harness: Harness) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{DetectInput, RunMode, detect_run_context};
+    use crate::core::{DetectInput, detect_run_context};
     use std::fs;
 
-    /// Build a `RunContext` for `harness`/`run_mode` against a throwaway skill dir.
-    fn ctx_for(harness: Harness, run_mode: RunMode) -> (tempfile::TempDir, RunContext) {
+    /// Build a `RunContext` for `harness` against a throwaway skill dir.
+    fn ctx_for(harness: Harness) -> (tempfile::TempDir, RunContext) {
         let tmp = tempfile::TempDir::new().unwrap();
         let skill = tmp.path().join("widget");
         fs::create_dir_all(&skill).unwrap();
@@ -153,7 +153,6 @@ mod tests {
         let ctx = detect_run_context(DetectInput {
             skill: Some(skill.display().to_string()),
             harness: Some(harness),
-            run_mode: Some(run_mode),
             cwd: Some(tmp.path().to_path_buf()),
             ..Default::default()
         })
@@ -162,20 +161,10 @@ mod tests {
     }
 
     #[test]
-    fn claude_hybrid_allows_guard() {
+    fn claude_allows_guard() {
         // `claude -p` loads the project `.claude/settings.local.json` PreToolUse
-        // hook from its cwd, so the write guard fires under Cli dispatch too.
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Hybrid);
-        let opts = RunOptions {
-            guard: true,
-            ..Default::default()
-        };
-        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
-    }
-
-    #[test]
-    fn claude_headless_allows_guard() {
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Headless);
+        // hook from its cwd, so the write guard fires under CLI dispatch.
+        let (_t, ctx) = ctx_for(Harness::ClaudeCode);
         let opts = RunOptions {
             guard: true,
             ..Default::default()

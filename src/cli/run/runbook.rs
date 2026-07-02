@@ -3,8 +3,8 @@
 //!
 //! The runbook turns the prep session's "what to do next" guidance into a file
 //! a human at a terminal can read end-to-end: "Read and follow RUNBOOK.md". Every
-//! run uses the shared [`HEADLESS_RUNBOOK_TEMPLATE`], whose harness-specific
-//! dispatch + judge recipes come from the adapter's CLI generators.
+//! run uses the shared [`RUNBOOK_TEMPLATE`], whose harness-specific dispatch +
+//! judge recipes come from the adapter's CLI generators.
 //!
 //! The prose skeleton lives in `profiles/` (checked in) and carries `{{TOKEN}}`
 //! placeholders the renderer fills with run-specific values. The generated
@@ -12,9 +12,7 @@
 
 use std::path::Path;
 
-use crate::adapters::{
-    CliDispatchContext, CliJudgeContext, HEADLESS_RUNBOOK_TEMPLATE, adapter_for,
-};
+use crate::adapters::{CliDispatchContext, CliJudgeContext, RUNBOOK_TEMPLATE, adapter_for};
 use crate::core::{Harness, Mode};
 
 use super::util::{harness_label, mode_str};
@@ -39,14 +37,14 @@ pub(crate) struct RunbookContext<'a> {
     pub agent_model: Option<&'a str>,
 }
 
-/// Render `RUNBOOK.md` for a run: fill the shared headless template's
+/// Render `RUNBOOK.md` for a run: fill the shared runbook template's
 /// `{{TOKEN}}` placeholders with run-specific values. The harness-specific
 /// dispatch + judge recipes come from the adapter's CLI generators, so the
 /// runbook stays in lockstep with `dispatch-manifest.md` and the printed next
 /// steps; pipeline commands carry `--harness`.
 pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
     let adapter = adapter_for(ctx.harness);
-    let template = HEADLESS_RUNBOOK_TEMPLATE;
+    let template = RUNBOOK_TEMPLATE;
 
     let iteration = ctx.iteration.to_string();
     let num_tasks = ctx.num_tasks.to_string();
@@ -150,7 +148,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn headless_runbook_is_human_followed_cli_recipe() {
+    fn runbook_is_human_followed_cli_recipe() {
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
         let ctx = RunbookContext {
             harness: Harness::Codex,
@@ -175,7 +173,7 @@ mod tests {
             "names both conditions: {book}"
         );
 
-        // Human-followed framing (the shared headless template).
+        // Human-followed framing (the shared runbook template).
         assert!(
             book.contains("human driving"),
             "frames the run for a human at a terminal: {book}"

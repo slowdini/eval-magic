@@ -51,18 +51,15 @@ fn run_writes_headless_runbook_for_claude() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "headless",
             "--dry-run",
         ])
         .assert()
         .success();
 
     let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
-    // A Claude Code Cli-mode run uses the shared human-followed template, NOT
-    // Claude's interactive (agent-followed) one — so the in-session switch-condition
-    // batch loop is absent and the claude -p recipe is present. Cli has no single
-    // env/, so the runbook lives in the iteration dir.
+    // A Claude Code run uses the shared human-followed template carrying the
+    // `claude -p` recipe. Each task dispatches from its own per-(group, condition)
+    // env, so the runbook lives in the iteration dir, above those envs.
     assert!(
         book.contains("human driving"),
         "frames the run for a human at a terminal: {book}"

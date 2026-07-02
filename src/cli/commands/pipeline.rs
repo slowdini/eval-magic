@@ -45,7 +45,6 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
         iteration: Some(step.iteration),
         mode: None,
         harness: Some(step.harness),
-        run_mode: Some(step.run_mode),
         workspace_dir: step.workspace_dir.clone(),
         only: None,
         skip: None,
@@ -75,7 +74,6 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
-        run_mode: ctx.run_mode,
         workspace_dir: args.workspace_dir.as_deref(),
     });
     if let Some(failed) = run::steps::run_steps(&steps, run_step) {
@@ -119,7 +117,6 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
         skill: args.skill.as_deref(),
         iteration,
         harness: ctx.harness,
-        run_mode: ctx.run_mode,
         workspace_dir: args.workspace_dir.as_deref(),
     });
     if let Some(failed) = run::steps::run_steps(&steps, run_step) {

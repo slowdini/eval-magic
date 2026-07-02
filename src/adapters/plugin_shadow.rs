@@ -1,13 +1,12 @@
 //! Plugin-shadow detector (Claude Code).
 //!
-//! The runner stages eval skills into the
-//! project-local `.claude/skills/` dir, but eval subagents are dispatched via the
-//! Task tool and run in-process — so they ALSO inherit whatever skills the
-//! orchestrator session loaded from installed plugins and the global skills dir.
-//! When a staged skill name collides with one of those, both copies are
-//! discoverable and the with/without comparison is contaminated. The runner
-//! cannot unload a plugin from a running session, so this module only *detects
-//! and reports* the overlap, reading declared settings as a best-effort proxy.
+//! The runner stages eval skills into each dispatch's project-local
+//! `.claude/skills/` dir, but every `claude -p` dispatch ALSO loads the user/global
+//! plugins and the global skills dir from its Claude config. When a staged skill
+//! name collides with one of those, both copies are discoverable and the
+//! with/without comparison is contaminated. The runner cannot strip an installed
+//! plugin from a dispatch, so this module only *detects and reports* the overlap,
+//! reading declared settings as a best-effort proxy.
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -15,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const ISOLATION_DOC: &str = "docs/harness-claude-code.md → \"Isolating from installed plugins\"";
+const ISOLATION_DOC: &str = "README.md → Claude Code → \"Isolating from installed plugins\"";
 
 /// A staged skill that is also discoverable from the live environment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -206,9 +205,9 @@ pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
         .iter()
         .map(|s| {
             format!(
-                "staged skill '{}' is also provided by {} — eval subagents could discover both \
-                 copies, so with/without results may be contaminated. Re-run from an isolated \
-                 session (see {}).",
+                "staged skill '{}' is also provided by {} — each claude -p dispatch could discover \
+                 both copies, so with/without results may be contaminated. Isolate each dispatch's \
+                 Claude config (see {}).",
                 s.skill_name(),
                 s.source_label(),
                 ISOLATION_DOC
@@ -231,21 +230,19 @@ pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
         lines.push(format!("  • {} — {}", s.skill_name(), s.source_label()));
     }
     lines.push(
-        "  Eval subagents (dispatched via the Task tool) inherit this session's plugins,"
-            .to_string(),
+        "  Each `claude -p` dispatch loads your user/global plugins and skills, so".to_string(),
     );
-    lines.push(
-        "  so both the staged copy and the installed copy are discoverable — the".to_string(),
-    );
+    lines.push("  both the staged copy and the installed copy are discoverable — the".to_string());
     lines.push(
         "  with/without comparison may be contaminated and the control arm is not truly"
             .to_string(),
     );
     lines.push(
-        "  skill-absent. The runner cannot unload a plugin from a running session.".to_string(),
+        "  skill-absent. The runner cannot strip an installed plugin from the dispatch."
+            .to_string(),
     );
     lines.push(format!(
-        "  Re-run from an isolated session — see {ISOLATION_DOC}."
+        "  Isolate each dispatch's Claude config — see {ISOLATION_DOC}."
     ));
     lines.join("\n")
 }

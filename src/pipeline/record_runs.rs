@@ -819,7 +819,7 @@ mod tests {
     }
 
     #[test]
-    fn assembles_claude_hybrid_records_from_each_tasks_events() {
+    fn assembles_claude_records_from_each_tasks_events() {
         let root = TempDir::new().unwrap();
         let iter = dirs(&root);
         let paths = write_iteration(
@@ -875,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn claude_hybrid_warning_points_at_events_file() {
+    fn claude_warning_points_at_events_file() {
         let result = RecordRunsResult {
             recorded: 2,
             missing_transcript: 2,
@@ -884,11 +884,11 @@ mod tests {
         let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
         assert!(
             warning.contains("claude-events.jsonl"),
-            "names the Claude hybrid source: {warning}"
+            "names the Claude CLI events source: {warning}"
         );
         assert!(
             !warning.contains("agent_description"),
-            "hybrid doesn't use agent_description: {warning}"
+            "CLI dispatch doesn't use agent_description: {warning}"
         );
     }
 }

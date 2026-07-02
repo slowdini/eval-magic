@@ -6,7 +6,7 @@ An eval dispatches a fresh subagent twice per test case — once with the skill 
 
 `eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are wired harnesses today**; OpenCode has foundational harness selection and staging support; see [Harnesses](#harnesses) for per-harness fidelity and caveats. From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
-This README is the complete operating guide: install, author cases, run both modes, drive the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `eval-magic --help` (and `eval-magic <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
+This README is the complete operating guide: install, author cases, run the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `eval-magic --help` (and `eval-magic <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
 ## Install
 
@@ -41,7 +41,7 @@ cargo build --release          # binary at target/release/eval-magic
 
 ## How an eval works
 
-For each test case, the runner sets up two conditions and a fresh subagent runs each with clean context — *how* that subagent is dispatched (in-session vs. one-shot CLI) is the run-mode axis covered under [Harnesses](#harnesses):
+For each test case, the runner sets up two conditions and a fresh subagent runs each with clean context. Each subagent is dispatched through the harness's one-shot CLI (`claude -p`, `codex exec`) — the specifics per harness are covered under [Harnesses](#harnesses):
 
 - **Mode A — new skill:** `with_skill` vs `without_skill`. Validates a brand-new skill beats baseline behavior with no skill loaded.
 - **Mode B — revision (the common case):** `old_skill` vs `new_skill`. Tests a language change to an existing skill — you snapshot the old `SKILL.md`, then run both variants against the same prompts. A negative or zero `delta.pass_rate` is a signal to revert.
@@ -85,35 +85,32 @@ environment.
 ### Mode A — new skill (with vs. without)
 
 ```bash
-# 1. Build the iteration's isolated env (arm --guard — see Cost & confirmation).
-#    run stages skills into .eval-magic/my-skill/iteration-1/env/, copies
-#    fixtures in, and writes RUNBOOK.md. It does NOT dispatch — it prints a handoff.
-#    Add --runs <N> to dispatch every eval N times per condition for variance
-#    reduction (a per-eval "runs" field in evals.json overrides the flag).
+# 1. Build the iteration's isolated envs (arm --guard — see Cost & confirmation).
+#    run stages skills into one env per (group, condition) under
+#    .eval-magic/my-skill/iteration-1/, copies fixtures in, and writes RUNBOOK.md.
+#    It does NOT dispatch — it prints a handoff. Add --runs <N> to dispatch every
+#    eval N times per condition for variance reduction (a per-eval "runs" field in
+#    evals.json overrides the flag).
 eval-magic run --guard
 
-# 2. Enter the isolated env and follow the runbook. cd into iteration-1/env/ and
-#    start a fresh agent session there (interactive Claude Code: the staged skills
-#    must be present at session start), then say: "Read and follow RUNBOOK.md".
-#    That session drives the whole loop below — dispatch → switch-condition →
-#    ingest → finalize — and writes benchmark.json into iteration-1/. (Headless:
-#    you, a human, follow the same RUNBOOK.md top to bottom; hybrid: the session
-#    shells out a `claude -p` / `codex exec` recipe per task.) See Claude Code
-#    below for the plugin-isolation and transcript specifics.
+# 2. Follow the runbook. From the iteration dir, read RUNBOOK.md end to end. It
+#    drives the whole loop below — dispatch → ingest → dispatch judges → finalize —
+#    dispatching each task through the harness CLI (`claude -p` / `codex exec`) and
+#    writing benchmark.json into iteration-1/. An agent session can drive the runbook
+#    ("Read and follow RUNBOOK.md"), or you can follow it by hand — the steps are
+#    identical. See Claude Code below for the plugin-isolation and transcript specifics.
 
-# Steps 3–5 are driven from inside the runbook — shown here for reference:
+# Steps 3–5 are driven from the runbook — shown here for reference:
 
 # 3. ingest assembles records, detects stray writes, and grades, stopping at the
-#    judge hand-off. In-session it auto-resolves transcripts from
-#    CLAUDE_CODE_SESSION_ID; hybrid/headless read each task's events file instead.
+#    judge hand-off. It reads each task's events file (outputs/<harness>-events.jsonl).
 eval-magic ingest
 
 # 4. Dispatch the judge tasks ingest lists, then finalize. If --guard is still
 #    armed, finalize reminds you to run teardown-guard before editing source.
 eval-magic finalize
 
-# 5. Read .eval-magic/my-skill/iteration-1/benchmark.json (the prep session
-#    resumes here), then clean up:
+# 5. Read .eval-magic/my-skill/iteration-1/benchmark.json, then clean up:
 eval-magic teardown
 ```
 
@@ -131,41 +128,36 @@ If you snapshot *before* editing, omit `--ref` (it then reads the working tree) 
 
 ## The run loop
 
-A run is one canonical workflow. `run` *prepares* an isolated env and hands off; a session entered in that env drives the rest of the loop to `benchmark.json`:
+A run is one canonical workflow. `run` *prepares* the isolated envs and hands off; the runbook then drives the rest of the loop to `benchmark.json`. An agent session or a human at a terminal can drive it — the steps are identical:
 
 ```
-run (prepare env/ + RUNBOOK.md)
-  └─► [in env/, runbook-driven] dispatch batch A → switch-condition → dispatch batch B
+run (prepare per-(group,condition) envs + RUNBOOK.md)
+  └─► [runbook-driven] dispatch condition A → dispatch condition B
         → ingest → dispatch judges → finalize  ──►  benchmark.json
 teardown
 ```
 
-1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into the isolated env `iteration-N/env/` (the agent's cwd), copies fixtures in so it reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `env/`. Then it prints a handoff, not a dispatch.
-2. **Enter the isolated env.** `cd` into `iteration-N/env/`, begin a run session there, and say *Read and follow `RUNBOOK.md`*. How you enter differs by run mode (see [Run modes](#run-modes)):
-   - **Interactive (Claude Code):** start a *fresh* Claude Code session in `env/` so the staged skills are present at session start; it dispatches in-session subagents and runs the rest of the loop itself.
-   - **Hybrid (Claude Code / Codex):** an orchestrating session follows `RUNBOOK.md`, shelling out a `claude -p` / `codex exec` recipe per task.
-   - **Headless (Claude Code / Codex):** no session — a human follows the same `RUNBOOK.md`, pasting each recipe and command top to bottom.
-3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), an `agent_description` to pass through *verbatim* as the dispatch description, and the exact `run_record_path` / `timing_path`. For each task, dispatch a fresh subagent told to read the file at `dispatch_prompt_path` and follow it exactly. The `agent_description` is namespaced with the iteration and a per-run nonce (`<eval_id>:<condition>[:r<k>]:i<N>-<nonce>`; the `r<k>` segment appears only in multi-run cells, see `run --help` on `--runs`) — passing it through unchanged is what lets transcripts correlate to runs.
-4. **`switch-condition` between condition batches.** Conditions run as sequential batches, never interleaved. After joining *all* of the first batch's subagents, run `eval-magic switch-condition --condition <next>` to remove the off-condition's staged skill from `env/.claude/skills/`, so the next batch can't read it — the read-isolation barrier. When a run has more than one **isolation group** (see below), the runbook also dispatches each group as its own batch and runs `eval-magic reset-batch --group <g>` between groups — it wipes the shared `env/` working tree and re-seeds it with that group's fixtures, the per-group isolation barrier. The runbook spells out the exact `switch-condition` / `reset-batch` sequence; you never work it out yourself.
-5. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade), run from inside `env/`, assembles each task's `run.json` and `timing.json` from `dispatch.json` + the subagent's `outputs/final-message.md` + the persisted transcript, scans for stray writes, and grades the `transcript_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion.
-6. **Dispatch judges.** Same pattern as step 3: dispatch a fresh subagent for each judge task to read its prompt file and write its verdict back.
-7. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json` into `iteration-N/`, *above* `env/`. Read it. If a `--guard` marker is still live, it also reminds you to run `teardown-guard` before editing source.
-8. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
+1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one isolated env per `(group, condition)` (`iteration-N/env-<group>-<condition>/`, the cwd each dispatch runs from), copies fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. Then it prints a handoff, not a dispatch.
+2. **Follow the runbook.** From `iteration-N/`, read `RUNBOOK.md` end to end. An agent session can drive it (*Read and follow `RUNBOOK.md`*) or you can follow it by hand — the commands are identical. It carries the exact per-task dispatch recipe plus the `ingest` / `finalize` commands, each already threaded with `--harness`.
+3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. For each task, run the harness CLI recipe from its `eval_root`, pointing the dispatched subagent at `dispatch_prompt_path` to read and follow exactly, and capture the events transcript into `outputs/`. Conditions are physically isolated — the `with_skill` env holds the staged skill, the control arm's env holds none — so there is no runtime "switch" step to get wrong.
+4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json` from `dispatch.json` + the subagent's `outputs/final-message.md` + each task's events transcript, scans for stray writes, and grades the `transcript_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion.
+5. **Dispatch judges.** Same pattern as step 3: run the CLI recipe for each judge task to read its prompt file and write its verdict back.
+6. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json` into `iteration-N/`, *above* the envs. Read it. If a `--guard` marker is still live, it also reminds you to run `teardown-guard` before editing source.
+7. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
 
-The chains run in-process and stop at the first failure; re-running after a fix is safe — every sub-step skips work that's already done. The individual steps (`record-runs`, `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`) remain callable for inspection or recovery. Under the `Cli` mechanism (Claude Code hybrid/headless, Codex), the per-task dispatch recipe lives in `RUNBOOK.md` and `ingest` reads each task's events file (`claude-events.jsonl` / `codex-events.jsonl`) instead of an in-session transcript; un-wired harnesses still write records by hand until their adapters land.
+The chains run in-process and stop at the first failure; re-running after a fix is safe — every sub-step skips work that's already done. The individual steps (`record-runs`, `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`) remain callable for inspection or recovery. The per-task dispatch recipe lives in `RUNBOOK.md` and `dispatch-manifest.md`, and `ingest` reads each task's events file (`claude-events.jsonl` / `codex-events.jsonl`); un-wired harnesses still write records by hand until their adapters land.
 
 ### Isolation grouping (which agents batch together)
 
-`run` decides at **setup** time which evals can share an environment and which need their own, writes the plan into `dispatch.json` (a `groups[]` summary plus a per-task `group`/`eval_root`), and the runbook follows it — the executing session does no isolation reasoning itself. By default every eval shares one group (today's behavior, unchanged). Two things create a separate group: evals whose fixtures would clobber each other, and an eval that opts out explicitly with `"isolation": "isolated"` in `evals.json` (use it when an eval's agent *mutates* a fixture another eval reads). How groups are realized depends on the run mode:
+`run` decides at **setup** time which evals can share an environment and which need their own, writes the plan into `dispatch.json` (a `groups[]` summary plus a per-task `group`/`eval_root`), and the runbook follows it — whoever drives the loop does no isolation reasoning themselves. By default every eval shares one group. Two things create a separate group: evals whose fixtures would clobber each other, and an eval that opts out explicitly with `"isolation": "isolated"` in `evals.json` (use it when an eval's agent *mutates* a fixture another eval reads).
 
-- **Interactive (in-session):** one `env/`; groups are dispatched as sequential batches with a `reset-batch` barrier between them.
-- **Hybrid / headless (Cli):** one env per `(group, condition)` — `iteration-N/env-<group>-<condition>/` — so each subprocess `cd`s into a fully-isolated cwd. This also gives the Cli path real per-condition isolation: the control arm's env contains no skill at all.
+Each `(group, condition)` gets its own env — `iteration-N/env-<group>-<condition>/` — so every dispatch `cd`s into a fully-isolated cwd holding only that group's fixtures, plus the staged skill for the `with_skill` arm (the control arm's env holds no skill at all). This structural split *is* the per-condition read-isolation barrier — there is no runtime switch step.
 
 ## Cost & confirmation
 
 An eval run is not free: an N-case suite is **2N full agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A subagent under test runs the real skill, and some skills write to disk, so it can write outside its sandbox.
 
-If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. For CLI-dispatch harnesses, pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection; for in-session dispatch, those flags are still provenance because the runner does not choose the parent session's model. Arm `--guard` unless the user actively opts out; unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
+If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. Pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection (Codex today); otherwise they are recorded as provenance. Arm `--guard` unless the user actively opts out; unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
 
 The judgment of *whether* a change needs an eval, and how to design cases that actually measure it, lives in the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill.
 
@@ -264,53 +256,35 @@ For the `without_skill` / baseline condition, the dispatch reflects "this skill 
 
 Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record means the same thing regardless of which harness produced it. **Claude Code** and **Codex** are wired harnesses, with harness-specific fidelity notes below. The parity-audit framework for bringing another harness up to the supported feature set is in [docs/harness-parity.md](docs/harness-parity.md).
 
-### Run modes
+### How dispatch works
 
-*How* an eval gets dispatched is the primary parity axis (see [docs/harness-parity.md](docs/harness-parity.md)), distinct from *which* harness runs it. There are three run modes — pick whichever fits your account and plan:
-
-- **Headless** — you never start an agent session. You run a series of `eval-magic` commands, and every eval test and judge is dispatched through the harness's one-shot CLI (`claude -p`, `codex exec`), writing transcripts to disk. The run ends in a written report.
-- **Fully interactive** — you start an agent session and ask it to run an eval. The agent runs the `eval-magic` commands and dispatches tests and judges as **in-session subagents**, then hands you the report.
-- **Hybrid** — like interactive, but the agent guides the process and issues headless CLI dispatches (`claude -p` / `codex exec`) for some or all tests and judges — useful for working through iterations.
-
-Under the hood these three modes ride on **two dispatch mechanisms** (`DispatchMechanism` in `src/core/run_mode.rs`): *fully-interactive* dispatches **in-session** subagents, while *headless* and *hybrid* both dispatch through the **one-shot CLI** — they differ only in whether a session drives the loop, not in how a single task reaches the harness.
+Every eval test and judge is dispatched the same way: through the harness's one-shot CLI (`claude -p`, `codex exec`), one subprocess per task, each `cd`'d into its `(group, condition)` env and writing its events transcript to disk. `run` prepares the envs and `RUNBOOK.md`; from there an **agent session** can drive the loop (reading the runbook and shelling out each recipe) or a **human** can follow the same runbook by hand.
 
 Support today:
 
-| Harness | Headless | Fully interactive | Hybrid |
-|---------|:--------:|:-----------------:|:------:|
+| Harness | CLI dispatch | Transcript ingest | `--guard` |
+|---------|:------------:|:-----------------:|:---------:|
 | **Claude Code** | ✅ | ✅ | ✅ |
-| **Codex** | ✅ | ❔ likely N/A¹ | ✅ |
-| **OpenCode** | ❌ | ❌ | ❌² |
+| **Codex** | ✅ | ✅ | ✅ |
+| **OpenCode** | ⚠️ partial¹ | ❌ | ❌ |
 
-¹ Codex dispatches via subprocess (`codex exec`), not in-session subagents, so a "fully interactive" Codex mode may not translate. ² OpenCode foundational harness support is wired: `--harness opencode` stages skills under `.opencode/skills/` and emits native dispatch prompts. Transcript ingest, auto-record, and `--guard` are pending.
+¹ OpenCode has foundational harness support: `--harness opencode` stages skills under `.opencode/skills/` and emits native dispatch prompts, but eval-magic does not yet drive OpenCode dispatches or ingest their transcripts.
 
-**Cost and billing.** Mode choice has billing consequences:
+### Claude Code
 
-- **Claude Code, fully interactive** (Task-tool subagents) — billed under normal interactive session usage/limits (your subscription's interactive pool, or your API key).
-- **Claude Code, headless / hybrid** (`claude -p`) — same token-based pricing, but on **subscription plans, starting June 15 2026**, `claude -p` (Agent SDK) usage draws from a **separate monthly Agent SDK credit pool**, distinct from interactive limits. Headless JSON output exposes `total_cost_usd` per invocation, so the runner can record per-task cost — something the in-session Task-tool path can't easily capture.
-- **Codex, hybrid** (`codex exec`) — billed under your Codex usage.
+The run loop above *is* the Claude Code loop: each eval test and judge is dispatched through the `claude -p` one-shot CLI. `eval-magic run` only *prepares* the isolated envs (`.eval-magic/<skill>/iteration-N/env-<group>-<condition>/`) and writes `RUNBOOK.md` into `iteration-N/`, then prints a handoff. An agent session can drive the runbook (*Read and follow RUNBOOK.md*), or you can follow it by hand — either way each task shells out the same `claude -p` recipe, and `ingest` → `finalize` assemble `benchmark.json`. These are the Claude-Code-specific details:
 
-**Intended end state:** all three modes first-class on Claude Code and Codex (where the mode translates) — reached as of this release; OpenCode wired as a third harness remains. Progress is tracked in [GitHub issues](https://github.com/slowdini/eval-magic/issues).
+**Isolating from installed plugins.** Read this first if the skill you're evaluating shares a name with one an installed, enabled plugin provides. Each `claude -p` dispatch loads *your* user/global plugins and the global skills dir from its Claude config — the staging slug avoids an on-disk collision but does not stop the installed copy from being discoverable, contaminating both arms (the `without_skill` arm is then not truly skill-absent). The runner can only *detect and warn* (the plugin-shadow banner). To actually isolate, constrain the config each `claude -p` dispatch loads, one of these ways:
 
-### Claude Code (fully wired)
+- **Drop user-scope plugins, keep auth:** add `--setting-sources project,local` to the dispatch. User-scope `enabledPlugins` isn't loaded; auth is unaffected.
+- **Disable the specific plugin:** set `"enabledPlugins": { "<plugin>@<marketplace>": false }` in a settings source the dispatch loads.
+- **Clean config dir (strips everything):** run each dispatch under `CLAUDE_CONFIG_DIR="$(mktemp -d)"`. No installed plugins or global skills load at all. Auth caveat: OAuth lives in `~/.claude.json`, which a relocated config dir may not carry — set `ANTHROPIC_API_KEY` or re-authenticate once in the fresh dir.
 
-The run loop above *is* the Claude Code loop. By default this is the **fully-interactive** run mode (see [Run modes](#run-modes)) — subagents are dispatched in-session via the Task tool; the **hybrid** and **headless** (`claude -p`) modes are now wired too (pass `--run-mode hybrid` or `--run-mode headless`, see below). `eval-magic run` itself only *prepares* the isolated env (`.eval-magic/<skill>/iteration-N/env/`) and writes `RUNBOOK.md` into it, then prints a handoff: `cd` into `env/`, start a **fresh** Claude Code session there, and say *Read and follow RUNBOOK.md*. That fresh session — clean cwd, staged skills present at session start — drives the whole dispatch → switch-condition → ingest → finalize loop and writes `benchmark.json`, which the prep session resumes on. These are the Claude-Code-specific details:
+Project-local staged skills live in each env at `.claude/skills/`, independent of installed plugins, so they still load and the meta-check still resolves the slug under all three.
 
-**Isolating from installed plugins.** Read this first if the skill you're evaluating shares a name with one an installed, enabled plugin provides. Subagents are dispatched via the **Task tool**, so they inherit *this session's* enabled plugins — the staging slug avoids an on-disk collision but does not stop the installed copy from being discoverable, contaminating both arms (the `without_skill` arm is then not truly skill-absent). Plugins load at session start and can't be unloaded mid-session, so the runner only *detects and warns* (the plugin-shadow banner). The isolated env gives a clean *cwd* but does not unload user/global plugins, so this still applies. To actually isolate, launch the **fresh session you start in `env/`** one of these ways — subagents inherit it:
+**Discovery is structural.** Claude Code discovers the project-local skills present in the dispatch's cwd. Because `eval-magic run` builds each env's `.claude/skills/` *before* the dispatch runs, the staged skills are present from the start — there is no mid-session staging hazard. `--no-stage` remains for harnesses without project-local skill discovery: each `SKILL.md` is inlined into its dispatch prompt instead of staged. Regardless, run `detect-stray-writes` (folded into `ingest`) before trusting a result.
 
-- **Drop user-scope plugins, keep auth:** `claude --setting-sources project,local`. User-scope `enabledPlugins` isn't loaded; auth is unaffected.
-- **Disable the specific plugin, then restart:** set `"enabledPlugins": { "<plugin>@<marketplace>": false }` in a settings source that loads at startup, and start a fresh session.
-- **Clean config dir (strips everything):** `CLAUDE_CONFIG_DIR="$(mktemp -d)" claude`. No installed plugins or global skills load at all. Auth caveat: OAuth lives in `~/.claude.json`, which a relocated config dir may not carry — set `ANTHROPIC_API_KEY` or re-authenticate once in the fresh dir.
-
-Project-local staged skills live in the isolated env at `env/.claude/skills/`, independent of installed plugins, so they still load and the meta-check still resolves the slug under all three.
-
-**Discovery is structural now.** Claude Code only watches skill directories that existed when the session started. Because `eval-magic run` builds `env/.claude/skills/` *before* you start the fresh session in `env/`, the staged skills are present at session start and discovered normally — there is no mid-session staging, so the old "did the dir exist when your session started?" hazard (and the build-time warning it once printed) no longer applies. `--no-stage` remains for harnesses without project-local skill discovery: each `SKILL.md` is inlined into its dispatch prompt instead of staged. Regardless, run `detect-stray-writes` (folded into `ingest`) before trusting a result.
-
-**Where transcripts live.** Claude Code persists subagent transcripts under `~/.claude/projects/<project-slug>/<parent-session-id>/subagents/`. `ingest` auto-resolves this from the `CLAUDE_CODE_SESSION_ID` the orchestrating session exports (deriving `<project-slug>` from the cwd and scanning `projects/*` if needed), so you normally don't pass `--subagents-dir` at all. When running outside that session — or to target a past session — pass `--session-id <id>`, or override the lookup entirely with `--subagents-dir <path>`. Besides out-of-bounds writes, `detect-stray-writes` also flags **live-source reads**: an arm whose subagent read the live skill source instead of its staged copy. That usually means the Skill tool couldn't resolve the staged slug yet and the agent improvised — fatal in revision mode, where the `old_skill` arm then sees new-skill content. Treat a flagged cell's arm as contaminated.
-
-**Dispatching via the Task tool.** `dispatch.json` is a top-level object (`{ skill_name, iteration, run_nonce, …, tasks: [...] }`); iterate `tasks[]`. For each task, dispatch a fresh subagent via the Task tool with the prompt `Read the file at <dispatch_prompt_path> and follow its instructions exactly.` (substituting the task's `dispatch_prompt_path`), and pass `agent_description` *verbatim* as the description — it's namespaced `<eval_id>:<condition>:i<N>-<nonce>`, and passing it unchanged is what lets transcript correlation work. (The Task tool documents `description` as "short", but pass the full string regardless — correlation depends on the exact value.) You do **not** write `run.json`/`timing.json` yourself; the subagent writes `outputs/final-message.md`, and `ingest` (`record-runs`) assembles both records from disk. For a plan-mode-relevant skill, add `--plan-mode` to inject the shared plan-mode procedure as a `<system-reminder>` operating-context layer.
-
-**Hybrid mode (`--run-mode hybrid`).** Pass `--run-mode hybrid` to dispatch each task through the `claude -p` one-shot CLI instead of in-session subagents — the same shape as Codex's hybrid flow, where an agent session orchestrates while each test/judge shells out to the CLI. `run` then prints (and `dispatch-manifest.md` / `RUNBOOK.md` carry) a `claude -p` recipe per task:
+**Dispatching via `claude -p`.** `dispatch.json` is a top-level object (`{ skill_name, iteration, run_nonce, …, tasks: [...] }`); iterate `tasks[]`. `run` prints (and `dispatch-manifest.md` / `RUNBOOK.md` carry) a `claude -p` recipe per task:
 
 ```bash
 cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
@@ -320,13 +294,15 @@ cd <eval-root> && claude -p --output-format stream-json --verbose --permission-m
   2> <outputs_dir>/claude-stderr.log
 ```
 
-Three details differ from Codex's `codex exec`: `--output-format stream-json` **requires `--verbose`** in `-p` mode; `claude` has **no `--cd` flag**, so each dispatch must run from the env dir (`cd <eval-root> &&`) — staged-skill discovery is cwd-relative, so getting this wrong makes the `with_skill` arm behave like `without_skill`; and there is **no `--output-last-message`**, so the final message is recovered from the stream-json `result` event rather than a file. Detach stdin with `</dev/null` so a permission prompt can't block on a TTY. Then `eval-magic ingest --harness claude-code --run-mode hybrid` reads each task's `outputs/claude-events.jsonl` (the `-p` stream-json transcript) to populate `tool_invocations`, tokens, duration, and the final message. `--run-mode` is recorded in `conditions.json`; pass it to each post-dispatch command (the printed next-step commands already carry it). `--guard` works under hybrid and headless too: the `PreToolUse` hook is staged in `env/.claude/settings.local.json`, and because each `claude -p` dispatch runs from `env/` (`cd <eval-root>`), it loads and enforces the hook exactly as an interactive session would (the recipe never passes `--bare`, which would skip hook discovery). A deny aborts the offending dispatch; `detect-stray-writes` (folded into `ingest`) remains the after-the-fact backstop.
+Three details differ from Codex's `codex exec`: `--output-format stream-json` **requires `--verbose`** in `-p` mode; `claude` has **no `--cd` flag**, so each dispatch must run from its env dir (`cd <eval-root> &&`) — staged-skill discovery is cwd-relative, so getting this wrong makes the `with_skill` arm behave like `without_skill`; and there is **no `--output-last-message`**, so the final message is recovered from the stream-json `result` event rather than a file. Detach stdin with `</dev/null` so a permission prompt can't block on a TTY. You do **not** write `run.json`/`timing.json` yourself; `eval-magic ingest --harness claude-code` reads each task's `outputs/claude-events.jsonl` (the `-p` stream-json transcript) to populate `tool_invocations`, tokens, duration, and the final message. For a plan-mode-relevant skill, add `--plan-mode` to inject the shared plan-mode procedure as a `<system-reminder>` operating-context layer.
 
-**Headless mode (`--run-mode headless`).** The same `claude -p` dispatch as hybrid, but no agent session drives the loop — you (a human) paste each `eval-magic` command and the `claude -p` recipe yourself, ending in a written `benchmark.json`. `run` writes the same human-followed `RUNBOOK.md` (the shared headless template) into `env/`; work from that directory and copy-paste top to bottom: dispatch the tests → `ingest` → dispatch the judges → `finalize` → read the result → `teardown`. Pass `--run-mode headless` to every command of the run (the printed next steps and the runbook already carry it). `--guard` behaves exactly as it does under hybrid.
+Besides out-of-bounds writes, `detect-stray-writes` also flags **live-source reads**: an arm whose subagent read the live skill source instead of its staged copy. That usually means the Skill tool couldn't resolve the staged slug and the agent improvised — fatal in revision mode, where the `old_skill` arm then sees new-skill content. Treat a flagged cell's arm as contaminated.
+
+**Write guard.** `--guard` stages a `PreToolUse` hook in each env's `.claude/settings.local.json`; because every `claude -p` dispatch runs from its env (`cd <eval-root>`), it loads and enforces the hook (the recipe never passes `--bare`, which would skip hook discovery). A deny aborts the offending dispatch; `detect-stray-writes` (folded into `ingest`) remains the after-the-fact backstop.
 
 ### Codex
 
-Codex's `codex --ask-for-approval never exec --json` flow powers both CLI run modes (see [Run modes](#run-modes)): **hybrid** — an agent session orchestrates while each dispatch shells out to the CLI — and **headless** (`--run-mode headless`), where eval-magic drives the whole loop with no session, writing the same human-followed `RUNBOOK.md`. A **fully-interactive** mode likely doesn't translate, since Codex dispatches via subprocess rather than in-session subagents.
+Codex dispatches each task through the `codex --ask-for-approval never exec --json` one-shot CLI — the same single dispatch path as Claude Code (see [How dispatch works](#how-dispatch-works)). An agent session can drive the runbook, or you can follow it by hand; either way each test and judge shells out the same `codex exec` recipe.
 
 Pass `--harness codex`: skills stage under repo-local `.agents/skills/` (the staged skill-under-test's frontmatter `name:` is rewritten to the eval slug so Codex's repo-local discovery sees it), and `conditions.json` / `dispatch.json` record `"harness": "codex"`. Dispatch each task with a fresh `codex --ask-for-approval never exec --json` execution, capturing the event stream:
 

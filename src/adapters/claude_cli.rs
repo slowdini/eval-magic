@@ -1,5 +1,4 @@
-//! Claude Code `claude -p` command rendering for dispatch guidance
-//! (hybrid / headless run modes).
+//! Claude Code `claude -p` command rendering for CLI dispatch guidance.
 //!
 //! Differences from the Codex recipe, all forced by the `claude` CLI:
 //! `--output-format stream-json` requires `--verbose` in `-p` mode; there is no
