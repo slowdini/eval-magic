@@ -4,9 +4,10 @@
 
 `eval-magic` is a Rust CLI crate. The binary entry point is `src/main.rs`; reusable logic lives in
 `src/lib.rs` and submodules such as `cli/`, `pipeline/`, `sandbox/`, `validation/`, and
-`workspace/`. JSON schemas are tracked in `schema/`, harness profiles in `profiles/`, and design or
-parity notes in `docs/`. Integration tests are split by surface area under `tests/cli/` and
-`tests/run/`; unit tests usually live beside the module they exercise.
+`workspace/`. JSON schemas are tracked in `schema/`, harness profiles in `profiles/`, and
+development docs (the harness enhancement contract, per-harness notes) in `docs/`. Integration
+tests are split by surface area under `tests/cli/` and `tests/run/`; unit tests usually live
+beside the module they exercise.
 
 ## Build, Test, and Development Commands
 

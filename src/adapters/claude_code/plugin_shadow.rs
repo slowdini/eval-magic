@@ -14,7 +14,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-const ISOLATION_DOC: &str = "README.md → Claude Code → \"Isolating from installed plugins\"";
+const ISOLATION_DOC: &str = "docs/claude-notes.md → \"Isolating from installed plugins\"";
 
 /// A staged skill that is also discoverable from the live environment.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -241,9 +241,23 @@ pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
         "  skill-absent. The runner cannot strip an installed plugin from the dispatch."
             .to_string(),
     );
-    lines.push(format!(
-        "  Isolate each dispatch's Claude config — see {ISOLATION_DOC}."
-    ));
+    lines.push("  Isolate each dispatch's Claude config, one of these ways:".to_string());
+    lines.push(
+        "  1. Drop user-scope plugins, keep auth: add `--setting-sources project,local`"
+            .to_string(),
+    );
+    lines.push("     to each dispatch.".to_string());
+    lines.push(
+        "  2. Disable the specific plugin: set `\"enabledPlugins\": { \"<plugin>@<marketplace>\":"
+            .to_string(),
+    );
+    lines.push("     false }` in a settings source the dispatch loads.".to_string());
+    lines.push("  3. Clean config dir (strips everything): run each dispatch under".to_string());
+    lines.push(
+        "     `CLAUDE_CONFIG_DIR=\"$(mktemp -d)\"` — auth may need `ANTHROPIC_API_KEY`."
+            .to_string(),
+    );
+    lines.push(format!("  Full mechanics: {ISOLATION_DOC}."));
     lines.join("\n")
 }
 
@@ -467,5 +481,39 @@ mod tests {
         assert!(banner.contains("verification-before-completion"));
         assert!(banner.contains("slow-powers@slowdini"));
         assert!(banner.to_lowercase().contains("isolat"));
+    }
+
+    #[test]
+    fn banner_carries_the_three_isolation_recipes_inline() {
+        // The remediation options live in the banner itself — shown exactly when
+        // the contamination is detected — not in a README section the operator
+        // has to go find.
+        let banner = format_shadow_banner(&sample_report());
+        assert!(
+            banner.contains("--setting-sources project,local"),
+            "banner names the setting-sources option: {banner}"
+        );
+        assert!(
+            banner.contains("enabledPlugins"),
+            "banner names the per-plugin disable option: {banner}"
+        );
+        assert!(
+            banner.contains("CLAUDE_CONFIG_DIR"),
+            "banner names the clean-config-dir option: {banner}"
+        );
+        assert!(
+            banner.contains("docs/claude-notes.md"),
+            "banner points at the harness dev notes for the full mechanics: {banner}"
+        );
+    }
+
+    #[test]
+    fn validity_warnings_point_at_a_doc_that_exists() {
+        let warnings = shadow_validity_warnings(&sample_report());
+        assert!(
+            warnings[0].contains("docs/claude-notes.md"),
+            "warning points at the harness dev notes: {}",
+            warnings[0]
+        );
     }
 }
