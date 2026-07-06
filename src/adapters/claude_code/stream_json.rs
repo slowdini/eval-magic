@@ -4,7 +4,7 @@
 //! --output-format stream-json --verbose` writes (captured per task as
 //! `outputs/claude-events.jsonl`). The `assistant`/`user` events wrap a full
 //! Anthropic Messages object under `message`, so tool-call extraction is shared
-//! with the [`claude_code_transcript`](super::claude_code_transcript) record
+//! with the [`transcript`](super::transcript) record
 //! types. The differences are all in the envelope: there are no per-line
 //! timestamps, and a terminal `result` event carries the authoritative final
 //! text, wall-clock duration, and token usage. `system`, `rate_limit_event`, and
@@ -17,8 +17,9 @@ use std::path::Path;
 
 use crate::core::ToolInvocation;
 
-use super::TranscriptSummary;
-use super::claude_code_transcript::{
+use crate::adapters::TranscriptSummary;
+
+use super::transcript::{
     TranscriptRecord, UsageRecord, extract_invocations, last_assistant_text, read_records,
 };
 

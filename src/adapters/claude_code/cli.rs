@@ -8,7 +8,7 @@
 //! written to a file. `</dev/null` detaches stdin so a permission prompt cannot
 //! block on a TTY and piped task data cannot become extra prompt context.
 
-use super::cli_command::render_cli_model_arg;
+use crate::adapters::cli_command::render_cli_model_arg;
 use std::path::Path;
 
 /// Copy/pasteable Claude Code dispatch command template.

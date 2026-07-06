@@ -6,7 +6,9 @@
 //! transcript is parsed, where staged skills live, and which native hook the
 //! write guard installs. Generic code resolves an adapter with [`adapter_for`]
 //! and then calls the trait — so [`adapter_for`] is the one place that names a
-//! concrete harness for this surface.
+//! concrete harness for this surface. The impls live in the per-harness
+//! modules ([`claude_code`](super::claude_code), [`codex`](super::codex),
+//! [`opencode`](super::opencode)).
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -15,17 +17,6 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, Harness, ToolInvocation};
 
 use super::TranscriptSummary;
-use super::claude_cli::{
-    claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
-};
-use super::codex_cli::{
-    codex_exec_command_template, codex_judge_dispatch_recipe, codex_parallel_dispatch_recipe,
-};
-use super::{
-    parse_claude_stream_json, parse_claude_stream_json_full, parse_codex_events,
-    parse_codex_events_full, render_available_skills_block, render_codex_available_skills_block,
-    render_opencode_available_skills_block,
-};
 
 /// The behavior that varies by harness. Generic dispatch code depends on this
 /// trait, never on a concrete harness variant.
@@ -137,10 +128,6 @@ pub trait HarnessAdapter {
 /// regardless of harness (Claude Code, Codex, OpenCode).
 pub const RUNBOOK_TEMPLATE: &str = include_str!("../../profiles/shared/runbook.md");
 
-pub struct ClaudeCodeAdapter;
-pub struct CodexAdapter;
-pub struct OpenCodeAdapter;
-
 /// Context for rendering a harness's one-shot CLI agent-dispatch guidance.
 #[derive(Debug, Clone, Copy)]
 pub struct CliDispatchContext<'a> {
@@ -164,243 +151,14 @@ pub struct CliJudgeContext<'a> {
     pub iteration_dir: &'a Path,
 }
 
-impl HarnessAdapter for ClaudeCodeAdapter {
-    fn label(&self) -> &'static str {
-        "claude-code"
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".claude").join("skills")
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        false
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        false
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "via the Skill tool"
-    }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If the Skill tool cannot resolve that identifier"
-    }
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        Some("claude-events.jsonl")
-    }
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        Some("--model")
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness claude-code`.",
-            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        Some(vec![
-            "After all dispatches (Claude Code):".to_string(),
-            String::new(),
-            "Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Parallel dispatch from this iteration directory:".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            claude_parallel_dispatch_recipe(self.cli_model_flag(), ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
-            String::new(),
-        ])
-    }
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
-        Some(claude_judge_dispatch_recipe(
-            self.cli_model_flag(),
-            ctx.iteration_dir,
-        ))
-    }
-    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_claude_stream_json(path)
-    }
-    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_claude_stream_json_full(path)
-    }
-    fn install_guard(
-        &self,
-        stage_root: &Path,
-        guard_exe: &Path,
-        ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        crate::sandbox::install::install_claude_guard(stage_root, guard_exe, ttl)
-    }
-    fn guard_armed_message(&self) -> Option<&'static str> {
-        Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   Each `claude -p` dispatch loads the hook from the env cwd it runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
-        )
-    }
-}
-
-impl HarnessAdapter for CodexAdapter {
-    fn label(&self) -> &'static str {
-        "codex"
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".agents").join("skills")
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        true
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        true
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_codex_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as a Codex skill"
-    }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If it does not load as a Codex skill"
-    }
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        Some("codex-events.jsonl")
-    }
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        Some("-m")
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
-            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        Some(vec![
-            "After all dispatches (Codex):".to_string(),
-            String::new(),
-            "Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Parallel dispatch from this iteration directory:".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            codex_parallel_dispatch_recipe(self.cli_model_flag(), ctx.guard, ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
-            String::new(),
-        ])
-    }
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
-        Some(codex_judge_dispatch_recipe(
-            self.cli_model_flag(),
-            ctx.guard,
-            ctx.iteration_dir,
-        ))
-    }
-    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_codex_events(path)
-    }
-    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_codex_events_full(path)
-    }
-    fn install_guard(
-        &self,
-        stage_root: &Path,
-        guard_exe: &Path,
-        ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        crate::sandbox::install::install_codex_guard(stage_root, guard_exe, ttl)
-    }
-    fn guard_armed_message(&self) -> Option<&'static str> {
-        Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
-        )
-    }
-}
-
-impl HarnessAdapter for OpenCodeAdapter {
-    fn label(&self) -> &'static str {
-        "opencode"
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".opencode").join("skills")
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        true
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        false
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_opencode_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as an OpenCode skill"
-    }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If it does not load as an OpenCode skill"
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        let model_note = if ctx.agent_model.is_some() {
-            " Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet."
-        } else {
-            ""
-        };
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`.{model_note} OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`.",
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    // OpenCode transcript ingest is not yet wired: its `cli_events_filename` is
-    // `None`, so the ingest pipeline never reaches these parsers. They error
-    // rather than parse until OpenCode ingest lands.
-    fn parse_cli_events(&self, _path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "opencode transcript ingest is not yet wired",
-        ))
-    }
-    fn parse_cli_events_full(&self, _path: &Path) -> io::Result<TranscriptSummary> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "opencode transcript ingest is not yet wired",
-        ))
-    }
-    fn install_guard(
-        &self,
-        _stage_root: &Path,
-        _guard_exe: &Path,
-        _ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "--guard is not yet supported for the opencode harness",
-        ))
-    }
-}
-
 /// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
 /// the harness variant for all harness-specific behavior; every other module
 /// goes through the returned trait object.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
     match harness {
-        Harness::ClaudeCode => &ClaudeCodeAdapter,
-        Harness::Codex => &CodexAdapter,
-        Harness::OpenCode => &OpenCodeAdapter,
+        Harness::ClaudeCode => &super::claude_code::ClaudeCodeAdapter,
+        Harness::Codex => &super::codex::CodexAdapter,
+        Harness::OpenCode => &super::opencode::OpenCodeAdapter,
     }
 }
 
@@ -441,18 +199,11 @@ mod tests {
 
     #[test]
     fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
-        for h in [Harness::ClaudeCode, Harness::Codex, Harness::OpenCode] {
+        for h in Harness::ALL {
             let out = adapter_for(h).render_plan_mode_context("BODY");
             assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
             assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
         }
-    }
-
-    #[test]
-    fn claude_adapter_advertises_cli_events_file_and_model_flag() {
-        let a = adapter_for(Harness::ClaudeCode);
-        assert_eq!(a.cli_events_filename(), Some("claude-events.jsonl"));
-        assert_eq!(a.cli_model_flag(), Some("--model"));
     }
 
     #[test]
@@ -478,45 +229,5 @@ mod tests {
         // OpenCode has no write guard (its install_guard errors), so there is no
         // banner to print.
         assert_eq!(adapter_for(Harness::OpenCode).guard_armed_message(), None);
-    }
-
-    #[test]
-    fn claude_parse_cli_events_full_reads_stream_json_result_event() {
-        use serde_json::json;
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("claude-events.jsonl");
-        // No per-line timestamps; the result event is the only source of duration.
-        let lines = [
-            json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [
-                {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
-            ]}}),
-            json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 5637, "usage": {"input_tokens": 1, "output_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}),
-        ];
-        let body = lines
-            .iter()
-            .map(|l| l.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&path, format!("{body}\n")).unwrap();
-
-        let a = adapter_for(Harness::ClaudeCode);
-        let summary = a.parse_cli_events_full(&path).unwrap();
-        assert_eq!(summary.final_text, Some("Done".into()));
-        assert_eq!(summary.duration_ms, Some(5637));
-        assert_eq!(summary.tool_invocations.len(), 1);
-        assert_eq!(summary.tool_invocations[0].name, "Bash");
-    }
-
-    #[test]
-    fn codex_parse_cli_events_delegates_to_events_parser() {
-        use serde_json::json;
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("codex-events.jsonl");
-        let line = json!({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bun test", "output": "ok"}});
-        std::fs::write(&path, format!("{line}\n")).unwrap();
-
-        let inv = adapter_for(Harness::Codex).parse_cli_events(&path).unwrap();
-        assert_eq!(inv.len(), 1);
-        assert_eq!(inv[0].name, "command_execution");
     }
 }

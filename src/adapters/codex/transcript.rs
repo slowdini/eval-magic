@@ -6,7 +6,7 @@
 //! [`TranscriptSummary`] shape as the Claude adapter, but with Codex's token
 //! accounting (excludes cached input tokens).
 
-use crate::adapters::claude_code_transcript::TranscriptSummary;
+use crate::adapters::TranscriptSummary;
 use crate::core::ToolInvocation;
 use serde_json::{Map, Value};
 use std::fs;

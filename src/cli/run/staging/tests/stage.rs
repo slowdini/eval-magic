@@ -209,27 +209,8 @@ fn codex_stage_name_override_is_dir_and_frontmatter_name() {
 }
 
 // ── stage_skill_for_harness (opencode) ────────────────────────────────
-
-#[test]
-fn opencode_slug_sanitizes_underscores_and_special_characters() {
-    assert_eq!(
-        opencode_slug(1, "with_skill", "My_Skill!"),
-        "slow-powers-eval-1-with-skill-my-skill"
-    );
-    assert_eq!(
-        opencode_slug(2, "without_skill", "snake_case"),
-        "slow-powers-eval-2-without-skill-snake-case"
-    );
-}
-
-#[test]
-fn opencode_slug_truncates_to_valid_max_length() {
-    let very_long = "a".repeat(200);
-    let slug = opencode_slug(1, "with_skill", &very_long);
-    assert!(slug.len() <= 64);
-    assert!(is_valid_opencode_name(&slug));
-    assert!(slug.starts_with("slow-powers-eval-1-with-skill-"));
-}
+// The opencode slug/naming unit tests live with the slug functions in
+// `crate::adapters::opencode`.
 
 #[test]
 fn opencode_stages_under_opencode_skills_and_rewrites_frontmatter_name() {
