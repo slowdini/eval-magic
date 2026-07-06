@@ -14,7 +14,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::core::{AvailableSkill, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
 use super::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter};
@@ -32,6 +32,16 @@ impl HarnessAdapter for CodexAdapter {
     }
     fn skills_dir(&self, repo_root: &Path) -> PathBuf {
         repo_root.join(".agents").join("skills")
+    }
+    fn run_capabilities(&self) -> HarnessRunCapabilities {
+        HarnessRunCapabilities {
+            supports_guard: true,
+            supports_bootstrap_with_no_stage: false,
+            supports_stage_name_with_no_stage: false,
+        }
+    }
+    fn config_dir_names(&self) -> &'static [&'static str] {
+        &[".agents", ".codex"]
     }
     fn rewrites_frontmatter_name(&self) -> bool {
         true
@@ -95,6 +105,11 @@ impl HarnessAdapter for CodexAdapter {
     fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
         parse_codex_events_full(path)
     }
+    // Codex's JSONL exposes no deterministic skill-tool event, so the
+    // `__skill_invoked` meta-check uses the LLM-judge fallback.
+    fn transcript_surfaces_skill_invocation(&self) -> bool {
+        false
+    }
     fn install_guard(
         &self,
         stage_root: &Path,
@@ -102,6 +117,9 @@ impl HarnessAdapter for CodexAdapter {
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf> {
         guard::install_guard(stage_root, guard_exe, ttl)
+    }
+    fn guard_hook_cleanup_dir(&self, stage_root: &Path) -> Option<PathBuf> {
+        Some(guard::hook_cleanup_dir(stage_root))
     }
     fn guard_armed_message(&self) -> Option<&'static str> {
         Some(

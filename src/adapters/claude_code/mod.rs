@@ -17,7 +17,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::core::{AvailableSkill, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
 use super::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter};
@@ -36,11 +36,15 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     fn skills_dir(&self, repo_root: &Path) -> PathBuf {
         repo_root.join(".claude").join("skills")
     }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        false
+    fn run_capabilities(&self) -> HarnessRunCapabilities {
+        HarnessRunCapabilities {
+            supports_guard: true,
+            supports_bootstrap_with_no_stage: true,
+            supports_stage_name_with_no_stage: true,
+        }
     }
-    fn advertises_staged_slug_name(&self) -> bool {
-        false
+    fn config_dir_names(&self) -> &'static [&'static str] {
+        &[".claude"]
     }
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
         render_available_skills_block(skills)

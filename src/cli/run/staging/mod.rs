@@ -111,6 +111,17 @@ pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> Path
     adapter_for(harness).skills_dir(repo_root)
 }
 
+/// True when `name` is any harness's project-local config dir (`.claude`,
+/// `.agents`, …). Staging excludes every harness's config dirs when copying a
+/// skill's sibling assets — regardless of the active harness — so a checked-in
+/// config dir never rides into a staged env.
+fn is_harness_config_dir(name: &str) -> bool {
+    Harness::ALL
+        .iter()
+        .flat_map(|&h| adapter_for(h).config_dir_names())
+        .any(|&dir| dir == name)
+}
+
 /// Rewrite (or insert) the `name:` frontmatter field so a Codex-staged skill's
 /// declared name matches its staged slug.
 fn rewrite_frontmatter_name(content: &str, name: &str) -> String {
@@ -142,35 +153,25 @@ fn prune_if_empty(dir: &Path) -> Result<(), RunError> {
     Ok(())
 }
 
-/// Stage one skill under the harness's skills dir and return its slug. For Codex
-/// and OpenCode the frontmatter `name:` is rewritten to the slug.
+/// Stage one skill under the harness's skills dir and return its slug. For
+/// harnesses whose adapter opts in, the frontmatter `name:` is rewritten to the
+/// slug.
 pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError> {
+    let adapter = adapter_for(opts.harness);
     let slug = match opts.stage_name_override {
         Some(name) => name.to_string(),
-        None => match opts.harness {
-            Harness::OpenCode => crate::adapters::opencode::opencode_slug(
-                STAGED_SKILL_PREFIX,
-                opts.iteration,
-                opts.condition,
-                opts.skill_name,
-            ),
-            _ => format!(
-                "{STAGED_SKILL_PREFIX}{}-{}__{}",
-                opts.iteration, opts.condition, opts.skill_name
-            ),
-        },
+        None => adapter.staged_slug(
+            STAGED_SKILL_PREFIX,
+            opts.iteration,
+            opts.condition,
+            opts.skill_name,
+        ),
     };
-    if opts.harness == Harness::OpenCode
-        && !crate::adapters::opencode::is_valid_opencode_name(&slug)
-    {
-        return Err(RunError::msg(format!(
-            "OpenCode skill name \"{slug}\" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens"
-        )));
-    }
+    adapter.validate_stage_name(&slug).map_err(RunError::msg)?;
     let skill_dir = skills_dir_for_harness(opts.repo_root, opts.harness).join(&slug);
     fs::create_dir_all(&skill_dir)?;
 
-    let content = if adapter_for(opts.harness).rewrites_frontmatter_name() {
+    let content = if adapter.rewrites_frontmatter_name() {
         rewrite_frontmatter_name(opts.content, &slug)
     } else {
         opts.content.to_string()
@@ -183,17 +184,12 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
         for entry in fs::read_dir(assets_dir)? {
             let entry = entry?;
             let name = entry.file_name();
+            let name_str = name.to_string_lossy();
             if matches!(
-                name.to_string_lossy().as_ref(),
-                "SKILL.md"
-                    | "evals"
-                    | SNAPSHOT_META
-                    | ".eval-magic"
-                    | ".claude"
-                    | ".agents"
-                    | ".codex"
-                    | ".opencode"
-            ) {
+                name_str.as_ref(),
+                "SKILL.md" | "evals" | SNAPSHOT_META | ".eval-magic"
+            ) || is_harness_config_dir(name_str.as_ref())
+            {
                 continue;
             }
             copy_entry(&assets_dir.join(&name), &skill_dir.join(&name))?;

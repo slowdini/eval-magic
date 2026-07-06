@@ -209,8 +209,6 @@ fn codex_stage_name_override_is_dir_and_frontmatter_name() {
 }
 
 // ── stage_skill_for_harness (opencode) ────────────────────────────────
-// The opencode slug/naming unit tests live with the slug functions in
-// `crate::adapters::opencode`.
 
 #[test]
 fn opencode_stages_under_opencode_skills_and_rewrites_frontmatter_name() {

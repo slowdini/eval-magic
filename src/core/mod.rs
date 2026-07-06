@@ -13,7 +13,7 @@ pub mod context;
 pub mod runtime;
 pub mod types;
 
-pub use capabilities::{HarnessRunCapabilities, capabilities_for};
+pub use capabilities::HarnessRunCapabilities;
 pub use context::{ContextError, DetectInput, Harness, RunContext, detect_run_context};
 pub use runtime::{GitOutput, run_git};
 pub use types::*;

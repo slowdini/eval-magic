@@ -131,10 +131,12 @@ pub(crate) fn write_manifest(
 pub fn teardown_guard(stage_root: &Path) -> bool {
     let mut torn = false;
     for harness in Harness::ALL {
-        let skills_dir = crate::adapters::adapter_for(harness).skills_dir(stage_root);
-        torn |= teardown_guard_from_skills_dir(&skills_dir);
+        let adapter = crate::adapters::adapter_for(harness);
+        torn |= teardown_guard_from_skills_dir(&adapter.skills_dir(stage_root));
+        if let Some(hook_dir) = adapter.guard_hook_cleanup_dir(stage_root) {
+            let _ = prune_if_empty(&hook_dir);
+        }
     }
-    let _ = prune_if_empty(&crate::adapters::codex::guard::hook_cleanup_dir(stage_root));
     torn
 }
 
