@@ -362,6 +362,10 @@ mod tests {
             let out = adapter_for(h).render_plan_mode_context("BODY");
             assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
             assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
+            assert_eq!(
+                adapter_for(h).render_plan_mode_context("\n\n  BODY  \n\n"),
+                "<system-reminder>\nBODY\n</system-reminder>"
+            );
         }
     }
 

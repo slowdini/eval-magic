@@ -28,17 +28,6 @@ pub fn render_opencode_available_skills_block(skills: &[AvailableSkill]) -> Stri
     out
 }
 
-/// Render an OpenCode plan-mode profile as an operating-context reminder. The
-/// real OpenCode plan agent is a primary agent mode, not text, so this is the
-/// portable approximation: a `<system-reminder>` the dispatch reads.
-pub fn render_opencode_plan_mode_context(profile_text: &str) -> String {
-    let trimmed = profile_text.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-    format!("<system-reminder>\n{trimmed}\n</system-reminder>")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,26 +65,5 @@ mod tests {
     #[test]
     fn empty_list_renders_empty_string() {
         assert_eq!(render_opencode_available_skills_block(&[]), "");
-    }
-
-    #[test]
-    fn plan_mode_wraps_in_system_reminder() {
-        let block = render_opencode_plan_mode_context("OpenCode plan mode is active.");
-        assert_eq!(
-            block,
-            "<system-reminder>\nOpenCode plan mode is active.\n</system-reminder>"
-        );
-    }
-
-    #[test]
-    fn plan_mode_trims_surrounding_whitespace() {
-        let block = render_opencode_plan_mode_context("\n\n  PROFILE-BODY  \n\n");
-        assert_eq!(block, "<system-reminder>\nPROFILE-BODY\n</system-reminder>");
-    }
-
-    #[test]
-    fn plan_mode_empty_or_whitespace_renders_empty_string() {
-        assert_eq!(render_opencode_plan_mode_context(""), "");
-        assert_eq!(render_opencode_plan_mode_context("   \n  "), "");
     }
 }

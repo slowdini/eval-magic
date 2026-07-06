@@ -79,7 +79,7 @@ impl HarnessAdapter for OpenCodeAdapter {
 /// - 1–64 characters
 /// - lowercase alphanumeric with single-hyphen separators
 /// - no leading/trailing/consecutive hyphens
-pub(crate) fn is_valid_opencode_name(name: &str) -> bool {
+fn is_valid_opencode_name(name: &str) -> bool {
     if name.is_empty() || name.len() > 64 {
         return false;
     }
@@ -131,12 +131,7 @@ fn sanitize_opencode_name(name: &str) -> String {
 /// Build a slug that is valid for OpenCode's skill directory + frontmatter name
 /// constraints. `prefix` is the conspicuous staged-skill prefix, preserved so
 /// cleanup prefix-scans still find it.
-pub(crate) fn opencode_slug(
-    prefix: &str,
-    iteration: u32,
-    condition: &str,
-    skill_name: &str,
-) -> String {
+fn opencode_slug(prefix: &str, iteration: u32, condition: &str, skill_name: &str) -> String {
     let condition = sanitize_opencode_name(condition);
     let skill = sanitize_opencode_name(skill_name);
     let base = format!("{prefix}{iteration}-{condition}-{skill}");
