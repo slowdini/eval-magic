@@ -8,7 +8,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::adapter_for;
-use crate::core::{Harness, Mode, RunContext, capabilities_for};
+use crate::core::{Harness, Mode, RunContext};
 
 use super::RunError;
 use super::orchestrate::RunOptions;
@@ -68,7 +68,7 @@ pub(crate) fn validate_harness_run_options(
     opts: &RunOptions,
     ctx: &RunContext,
 ) -> Result<(), RunError> {
-    let capabilities = capabilities_for(ctx.harness);
+    let capabilities = adapter_for(ctx.harness).run_capabilities();
     let mut unsupported: Vec<&str> = Vec::new();
     if opts.guard && !capabilities.supports_guard {
         unsupported.push("--guard");

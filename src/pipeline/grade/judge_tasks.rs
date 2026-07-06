@@ -13,7 +13,7 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::core::{Assertion, Harness, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
+use crate::core::{Assertion, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
 use crate::pipeline::slots::run_slots;
@@ -223,7 +223,13 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
             )
         })
         .collect();
-    let code_check_available = ctx.conditions.harness != Some(Harness::Codex);
+    // The deterministic `__skill_invoked` code check needs a transcript that
+    // exposes a skill-invocation event; harnesses without one (per their
+    // adapter) fall back to the LLM judge.
+    let code_check_available = ctx
+        .conditions
+        .harness
+        .is_none_or(|h| crate::adapters::adapter_for(h).transcript_surfaces_skill_invocation());
     let default_judge_model = ctx.conditions.judge_model.clone();
 
     let mut tasks: Vec<JudgeTask> = Vec::new();

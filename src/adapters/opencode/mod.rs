@@ -3,17 +3,14 @@
 //! Everything OpenCode-specific lives in this module tree: the adapter impl and
 //! slug/naming rules (this file) and the `<available_skills>` XML block
 //! ([`session`]). Transcript ingest, the model flag, and the write guard are
-//! not wired yet; the adapter's error stubs say so.
+//! not wired yet; the trait's enhancement defaults cover them.
 
 pub mod session;
 
-use std::io;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
-use crate::core::{AvailableSkill, ToolInvocation};
+use crate::core::AvailableSkill;
 
-use super::TranscriptSummary;
 use super::harness::{CliDispatchContext, HarnessAdapter};
 use session::render_opencode_available_skills_block;
 
@@ -26,11 +23,31 @@ impl HarnessAdapter for OpenCodeAdapter {
     fn skills_dir(&self, repo_root: &Path) -> PathBuf {
         repo_root.join(".opencode").join("skills")
     }
+    fn config_dir_names(&self) -> &'static [&'static str] {
+        &[".opencode"]
+    }
+    // OpenCode's constrained naming rules need a sanitized slug; the generated
+    // slug and any --stage-name override are validated against the same rules.
+    fn staged_slug(
+        &self,
+        prefix: &str,
+        iteration: u32,
+        condition: &str,
+        skill_name: &str,
+    ) -> String {
+        opencode_slug(prefix, iteration, condition, skill_name)
+    }
+    fn validate_stage_name(&self, name: &str) -> Result<(), String> {
+        if is_valid_opencode_name(name) {
+            Ok(())
+        } else {
+            Err(format!(
+                "OpenCode skill name \"{name}\" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens"
+            ))
+        }
+    }
     fn rewrites_frontmatter_name(&self) -> bool {
         true
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        false
     }
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
         render_opencode_available_skills_block(skills)
@@ -53,32 +70,9 @@ impl HarnessAdapter for OpenCodeAdapter {
             iteration = ctx.iteration
         )
     }
-    // OpenCode transcript ingest is not yet wired: its `cli_events_filename` is
-    // `None`, so the ingest pipeline never reaches these parsers. They error
-    // rather than parse until OpenCode ingest lands.
-    fn parse_cli_events(&self, _path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "opencode transcript ingest is not yet wired",
-        ))
-    }
-    fn parse_cli_events_full(&self, _path: &Path) -> io::Result<TranscriptSummary> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "opencode transcript ingest is not yet wired",
-        ))
-    }
-    fn install_guard(
-        &self,
-        _stage_root: &Path,
-        _guard_exe: &Path,
-        _ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "--guard is not yet supported for the opencode harness",
-        ))
-    }
+    // Transcript ingest, the model flag, and the write guard are not wired for
+    // OpenCode: the trait's enhancement defaults (unsupported-errors and
+    // `None`s) apply as-is.
 }
 
 /// True when `name` satisfies OpenCode's skill-name rules:
