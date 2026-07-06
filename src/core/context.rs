@@ -23,6 +23,12 @@ pub enum Harness {
     OpenCode,
 }
 
+impl Harness {
+    /// Every supported harness, for code that must sweep all of them (e.g.
+    /// guard teardown scans each harness's skills dir for a marker).
+    pub const ALL: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness::OpenCode];
+}
+
 /// The resolved environment for a run: validated skill location, sibling skills,
 /// workspace/stage roots, optional bootstrap file, and the target harness. Built
 /// by [`detect_run_context`]; held in memory and never (de)serialized.

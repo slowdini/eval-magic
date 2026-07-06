@@ -1,6 +1,6 @@
 //! Codex CLI command rendering (`codex exec`) for dispatch guidance.
 
-use super::cli_command::render_cli_model_arg;
+use crate::adapters::cli_command::render_cli_model_arg;
 use std::path::Path;
 
 /// Copy/pasteable Codex dispatch command template. Stdin is detached so a

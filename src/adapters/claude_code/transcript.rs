@@ -3,11 +3,12 @@
 //! Defines the JSONL record shapes and the shared extractors — ordered
 //! [`ToolInvocation`]s (matching `tool_result` blocks back to their `tool_use` by
 //! id) and the last assistant text — reused by the `claude -p` stream-json parser
-//! ([`claude_stream_json`](super::claude_stream_json)), plus the
-//! [`TranscriptSummary`] the pipeline consumes.
+//! ([`stream_json`](super::stream_json)). The harness-neutral
+//! [`TranscriptSummary`](crate::adapters::TranscriptSummary) the pipeline
+//! consumes lives in `crate::adapters::transcript`.
 
 use crate::core::ToolInvocation;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -161,19 +162,6 @@ pub(crate) fn last_assistant_text(records: &[TranscriptRecord]) -> Option<String
         }
     }
     final_text
-}
-
-/// A transcript boiled down to the artifacts the pipeline needs.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TranscriptSummary {
-    pub tool_invocations: Vec<ToolInvocation>,
-    /// Total token usage (input + output + cache creation/read), as reported by
-    /// the run's terminal `result` event.
-    pub total_tokens: Option<i64>,
-    /// Wall-clock duration, as reported by the run's terminal `result` event.
-    pub duration_ms: Option<i64>,
-    /// Concatenated text blocks of the last assistant message.
-    pub final_text: Option<String>,
 }
 
 #[cfg(test)]
