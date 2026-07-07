@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::adapters::all_config_dir_names;
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
@@ -142,9 +143,10 @@ fn is_trailing_boundary(b: u8) -> bool {
 }
 
 /// True if `command` references `rel` as a bare path token — bounded as a path
-/// segment and **not** prefixed by a `.claude`/`.agents` staging dir. The
-/// `regex` crate has no lookbehind, so each occurrence is scanned directly for
-/// the boundary + preceding-segment conditions.
+/// segment and **not** prefixed by any harness config dir
+/// (`adapters::all_config_dir_names`). The `regex` crate has no lookbehind, so
+/// each occurrence is scanned directly for the boundary + preceding-segment
+/// conditions.
 fn references_bare_rel(command: &str, rel: &str) -> bool {
     if rel.is_empty() {
         return false;
@@ -160,7 +162,9 @@ fn references_bare_rel(command: &str, rel: &str) -> bool {
         // including) that char must not end with a staging-dir prefix.
         let lookbehind_ok = start == 0 || {
             let before = &command[..start - 1];
-            !before.ends_with(".claude") && !before.ends_with(".agents")
+            !all_config_dir_names()
+                .iter()
+                .any(|dir| before.ends_with(dir))
         };
         let trailing_ok = end == command.len() || is_trailing_boundary(bytes[end]);
 
@@ -582,7 +586,22 @@ mod tests {
             repo(),
         );
         assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains(".claude"));
+        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
+    }
+
+    #[test]
+    fn creating_a_path_under_dot_codex_is_a_warning() {
+        let f = detect_stray_writes(
+            &[inv(
+                "Bash",
+                json!({"command": "cp evil.json .codex/hooks.json"}),
+                0,
+            )],
+            OUTPUTS,
+            repo(),
+        );
+        assert_eq!(f.warnings.len(), 1);
+        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
     }
 
     #[test]
@@ -734,6 +753,20 @@ mod tests {
             &[inv(
                 "Bash",
                 json!({"command": "cat .agents/skills/mr-review/SKILL.md"}),
+                0,
+            )],
+            live(),
+            repo(),
+        );
+        assert!(f.is_empty());
+    }
+
+    #[test]
+    fn a_bash_referencing_a_staged_copy_under_dot_opencode_skills_is_not_flagged() {
+        let f = detect_live_source_reads(
+            &[inv(
+                "Bash",
+                json!({"command": "cat .opencode/skills/mr-review/SKILL.md"}),
                 0,
             )],
             live(),

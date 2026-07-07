@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::adapter_for;
+use crate::adapters::{adapter_for, all_config_dir_names};
 use crate::core::Harness;
 use crate::pipeline::io::now_iso8601;
 use crate::workspace::SNAPSHOT_META;
@@ -116,10 +116,7 @@ pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> Path
 /// skill's sibling assets — regardless of the active harness — so a checked-in
 /// config dir never rides into a staged env.
 fn is_harness_config_dir(name: &str) -> bool {
-    Harness::ALL
-        .iter()
-        .flat_map(|&h| adapter_for(h).config_dir_names())
-        .any(|&dir| dir == name)
+    all_config_dir_names().contains(&name)
 }
 
 /// Rewrite (or insert) the `name:` frontmatter field so a Codex-staged skill's

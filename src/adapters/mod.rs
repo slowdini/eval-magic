@@ -16,7 +16,7 @@ pub mod transcript;
 
 pub use harness::{
     CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
-    adapter_for,
+    adapter_for, all_config_dir_names,
 };
 pub use transcript::TranscriptSummary;
 

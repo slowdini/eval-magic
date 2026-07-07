@@ -27,43 +27,53 @@ pub fn is_write_tool(tool_name: &str) -> bool {
 /// Compiled once. The patterns are known-valid, so a compile failure here is a
 /// programmer error and panics.
 static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    let config_dirs = crate::adapters::all_config_dir_names()
+        .iter()
+        .map(|d| regex::escape(d))
+        .collect::<Vec<_>>()
+        .join("|");
     [
         (
-            r"\b(npm|pnpm|yarn|bun)\s+(install|add|ci|i)\b",
+            r"\b(npm|pnpm|yarn|bun)\s+(install|add|ci|i)\b".to_string(),
             "package install/add",
         ),
-        (r"\bpip3?\s+install\b", "pip install"),
-        (r"\bsed\s+-i\b", "in-place file edit (sed -i)"),
+        (r"\bpip3?\s+install\b".to_string(), "pip install"),
+        (r"\bsed\s+-i\b".to_string(), "in-place file edit (sed -i)"),
         (
-            r"\bgit\s+(commit|add|push|checkout|reset|restore|merge|rebase)\b",
+            r"\bgit\s+(commit|add|push|checkout|reset|restore|merge|rebase)\b".to_string(),
             "git mutation",
         ),
         (
-            r"\bgit\s+worktree\s+add\b",
+            r"\bgit\s+worktree\s+add\b".to_string(),
             "git worktree add (working tree outside the sandbox)",
         ),
-        // A create/copy/move/link verb whose operand is a path under `.claude` —
-        // catches stray writes to the harness config dir that aren't a `>`
-        // redirect (caught below). Read-only verbs (`cat`, `ls`) aren't listed,
-        // so inspecting `.claude` stays allowed.
+        // A create/copy/move/link verb whose operand is a path under any
+        // harness config dir (`adapters::all_config_dir_names`) — catches
+        // stray writes to a config dir that aren't a `>` redirect (caught
+        // below). Read-only verbs (`cat`, `ls`) aren't listed, so inspecting
+        // the dirs stays allowed.
         (
-            r"\b(cp|mv|mkdir|touch|ln|rsync|install)\b[^|;&\n]*\.claude(/|\b)",
-            "path under .claude",
+            format!(r"\b(cp|mv|mkdir|touch|ln|rsync|install)\b[^|;&\n]*({config_dirs})(/|\b)"),
+            "path under a harness config dir",
         ),
         // The same create verbs whose operand is a top-level `skills/` directory —
         // catches a bare `skills/` left in the cwd. `skills-data` and other
         // `skills`-prefixed names are excluded by the trailing `/`, whitespace, or
         // end-of-string boundary.
         (
-            r#"\b(cp|mv|mkdir|touch|ln|rsync)\b[^|;&\n]*[\s'"=/]\.{0,2}/?skills(/|\s|$)"#,
+            r#"\b(cp|mv|mkdir|touch|ln|rsync)\b[^|;&\n]*[\s'"=/]\.{0,2}/?skills(/|\s|$)"#
+                .to_string(),
             "creates a bare skills/ dir",
         ),
-        (r"(^|\s)(>>?|tee)\s", "output redirection to a file"),
+        (
+            r"(^|\s)(>>?|tee)\s".to_string(),
+            "output redirection to a file",
+        ),
     ]
     .into_iter()
     .map(|(re, reason)| {
         (
-            Regex::new(re)
+            Regex::new(&re)
                 .unwrap_or_else(|e| panic!("bundled bash pattern {re:?} is invalid: {e}")),
             reason,
         )
@@ -281,6 +291,28 @@ mod tests {
             classify_bash("echo hi > out.log", &roots()),
             Some("output redirection to a file")
         );
+    }
+
+    #[test]
+    fn classify_bash_flags_creates_under_every_harness_config_dir_but_allows_reads() {
+        for dir in crate::adapters::all_config_dir_names() {
+            assert_eq!(
+                classify_bash(&format!("mkdir -p {dir}/x"), &[]),
+                Some("path under a harness config dir"),
+                "mkdir under {dir} should be flagged"
+            );
+            assert_eq!(
+                classify_bash(&format!("cp evil.json {dir}/hooks.json"), &[]),
+                Some("path under a harness config dir"),
+                "cp into {dir} should be flagged"
+            );
+            assert_eq!(
+                classify_bash(&format!("cat {dir}/settings.json"), &[]),
+                None,
+                "read of {dir} should stay allowed"
+            );
+            assert_eq!(classify_bash(&format!("ls {dir}"), &[]), None);
+        }
     }
 
     #[test]
