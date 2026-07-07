@@ -24,6 +24,7 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::core::{AvailableSkill, Harness, HarnessRunCapabilities, ToolInvocation};
@@ -64,7 +65,10 @@ pub trait HarnessAdapter {
     /// The project-local config dir names this harness reads or the adapter
     /// writes (e.g. `.claude`). Staging excludes every harness's config dirs
     /// when copying a skill's sibling assets, so a stray checked-in config dir
-    /// never rides into a staged env. List the parent of
+    /// never rides into a staged env. Via [`all_config_dir_names`] this list
+    /// also feeds the guard's Bash tamper rule and detect-stray-writes'
+    /// staging-dir lookbehind, so adding a dir here automatically grows the
+    /// write-guard's deny surface. List the parent of
     /// [`skills_dir`](Self::skills_dir) plus any hook/config dirs the adapter
     /// writes.
     fn config_dir_names(&self) -> &'static [&'static str] {
@@ -321,9 +325,35 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
     }
 }
 
+/// The union of every harness's project-local config dir names (sorted,
+/// deduplicated): the dirs harness-agnostic code must treat as protected —
+/// staging's sibling-asset filter, the guard's Bash tamper rule, and
+/// detect-stray-writes' staging-dir lookbehind.
+pub fn all_config_dir_names() -> &'static [&'static str] {
+    static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
+        let mut names: Vec<&'static str> = Harness::ALL
+            .iter()
+            .flat_map(|&h| adapter_for(h).config_dir_names())
+            .copied()
+            .collect();
+        names.sort_unstable();
+        names.dedup();
+        names
+    });
+    &NAMES
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn all_config_dir_names_unions_every_adapter() {
+        assert_eq!(
+            all_config_dir_names(),
+            [".agents", ".claude", ".codex", ".opencode"]
+        );
+    }
 
     #[test]
     fn labels_match_kebab_case_identifiers() {

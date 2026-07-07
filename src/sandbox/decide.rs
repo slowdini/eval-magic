@@ -363,6 +363,81 @@ mod tests {
     }
 
     #[test]
+    fn denies_bash_that_creates_a_path_under_dot_codex_via_non_redirect_verb() {
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "mkdir -p .codex/foo" }),
+                Some(&marker())
+            )
+            .allow
+        );
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "cp evil.json .codex/hooks.json" }),
+                Some(&marker())
+            )
+            .allow
+        );
+    }
+
+    #[test]
+    fn denies_bash_that_creates_a_path_under_dot_agents_via_non_redirect_verb() {
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "mkdir -p .agents/foo" }),
+                Some(&marker())
+            )
+            .allow
+        );
+    }
+
+    #[test]
+    fn denies_bash_that_creates_a_path_under_dot_opencode_via_non_redirect_verb() {
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "touch .opencode/opencode.json" }),
+                Some(&marker())
+            )
+            .allow
+        );
+    }
+
+    #[test]
+    fn still_allows_reads_of_other_harness_config_dirs_with_no_create_verb() {
+        for command in [
+            "cat .codex/hooks.json",
+            "ls .agents",
+            "cat .opencode/skills/x/SKILL.md",
+        ] {
+            assert!(
+                decide_now("Bash", json!({ "command": command }), Some(&marker())).allow,
+                "{command} should stay allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_a_create_scoped_to_a_codex_skills_staging_root() {
+        let codex_marker = GuardMarker {
+            allowed_roots: Some(vec![
+                "/work/.eval-magic".to_string(),
+                "/work/.agents/skills".to_string(),
+            ]),
+            ..marker()
+        };
+        let d = decide_now(
+            "Bash",
+            json!({ "command": "mkdir -p /work/.agents/skills/staged-x" }),
+            Some(&codex_marker),
+        );
+        assert!(d.allow);
+    }
+
+    #[test]
     fn does_not_flag_a_skills_prefixed_dir_as_a_bare_skills_write() {
         // A `skills`-prefixed path that is NOT an allowed root: the bare-`skills/`
         // heuristic only fires on a bare `skills` at a path boundary, so a
