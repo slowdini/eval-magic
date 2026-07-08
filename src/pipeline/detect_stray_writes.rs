@@ -143,11 +143,11 @@ fn is_trailing_boundary(b: u8) -> bool {
 }
 
 /// True if `command` references `rel` as a bare path token — bounded as a path
-/// segment and **not** prefixed by any harness config dir
-/// (`adapters::all_config_dir_names`). The `regex` crate has no lookbehind, so
-/// each occurrence is scanned directly for the boundary + preceding-segment
-/// conditions.
-fn references_bare_rel(command: &str, rel: &str) -> bool {
+/// segment and **not** prefixed by any harness config dir (`config_dirs`, the
+/// caller-supplied `adapters::all_config_dir_names()` list). The `regex` crate
+/// has no lookbehind, so each occurrence is scanned directly for the boundary +
+/// preceding-segment conditions.
+fn references_bare_rel(command: &str, rel: &str, config_dirs: &[String]) -> bool {
     if rel.is_empty() {
         return false;
     }
@@ -162,9 +162,7 @@ fn references_bare_rel(command: &str, rel: &str) -> bool {
         // including) that char must not end with a staging-dir prefix.
         let lookbehind_ok = start == 0 || {
             let before = &command[..start - 1];
-            !all_config_dir_names()
-                .iter()
-                .any(|dir| before.ends_with(dir))
+            !config_dirs.iter().any(|dir| before.ends_with(dir.as_str()))
         };
         let trailing_ok = end == command.len() || is_trailing_boundary(bytes[end]);
 
@@ -189,6 +187,7 @@ pub fn detect_live_source_reads(
     let live_dir_str = live_dir.to_string_lossy();
     let rel = path_relative(repo_root, &live_dir);
     let rel_usable = !rel.starts_with("..");
+    let config_dirs = all_config_dir_names();
 
     for inv in invocations {
         if READ_TOOLS.contains(&inv.name.as_str()) {
@@ -209,7 +208,7 @@ pub fn detect_live_source_reads(
         if SHELL_TOOLS.contains(&inv.name.as_str()) {
             let command = command_of(inv);
             if command.contains(live_dir_str.as_ref())
-                || (rel_usable && references_bare_rel(command, &rel))
+                || (rel_usable && references_bare_rel(command, &rel, &config_dirs))
             {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),

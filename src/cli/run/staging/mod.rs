@@ -116,7 +116,7 @@ pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> Path
 /// skill's sibling assets — regardless of the active harness — so a checked-in
 /// config dir never rides into a staged env.
 fn is_harness_config_dir(name: &str) -> bool {
-    all_config_dir_names().contains(&name)
+    all_config_dir_names().iter().any(|d| d == name)
 }
 
 /// Rewrite (or insert) the `name:` frontmatter field so a Codex-staged skill's

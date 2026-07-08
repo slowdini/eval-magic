@@ -30,8 +30,8 @@ use stream_json::{parse_claude_stream_json, parse_claude_stream_json_full};
 pub struct ClaudeCodeAdapter;
 
 impl HarnessAdapter for ClaudeCodeAdapter {
-    fn label(&self) -> &'static str {
-        "claude-code"
+    fn label(&self) -> String {
+        "claude-code".to_string()
     }
     fn skills_dir(&self, repo_root: &Path) -> PathBuf {
         repo_root.join(".claude").join("skills")
@@ -43,28 +43,28 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             supports_stage_name_with_no_stage: true,
         }
     }
-    fn config_dir_names(&self) -> &'static [&'static str] {
-        &[".claude"]
+    fn config_dir_names(&self) -> Vec<String> {
+        vec![".claude".to_string()]
     }
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
         render_available_skills_block(skills)
     }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "via the Skill tool"
+    fn skill_surface_phrase(&self) -> String {
+        "via the Skill tool".to_string()
     }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If the Skill tool cannot resolve that identifier"
+    fn skill_unresolved_phrase(&self) -> String {
+        "If the Skill tool cannot resolve that identifier".to_string()
     }
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        Some("claude-events.jsonl")
+    fn cli_events_filename(&self) -> Option<String> {
+        Some("claude-events.jsonl".to_string())
     }
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        Some("--model")
+    fn cli_model_flag(&self) -> Option<String> {
+        Some("--model".to_string())
     }
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         format!(
             "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness claude-code`.",
-            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
+            claude_exec_command_template(self.cli_model_flag().as_deref(), ctx.agent_model),
             target_args = ctx.target_args,
             iteration = ctx.iteration
         )
@@ -76,13 +76,13 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             "Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.".to_string(),
             String::new(),
             "```bash".to_string(),
-            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
+            claude_exec_command_template(self.cli_model_flag().as_deref(), ctx.agent_model),
             "```".to_string(),
             String::new(),
             "Parallel dispatch from this iteration directory:".to_string(),
             String::new(),
             "```bash".to_string(),
-            claude_parallel_dispatch_recipe(self.cli_model_flag(), ctx.agent_model),
+            claude_parallel_dispatch_recipe(self.cli_model_flag().as_deref(), ctx.agent_model),
             "```".to_string(),
             String::new(),
             "Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
@@ -91,7 +91,7 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
     fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
         Some(claude_judge_dispatch_recipe(
-            self.cli_model_flag(),
+            self.cli_model_flag().as_deref(),
             ctx.iteration_dir,
         ))
     }
@@ -109,9 +109,10 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     ) -> io::Result<PathBuf> {
         guard::install_guard(stage_root, guard_exe, ttl)
     }
-    fn guard_armed_message(&self) -> Option<&'static str> {
+    fn guard_armed_message(&self) -> Option<String> {
         Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   Each `claude -p` dispatch loads the hook from the env cwd it runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
+            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   Each `claude -p` dispatch loads the hook from the env cwd it runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard"
+                .to_string(),
         )
     }
 }
@@ -124,8 +125,11 @@ mod tests {
     #[test]
     fn claude_adapter_advertises_cli_events_file_and_model_flag() {
         let a = adapter_for(Harness::ClaudeCode);
-        assert_eq!(a.cli_events_filename(), Some("claude-events.jsonl"));
-        assert_eq!(a.cli_model_flag(), Some("--model"));
+        assert_eq!(
+            a.cli_events_filename().as_deref(),
+            Some("claude-events.jsonl")
+        );
+        assert_eq!(a.cli_model_flag().as_deref(), Some("--model"));
     }
 
     #[test]

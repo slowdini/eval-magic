@@ -78,7 +78,7 @@ impl RecordRunsResult {
         };
         let file = adapter_for(harness)
             .cli_events_filename()
-            .unwrap_or("the events file");
+            .unwrap_or_else(|| "the events file".to_string());
         let cause = format!("expected `outputs/{file}` was not found");
         Some(format!(
             "{lead} — {cause}; tool_invocations/tokens/duration are empty, so transcript_check \

@@ -97,7 +97,7 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         ctx.target_args, ctx.iteration
     );
     let teardown_cmd = format!("eval-magic teardown{} --harness {label}", ctx.target_args);
-    vars.push(("HARNESS", label));
+    vars.push(("HARNESS", &label));
     vars.push(("DISPATCH_RECIPE", &dispatch_recipe));
     vars.push(("JUDGE_RECIPE", &judge_recipe));
     vars.push(("FINALIZE_CMD", &finalize_cmd));

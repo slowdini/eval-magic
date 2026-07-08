@@ -24,7 +24,6 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::core::{AvailableSkill, Harness, HarnessRunCapabilities, ToolInvocation};
@@ -39,7 +38,7 @@ pub trait HarnessAdapter {
 
     /// **Baseline.** The kebab-case identifier used in CLI flags,
     /// `dispatch.json`, and the staged `conditions.json`.
-    fn label(&self) -> &'static str;
+    fn label(&self) -> String;
 
     /// **Baseline.** The project-local directory staged skills live under for
     /// this harness. Under `--no-stage` nothing is staged into it, so a
@@ -71,8 +70,8 @@ pub trait HarnessAdapter {
     /// write-guard's deny surface. List the parent of
     /// [`skills_dir`](Self::skills_dir) plus any hook/config dirs the adapter
     /// writes.
-    fn config_dir_names(&self) -> &'static [&'static str] {
-        &[]
+    fn config_dir_names(&self) -> Vec<String> {
+        Vec::new()
     }
 
     // ── Enhancement: native skill staging (defaulted) ────────────────────────
@@ -138,15 +137,15 @@ pub trait HarnessAdapter {
     /// **Enhancement: native staging.** How a staged skill is described as
     /// discoverable in the neutral slug-disambiguation line (e.g. "via the
     /// Skill tool").
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as a discoverable skill"
+    fn skill_surface_phrase(&self) -> String {
+        "as a discoverable skill".to_string()
     }
 
     /// **Enhancement: native staging.** The lead-in for the fallback "read the
     /// skill from `<path>`" instruction when the staged identifier can't be
     /// resolved.
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If the staged skill cannot be resolved"
+    fn skill_unresolved_phrase(&self) -> String {
+        "If the staged skill cannot be resolved".to_string()
     }
 
     // ── Enhancement: transcript parser (defaulted) ───────────────────────────
@@ -159,7 +158,7 @@ pub trait HarnessAdapter {
     /// `outputs/` dir) this harness's one-shot CLI writes the captured
     /// transcript to. `None` when no transcript ingest is wired — the ingest
     /// pipeline then never calls the parsers below.
-    fn cli_events_filename(&self) -> Option<&'static str> {
+    fn cli_events_filename(&self) -> Option<String> {
         None
     }
 
@@ -204,7 +203,7 @@ pub trait HarnessAdapter {
     /// **Enhancement: model flag.** The native model-selection flag accepted
     /// by this harness's CLI. `None` means no model-selection support is
     /// wired.
-    fn cli_model_flag(&self) -> Option<&'static str> {
+    fn cli_model_flag(&self) -> Option<String> {
         None
     }
 
@@ -234,7 +233,7 @@ pub trait HarnessAdapter {
     /// to remove it. `None` for a harness with no write guard (its
     /// [`install_guard`](Self::install_guard) errors), in which case no banner
     /// is printed.
-    fn guard_armed_message(&self) -> Option<&'static str> {
+    fn guard_armed_message(&self) -> Option<String> {
         None
     }
 
@@ -329,18 +328,14 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
 /// deduplicated): the dirs harness-agnostic code must treat as protected —
 /// staging's sibling-asset filter, the guard's Bash tamper rule, and
 /// detect-stray-writes' staging-dir lookbehind.
-pub fn all_config_dir_names() -> &'static [&'static str] {
-    static NAMES: LazyLock<Vec<&'static str>> = LazyLock::new(|| {
-        let mut names: Vec<&'static str> = Harness::ALL
-            .iter()
-            .flat_map(|&h| adapter_for(h).config_dir_names())
-            .copied()
-            .collect();
-        names.sort_unstable();
-        names.dedup();
-        names
-    });
-    &NAMES
+pub fn all_config_dir_names() -> Vec<String> {
+    let mut names: Vec<String> = Harness::ALL
+        .iter()
+        .flat_map(|&h| adapter_for(h).config_dir_names())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
 }
 
 #[cfg(test)]
@@ -496,7 +491,7 @@ mod tests {
                 .to_string_lossy()
                 .into_owned();
             assert!(
-                a.config_dir_names().contains(&top.as_str()),
+                a.config_dir_names().contains(&top),
                 "{} config_dir_names {:?} misses {top}",
                 a.label(),
                 a.config_dir_names()
