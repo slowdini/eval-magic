@@ -17,14 +17,14 @@ use session::render_opencode_available_skills_block;
 pub struct OpenCodeAdapter;
 
 impl HarnessAdapter for OpenCodeAdapter {
-    fn label(&self) -> &'static str {
-        "opencode"
+    fn label(&self) -> String {
+        "opencode".to_string()
     }
     fn skills_dir(&self, repo_root: &Path) -> PathBuf {
         repo_root.join(".opencode").join("skills")
     }
-    fn config_dir_names(&self) -> &'static [&'static str] {
-        &[".opencode"]
+    fn config_dir_names(&self) -> Vec<String> {
+        vec![".opencode".to_string()]
     }
     // OpenCode's constrained naming rules need a sanitized slug; the generated
     // slug and any --stage-name override are validated against the same rules.
@@ -52,11 +52,11 @@ impl HarnessAdapter for OpenCodeAdapter {
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
         render_opencode_available_skills_block(skills)
     }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as an OpenCode skill"
+    fn skill_surface_phrase(&self) -> String {
+        "as an OpenCode skill".to_string()
     }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If it does not load as an OpenCode skill"
+    fn skill_unresolved_phrase(&self) -> String {
+        "If it does not load as an OpenCode skill".to_string()
     }
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         let model_note = if ctx.agent_model.is_some() {

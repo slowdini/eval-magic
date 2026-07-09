@@ -130,7 +130,7 @@ pub(crate) fn mode_str(mode: Mode) -> &'static str {
     }
 }
 
-pub(crate) fn harness_label(harness: Harness) -> &'static str {
+pub(crate) fn harness_label(harness: Harness) -> String {
     adapter_for(harness).label()
 }
 

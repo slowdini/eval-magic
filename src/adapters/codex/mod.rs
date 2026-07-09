@@ -27,8 +27,8 @@ use transcript::{parse_codex_events, parse_codex_events_full};
 pub struct CodexAdapter;
 
 impl HarnessAdapter for CodexAdapter {
-    fn label(&self) -> &'static str {
-        "codex"
+    fn label(&self) -> String {
+        "codex".to_string()
     }
     fn skills_dir(&self, repo_root: &Path) -> PathBuf {
         repo_root.join(".agents").join("skills")
@@ -40,8 +40,8 @@ impl HarnessAdapter for CodexAdapter {
             supports_stage_name_with_no_stage: false,
         }
     }
-    fn config_dir_names(&self) -> &'static [&'static str] {
-        &[".agents", ".codex"]
+    fn config_dir_names(&self) -> Vec<String> {
+        vec![".agents".to_string(), ".codex".to_string()]
     }
     fn rewrites_frontmatter_name(&self) -> bool {
         true
@@ -52,22 +52,26 @@ impl HarnessAdapter for CodexAdapter {
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
         render_codex_available_skills_block(skills)
     }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as a Codex skill"
+    fn skill_surface_phrase(&self) -> String {
+        "as a Codex skill".to_string()
     }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If it does not load as a Codex skill"
+    fn skill_unresolved_phrase(&self) -> String {
+        "If it does not load as a Codex skill".to_string()
     }
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        Some("codex-events.jsonl")
+    fn cli_events_filename(&self) -> Option<String> {
+        Some("codex-events.jsonl".to_string())
     }
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        Some("-m")
+    fn cli_model_flag(&self) -> Option<String> {
+        Some("-m".to_string())
     }
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         format!(
             "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
-            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
+            codex_exec_command_template(
+                self.cli_model_flag().as_deref(),
+                ctx.guard,
+                ctx.agent_model
+            ),
             target_args = ctx.target_args,
             iteration = ctx.iteration
         )
@@ -79,13 +83,13 @@ impl HarnessAdapter for CodexAdapter {
             "Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
             String::new(),
             "```bash".to_string(),
-            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
+            codex_exec_command_template(self.cli_model_flag().as_deref(), ctx.guard, ctx.agent_model),
             "```".to_string(),
             String::new(),
             "Parallel dispatch from this iteration directory:".to_string(),
             String::new(),
             "```bash".to_string(),
-            codex_parallel_dispatch_recipe(self.cli_model_flag(), ctx.guard, ctx.agent_model),
+            codex_parallel_dispatch_recipe(self.cli_model_flag().as_deref(), ctx.guard, ctx.agent_model),
             "```".to_string(),
             String::new(),
             "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
@@ -94,7 +98,7 @@ impl HarnessAdapter for CodexAdapter {
     }
     fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
         Some(codex_judge_dispatch_recipe(
-            self.cli_model_flag(),
+            self.cli_model_flag().as_deref(),
             ctx.guard,
             ctx.iteration_dir,
         ))
@@ -121,9 +125,10 @@ impl HarnessAdapter for CodexAdapter {
     fn guard_hook_cleanup_dir(&self, stage_root: &Path) -> Option<PathBuf> {
         Some(guard::hook_cleanup_dir(stage_root))
     }
-    fn guard_armed_message(&self) -> Option<&'static str> {
+    fn guard_armed_message(&self) -> Option<String> {
         Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
+            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard"
+                .to_string(),
         )
     }
 }
