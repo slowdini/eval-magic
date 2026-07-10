@@ -1,0 +1,10 @@
+<available_skills>
+  <skill>
+    <name>aux-helper</name>
+    <description>Assists with auxiliary chores.</description>
+  </skill>
+  <skill>
+    <name>widget-skill</name>
+    <description>Builds widgets the house way.</description>
+  </skill>
+</available_skills>

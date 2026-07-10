@@ -1,0 +1,2 @@
+# Golden fixtures are byte-exact — never EOL-normalize them.
+tests/golden/** -text
