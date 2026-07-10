@@ -468,13 +468,9 @@ mod tests {
         assert_eq!(vocab.read_tools, ["Glob", "Grep", "Read"]);
     }
 
-    // The old cross-method invariant tests (guard/banner lockstep, hook-matcher
-    // ⊆ vocabulary, transcript ⇒ stray-writes vocabulary, role disjointness,
-    // slug ↔ naming rules, config-dirs ⊇ skills-dir parent) now run at
-    // descriptor load time — see `descriptor::validate_descriptor` and its
-    // per-invariant rejection tests. The registry's LazyLock panics on any
-    // violation, and `descriptor::tests::embedded_descriptors_load_and_validate`
-    // keeps that on the CI path. What stays here are the per-value pins.
+    // Cross-method invariants (guard/banner lockstep, hook-matcher ⊆
+    // vocabulary, slug ↔ naming rules, …) are enforced at descriptor load
+    // time in `descriptor::validation`; only per-value pins live here.
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {

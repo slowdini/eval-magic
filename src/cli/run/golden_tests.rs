@@ -1,9 +1,9 @@
 //! Golden-fixture tests pinning the generated harness artifacts byte-for-byte.
 //!
 //! Every fixture under `tests/golden/<harness>/` is rendered from a fixed,
-//! deterministic context (no tempdirs, no clocks) so the comparison is exact.
-//! The fixtures were captured before the descriptor refactor (#134) and guard
-//! byte-identity through it and any later descriptor edit.
+//! deterministic context (no tempdirs, no clocks) so the comparison is exact,
+//! guarding the generated artifacts byte-for-byte against descriptor and
+//! renderer edits.
 //!
 //! To regenerate after an intentional output change:
 //! `GOLDEN_BLESS=1 cargo test golden_` — then review the fixture diff.

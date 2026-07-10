@@ -1,11 +1,14 @@
 //! The harness adapter layer.
 //!
 //! [`harness`] defines the [`HarnessAdapter`] trait — the single API generic
-//! dispatch code uses to reach harness-specific behavior. Everything specific
-//! to one harness lives in that harness's module tree ([`claude_code`],
-//! [`codex`], [`opencode`]): the adapter impl, session renderers, transcript
-//! parsers, dispatch-recipe rendering, and write-guard hooks. Generic code
-//! resolves an adapter with [`adapter_for`] and calls the trait.
+//! dispatch code uses to reach harness-specific behavior. Each harness's
+//! declarative half lives in its embedded descriptor file
+//! (`harnesses/<label>.toml`, loaded by [`descriptor`] and served through the
+//! generic [`descriptor_adapter`]); the code-backed features a descriptor
+//! references by name live in [`capabilities`], backed by the per-harness
+//! module trees ([`claude_code`], [`codex`], [`opencode`]): transcript
+//! parsers, write-guard hooks, plugin-shadow detection, slug sanitization.
+//! Generic code resolves an adapter with [`adapter_for`] and calls the trait.
 
 pub mod capabilities;
 pub mod claude_code;
