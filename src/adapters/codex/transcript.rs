@@ -7,29 +7,14 @@
 //! accounting (excludes cached input tokens).
 
 use crate::adapters::TranscriptSummary;
+use crate::adapters::transcript::read_jsonl;
 use crate::core::ToolInvocation;
 use serde_json::{Map, Value};
-use std::fs;
 use std::io;
 use std::path::Path;
 
 const NON_TOOL_ITEMS: [&str; 3] = ["agent_message", "reasoning", "plan_update"];
 const ARG_OMIT_KEYS: [&str; 6] = ["id", "type", "status", "output", "result", "error"];
-
-fn read_events(jsonl_path: &Path) -> io::Result<Vec<Value>> {
-    let raw = fs::read_to_string(jsonl_path)?;
-    let mut out = Vec::new();
-    for line in raw.split('\n') {
-        if line.is_empty() {
-            continue;
-        }
-        // Skip malformed lines rather than failing the whole parse.
-        if let Ok(v) = serde_json::from_str::<Value>(line) {
-            out.push(v);
-        }
-    }
-    Ok(out)
-}
 
 fn stringify_value(v: &Value) -> String {
     match v {
@@ -91,7 +76,7 @@ fn extract_invocations(records: &[Value]) -> Vec<ToolInvocation> {
 
 /// Parse a Codex event stream into ordered tool invocations.
 pub fn parse_codex_events(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation>> {
-    Ok(extract_invocations(&read_events(jsonl_path)?))
+    Ok(extract_invocations(&read_jsonl::<Value>(jsonl_path)?))
 }
 
 fn parse_millis(s: &str) -> Option<i64> {
@@ -102,7 +87,7 @@ fn parse_millis(s: &str) -> Option<i64> {
 
 /// Parse a Codex event stream into a full [`TranscriptSummary`].
 pub fn parse_codex_events_full(jsonl_path: &Path) -> io::Result<TranscriptSummary> {
-    let records = read_events(jsonl_path)?;
+    let records = read_jsonl::<Value>(jsonl_path)?;
 
     let mut first_ts: Option<i64> = None;
     let mut last_ts: Option<i64> = None;
