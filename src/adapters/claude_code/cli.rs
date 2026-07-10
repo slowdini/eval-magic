@@ -8,7 +8,7 @@
 //! written to a file. `</dev/null` detaches stdin so a permission prompt cannot
 //! block on a TTY and piped task data cannot become extra prompt context.
 
-use crate::adapters::cli_command::render_cli_model_arg;
+use crate::adapters::cli_command::{render_cli_model_arg, render_judge_dispatch_recipe};
 use std::path::Path;
 
 /// Copy/pasteable Claude Code dispatch command template.
@@ -61,34 +61,14 @@ pub(crate) fn claude_parallel_dispatch_recipe(
 /// judge prompt, verdict `response_path`, and agent `outputs_dir`, and a dir with
 /// no write-guard hook.
 pub(crate) fn claude_judge_dispatch_recipe(model_flag: Option<&str>, judge_cwd: &Path) -> String {
-    let model_flag = model_flag.unwrap_or("--model");
     let cwd = judge_cwd.display();
-    [
-        "Dispatch each judge task from judge-tasks.json with:".to_string(),
-        String::new(),
-        "```bash".to_string(),
-        "JOBS=${JOBS:-4}".to_string(),
-        "jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // \"\")] | @tsv + \"\\u0000\"' judge-tasks.json | \\".to_string(),
-        "  xargs -0 -P \"$JOBS\" -I{} sh -c '".to_string(),
-        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
-        "    response_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
-        "    model=\"$(printf \"%s\" \"$1\" | cut -f3)\"".to_string(),
-        "    response_base=\"${response_path%.json}\"".to_string(),
-        "    mkdir -p \"$(dirname \"$response_path\")\"".to_string(),
-        "    model_arg=\"\"; [ -n \"$model\" ] && model_arg=\"".to_string()
-            + model_flag
-            + " $model\"",
-        format!(
+    render_judge_dispatch_recipe(
+        &format!(
             "    cd \"{cwd}\" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \\"
         ),
-        "      \"Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.\" \\".to_string(),
-        "      </dev/null \\".to_string(),
-        "      > \"$response_base.claude-events.jsonl\" \\".to_string(),
-        "      2> \"$response_base.claude-stderr.log\"".to_string(),
-        "  ' sh {}".to_string(),
-        "```".to_string(),
-    ]
-    .join("\n")
+        model_flag.unwrap_or("--model"),
+        "claude",
+    )
 }
 
 #[cfg(test)]
@@ -142,5 +122,32 @@ mod tests {
         assert!(recipe.contains("response_path"), "{recipe}");
         assert!(!recipe.contains("<eval-root>"), "{recipe}");
         assert!(recipe.contains("cd \"/work/iter-1\" &&"), "{recipe}");
+    }
+
+    #[test]
+    fn judge_recipe_snapshot_is_stable() {
+        // Full-string pin: the judge recipe renders through the shared
+        // template, and this locks the Claude output byte-for-byte.
+        let recipe = claude_judge_dispatch_recipe(Some("--model"), Path::new("/work/iter-1"));
+        let expected = r#"Dispatch each judge task from judge-tasks.json with:
+
+```bash
+JOBS=${JOBS:-4}
+jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv + "\u0000"' judge-tasks.json | \
+  xargs -0 -P "$JOBS" -I{} sh -c '
+    prompt_path="$(printf "%s" "$1" | cut -f1)"
+    response_path="$(printf "%s" "$1" | cut -f2)"
+    model="$(printf "%s" "$1" | cut -f3)"
+    response_base="${response_path%.json}"
+    mkdir -p "$(dirname "$response_path")"
+    model_arg=""; [ -n "$model" ] && model_arg="--model $model"
+    cd "/work/iter-1" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \
+      "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
+      </dev/null \
+      > "$response_base.claude-events.jsonl" \
+      2> "$response_base.claude-stderr.log"
+  ' sh {}
+```"#;
+        assert_eq!(recipe, expected);
     }
 }
