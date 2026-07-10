@@ -149,16 +149,12 @@ pub trait HarnessAdapter {
     /// list, Codex's `## Skills`, OpenCode's `<available_skills>` XML). The
     /// default is a neutral bulleted list.
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        if skills.is_empty() {
-            return String::new();
-        }
-        let mut sorted: Vec<&AvailableSkill> = skills.iter().collect();
-        sorted.sort_by(|a, b| a.name.cmp(&b.name));
-        let mut out = String::from("The following skills are available in this session:\n");
-        for s in sorted {
-            out.push_str(&format!("\n- {}: {}", s.name, s.description));
-        }
-        out
+        super::skills_block::render_skills_block(
+            super::skills_block::DEFAULT_HEADER,
+            super::skills_block::DEFAULT_ITEM,
+            "",
+            skills,
+        )
     }
 
     /// **Enhancement: native staging.** How a staged skill is described as

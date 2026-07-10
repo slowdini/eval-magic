@@ -24,6 +24,28 @@ pub(crate) fn render_cli_model_arg(flag: Option<&str>, model: Option<&str>) -> S
     format!(" {flag} {}", shell_quote_arg(model))
 }
 
+/// Render the shared parallel-dispatch recipe: the jq/xargs scaffold over
+/// `dispatch.json` tasks with the harness's per-task command block spliced in.
+///
+/// `command_block` is the (possibly multi-line) command run per task inside
+/// the `sh -c` body; it references `$eval_root` / `$prompt_path` /
+/// `$outputs_dir` and joins as one element, so the output is line-identical
+/// to the scaffold-with-block form.
+pub(crate) fn render_parallel_dispatch_recipe(command_block: &str) -> String {
+    [
+        "JOBS=${JOBS:-4}",
+        "jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\",
+        "  xargs -0 -P \"$JOBS\" -I{} sh -c '",
+        "    eval_root=\"$(printf \"%s\" \"$1\" | cut -f1)\"",
+        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"",
+        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f3)\"",
+        "    mkdir -p \"$outputs_dir\"",
+        command_block,
+        "  ' sh {}",
+    ]
+    .join("\n")
+}
+
 /// Render the shared judge-dispatch recipe: the jq/xargs scaffold over
 /// `judge-tasks.json` with the harness command line spliced in.
 ///

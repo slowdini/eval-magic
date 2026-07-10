@@ -12,9 +12,11 @@ pub mod claude_code;
 mod cli_command;
 pub mod codex;
 pub mod descriptor;
+pub mod descriptor_adapter;
 pub mod harness;
 pub mod opencode;
 pub mod skill_shadow;
+mod skills_block;
 pub mod transcript;
 
 pub use harness::{
