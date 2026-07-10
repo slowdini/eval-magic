@@ -34,23 +34,37 @@ That baseline already yields a working eval: `llm_judge` assertions grade every 
 run records exist. Run records without a transcript parser are assembled by hand per
 `schema/run-record.schema.json`.
 
-In trait terms the baseline is two methods: `label()` and `skills_dir()`. Everything else on
-`HarnessAdapter` has a default — either a working generic fallback or an `Unsupported` error naming
-the enhancement it belongs to.
+In descriptor terms the baseline is two required fields: `label` and `skills_dir`. Everything else
+in a harness descriptor is optional — an absent field or table gets a working generic fallback or
+an `Unsupported` error naming the enhancement it belongs to.
 
 ## Where this lives in code
 
+- `harnesses/<label>.toml` — one embedded **descriptor file** per built-in harness, carrying every
+  declarative value (labels, dirs, capability booleans, phrases, command templates, banner prose).
+  Descriptors are schema-gated (`schema/harness-descriptor.schema.json`) and invariant-checked at
+  load time.
 - `src/adapters/harness.rs` — the `HarnessAdapter` trait, tiered into baseline and enhancement
-  sections; `adapter_for()` is the single place a concrete harness is named.
-- `src/adapters/<harness>/` — everything specific to one harness: the adapter impl, session
-  renderers, transcript parsers, dispatch-recipe rendering, guard hooks.
-- `run_capabilities()` — the narrow table the `run` preflight uses to accept or reject run options
-  (`--guard`, `--bootstrap`/`--stage-name` with `--no-stage`) per harness.
+  sections; `adapter_for()` resolves each `Harness` variant to a descriptor-backed adapter in the
+  embedded registry — still the single place a concrete harness is named.
+- `src/adapters/descriptor.rs` — the descriptor model, TOML loading, and `validate_descriptor`
+  (the load-time invariants); `src/adapters/descriptor_adapter.rs` — the one generic
+  `DescriptorAdapter` implementing the trait from a descriptor.
+- `src/adapters/capabilities.rs` — the **named capabilities**: closed enums a descriptor references
+  by kebab-case name for everything that is real code (transcript parsers, guard engines, slug
+  generation, shadow preflight).
+- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, guard
+  hooks, the plugin-shadow scan, the OpenCode slug sanitizer.
+- `run_capabilities()` (descriptor table `[run]`) — the narrow table the `run` preflight uses to
+  accept or reject run options (`--guard`, `--bootstrap`/`--stage-name` with `--no-stage`) per
+  harness.
 
 ## The enhancements
 
-Each enhancement is a group of trait methods with defaults. Wire them together; invariant tests in
-`harness.rs` catch the combinations that must move in lockstep.
+Each enhancement is a group of descriptor fields — plus a named capability where code is involved —
+with defaults. Wire them together; load-time descriptor validation (`validate_descriptor` in
+`src/adapters/descriptor.rs`) rejects the combinations that must move in lockstep, with an
+actionable message per violation.
 
 ### Transcript parser
 
@@ -65,10 +79,12 @@ event — a deterministic `__skill_invoked` meta-check.
 suites toward `llm_judge` for such a harness), tokens/duration go unrecorded, records are
 hand-assembled, and the meta-check uses the LLM-judge fallback.
 
-*Trait methods:* `cli_events_filename` (gate: `None` means the ingest pipeline never calls the
-parsers), `parse_cli_events`, `parse_cli_events_full`, `transcript_surfaces_skill_invocation`.
-The tool names the parser emits must be declared in `tool_vocabulary` (see the write-guard
-enhancement) or `detect-stray-writes` audits nothing for the harness.
+*Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
+ingest pipeline never calls a parser), `parser`, `surfaces_skill_invocation`.
+*Capability:* `transcript.parser` names the code that stitches the stream (`claude-stream-json`,
+`codex-items`) — a new harness emitting a compatible event stream reuses one with zero code.
+The tool names the parser emits must be declared in `[tools]` (see the write-guard enhancement) or
+`detect-stray-writes` audits nothing for the harness — validation rejects the combination.
 
 ### Native skill staging + skills block
 
@@ -81,9 +97,14 @@ would discover it, instead of being pasted into the prompt.
 
 *Fallback:* `--no-stage` inlines each `SKILL.md` into its dispatch prompt.
 
-*Trait methods:* `skills_dir` semantics, `staged_slug`, `validate_stage_name`,
-`rewrites_frontmatter_name`, `advertises_staged_slug_name`, `render_available_skills_block`,
-`skill_surface_phrase`, `skill_unresolved_phrase`, `config_dir_names`.
+*Descriptor fields:* `skills_dir`, `config_dirs`, and the `[staging]` table — `slug_template`
+(or `slug_capability`), `stage_name_pattern`/`stage_name_max_len`/`stage_name_invalid_message`
+(declarative naming rules), `rewrites_frontmatter_name`, `advertises_staged_slug_name`,
+`surface_phrase`, `unresolved_phrase` — plus the `[skills_block]` table (`header`/`item`/`footer`
+format strings with `{name}`/`{description}`/`{path}` placeholders, rendered by the shared
+`skills_block` renderer).
+*Capability:* `staging.slug_capability` for naming rules that need sanitization/truncation beyond
+a format string (`opencode`); simpler rules stay declarative.
 
 ### Model flag
 
@@ -95,7 +116,8 @@ recipes; judge tasks resolve a per-task model.
 *Fallback:* the models are recorded as provenance in `conditions.json` only; dispatches run on the
 harness's default model.
 
-*Trait methods:* `cli_model_flag` (consumed by the harness's recipe renderers).
+*Descriptor fields:* the `[model]` table — `flag` (consumed as `{model_arg}` by the dispatch
+templates).
 
 ### Write guard
 
@@ -110,13 +132,16 @@ afterwards.
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
 arm; fatal in revision mode, where the `old_skill` arm then sees new-skill content.)
 
-*Trait methods:* `install_guard`, `guard_armed_message`, `guard_hook_cleanup_dir`,
-`tool_vocabulary`, plus `run_capabilities().supports_guard` (invariant-tested to stay in lockstep
-with the banner). The guard arbiter and `detect-stray-writes` classify tool names against the
-cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser
-without declaring the harness's tool names trips the invariant tests in `harness.rs`. The hidden
-`guard` / `guard-codex` subcommands are the hook entry points — their names are a stable on-disk
-contract. Shared marker/manifest/teardown machinery lives in `src/sandbox/`.
+*Descriptor fields:* the `[guard]` table — `engine`, `armed_message` — plus `[tools]` (the
+write/patch/shell/read vocabulary) and `run.supports_guard` (validated to stay in lockstep with
+the `[guard]` table).
+*Capability:* `guard.engine` names the hook installer (`claude-hooks`, `codex-hooks`); each engine
+also exposes its hook matcher so validation can prove every hooked tool is declared in `[tools]`.
+The guard arbiter and `detect-stray-writes` classify tool names against the cross-harness
+vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser without declaring
+the harness's tool names is rejected at descriptor load. The hidden `guard` / `guard-codex`
+subcommands are the hook entry points — their names are a stable on-disk contract. Shared
+marker/manifest/teardown machinery lives in `src/sandbox/`.
 
 ### Shadow preflight
 
@@ -131,8 +156,10 @@ iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
 *Fallback:* no preflight — the run proceeds with no shadow report, exactly right for a harness
 whose dispatches load nothing beyond the staged env.
 
-*Trait methods:* `detect_shadowed_skills` (returns the harness-neutral `PluginShadowReport` from
-`src/adapters/skill_shadow.rs`; detection itself stays in the harness's module tree).
+*Descriptor fields:* the `[shadow]` table — `preflight`.
+*Capability:* `shadow.preflight` names the scan (`claude-plugins`); it returns the harness-neutral
+`PluginShadowReport` from `src/adapters/skill_shadow.rs`, and detection itself stays in the
+harness's module tree.
 
 ### Plan-mode context
 
@@ -142,7 +169,8 @@ whose dispatches load nothing beyond the staged env.
 `<system-reminder>` block — an approximation that is the same for every harness today, since plan
 modes can't be reproduced exactly in a one-shot dispatch anyway.
 
-*Trait methods:* `render_plan_mode_context`.
+*Descriptor fields:* none yet — this is the trait default (`render_plan_mode_context`) with no
+descriptor surface; a harness with a real native plan mode would grow one.
 
 ### Dispatch recipes
 
@@ -153,7 +181,12 @@ carry exact per-task commands (including parallel and judge variants).
 
 *Fallback:* the generic handoff text; the operator constructs dispatch commands themselves.
 
-*Trait methods:* `cli_next_steps`, `cli_manifest_section`, `cli_judge_next_steps`.
+*Descriptor fields:* the `[dispatch]` table — `exec_template`, `parallel_command_template`,
+`judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
+`guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
+per run; the shared jq/xargs parallel and judge scaffolds stay code
+(`src/adapters/cli_command.rs`) with the per-harness command block spliced in. Validation rejects
+a template whose placeholder has no backing field.
 
 ## Current support
 
@@ -163,18 +196,25 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
 ## Adding a new harness
 
 1. Add the variant to `Harness` in `src/core/context.rs` (it derives `clap::ValueEnum`).
-2. Create `src/adapters/<harness>/mod.rs` with the adapter struct implementing `label()` +
-   `skills_dir()`, and register it in `adapter_for()` (`src/adapters/harness.rs`).
+2. Create `harnesses/<label>.toml` with the baseline fields (`label`, `skills_dir`, `config_dirs`),
+   embed it in `EMBEDDED_DESCRIPTORS` (`src/adapters/descriptor.rs`), and register it in the
+   registry behind `adapter_for()` (`src/adapters/harness.rs`). The label must match the variant's
+   kebab-case identifier — the registry asserts it.
 3. Create `docs/<harness>-notes.md` with the implementation notes discovered along the way.
 4. Add the harness to the README support table (all enhancements ❌ at baseline).
 5. Wire enhancements in leverage order — dispatch recipes and transcript parser first (they carry
-   the most fidelity), then staging, model flag, guard — updating the table as each lands.
+   the most fidelity), then staging, model flag, guard — updating the table as each lands. Most
+   enhancements are descriptor fields; add a named capability in
+   `src/adapters/capabilities.rs` (plus its `src/adapters/<harness>/` module) only when the
+   harness's stream or hooks are incompatible with every existing capability.
 
 ## Guardrails
 
 - **Cross-harness compatibility is enforced.** A change for one harness must not regress another;
-  the cross-harness tests in `src/adapters/harness.rs` and the per-harness integration tests under
-  `tests/run/` are the floor.
+  load-time descriptor validation (`src/adapters/descriptor.rs`), the golden-artifact fixtures
+  under `tests/golden/` (re-bless deliberate output changes with `GOLDEN_BLESS=1 cargo test
+  golden_`), the per-value pins in `src/adapters/harness.rs`, and the per-harness integration
+  tests under `tests/run/` are the floor.
 - **One enhancement per PR.** Wiring a harness happens one capability at a time.
 - **Don't guess harness details.** CLI flags, hook shapes, and event vocabularies come from the
   harness's own documentation or observed output — record what you verified in the harness's notes

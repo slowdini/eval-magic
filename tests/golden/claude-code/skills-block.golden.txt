@@ -1,0 +1,4 @@
+The following skills are available for use with the Skill tool:
+
+- aux-helper: Assists with auxiliary chores.
+- widget-skill: Builds widgets the house way.

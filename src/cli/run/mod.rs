@@ -17,6 +17,8 @@ use serde::Serialize;
 
 pub mod dispatch;
 pub mod fixtures;
+#[cfg(test)]
+mod golden_tests;
 pub mod grouping;
 pub mod orchestrate;
 pub mod runbook;

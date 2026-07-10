@@ -6,12 +6,14 @@
 
 ## Code map
 
-Everything OpenCode-specific lives under `src/adapters/opencode/`:
+The declarative half — including the `<available_skills>` XML block templates and the stage-name
+rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml`;
+`src/adapters/opencode/` keeps only the code capability the descriptor references:
 
 | File | What's in it |
 |------|--------------|
-| `mod.rs` | `OpenCodeAdapter` — the trait impl, plus the slug/naming rules |
-| `session.rs` | native `<available_skills>` XML block |
+| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug reference |
+| `mod.rs` | slug sanitization/truncation (the `opencode` slug capability) |
 
 ## What's wired
 
@@ -46,11 +48,13 @@ tracked for a separate fix.
 ## Wiring the next enhancements
 
 - **Transcript ingest:** candidate sources are `opencode run --format json` and `opencode export`.
-  Implement `parse_cli_events` / `parse_cli_events_full` in a new `transcript.rs` and set
-  `cli_events_filename`; check whether the stream exposes a deterministic skill event before
-  leaving `transcript_surfaces_skill_invocation` at its default.
-- **Dispatch recipes:** an `opencode run` command template in a new `cli.rs`, wired through
-  `cli_next_steps` / `cli_manifest_section` / `cli_judge_next_steps`.
-- **Write guard:** needs an OpenCode pre-tool hook surface. Flip
-  `run_capabilities().supports_guard` and `guard_armed_message` together — an invariant test in
-  `src/adapters/harness.rs` enforces the lockstep.
+  Add a parser in a new `transcript.rs`, name it as a capability in
+  `src/adapters/capabilities.rs`, and declare a `[transcript]` table (plus `[tools]` names) in
+  `harnesses/opencode.toml`; check whether the stream exposes a deterministic skill event before
+  leaving `surfaces_skill_invocation` at its default.
+- **Dispatch recipes:** an `opencode run` command template in the descriptor's `[dispatch]` table
+  (`exec_template` / `parallel_command_template` / `judge_command_template` +
+  `next_steps_template` / `manifest_template`).
+- **Write guard:** needs an OpenCode pre-tool hook surface — a new engine in
+  `src/adapters/capabilities.rs`. Declare `[guard]` and `run.supports_guard` together — load-time
+  descriptor validation enforces the lockstep.
