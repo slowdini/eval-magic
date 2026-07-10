@@ -73,7 +73,11 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "LICENSE",
         "README.md",
         "schema/evals.schema.json",
+        "schema/harness-descriptor.schema.json",
         "profiles/shared/plan-mode.md",
+        "harnesses/claude-code.toml",
+        "harnesses/codex.toml",
+        "harnesses/opencode.toml",
         "src/main.rs",
     ] {
         assert!(

@@ -130,8 +130,14 @@ fn sanitize_opencode_name(name: &str) -> String {
 
 /// Build a slug that is valid for OpenCode's skill directory + frontmatter name
 /// constraints. `prefix` is the conspicuous staged-skill prefix, preserved so
-/// cleanup prefix-scans still find it.
-fn opencode_slug(prefix: &str, iteration: u32, condition: &str, skill_name: &str) -> String {
+/// cleanup prefix-scans still find it. `pub(crate)` because the `opencode`
+/// named slug capability dispatches here.
+pub(crate) fn opencode_slug(
+    prefix: &str,
+    iteration: u32,
+    condition: &str,
+    skill_name: &str,
+) -> String {
     let condition = sanitize_opencode_name(condition);
     let skill = sanitize_opencode_name(skill_name);
     let base = format!("{prefix}{iteration}-{condition}-{skill}");

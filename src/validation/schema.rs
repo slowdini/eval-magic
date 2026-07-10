@@ -24,17 +24,19 @@ pub enum SchemaName {
     StrayWrites,
     Benchmark,
     JudgeTasks,
+    HarnessDescriptor,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 6] = [
+    const ALL: [SchemaName; 7] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
+        SchemaName::HarnessDescriptor,
     ];
 
     /// The schema's kebab-case name, as used in error messages and the on-disk
@@ -47,6 +49,7 @@ impl SchemaName {
             SchemaName::StrayWrites => "stray-writes",
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
+            SchemaName::HarnessDescriptor => "harness-descriptor",
         }
     }
 
@@ -59,6 +62,9 @@ impl SchemaName {
             SchemaName::StrayWrites => include_str!("../../schema/stray-writes.schema.json"),
             SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
             SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),
+            SchemaName::HarnessDescriptor => {
+                include_str!("../../schema/harness-descriptor.schema.json")
+            }
         }
     }
 }

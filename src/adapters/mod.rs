@@ -7,9 +7,11 @@
 //! parsers, dispatch-recipe rendering, and write-guard hooks. Generic code
 //! resolves an adapter with [`adapter_for`] and calls the trait.
 
+pub mod capabilities;
 pub mod claude_code;
 mod cli_command;
 pub mod codex;
+pub mod descriptor;
 pub mod harness;
 pub mod opencode;
 pub mod skill_shadow;

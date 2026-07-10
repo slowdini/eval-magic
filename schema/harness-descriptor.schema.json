@@ -1,0 +1,172 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/harness-descriptor.schema.json",
+  "title": "Harness Descriptor",
+  "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript parsers, guard engines, slug generation, shadow preflight). Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage) are enforced by the Rust loader on top of this schema.",
+  "type": "object",
+  "required": ["label", "skills_dir"],
+  "additionalProperties": false,
+  "properties": {
+    "label": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Kebab-case harness identifier, used in CLI flags, dispatch.json, and staged conditions.json."
+    },
+    "skills_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project-local staged-skills directory, `/`-separated relative to the repo root (e.g. \".claude/skills\")."
+    },
+    "config_dirs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Harness-owned config directory names (e.g. \".claude\"). Feeds the staging sibling filter, guard tamper rules, and stray-write lookbehind."
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Run-option capabilities; absent fields take the baseline defaults (no guard, bootstrap and stage-name allowed without staging).",
+      "properties": {
+        "supports_guard": { "type": "boolean" },
+        "supports_bootstrap_with_no_stage": { "type": "boolean" },
+        "supports_stage_name_with_no_stage": { "type": "boolean" }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tool-name vocabulary by role, as the harness's transcripts and hook payloads spell them.",
+      "properties": {
+        "write": { "$ref": "#/definitions/tool_list" },
+        "patch": { "$ref": "#/definitions/tool_list" },
+        "shell": { "$ref": "#/definitions/tool_list" },
+        "read": { "$ref": "#/definitions/tool_list" }
+      }
+    },
+    "staging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Native skill staging: slug shape (template or named capability), naming rules, and prompt phrasing.",
+      "properties": {
+        "slug_template": {
+          "type": "string",
+          "description": "Staged-slug format with {prefix}/{iteration}/{condition}/{skill_name} placeholders. Mutually exclusive with slug_capability."
+        },
+        "slug_capability": {
+          "enum": ["opencode"],
+          "description": "Named code capability generating the staged slug (sanitization/truncation beyond a format string)."
+        },
+        "stage_name_pattern": {
+          "type": "string",
+          "description": "Regex a stage name must fully match (declarative validate_stage_name)."
+        },
+        "stage_name_max_len": { "type": "integer", "minimum": 1 },
+        "stage_name_invalid_message": {
+          "type": "string",
+          "description": "Rejection message; {name} is substituted with the offending stage name."
+        },
+        "rewrites_frontmatter_name": { "type": "boolean" },
+        "advertises_staged_slug_name": { "type": "boolean" },
+        "surface_phrase": { "type": "string" },
+        "unresolved_phrase": { "type": "string" }
+      }
+    },
+    "skills_block": {
+      "type": "object",
+      "required": ["header", "item"],
+      "additionalProperties": false,
+      "description": "Harness-native available-skills block: header + one item per skill ({name}/{description}/{path} placeholders) + footer.",
+      "properties": {
+        "header": { "type": "string" },
+        "item": { "type": "string" },
+        "footer": { "type": "string" }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "required": ["events_filename", "parser"],
+      "additionalProperties": false,
+      "description": "Transcript ingest: the events file the CLI dispatch captures and the named parser that reads it.",
+      "properties": {
+        "events_filename": { "type": "string", "minLength": 1 },
+        "parser": { "enum": ["claude-stream-json", "codex-items"] },
+        "surfaces_skill_invocation": {
+          "type": "boolean",
+          "description": "Whether the transcript deterministically surfaces a skill invocation (false routes the meta-check to the LLM-judge fallback)."
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["flag"],
+      "additionalProperties": false,
+      "properties": {
+        "flag": { "type": "string", "minLength": 1 }
+      }
+    },
+    "guard": {
+      "type": "object",
+      "required": ["engine", "armed_message"],
+      "additionalProperties": false,
+      "description": "Write guard: the named hook engine and the post-arm banner.",
+      "properties": {
+        "engine": { "enum": ["claude-hooks", "codex-hooks"] },
+        "armed_message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "required": ["preflight"],
+      "additionalProperties": false,
+      "properties": {
+        "preflight": { "enum": ["claude-plugins"] }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args} slots) and the prose around them.",
+      "properties": {
+        "capture_prefix": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prefix naming the judge recipe's per-task capture files ($response_base.<prefix>-events.jsonl)."
+        },
+        "guard_args": {
+          "type": "string",
+          "description": "Extra args spliced into command templates at {guard_args} when the run is guarded (leading space included)."
+        },
+        "model_note": {
+          "type": "string",
+          "description": "Sentence spliced into next_steps_template at {model_note} when an agent model was declared."
+        },
+        "next_steps_template": {
+          "type": "string",
+          "description": "Post-run handoff text; {exec_command}/{target_args}/{iteration}/{model_note} placeholders."
+        },
+        "exec_template": {
+          "type": "string",
+          "description": "Copy/pasteable single-dispatch command; <eval-root>-style angle placeholders are prose for the human."
+        },
+        "parallel_command_template": {
+          "type": "string",
+          "description": "Per-task command block spliced into the shared jq/xargs parallel scaffold."
+        },
+        "judge_command_template": {
+          "type": "string",
+          "description": "Judge command line spliced into the shared judge recipe; must reference $model_arg and {cwd} and end with a shell line continuation."
+        },
+        "manifest_template": {
+          "type": "string",
+          "description": "The dispatch-manifest harness section; {exec_command}/{parallel_recipe} placeholders; ends with exactly one newline."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "tool_list": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}
