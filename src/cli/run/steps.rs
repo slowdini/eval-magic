@@ -41,25 +41,13 @@ pub struct StepCommand {
 }
 
 /// Resolved inputs shared by every step of a chain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StepParams<'a> {
     pub skill_dir: Option<&'a str>,
     pub skill: Option<&'a str>,
     pub iteration: u32,
     pub harness: Harness,
     pub workspace_dir: Option<&'a str>,
-}
-
-impl Default for StepParams<'_> {
-    fn default() -> Self {
-        Self {
-            skill_dir: None,
-            skill: None,
-            iteration: 0,
-            harness: Harness::ClaudeCode,
-            workspace_dir: None,
-        }
-    }
 }
 
 impl StepParams<'_> {
