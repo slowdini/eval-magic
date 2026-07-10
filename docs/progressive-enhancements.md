@@ -67,6 +67,8 @@ hand-assembled, and the meta-check uses the LLM-judge fallback.
 
 *Trait methods:* `cli_events_filename` (gate: `None` means the ingest pipeline never calls the
 parsers), `parse_cli_events`, `parse_cli_events_full`, `transcript_surfaces_skill_invocation`.
+The tool names the parser emits must be declared in `tool_vocabulary` (see the write-guard
+enhancement) or `detect-stray-writes` audits nothing for the harness.
 
 ### Native skill staging + skills block
 
@@ -108,10 +110,29 @@ afterwards.
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
 arm; fatal in revision mode, where the `old_skill` arm then sees new-skill content.)
 
-*Trait methods:* `install_guard`, `guard_armed_message`, `guard_hook_cleanup_dir`, plus
-`run_capabilities().supports_guard` (invariant-tested to stay in lockstep with the banner). The
-hidden `guard` / `guard-codex` subcommands are the hook entry points — their names are a stable
-on-disk contract. Shared marker/manifest/teardown machinery lives in `src/sandbox/`.
+*Trait methods:* `install_guard`, `guard_armed_message`, `guard_hook_cleanup_dir`,
+`tool_vocabulary`, plus `run_capabilities().supports_guard` (invariant-tested to stay in lockstep
+with the banner). The guard arbiter and `detect-stray-writes` classify tool names against the
+cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser
+without declaring the harness's tool names trips the invariant tests in `harness.rs`. The hidden
+`guard` / `guard-codex` subcommands are the hook entry points — their names are a stable on-disk
+contract. Shared marker/manifest/teardown machinery lives in `src/sandbox/`.
+
+### Shadow preflight
+
+*Why harness-specific:* what "discoverable from the live environment" means is harness-native —
+Claude Code dispatches load the operator's enabled plugins and global skills dir, so a staged
+skill name colliding with one of those contaminates the with/without comparison. Other harnesses
+load nothing global today.
+
+*What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
+iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
+
+*Fallback:* no preflight — the run proceeds with no shadow report, exactly right for a harness
+whose dispatches load nothing beyond the staged env.
+
+*Trait methods:* `detect_shadowed_skills` (returns the harness-neutral `PluginShadowReport` from
+`src/adapters/skill_shadow.rs`; detection itself stays in the harness's module tree).
 
 ### Plan-mode context
 

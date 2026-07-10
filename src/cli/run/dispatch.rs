@@ -52,7 +52,7 @@ pub struct DispatchTask {
 }
 
 /// Inputs to [`build_dispatch_task`]. `harness` defaults to Claude Code.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DispatchTaskOpts<'a> {
     pub eval_id: &'a str,
     pub condition: &'a str,
@@ -83,31 +83,6 @@ pub struct DispatchTaskOpts<'a> {
     /// The task's env dir (the agent-under-test's cwd); `None` in the single-group
     /// case (the shared `env/`).
     pub eval_root: Option<&'a str>,
-}
-
-impl Default for DispatchTaskOpts<'_> {
-    fn default() -> Self {
-        Self {
-            eval_id: "",
-            condition: "",
-            skill_path: None,
-            staged_skill_slug: None,
-            staged_skill_path: None,
-            user_prompt: "",
-            fixtures: Vec::new(),
-            outputs_dir: "",
-            cond_dir: "",
-            bootstrap_content: None,
-            plan_mode_content: None,
-            skill_name: "",
-            available_skills: Vec::new(),
-            harness: Harness::ClaudeCode,
-            run_tag: None,
-            run_index: None,
-            group: None,
-            eval_root: None,
-        }
-    }
 }
 
 fn render_available_skills_block_for_harness(

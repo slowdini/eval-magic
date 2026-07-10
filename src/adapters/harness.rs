@@ -24,11 +24,28 @@
 
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::time::Duration;
 
 use crate::core::{AvailableSkill, Harness, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
+use super::skill_shadow::PluginShadowReport;
+
+/// One harness's tool-name vocabulary: every name its guard hook payloads or
+/// transcript parser can produce, grouped by role. Consumers match against the
+/// union across all harnesses ([`all_tool_vocabulary`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolVocabulary {
+    /// Tools that write the filesystem with a single target path argument.
+    pub write_tools: Vec<String>,
+    /// apply_patch-style tools whose payload carries multiple patch targets.
+    pub patch_tools: Vec<String>,
+    /// Shell-execution tools carrying a `command` argument.
+    pub shell_tools: Vec<String>,
+    /// Read-only tools carrying a target path argument.
+    pub read_tools: Vec<String>,
+}
 
 /// The behavior that varies by harness. Generic dispatch code depends on this
 /// trait, never on a concrete harness variant. See the module docs for the
@@ -72,6 +89,16 @@ pub trait HarnessAdapter {
     /// writes.
     fn config_dir_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// The tool names this harness's guard hook payloads and parsed transcripts
+    /// use, grouped by role. Via [`all_tool_vocabulary`] this feeds the guard
+    /// arbiter's tool classification and detect-stray-writes' invocation audit,
+    /// so list every name this harness's surfaces produce — even names another
+    /// harness also uses; the union dedups. Default empty: a harness with no
+    /// guard and no transcript parser contributes nothing.
+    fn tool_vocabulary(&self) -> ToolVocabulary {
+        ToolVocabulary::default()
     }
 
     // ── Enhancement: native skill staging (defaulted) ────────────────────────
@@ -245,6 +272,24 @@ pub trait HarnessAdapter {
         None
     }
 
+    // ── Enhancement: shadow preflight (defaulted) ────────────────────────────
+    // Fallback without it: no preflight — the run proceeds with no shadow
+    // report, exactly as for a harness whose dispatches load nothing global.
+
+    /// **Enhancement: shadow preflight.** Detect staged skill names that are
+    /// also discoverable from the operator's live environment (e.g. Claude
+    /// Code's enabled plugins or global skills dir), which contaminates the
+    /// with/without comparison. `scan_root` is a real staged env root — its
+    /// project-local settings participate in detection. `None` when the
+    /// harness has no shadow preflight (the default) or nothing is shadowed.
+    fn detect_shadowed_skills(
+        &self,
+        _scan_root: &Path,
+        _staged_skill_names: &[&str],
+    ) -> Option<PluginShadowReport> {
+        None
+    }
+
     // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
 
     /// **Enhancement: plan-mode context.** Wrap a plan-mode profile as an
@@ -338,6 +383,33 @@ pub fn all_config_dir_names() -> Vec<String> {
     names
 }
 
+/// The union of every harness's tool vocabulary (each list sorted,
+/// deduplicated). Computed once behind a `LazyLock` — the guard arbiter
+/// consults it on every hooked tool call.
+pub fn all_tool_vocabulary() -> &'static ToolVocabulary {
+    static ALL: LazyLock<ToolVocabulary> = LazyLock::new(|| {
+        let mut union = ToolVocabulary::default();
+        for &h in Harness::ALL.iter() {
+            let vocab = adapter_for(h).tool_vocabulary();
+            union.write_tools.extend(vocab.write_tools);
+            union.patch_tools.extend(vocab.patch_tools);
+            union.shell_tools.extend(vocab.shell_tools);
+            union.read_tools.extend(vocab.read_tools);
+        }
+        for list in [
+            &mut union.write_tools,
+            &mut union.patch_tools,
+            &mut union.shell_tools,
+            &mut union.read_tools,
+        ] {
+            list.sort_unstable();
+            list.dedup();
+        }
+        union
+    });
+    &ALL
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,6 +420,109 @@ mod tests {
             all_config_dir_names(),
             [".agents", ".claude", ".codex", ".opencode"]
         );
+    }
+
+    #[test]
+    fn all_tool_vocabulary_unions_every_adapter() {
+        let vocab = all_tool_vocabulary();
+        assert_eq!(
+            vocab.write_tools,
+            ["Edit", "MultiEdit", "NotebookEdit", "Write", "file_change"]
+        );
+        assert_eq!(vocab.patch_tools, ["apply_patch"]);
+        assert_eq!(vocab.shell_tools, ["Bash", "command_execution"]);
+        assert_eq!(vocab.read_tools, ["Glob", "Grep", "Read"]);
+    }
+
+    #[test]
+    fn guard_hook_matcher_names_are_declared_in_the_vocabulary() {
+        // Every tool name a harness's guard hook can deliver must be declared in
+        // its vocabulary, or the arbiter would silently wave the tool through.
+        let matchers = [
+            (
+                Harness::ClaudeCode,
+                crate::adapters::claude_code::guard::HOOK_MATCHER,
+            ),
+            (Harness::Codex, crate::adapters::codex::guard::HOOK_MATCHER),
+        ];
+        let guard_wired = Harness::ALL
+            .iter()
+            .filter(|&&h| adapter_for(h).run_capabilities().supports_guard)
+            .count();
+        assert_eq!(
+            guard_wired,
+            matchers.len(),
+            "every guard-wired harness's HOOK_MATCHER must be checked here"
+        );
+        for (h, matcher) in matchers {
+            let vocab = adapter_for(h).tool_vocabulary();
+            for token in matcher.split('|') {
+                let name = token.trim_matches(|c| c == '^' || c == '$');
+                let declared = vocab
+                    .write_tools
+                    .iter()
+                    .chain(vocab.patch_tools.iter())
+                    .chain(vocab.shell_tools.iter())
+                    .any(|t| t == name);
+                assert!(
+                    declared,
+                    "{h:?} hook matcher tool {name} is missing from its tool_vocabulary"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn transcript_parser_implies_stray_writes_vocabulary() {
+        // A harness with a transcript parser but no declared tool names would
+        // make detect-stray-writes silently audit nothing for it.
+        for &h in Harness::ALL.iter() {
+            let adapter = adapter_for(h);
+            if adapter.cli_events_filename().is_none() {
+                continue;
+            }
+            let vocab = adapter.tool_vocabulary();
+            assert!(
+                !vocab.write_tools.is_empty(),
+                "{h:?} parses transcripts but declares no write tools"
+            );
+            assert!(
+                !vocab.shell_tools.is_empty(),
+                "{h:?} parses transcripts but declares no shell tools"
+            );
+        }
+    }
+
+    #[test]
+    fn tool_vocabulary_roles_are_disjoint_per_harness() {
+        for &h in Harness::ALL.iter() {
+            let vocab = adapter_for(h).tool_vocabulary();
+            let mut all: Vec<&String> = vocab
+                .write_tools
+                .iter()
+                .chain(vocab.patch_tools.iter())
+                .chain(vocab.shell_tools.iter())
+                .chain(vocab.read_tools.iter())
+                .collect();
+            let total = all.len();
+            all.sort_unstable();
+            all.dedup();
+            assert_eq!(
+                total,
+                all.len(),
+                "{h:?} declares a tool name in more than one vocabulary role"
+            );
+        }
+    }
+
+    #[test]
+    fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
+        for h in [Harness::Codex, Harness::OpenCode] {
+            assert_eq!(
+                adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
+                None
+            );
+        }
     }
 
     #[test]

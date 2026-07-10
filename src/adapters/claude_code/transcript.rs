@@ -11,9 +11,6 @@ use crate::core::ToolInvocation;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
-use std::io;
-use std::path::Path;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct UsageRecord {
@@ -78,21 +75,6 @@ fn stringify_result(content: Option<&Value>) -> String {
         Some(other) => serde_json::to_string(other).unwrap_or_default(),
         None => String::new(),
     }
-}
-
-pub(crate) fn read_records(jsonl_path: &Path) -> io::Result<Vec<TranscriptRecord>> {
-    let raw = fs::read_to_string(jsonl_path)?;
-    let mut records = Vec::new();
-    for line in raw.split('\n') {
-        if line.is_empty() {
-            continue;
-        }
-        // Skip malformed lines rather than failing the whole parse.
-        if let Ok(rec) = serde_json::from_str::<TranscriptRecord>(line) {
-            records.push(rec);
-        }
-    }
-    Ok(records)
 }
 
 pub(crate) fn extract_invocations(records: &[TranscriptRecord]) -> Vec<ToolInvocation> {
@@ -167,6 +149,7 @@ pub(crate) fn last_assistant_text(records: &[TranscriptRecord]) -> Option<String
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::transcript::read_jsonl;
     use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
@@ -184,7 +167,7 @@ mod tests {
     /// Read the records and run the shared tool-call extractor — the path the
     /// stream-json parser also takes.
     fn invocations(path: &Path) -> Vec<ToolInvocation> {
-        extract_invocations(&read_records(path).unwrap())
+        extract_invocations(&read_jsonl::<TranscriptRecord>(path).unwrap())
     }
 
     #[test]
@@ -295,7 +278,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            last_assistant_text(&read_records(&path).unwrap()),
+            last_assistant_text(&read_jsonl::<TranscriptRecord>(&path).unwrap()),
             Some("All tests pass.\nWrapping up.".into())
         );
     }
@@ -308,6 +291,9 @@ mod tests {
             &path,
             &[json!({"type": "user", "message": {"role": "user", "content": "hi"}})],
         );
-        assert_eq!(last_assistant_text(&read_records(&path).unwrap()), None);
+        assert_eq!(
+            last_assistant_text(&read_jsonl::<TranscriptRecord>(&path).unwrap()),
+            None
+        );
     }
 }

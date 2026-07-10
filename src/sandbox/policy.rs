@@ -3,7 +3,8 @@
 //! Stateless classifiers shared by the armed guard ([`super::decide`]) and
 //! `pipeline::detect-stray-writes`: which tools write, which Bash commands
 //! mutate state outside a sandbox, and whether a path falls under an allowed
-//! root.
+//! root. Tool names come from the adapters' cross-harness vocabulary union
+//! ([`all_tool_vocabulary`]), so no harness's tool naming is hardcoded here.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -11,12 +12,33 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-/// Tools that mutate the filesystem and carry a target path argument.
-pub const WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+use crate::adapters::all_tool_vocabulary;
 
-/// True for a tool name that writes the filesystem with a path argument.
+/// True for a tool name that writes the filesystem with a single target path
+/// argument, in any harness's vocabulary.
 pub fn is_write_tool(tool_name: &str) -> bool {
-    WRITE_TOOLS.contains(&tool_name)
+    all_tool_vocabulary()
+        .write_tools
+        .iter()
+        .any(|t| t == tool_name)
+}
+
+/// True for an apply_patch-style tool whose payload carries patch targets
+/// (extracted with [`apply_patch_paths`]), in any harness's vocabulary.
+pub fn is_patch_tool(tool_name: &str) -> bool {
+    all_tool_vocabulary()
+        .patch_tools
+        .iter()
+        .any(|t| t == tool_name)
+}
+
+/// True for a shell-execution tool carrying a `command` argument, in any
+/// harness's vocabulary.
+pub fn is_shell_tool(tool_name: &str) -> bool {
+    all_tool_vocabulary()
+        .shell_tools
+        .iter()
+        .any(|t| t == tool_name)
 }
 
 /// Bash command patterns that mutate state outside an eval's sandbox. Heuristics
@@ -206,12 +228,30 @@ mod tests {
     }
 
     #[test]
-    fn is_write_tool_matches_the_four_write_tools() {
-        for t in ["Write", "Edit", "MultiEdit", "NotebookEdit"] {
+    fn is_write_tool_matches_every_harness_write_tool() {
+        for t in ["Write", "Edit", "MultiEdit", "NotebookEdit", "file_change"] {
             assert!(is_write_tool(t), "{t} should be a write tool");
         }
-        for t in ["Read", "Bash", "Grep", ""] {
+        for t in ["Read", "Bash", "Grep", "apply_patch", ""] {
             assert!(!is_write_tool(t), "{t} should not be a write tool");
+        }
+    }
+
+    #[test]
+    fn is_patch_tool_matches_apply_patch_style_tools_only() {
+        assert!(is_patch_tool("apply_patch"));
+        for t in ["Write", "Bash", "file_change", ""] {
+            assert!(!is_patch_tool(t), "{t} should not be a patch tool");
+        }
+    }
+
+    #[test]
+    fn is_shell_tool_matches_every_harness_shell_tool() {
+        for t in ["Bash", "command_execution"] {
+            assert!(is_shell_tool(t), "{t} should be a shell tool");
+        }
+        for t in ["Write", "apply_patch", ""] {
+            assert!(!is_shell_tool(t), "{t} should not be a shell tool");
         }
     }
 

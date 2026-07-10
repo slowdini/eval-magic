@@ -11,17 +11,18 @@
 //! any other non-message events are ignored (they don't deserialize into an
 //! assistant/user record, so the shared extractor skips them).
 
-use std::fs;
 use std::io;
 use std::path::Path;
+
+use serde::Deserialize;
+use serde_json::Value;
 
 use crate::core::ToolInvocation;
 
 use crate::adapters::TranscriptSummary;
+use crate::adapters::transcript::read_jsonl;
 
-use super::transcript::{
-    TranscriptRecord, UsageRecord, extract_invocations, last_assistant_text, read_records,
-};
+use super::transcript::{TranscriptRecord, UsageRecord, extract_invocations, last_assistant_text};
 
 /// The terminal `{"type":"result", …}` event of a `-p` stream-json run.
 #[derive(Debug, serde::Deserialize)]
@@ -39,7 +40,7 @@ struct ResultEvent {
 /// Parse the event stream into ordered tool invocations. Reuses the shared
 /// extractor: non-message events deserialize into records the extractor skips.
 pub fn parse_claude_stream_json(path: &Path) -> io::Result<Vec<ToolInvocation>> {
-    Ok(extract_invocations(&read_records(path)?))
+    Ok(extract_invocations(&read_jsonl::<TranscriptRecord>(path)?))
 }
 
 /// Parse the event stream into a full [`TranscriptSummary`]. Final text,
@@ -47,19 +48,16 @@ pub fn parse_claude_stream_json(path: &Path) -> io::Result<Vec<ToolInvocation>> 
 /// missing or errored `result` the final text falls back to the last assistant
 /// message's text, and duration/tokens fall back to `None`.
 pub fn parse_claude_stream_json_full(path: &Path) -> io::Result<TranscriptSummary> {
-    let raw = fs::read_to_string(path)?;
+    let values = read_jsonl::<Value>(path)?;
     let mut records: Vec<TranscriptRecord> = Vec::new();
     let mut result_event: Option<ResultEvent> = None;
-    for line in raw.split('\n') {
-        if line.trim().is_empty() {
-            continue;
-        }
-        // Skip malformed lines rather than failing the whole parse.
-        let Ok(record) = serde_json::from_str::<TranscriptRecord>(line) else {
+    for value in &values {
+        // Skip lines that don't shape into records rather than failing the parse.
+        let Ok(record) = TranscriptRecord::deserialize(value) else {
             continue;
         };
         if record.record_type.as_deref() == Some("result") {
-            result_event = serde_json::from_str::<ResultEvent>(line).ok();
+            result_event = ResultEvent::deserialize(value).ok();
         }
         records.push(record);
     }
