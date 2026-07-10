@@ -21,6 +21,7 @@ use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
 use super::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter};
+use super::skill_shadow::PluginShadowReport;
 use cli::{
     claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
 };
@@ -94,6 +95,17 @@ impl HarnessAdapter for ClaudeCodeAdapter {
             self.cli_model_flag().as_deref(),
             ctx.iteration_dir,
         ))
+    }
+    fn detect_shadowed_skills(
+        &self,
+        scan_root: &Path,
+        staged_skill_names: &[&str],
+    ) -> Option<PluginShadowReport> {
+        plugin_shadow::shadow_preflight(
+            &plugin_shadow::config_dir_from_env(),
+            scan_root,
+            staged_skill_names,
+        )
     }
     fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         parse_claude_stream_json(path)

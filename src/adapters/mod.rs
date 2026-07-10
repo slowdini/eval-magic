@@ -12,15 +12,14 @@ mod cli_command;
 pub mod codex;
 pub mod harness;
 pub mod opencode;
+pub mod skill_shadow;
 pub mod transcript;
 
 pub use harness::{
     CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
     adapter_for, all_config_dir_names,
 };
-pub use transcript::TranscriptSummary;
-
-pub use claude_code::plugin_shadow::{
-    PluginShadowReport, ShadowSource, config_dir_from_env, detect_plugin_shadows,
-    format_shadow_banner, resolve_config_dir, shadow_validity_warnings,
+pub use skill_shadow::{
+    PluginShadowReport, ShadowSource, format_shadow_banner, shadow_validity_warnings,
 };
+pub use transcript::TranscriptSummary;

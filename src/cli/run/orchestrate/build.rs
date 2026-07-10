@@ -1,7 +1,7 @@
 //! Phases 3 & 4 — build every `(eval, condition)` dispatch task and write
 //! `conditions.json` / `dispatch-manifest.md` / per-task prompts / `dispatch.json`
-//! ([`write_dispatch`]), then arm the opt-in write guard and run the plugin-shadow
-//! preflight ([`post_build`]).
+//! ([`write_dispatch`]), then arm the opt-in write guard and run the harness's
+//! shadow preflight ([`post_build`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -9,10 +9,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::adapters::{
-    adapter_for, config_dir_from_env, detect_plugin_shadows, format_shadow_banner,
-};
-use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, Harness, RunContext};
+use crate::adapters::{adapter_for, format_shadow_banner};
+use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
 use super::super::dispatch::{
@@ -309,8 +307,8 @@ pub(super) fn write_dispatch(
     Ok(tasks.len())
 }
 
-/// Post-build side effects: arm the opt-in write guard and run the Claude Code
-/// plugin-shadow preflight.
+/// Post-build side effects: arm the opt-in write guard and run the harness's
+/// shadow preflight.
 pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
@@ -354,23 +352,19 @@ pub(super) fn post_build(
         eprintln!("{notice}");
     }
 
-    // Plugin-shadow preflight (Claude Code): a staged skill name also discoverable
-    // from an enabled plugin or the global skills dir contaminates the run. Scan the
-    // first staged env, not `ctx.stage_root` — only the per-`(group, condition)`
-    // envs are created, so the project-local `.claude/settings.json` enabledPlugins
-    // the scan reads must come from a real staged env.
-    if ctx.harness == Harness::ClaudeCode {
-        let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
-        names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
-        let scan_root = targets
-            .first()
-            .map(|t| t.root.as_path())
-            .unwrap_or(ctx.stage_root.as_path());
-        let report = detect_plugin_shadows(&config_dir_from_env(), scan_root, &names);
-        if !report.shadowed.is_empty() {
-            write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
-            eprintln!("{}", format_shadow_banner(&report));
-        }
+    // Shadow preflight: a staged skill name also discoverable from the operator's
+    // live environment contaminates the run. Scan the first staged env, not
+    // `ctx.stage_root` — only the per-`(group, condition)` envs are created, so
+    // the project-local settings the scan reads must come from a real staged env.
+    let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
+    names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
+    let scan_root = targets
+        .first()
+        .map(|t| t.root.as_path())
+        .unwrap_or(ctx.stage_root.as_path());
+    if let Some(report) = adapter_for(ctx.harness).detect_shadowed_skills(scan_root, &names) {
+        write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
+        eprintln!("{}", format_shadow_banner(&report));
     }
     Ok(())
 }

@@ -113,6 +113,22 @@ arm; fatal in revision mode, where the `old_skill` arm then sees new-skill conte
 hidden `guard` / `guard-codex` subcommands are the hook entry points — their names are a stable
 on-disk contract. Shared marker/manifest/teardown machinery lives in `src/sandbox/`.
 
+### Shadow preflight
+
+*Why harness-specific:* what "discoverable from the live environment" means is harness-native —
+Claude Code dispatches load the operator's enabled plugins and global skills dir, so a staged
+skill name colliding with one of those contaminates the with/without comparison. Other harnesses
+load nothing global today.
+
+*What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
+iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
+
+*Fallback:* no preflight — the run proceeds with no shadow report, exactly right for a harness
+whose dispatches load nothing beyond the staged env.
+
+*Trait methods:* `detect_shadowed_skills` (returns the harness-neutral `PluginShadowReport` from
+`src/adapters/skill_shadow.rs`; detection itself stays in the harness's module tree).
+
 ### Plan-mode context
 
 *Why harness-specific in principle:* a harness could inject a real native plan mode.

@@ -81,7 +81,7 @@ impl Default for StageSkillOpts<'_> {
             repo_root: Path::new(""),
             assets_dir: None,
             stage_name_override: None,
-            harness: Harness::ClaudeCode,
+            harness: Harness::default(),
         }
     }
 }
@@ -101,7 +101,7 @@ impl Default for StageSiblingOpts<'_> {
             skill_under_test: "",
             skills_source_dir: Path::new(""),
             repo_root: Path::new(""),
-            harness: Harness::ClaudeCode,
+            harness: Harness::default(),
         }
     }
 }

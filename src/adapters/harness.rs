@@ -29,6 +29,7 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, Harness, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
+use super::skill_shadow::PluginShadowReport;
 
 /// The behavior that varies by harness. Generic dispatch code depends on this
 /// trait, never on a concrete harness variant. See the module docs for the
@@ -245,6 +246,24 @@ pub trait HarnessAdapter {
         None
     }
 
+    // ── Enhancement: shadow preflight (defaulted) ────────────────────────────
+    // Fallback without it: no preflight — the run proceeds with no shadow
+    // report, exactly as for a harness whose dispatches load nothing global.
+
+    /// **Enhancement: shadow preflight.** Detect staged skill names that are
+    /// also discoverable from the operator's live environment (e.g. Claude
+    /// Code's enabled plugins or global skills dir), which contaminates the
+    /// with/without comparison. `scan_root` is a real staged env root — its
+    /// project-local settings participate in detection. `None` when the
+    /// harness has no shadow preflight (the default) or nothing is shadowed.
+    fn detect_shadowed_skills(
+        &self,
+        _scan_root: &Path,
+        _staged_skill_names: &[&str],
+    ) -> Option<PluginShadowReport> {
+        None
+    }
+
     // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
 
     /// **Enhancement: plan-mode context.** Wrap a plan-mode profile as an
@@ -348,6 +367,16 @@ mod tests {
             all_config_dir_names(),
             [".agents", ".claude", ".codex", ".opencode"]
         );
+    }
+
+    #[test]
+    fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
+        for h in [Harness::Codex, Harness::OpenCode] {
+            assert_eq!(
+                adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
+                None
+            );
+        }
     }
 
     #[test]
