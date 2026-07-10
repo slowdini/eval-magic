@@ -20,7 +20,7 @@ use crate::sandbox::install::{
 use crate::sandbox::{now_ms, parse_tool_call};
 
 /// Tool names the Codex PreToolUse hook fires on.
-const HOOK_MATCHER: &str = "^Bash$|^apply_patch$|^Edit$|^Write$";
+pub(crate) const HOOK_MATCHER: &str = "^Bash$|^apply_patch$|^Edit$|^Write$";
 
 /// Arm the write guard using Codex's project-local hook surface. Returns the
 /// staged marker path.

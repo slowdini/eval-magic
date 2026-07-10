@@ -17,7 +17,9 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
-use super::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter};
+use super::harness::{
+    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, ToolVocabulary,
+};
 use cli::{
     codex_exec_command_template, codex_judge_dispatch_recipe, codex_parallel_dispatch_recipe,
 };
@@ -42,6 +44,16 @@ impl HarnessAdapter for CodexAdapter {
     }
     fn config_dir_names(&self) -> Vec<String> {
         vec![".agents".to_string(), ".codex".to_string()]
+    }
+    fn tool_vocabulary(&self) -> ToolVocabulary {
+        ToolVocabulary {
+            // Guard hook payloads carry Claude-style names (see guard::HOOK_MATCHER);
+            // parsed transcripts carry Codex item types (file_change, command_execution).
+            write_tools: ["Edit", "Write", "file_change"].map(String::from).to_vec(),
+            patch_tools: vec!["apply_patch".to_string()],
+            shell_tools: ["Bash", "command_execution"].map(String::from).to_vec(),
+            read_tools: Vec::new(),
+        }
     }
     fn rewrites_frontmatter_name(&self) -> bool {
         true

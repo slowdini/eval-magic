@@ -20,7 +20,7 @@ use crate::sandbox::install::{
 use crate::sandbox::{now_ms, parse_tool_call};
 
 /// Tool names the Claude Code PreToolUse hook fires on.
-const HOOK_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
+pub(crate) const HOOK_MATCHER: &str = "Write|Edit|MultiEdit|NotebookEdit|Bash";
 
 /// Arm the write guard using Claude Code's project-local hook surface. Returns
 /// the staged marker path.

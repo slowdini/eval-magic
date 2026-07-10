@@ -20,7 +20,9 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
-use super::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter};
+use super::harness::{
+    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, ToolVocabulary,
+};
 use super::skill_shadow::PluginShadowReport;
 use cli::{
     claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
@@ -46,6 +48,16 @@ impl HarnessAdapter for ClaudeCodeAdapter {
     }
     fn config_dir_names(&self) -> Vec<String> {
         vec![".claude".to_string()]
+    }
+    fn tool_vocabulary(&self) -> ToolVocabulary {
+        ToolVocabulary {
+            write_tools: ["Edit", "MultiEdit", "NotebookEdit", "Write"]
+                .map(String::from)
+                .to_vec(),
+            patch_tools: Vec::new(),
+            shell_tools: vec!["Bash".to_string()],
+            read_tools: ["Glob", "Grep", "Read"].map(String::from).to_vec(),
+        }
     }
     fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
         render_available_skills_block(skills)

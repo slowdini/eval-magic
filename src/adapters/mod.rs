@@ -17,7 +17,7 @@ pub mod transcript;
 
 pub use harness::{
     CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
-    adapter_for, all_config_dir_names,
+    ToolVocabulary, adapter_for, all_config_dir_names, all_tool_vocabulary,
 };
 pub use skill_shadow::{
     PluginShadowReport, ShadowSource, format_shadow_banner, shadow_validity_warnings,

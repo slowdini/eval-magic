@@ -10,7 +10,10 @@ use chrono::DateTime;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::policy::{apply_patch_paths, classify_bash, is_under_any, is_write_tool, path_arg};
+use super::policy::{
+    apply_patch_paths, classify_bash, is_patch_tool, is_shell_tool, is_under_any, is_write_tool,
+    path_arg,
+};
 
 /// The staged marker file that arms the guard. The guard is a no-op unless this
 /// file exists, is active, and has not expired — so a crashed run that never tore
@@ -101,31 +104,30 @@ pub fn decide(
         return GuardDecision::allow();
     }
 
-    if tool_name == "apply_patch" {
+    if is_patch_tool(tool_name) {
         let paths = apply_patch_paths(tool_input);
         if paths.is_empty() {
-            return GuardDecision::deny(
-                "eval guard: blocked apply_patch because no patch target path could be determined"
-                    .to_string(),
-            );
+            return GuardDecision::deny(format!(
+                "eval guard: blocked {tool_name} because no patch target path could be determined"
+            ));
         }
         if let Some(path) = paths.iter().find(|p| !is_under_any(p, &roots, &repo_root)) {
             return GuardDecision::deny(format!(
-                "eval guard: apply_patch target {path} is outside the eval sandbox (allowed: {})",
+                "eval guard: {tool_name} target {path} is outside the eval sandbox (allowed: {})",
                 roots.join(", ")
             ));
         }
         return GuardDecision::allow();
     }
 
-    if tool_name == "Bash" {
+    if is_shell_tool(tool_name) {
         let command = tool_input
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or("");
         if let Some(reason) = classify_bash(command, &roots) {
             return GuardDecision::deny(format!(
-                "eval guard: blocked Bash ({reason}) — runs outside the eval sandbox"
+                "eval guard: blocked {tool_name} ({reason}) — runs outside the eval sandbox"
             ));
         }
     }

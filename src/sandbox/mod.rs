@@ -18,7 +18,7 @@ pub(crate) use guard::parse_tool_call;
 pub use guard::read_marker;
 pub(crate) use install::guard_is_armed;
 pub use install::{GUARD_MANIFEST, GUARD_MARKER, teardown_guard};
-pub use policy::{WRITE_TOOLS, classify_bash, is_under, is_under_any, is_write_tool, path_arg};
+pub use policy::{classify_bash, is_shell_tool, is_under, is_under_any, is_write_tool, path_arg};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

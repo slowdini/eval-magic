@@ -3,8 +3,8 @@
 //! Classifies a run's tool
 //! invocations against its allowed outputs dir:
 //!
-//! - **violations**: file-write tools (Write/Edit/MultiEdit/NotebookEdit/Codex
-//!   `file_change`) whose target path resolves outside the outputs dir.
+//! - **violations**: file-write tools (per the adapters' cross-harness
+//!   vocabulary union) whose target path resolves outside the outputs dir.
 //! - **warnings**: shell commands matching a mutating pattern that don't
 //!   reference the outputs dir (via the sandbox `classify_bash` policy).
 //! - **live_source_reads**: read tools / shell commands that touched the live
@@ -14,22 +14,18 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::all_config_dir_names;
+use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
 use crate::pipeline::slots::{run_key, run_slots};
-use crate::sandbox::{WRITE_TOOLS, classify_bash, is_under, path_arg};
+use crate::sandbox::{classify_bash, is_shell_tool, is_under, is_write_tool, path_arg};
 use crate::validation::{SchemaName, validate_against_schema};
 
-/// Shell-execution tools across harnesses.
-const SHELL_TOOLS: [&str; 2] = ["Bash", "command_execution"];
-/// Read-only tools that carry a target path argument.
-const READ_TOOLS: [&str; 3] = ["Read", "Glob", "Grep"];
-
-/// A file-write tool: a sandbox write tool, or Codex's `file_change`.
-fn is_file_write_tool(name: &str) -> bool {
-    WRITE_TOOLS.contains(&name) || name == "file_change"
+/// A read-only tool carrying a target path argument, in any harness's
+/// vocabulary.
+fn is_read_tool(name: &str) -> bool {
+    all_tool_vocabulary().read_tools.iter().any(|t| t == name)
 }
 
 const LIVE_SOURCE_REASON: &str =
@@ -74,7 +70,7 @@ pub fn detect_stray_writes(
     let mut findings = RunFindings::default();
 
     for inv in invocations {
-        if is_file_write_tool(&inv.name) {
+        if is_write_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
                 && !is_under(p, outputs_dir, repo_root)
             {
@@ -89,7 +85,7 @@ pub fn detect_stray_writes(
             continue;
         }
 
-        if SHELL_TOOLS.contains(&inv.name.as_str()) {
+        if is_shell_tool(&inv.name) {
             let command = command_of(inv);
             if let Some(reason) =
                 classify_bash(command, std::slice::from_ref(&outputs_dir.to_string()))
@@ -190,7 +186,7 @@ pub fn detect_live_source_reads(
     let config_dirs = all_config_dir_names();
 
     for inv in invocations {
-        if READ_TOOLS.contains(&inv.name.as_str()) {
+        if is_read_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
                 && is_under(p, &live_dir_str, repo_root)
             {
@@ -205,7 +201,7 @@ pub fn detect_live_source_reads(
             continue;
         }
 
-        if SHELL_TOOLS.contains(&inv.name.as_str()) {
+        if is_shell_tool(&inv.name) {
             let command = command_of(inv);
             if command.contains(live_dir_str.as_ref())
                 || (rel_usable && references_bare_rel(command, &rel, &config_dirs))
