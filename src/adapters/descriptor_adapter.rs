@@ -331,204 +331,170 @@ impl HarnessAdapter for DescriptorAdapter {
 
 #[cfg(test)]
 mod tests {
-    use std::path::{Path, PathBuf};
+    use std::path::Path;
 
-    use super::*;
-    use crate::adapters::descriptor::{EMBEDDED_DESCRIPTORS, load_descriptor};
-    use crate::adapters::harness::{
-        CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, adapter_for,
-    };
+    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext, adapter_for};
     use crate::core::{AvailableSkill, Harness};
 
-    fn descriptor_adapter(harness: Harness) -> DescriptorAdapter {
-        let index = Harness::ALL
-            .iter()
-            .position(|&h| h == harness)
-            .expect("harness is built in");
-        let (source, toml_src) = EMBEDDED_DESCRIPTORS[index];
-        DescriptorAdapter::from_descriptor(
-            load_descriptor(toml_src, source)
-                .unwrap_or_else(|e| panic!("embedded descriptor {source} is invalid: {e}")),
-        )
-    }
-
-    fn sample_skills() -> Vec<AvailableSkill> {
-        vec![
-            AvailableSkill {
-                name: "zeta-skill".to_string(),
-                path: "/x/zeta-skill/SKILL.md".to_string(),
-                description: "Does zeta things.".to_string(),
-            },
-            AvailableSkill {
-                name: "alpha-skill".to_string(),
-                path: "/x/alpha-skill/SKILL.md".to_string(),
-                description: "Does alpha things.".to_string(),
-            },
-        ]
-    }
-
-    /// Transitional equivalence pin for the descriptor cutover: every
-    /// observable method of the descriptor-backed adapter matches the legacy
-    /// hand-written adapter, across the guard × model context matrix. Deleted
-    /// with the legacy adapters once `adapter_for` routes through the
-    /// registry.
-    #[test]
-    fn descriptor_adapter_matches_legacy_adapter_observable_surface() {
-        let root = Path::new("/repo");
-        let stage_root = Path::new("/stage");
-        let iteration_dir = PathBuf::from("/work/iter-1");
-
-        for harness in Harness::ALL {
-            let legacy = adapter_for(harness);
-            let new = descriptor_adapter(harness);
-
-            assert_eq!(new.label(), legacy.label());
-            assert_eq!(new.skills_dir(root), legacy.skills_dir(root));
-            assert_eq!(new.run_capabilities(), legacy.run_capabilities());
-            assert_eq!(new.config_dir_names(), legacy.config_dir_names());
-            assert_eq!(new.tool_vocabulary(), legacy.tool_vocabulary());
-            assert_eq!(
-                new.rewrites_frontmatter_name(),
-                legacy.rewrites_frontmatter_name()
-            );
-            assert_eq!(
-                new.advertises_staged_slug_name(),
-                legacy.advertises_staged_slug_name()
-            );
-            assert_eq!(new.skill_surface_phrase(), legacy.skill_surface_phrase());
-            assert_eq!(
-                new.skill_unresolved_phrase(),
-                legacy.skill_unresolved_phrase()
-            );
-            assert_eq!(new.cli_events_filename(), legacy.cli_events_filename());
-            assert_eq!(new.cli_model_flag(), legacy.cli_model_flag());
-            assert_eq!(new.guard_armed_message(), legacy.guard_armed_message());
-            assert_eq!(
-                new.transcript_surfaces_skill_invocation(),
-                legacy.transcript_surfaces_skill_invocation()
-            );
-            assert_eq!(
-                new.guard_hook_cleanup_dir(stage_root),
-                legacy.guard_hook_cleanup_dir(stage_root)
-            );
-            assert_eq!(
-                new.render_plan_mode_context("  PLAN\n"),
-                legacy.render_plan_mode_context("  PLAN\n")
-            );
-            assert_eq!(new.render_plan_mode_context(" "), "");
-
-            // Staging: generated slugs and naming-rule verdicts.
-            for (prefix, iteration, condition, skill) in [
-                ("slow-powers-eval-", 2, "with_skill", "my-skill"),
-                ("slow-powers-eval-", 7, "no_skill", "Very_Loud.Skill"),
-                (
-                    "slow-powers-eval-",
-                    1,
-                    "with_skill",
-                    "a-skill-name-clearly-engineered-to-overflow-opencodes-limit-of-sixty-four",
-                ),
-            ] {
-                assert_eq!(
-                    new.staged_slug(prefix, iteration, condition, skill),
-                    legacy.staged_slug(prefix, iteration, condition, skill),
-                    "{harness:?} slug for {condition}/{skill}"
-                );
-            }
-            for name in [
-                "valid-name",
-                "slow-powers-eval-2-with-skill-my-skill",
-                "Invalid_Name",
-                "double--hyphen",
-                "-leading",
-            ] {
-                assert_eq!(
-                    new.validate_stage_name(name),
-                    legacy.validate_stage_name(name),
-                    "{harness:?} stage-name verdict for {name}"
-                );
-            }
-
-            // Skills block: native shape, sortedness, and the empty guard.
-            assert_eq!(
-                new.render_available_skills_block(&sample_skills()),
-                legacy.render_available_skills_block(&sample_skills())
-            );
-            assert_eq!(new.render_available_skills_block(&[]), "");
-
-            // Dispatch recipes across the guard × model matrix.
-            for guard in [false, true] {
-                for agent_model in [None, Some("model-x")] {
-                    let ctx = CliDispatchContext {
-                        guard,
-                        target_args: " --skill-dir /tmp/skills --skill widget-skill",
-                        iteration: 2,
-                        agent_model,
-                    };
-                    assert_eq!(
-                        new.cli_next_steps(ctx),
-                        legacy.cli_next_steps(CliDispatchContext {
-                            guard,
-                            target_args: " --skill-dir /tmp/skills --skill widget-skill",
-                            iteration: 2,
-                            agent_model,
-                        }),
-                        "{harness:?} next steps guard={guard} model={agent_model:?}"
-                    );
-                    // The manifest consumer joins the lines with '\n'
-                    // (build_manifest), so equivalence holds on the joined
-                    // text — the descriptor path splits multi-line commands
-                    // into more elements than the legacy hand-built vec.
-                    assert_eq!(
-                        new.cli_manifest_section(CliManifestContext { guard, agent_model })
-                            .map(|lines| lines.join("\n")),
-                        legacy
-                            .cli_manifest_section(CliManifestContext { guard, agent_model })
-                            .map(|lines| lines.join("\n")),
-                        "{harness:?} manifest guard={guard} model={agent_model:?}"
-                    );
-                }
-                assert_eq!(
-                    new.cli_judge_next_steps(CliJudgeContext {
-                        guard,
-                        iteration_dir: &iteration_dir,
-                    }),
-                    legacy.cli_judge_next_steps(CliJudgeContext {
-                        guard,
-                        iteration_dir: &iteration_dir,
-                    }),
-                    "{harness:?} judge recipe guard={guard}"
-                );
-            }
-
-            // Unsupported-enhancement errors carry the same kind and message.
-            if new.cli_events_filename().is_none() {
-                let new_err = new.parse_cli_events(Path::new("/nope")).unwrap_err();
-                let legacy_err = legacy.parse_cli_events(Path::new("/nope")).unwrap_err();
-                assert_eq!(new_err.kind(), legacy_err.kind());
-                assert_eq!(new_err.to_string(), legacy_err.to_string());
-                let new_err = new.parse_cli_events_full(Path::new("/nope")).unwrap_err();
-                let legacy_err = legacy
-                    .parse_cli_events_full(Path::new("/nope"))
-                    .unwrap_err();
-                assert_eq!(new_err.to_string(), legacy_err.to_string());
-            }
-            if !new.run_capabilities().supports_guard {
-                let new_err = new
-                    .install_guard(stage_root, Path::new("/bin/guard"), None)
-                    .unwrap_err();
-                let legacy_err = legacy
-                    .install_guard(stage_root, Path::new("/bin/guard"), None)
-                    .unwrap_err();
-                assert_eq!(new_err.kind(), legacy_err.kind());
-                assert_eq!(new_err.to_string(), legacy_err.to_string());
-            }
-
-            // Shadow preflight: only Claude Code wires one; on a bare scan
-            // root both sides agree (None for the others by construction).
-            if harness != Harness::ClaudeCode {
-                assert!(new.detect_shadowed_skills(root, &["x"]).is_none());
-                assert!(legacy.detect_shadowed_skills(root, &["x"]).is_none());
-            }
+    fn skill(name: &str, description: &str) -> AvailableSkill {
+        AvailableSkill {
+            name: name.into(),
+            path: format!("/x/{name}/SKILL.md"),
+            description: description.into(),
         }
+    }
+
+    fn next_steps(harness: Harness, agent_model: Option<&str>) -> String {
+        adapter_for(harness).cli_next_steps(CliDispatchContext {
+            guard: harness == Harness::Codex,
+            target_args: " --skill-dir /tmp/skills --skill widget-skill",
+            iteration: 2,
+            agent_model,
+        })
+    }
+
+    #[test]
+    fn exec_recipe_includes_model_only_when_declared() {
+        let with = next_steps(Harness::ClaudeCode, Some("opus"));
+        assert!(with.contains("--model opus"), "{with}");
+        let without = next_steps(Harness::ClaudeCode, None);
+        assert!(!without.contains("--model "), "{without}");
+    }
+
+    #[test]
+    fn codex_recipes_gate_hook_trust_on_guard() {
+        let guarded = next_steps(Harness::Codex, Some("gpt-5-mini"));
+        assert!(
+            guarded.contains(
+                "codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust -m gpt-5-mini --json \\"
+            ),
+            "{guarded}"
+        );
+        let unguarded = adapter_for(Harness::Codex).cli_next_steps(CliDispatchContext {
+            guard: false,
+            target_args: "",
+            iteration: 2,
+            agent_model: None,
+        });
+        assert!(
+            !unguarded.contains("--dangerously-bypass-hook-trust"),
+            "{unguarded}"
+        );
+    }
+
+    #[test]
+    fn codex_judge_recipe_splices_model_arg_in_one_command_shape() {
+        let recipe = adapter_for(Harness::Codex)
+            .cli_judge_next_steps(CliJudgeContext {
+                guard: true,
+                iteration_dir: Path::new("/work/iter-1"),
+            })
+            .expect("codex judge recipe is wired");
+        // One command shape: the optional model flag is spliced via $model_arg
+        // (same structure as the Claude judge recipe), not an if/else pair.
+        assert!(
+            recipe.contains(
+                "    codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write --dangerously-bypass-hook-trust $model_arg --json \\"
+            ),
+            "{recipe}"
+        );
+        assert!(
+            recipe.contains("    model_arg=\"\"; [ -n \"$model\" ] && model_arg=\"-m $model\""),
+            "{recipe}"
+        );
+        assert!(!recipe.contains("if [ -n"), "{recipe}");
+    }
+
+    #[test]
+    fn claude_judge_recipe_snapshot_is_stable() {
+        // Full-string pin carried over from the pre-descriptor adapter: locks
+        // the Claude judge recipe byte-for-byte through the descriptor path.
+        let recipe = adapter_for(Harness::ClaudeCode)
+            .cli_judge_next_steps(CliJudgeContext {
+                guard: false,
+                iteration_dir: Path::new("/work/iter-1"),
+            })
+            .expect("claude judge recipe is wired");
+        let expected = r#"Dispatch each judge task from judge-tasks.json with:
+
+```bash
+JOBS=${JOBS:-4}
+jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv + "\u0000"' judge-tasks.json | \
+  xargs -0 -P "$JOBS" -I{} sh -c '
+    prompt_path="$(printf "%s" "$1" | cut -f1)"
+    response_path="$(printf "%s" "$1" | cut -f2)"
+    model="$(printf "%s" "$1" | cut -f3)"
+    response_base="${response_path%.json}"
+    mkdir -p "$(dirname "$response_path")"
+    model_arg=""; [ -n "$model" ] && model_arg="--model $model"
+    cd "/work/iter-1" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \
+      "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
+      </dev/null \
+      > "$response_base.claude-events.jsonl" \
+      2> "$response_base.claude-stderr.log"
+  ' sh {}
+```"#;
+        assert_eq!(recipe, expected);
+    }
+
+    #[test]
+    fn skills_blocks_render_each_harness_native_shape() {
+        let skills = vec![skill("zebra", "z skill"), skill("alpha", "a skill")];
+
+        let claude = adapter_for(Harness::ClaudeCode).render_available_skills_block(&skills);
+        assert!(
+            claude.starts_with("The following skills are available for use with the Skill tool:"),
+            "{claude}"
+        );
+        assert!(claude.contains("\n- alpha: a skill"), "{claude}");
+
+        let codex = adapter_for(Harness::Codex).render_available_skills_block(&skills);
+        assert!(codex.starts_with("## Skills"), "{codex}");
+        assert!(
+            codex.contains("- alpha: a skill (file: /x/alpha/SKILL.md)"),
+            "{codex}"
+        );
+
+        let opencode = adapter_for(Harness::OpenCode).render_available_skills_block(&skills);
+        assert!(opencode.starts_with("<available_skills>"), "{opencode}");
+        assert!(opencode.ends_with("\n</available_skills>"), "{opencode}");
+        assert!(opencode.contains("<name>alpha</name>"), "{opencode}");
+        assert!(
+            opencode.contains("<description>a skill</description>"),
+            "{opencode}"
+        );
+
+        // Sorted by name in every shape, and empty renders empty.
+        for harness in Harness::ALL {
+            let block = adapter_for(harness).render_available_skills_block(&skills);
+            assert!(
+                block.find("alpha").unwrap() < block.find("zebra").unwrap(),
+                "{harness:?} sorts by name: {block}"
+            );
+            assert_eq!(adapter_for(harness).render_available_skills_block(&[]), "");
+        }
+    }
+
+    #[test]
+    fn opencode_stage_name_rules_match_the_old_validator() {
+        let adapter = adapter_for(Harness::OpenCode);
+        assert!(adapter.validate_stage_name("valid-name-2").is_ok());
+        for invalid in [
+            "Invalid_Name",
+            "double--hyphen",
+            "-leading",
+            "trailing-",
+            "",
+        ] {
+            let err = adapter
+                .validate_stage_name(invalid)
+                .expect_err("name should be rejected");
+            assert!(
+                err.contains(&format!("OpenCode skill name \"{invalid}\" is invalid")),
+                "{err}"
+            );
+        }
+        assert!(adapter.validate_stage_name(&"a".repeat(64)).is_ok());
+        assert!(adapter.validate_stage_name(&"a".repeat(65)).is_err());
     }
 }

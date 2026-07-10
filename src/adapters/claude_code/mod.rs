@@ -1,145 +1,15 @@
 //! Claude Code harness support — the default harness.
 //!
-//! Everything Claude-Code-specific lives in this module tree: the adapter impl
-//! (this file), dispatch-recipe rendering ([`cli`]), the native skills block
-//! ([`session`]), `claude -p` stream-json transcript parsing ([`stream_json`] +
+//! The declarative half of this harness lives in `harnesses/claude-code.toml`;
+//! this module tree keeps only the code-backed capabilities the descriptor
+//! references: `claude -p` stream-json transcript parsing ([`stream_json`] +
 //! [`transcript`]), plugin-shadow detection ([`plugin_shadow`]), and the
 //! write-guard hook ([`guard`]).
 
-mod cli;
 pub(crate) mod guard;
 pub mod plugin_shadow;
-pub mod session;
 pub mod stream_json;
 pub mod transcript;
-
-use std::io;
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
-
-use super::TranscriptSummary;
-use super::harness::{
-    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, ToolVocabulary,
-};
-use super::skill_shadow::PluginShadowReport;
-use cli::{
-    claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
-};
-use session::render_available_skills_block;
-use stream_json::{parse_claude_stream_json, parse_claude_stream_json_full};
-
-pub struct ClaudeCodeAdapter;
-
-impl HarnessAdapter for ClaudeCodeAdapter {
-    fn label(&self) -> String {
-        "claude-code".to_string()
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".claude").join("skills")
-    }
-    fn run_capabilities(&self) -> HarnessRunCapabilities {
-        HarnessRunCapabilities {
-            supports_guard: true,
-            supports_bootstrap_with_no_stage: true,
-            supports_stage_name_with_no_stage: true,
-        }
-    }
-    fn config_dir_names(&self) -> Vec<String> {
-        vec![".claude".to_string()]
-    }
-    fn tool_vocabulary(&self) -> ToolVocabulary {
-        ToolVocabulary {
-            write_tools: ["Edit", "MultiEdit", "NotebookEdit", "Write"]
-                .map(String::from)
-                .to_vec(),
-            patch_tools: Vec::new(),
-            shell_tools: vec!["Bash".to_string()],
-            read_tools: ["Glob", "Grep", "Read"].map(String::from).to_vec(),
-        }
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> String {
-        "via the Skill tool".to_string()
-    }
-    fn skill_unresolved_phrase(&self) -> String {
-        "If the Skill tool cannot resolve that identifier".to_string()
-    }
-    fn cli_events_filename(&self) -> Option<String> {
-        Some("claude-events.jsonl".to_string())
-    }
-    fn cli_model_flag(&self) -> Option<String> {
-        Some("--model".to_string())
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness claude-code`.",
-            claude_exec_command_template(self.cli_model_flag().as_deref(), ctx.agent_model),
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        Some(vec![
-            "After all dispatches (Claude Code):".to_string(),
-            String::new(),
-            "Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            claude_exec_command_template(self.cli_model_flag().as_deref(), ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Parallel dispatch from this iteration directory:".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            claude_parallel_dispatch_recipe(self.cli_model_flag().as_deref(), ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
-            String::new(),
-        ])
-    }
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
-        Some(claude_judge_dispatch_recipe(
-            self.cli_model_flag().as_deref(),
-            ctx.iteration_dir,
-        ))
-    }
-    fn detect_shadowed_skills(
-        &self,
-        scan_root: &Path,
-        staged_skill_names: &[&str],
-    ) -> Option<PluginShadowReport> {
-        plugin_shadow::shadow_preflight(
-            &plugin_shadow::config_dir_from_env(),
-            scan_root,
-            staged_skill_names,
-        )
-    }
-    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_claude_stream_json(path)
-    }
-    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_claude_stream_json_full(path)
-    }
-    fn install_guard(
-        &self,
-        stage_root: &Path,
-        guard_exe: &Path,
-        ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        guard::install_guard(stage_root, guard_exe, ttl)
-    }
-    fn guard_armed_message(&self) -> Option<String> {
-        Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches.\n   Each `claude -p` dispatch loads the hook from the env cwd it runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard"
-                .to_string(),
-        )
-    }
-}
 
 #[cfg(test)]
 mod tests {

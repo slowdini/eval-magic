@@ -1,79 +1,9 @@
 //! OpenCode harness support.
 //!
-//! Everything OpenCode-specific lives in this module tree: the adapter impl and
-//! slug/naming rules (this file) and the `<available_skills>` XML block
-//! ([`session`]). Transcript ingest, the model flag, and the write guard are
-//! not wired yet; the trait's enhancement defaults cover them.
-
-pub mod session;
-
-use std::path::{Path, PathBuf};
-
-use crate::core::AvailableSkill;
-
-use super::harness::{CliDispatchContext, HarnessAdapter};
-use session::render_opencode_available_skills_block;
-
-pub struct OpenCodeAdapter;
-
-impl HarnessAdapter for OpenCodeAdapter {
-    fn label(&self) -> String {
-        "opencode".to_string()
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".opencode").join("skills")
-    }
-    fn config_dir_names(&self) -> Vec<String> {
-        vec![".opencode".to_string()]
-    }
-    // OpenCode's constrained naming rules need a sanitized slug; the generated
-    // slug and any --stage-name override are validated against the same rules.
-    fn staged_slug(
-        &self,
-        prefix: &str,
-        iteration: u32,
-        condition: &str,
-        skill_name: &str,
-    ) -> String {
-        opencode_slug(prefix, iteration, condition, skill_name)
-    }
-    fn validate_stage_name(&self, name: &str) -> Result<(), String> {
-        if is_valid_opencode_name(name) {
-            Ok(())
-        } else {
-            Err(format!(
-                "OpenCode skill name \"{name}\" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens"
-            ))
-        }
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        true
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_opencode_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> String {
-        "as an OpenCode skill".to_string()
-    }
-    fn skill_unresolved_phrase(&self) -> String {
-        "If it does not load as an OpenCode skill".to_string()
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        let model_note = if ctx.agent_model.is_some() {
-            " Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet."
-        } else {
-            ""
-        };
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`.{model_note} OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`.",
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    // Transcript ingest, the model flag, and the write guard are not wired for
-    // OpenCode: the trait's enhancement defaults (unsupported-errors and
-    // `None`s) apply as-is.
-}
+//! The declarative half of this harness lives in `harnesses/opencode.toml`
+//! (including the stage-name rules, expressed as a regex + length cap); this
+//! file keeps only the code-backed `opencode` slug capability — sanitization
+//! and truncation the descriptor's format-string template cannot express.
 
 /// True when `name` satisfies OpenCode's skill-name rules:
 /// - 1–64 characters

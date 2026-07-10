@@ -30,6 +30,8 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, Harness, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
+use super::descriptor::{EMBEDDED_DESCRIPTORS, load_descriptor};
+use super::descriptor_adapter::DescriptorAdapter;
 use super::skill_shadow::PluginShadowReport;
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
@@ -354,14 +356,50 @@ pub struct CliJudgeContext<'a> {
     pub iteration_dir: &'a Path,
 }
 
+/// The built-in adapters, one descriptor-backed adapter per [`Harness`]
+/// variant, loaded once from the embedded descriptor files.
+struct Registry {
+    claude_code: DescriptorAdapter,
+    codex: DescriptorAdapter,
+    opencode: DescriptorAdapter,
+}
+
+/// Built on first `adapter_for` call. The embedded descriptors are bundled and
+/// known-valid, so a load failure here is a programmer error (a bad descriptor
+/// edit) and panics — mirroring the bundled-schema panics in
+/// `validation::schema` — with the descriptor's own actionable message.
+static REGISTRY: LazyLock<Registry> = LazyLock::new(|| Registry {
+    claude_code: build_embedded(Harness::ClaudeCode, EMBEDDED_DESCRIPTORS[0]),
+    codex: build_embedded(Harness::Codex, EMBEDDED_DESCRIPTORS[1]),
+    opencode: build_embedded(Harness::OpenCode, EMBEDDED_DESCRIPTORS[2]),
+});
+
+fn build_embedded(harness: Harness, (source, toml_src): (&str, &str)) -> DescriptorAdapter {
+    let descriptor = load_descriptor(toml_src, source)
+        .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"));
+    // Label ↔ variant lockstep: the descriptor's label must be the variant's
+    // serde/CLI identifier, or `--harness <label>` and the descriptor would
+    // name different harnesses.
+    let expected = serde_json::to_value(harness)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .expect("Harness serializes to its kebab-case identifier");
+    assert_eq!(
+        descriptor.label, expected,
+        "bundled descriptor {source} label {:?} does not match the {expected} harness identifier",
+        descriptor.label
+    );
+    DescriptorAdapter::from_descriptor(descriptor)
+}
+
 /// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
 /// the harness variant for all harness-specific behavior; every other module
 /// goes through the returned trait object.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
     match harness {
-        Harness::ClaudeCode => &super::claude_code::ClaudeCodeAdapter,
-        Harness::Codex => &super::codex::CodexAdapter,
-        Harness::OpenCode => &super::opencode::OpenCodeAdapter,
+        Harness::ClaudeCode => &REGISTRY.claude_code,
+        Harness::Codex => &REGISTRY.codex,
+        Harness::OpenCode => &REGISTRY.opencode,
     }
 }
 
@@ -430,86 +468,13 @@ mod tests {
         assert_eq!(vocab.read_tools, ["Glob", "Grep", "Read"]);
     }
 
-    #[test]
-    fn guard_hook_matcher_names_are_declared_in_the_vocabulary() {
-        // Every tool name a harness's guard hook can deliver must be declared in
-        // its vocabulary, or the arbiter would silently wave the tool through.
-        let matchers = [
-            (
-                Harness::ClaudeCode,
-                crate::adapters::claude_code::guard::HOOK_MATCHER,
-            ),
-            (Harness::Codex, crate::adapters::codex::guard::HOOK_MATCHER),
-        ];
-        let guard_wired = Harness::ALL
-            .iter()
-            .filter(|&&h| adapter_for(h).run_capabilities().supports_guard)
-            .count();
-        assert_eq!(
-            guard_wired,
-            matchers.len(),
-            "every guard-wired harness's HOOK_MATCHER must be checked here"
-        );
-        for (h, matcher) in matchers {
-            let vocab = adapter_for(h).tool_vocabulary();
-            for token in matcher.split('|') {
-                let name = token.trim_matches(|c| c == '^' || c == '$');
-                let declared = vocab
-                    .write_tools
-                    .iter()
-                    .chain(vocab.patch_tools.iter())
-                    .chain(vocab.shell_tools.iter())
-                    .any(|t| t == name);
-                assert!(
-                    declared,
-                    "{h:?} hook matcher tool {name} is missing from its tool_vocabulary"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn transcript_parser_implies_stray_writes_vocabulary() {
-        // A harness with a transcript parser but no declared tool names would
-        // make detect-stray-writes silently audit nothing for it.
-        for &h in Harness::ALL.iter() {
-            let adapter = adapter_for(h);
-            if adapter.cli_events_filename().is_none() {
-                continue;
-            }
-            let vocab = adapter.tool_vocabulary();
-            assert!(
-                !vocab.write_tools.is_empty(),
-                "{h:?} parses transcripts but declares no write tools"
-            );
-            assert!(
-                !vocab.shell_tools.is_empty(),
-                "{h:?} parses transcripts but declares no shell tools"
-            );
-        }
-    }
-
-    #[test]
-    fn tool_vocabulary_roles_are_disjoint_per_harness() {
-        for &h in Harness::ALL.iter() {
-            let vocab = adapter_for(h).tool_vocabulary();
-            let mut all: Vec<&String> = vocab
-                .write_tools
-                .iter()
-                .chain(vocab.patch_tools.iter())
-                .chain(vocab.shell_tools.iter())
-                .chain(vocab.read_tools.iter())
-                .collect();
-            let total = all.len();
-            all.sort_unstable();
-            all.dedup();
-            assert_eq!(
-                total,
-                all.len(),
-                "{h:?} declares a tool name in more than one vocabulary role"
-            );
-        }
-    }
+    // The old cross-method invariant tests (guard/banner lockstep, hook-matcher
+    // ⊆ vocabulary, transcript ⇒ stray-writes vocabulary, role disjointness,
+    // slug ↔ naming rules, config-dirs ⊇ skills-dir parent) now run at
+    // descriptor load time — see `descriptor::validate_descriptor` and its
+    // per-invariant rejection tests. The registry's LazyLock panics on any
+    // violation, and `descriptor::tests::embedded_descriptors_load_and_validate`
+    // keeps that on the CI path. What stays here are the per-value pins.
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
@@ -584,22 +549,6 @@ mod tests {
     }
 
     #[test]
-    fn guard_support_and_guard_banner_stay_in_lockstep() {
-        // `run_capabilities().supports_guard` gates the `--guard` preflight and
-        // `guard_armed_message()` is the post-arm banner — an adapter wiring or
-        // dropping the write-guard enhancement must update both.
-        for h in Harness::ALL {
-            let a = adapter_for(h);
-            assert_eq!(
-                a.run_capabilities().supports_guard,
-                a.guard_armed_message().is_some(),
-                "guard capability and banner disagree for {}",
-                a.label()
-            );
-        }
-    }
-
-    #[test]
     fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
         // The post-arm `--guard` banner names the harness's native hook surface,
         // so it lives behind the adapter rather than in generic run code.
@@ -627,14 +576,6 @@ mod tests {
     #[test]
     fn staged_slug_default_and_opencode_override_preserve_the_prefix() {
         let prefix = "slow-powers-eval-";
-        for h in Harness::ALL {
-            let slug = adapter_for(h).staged_slug(prefix, 2, "with_skill", "my-skill");
-            assert!(slug.starts_with(prefix), "{slug}");
-            assert!(
-                adapter_for(h).validate_stage_name(&slug).is_ok(),
-                "each harness's generated slug passes its own naming rules: {slug}"
-            );
-        }
         assert_eq!(
             adapter_for(Harness::ClaudeCode).staged_slug(prefix, 2, "with_skill", "my-skill"),
             "slow-powers-eval-2-with_skill__my-skill"
@@ -643,30 +584,5 @@ mod tests {
             adapter_for(Harness::OpenCode).staged_slug(prefix, 2, "with_skill", "my-skill"),
             "slow-powers-eval-2-with-skill-my-skill"
         );
-    }
-
-    #[test]
-    fn every_config_dir_list_covers_the_skills_dir_parent() {
-        // Staging's sibling-asset filter unions config_dir_names() across all
-        // harnesses; each adapter must at least name the dir its skills live
-        // under so a checked-in copy never rides into a staged env.
-        let root = Path::new("");
-        for h in Harness::ALL {
-            let a = adapter_for(h);
-            let skills_dir = a.skills_dir(root);
-            let top = skills_dir
-                .components()
-                .next()
-                .expect("skills dir has a leading component")
-                .as_os_str()
-                .to_string_lossy()
-                .into_owned();
-            assert!(
-                a.config_dir_names().contains(&top),
-                "{} config_dir_names {:?} misses {top}",
-                a.label(),
-                a.config_dir_names()
-            );
-        }
     }
 }
