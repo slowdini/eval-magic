@@ -6,15 +6,15 @@
 
 ## Code map
 
-Everything Codex-specific lives under `src/adapters/codex/`:
+The declarative half (label, dirs, phrases, command templates, banner) is the descriptor file
+`harnesses/codex.toml`; `src/adapters/codex/` keeps only the code capabilities the descriptor
+references:
 
 | File | What's in it |
 |------|--------------|
-| `mod.rs` | `CodexAdapter` — the trait impl |
-| `cli.rs` | `codex exec` exec / parallel / judge recipe rendering |
-| `session.rs` | native `## Skills` markdown block |
-| `transcript.rs` | `item.completed` event-stream parsing |
-| `guard.rs` | write-guard hook install + `{"decision": "block"}` verdict |
+| `harnesses/codex.toml` | the descriptor — every declarative value + capability references |
+| `transcript.rs` | `item.completed` event-stream parsing (`codex-items`) |
+| `guard.rs` | write-guard hook install + `{"decision": "block"}` verdict (`codex-hooks`) |
 
 ## Dispatch (`codex exec`)
 

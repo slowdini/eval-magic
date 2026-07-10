@@ -287,7 +287,8 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 
 ## Bundled assets
 
-- `schema/` — JSON Schemas for every artifact (`evals`, run records, `grading`, `stray-writes`, `benchmark`, `judge-tasks`); the portable cross-harness contract, embedded in the binary
+- `schema/` — JSON Schemas for every artifact (`evals`, run records, `grading`, `stray-writes`, `benchmark`, `judge-tasks`, harness descriptors); the portable cross-harness contract, embedded in the binary
+- `harnesses/` — the built-in harness descriptor files (one TOML per harness: declarative values plus named-capability references), schema-validated and embedded in the binary
 - `profiles/` — the shared plan-mode procedure profile (`--plan-mode`) and runbook templates, embedded in the binary
 
 ## Development

@@ -6,17 +6,17 @@
 
 ## Code map
 
-Everything Claude-Code-specific lives under `src/adapters/claude_code/`:
+The declarative half (label, dirs, phrases, command templates, banner) is the descriptor file
+`harnesses/claude-code.toml`; `src/adapters/claude_code/` keeps only the code capabilities the
+descriptor references:
 
 | File | What's in it |
 |------|--------------|
-| `mod.rs` | `ClaudeCodeAdapter` — the trait impl |
-| `cli.rs` | `claude -p` exec / parallel / judge recipe rendering |
-| `session.rs` | native available-skills block (Skill-tool list) |
-| `stream_json.rs` | `-p --output-format stream-json` transcript parsing |
+| `harnesses/claude-code.toml` | the descriptor — every declarative value + capability references |
+| `stream_json.rs` | `-p --output-format stream-json` transcript parsing (`claude-stream-json`) |
 | `transcript.rs` | JSONL record shapes + shared tool-call extractors |
-| `plugin_shadow.rs` | plugin-shadow detection + isolation banner |
-| `guard.rs` | write-guard hook install + `hookSpecificOutput` deny verdict |
+| `plugin_shadow.rs` | plugin-shadow detection + isolation banner (`claude-plugins`) |
+| `guard.rs` | write-guard hook install + `hookSpecificOutput` deny verdict (`claude-hooks`) |
 
 ## Dispatch quirks (all forced by the `claude` CLI)
 
