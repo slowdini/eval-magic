@@ -19,7 +19,7 @@ fn cleanup_removes_only_prefixed_dirs() {
         fs::create_dir_all(d).unwrap();
     }
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 
     assert!(!staged_a.exists());
     assert!(!staged_b.exists());
@@ -29,7 +29,7 @@ fn cleanup_removes_only_prefixed_dirs() {
 #[test]
 fn cleanup_is_noop_when_skills_dir_missing() {
     let tmp = TempDir::new().unwrap();
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 }
 
 // ── manifest-aware ────────────────────────────────────────────────────
@@ -46,12 +46,12 @@ fn codex_cleanup_restores_preexisting_agents_entries() {
         skill_under_test: "x",
         skills_source_dir: &src,
         repo_root: tmp.path(),
-        harness: Harness::Codex,
+        harness: Harness::resolve("codex").unwrap(),
     })
     .unwrap();
     assert_eq!(read(&skills_dir.join("alpha/SKILL.md")), "new alpha");
 
-    cleanup_staged_skills(tmp.path(), Harness::Codex).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("codex").unwrap()).unwrap();
 
     assert_eq!(read(&skills_dir.join("alpha/SKILL.md")), "USER ALPHA");
     assert!(!skills_dir.join(STAGED_SIBLING_MANIFEST).exists());
@@ -77,7 +77,7 @@ fn removes_sibling_entries_and_restores_backups() {
     assert_eq!(read(&skills_dir.join("alpha/SKILL.md")), "new alpha");
     assert_eq!(read(&skills_dir.join("beta/SKILL.md")), "new beta");
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 
     assert_eq!(read(&skills_dir.join("alpha/SKILL.md")), "USER ALPHA");
     assert!(!skills_dir.join("beta").exists());
@@ -91,7 +91,7 @@ fn sweeps_prefix_entries_when_no_manifest() {
     fs::create_dir_all(skills_dir.join("slow-powers-eval-1-with_skill__foo")).unwrap();
     fs::create_dir_all(skills_dir.join("user-custom")).unwrap();
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 
     assert!(
         !skills_dir
@@ -118,7 +118,7 @@ fn removes_whole_tree_when_runner_created_and_prunes_claude() {
     .unwrap();
     fs::create_dir_all(tmp.path().join(".claude/skills/stray-leftover")).unwrap();
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 
     assert!(!tmp.path().join(".claude/skills").exists());
     assert!(!tmp.path().join(".claude").exists());
@@ -140,7 +140,7 @@ fn keeps_claude_and_settings_when_runner_created_only_skills() {
     })
     .unwrap();
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 
     assert!(!claude_dir.join("skills").exists());
     assert!(claude_dir.exists());
@@ -163,7 +163,7 @@ fn leaves_preexisting_skills_dir_in_place() {
     })
     .unwrap();
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
 
     assert!(skills_dir.exists());
     assert_eq!(read(&skills_dir.join("user-owned/SKILL.md")), "USER");

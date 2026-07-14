@@ -164,7 +164,7 @@ mod tests {
     fn claude_allows_guard() {
         // `claude -p` loads the project `.claude/settings.local.json` PreToolUse
         // hook from its cwd, so the write guard fires under CLI dispatch.
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode);
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
         let opts = RunOptions {
             guard: true,
             ..Default::default()
@@ -202,7 +202,10 @@ mod tests {
 
     #[test]
     fn harness_label_opencode() {
-        assert_eq!(harness_label(Harness::OpenCode), "opencode");
+        assert_eq!(
+            harness_label(Harness::resolve("opencode").unwrap()),
+            "opencode"
+        );
     }
 
     #[test]

@@ -745,7 +745,7 @@ mod tests {
     fn codex_flavored_fallback_wording() {
         let staged = "/repo/.agents/skills/slow-powers-eval-1-with_skill__foo/SKILL.md";
         let task = build_dispatch_task(&DispatchTaskOpts {
-            harness: Harness::Codex,
+            harness: Harness::resolve("codex").unwrap(),
             staged_skill_path: Some(staged),
             ..base_opts()
         })
@@ -768,7 +768,7 @@ mod tests {
     fn opencode_flavored_fallback_wording() {
         let staged = "/repo/.opencode/skills/slow-powers-eval-1-with-skill-foo/SKILL.md";
         let task = build_dispatch_task(&DispatchTaskOpts {
-            harness: Harness::OpenCode,
+            harness: Harness::resolve("opencode").unwrap(),
             staged_skill_path: Some(staged),
             ..base_opts()
         })
@@ -790,7 +790,7 @@ mod tests {
     #[test]
     fn opencode_available_skills_block_uses_xml() {
         let task = build_dispatch_task(&DispatchTaskOpts {
-            harness: Harness::OpenCode,
+            harness: Harness::resolve("opencode").unwrap(),
             available_skills: vec![skill("foo", "the foo skill")],
             ..base_opts()
         })

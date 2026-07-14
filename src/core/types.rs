@@ -426,7 +426,7 @@ mod tests {
             baseline: None,
             conditions: vec![],
             timestamp: "2026-06-08T00:00:00Z".into(),
-            harness: Some(Harness::ClaudeCode),
+            harness: Some(Harness::resolve("claude-code").unwrap()),
             run_nonce: None,
             runs: None,
             agent_model: None,
@@ -477,6 +477,25 @@ mod tests {
                 out, fixture,
                 "fixture {name} did not round-trip byte-identically"
             );
+        }
+    }
+
+    /// A `conditions.json` naming a harness the registry doesn't know must
+    /// fail deserialization with the known harnesses listed, mirroring the
+    /// `--harness` CLI rejection.
+    #[test]
+    fn conditions_json_with_unknown_harness_errors_naming_known_harnesses() {
+        let err = serde_json::from_value::<ConditionsRecord>(json!({
+            "mode": "new-skill",
+            "conditions": [],
+            "timestamp": "2026-06-08T00:00:00Z",
+            "harness": "nonexistent"
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
+        for name in ["claude-code", "codex", "opencode"] {
+            assert!(err.contains(name), "error must name {name}: {err}");
         }
     }
 

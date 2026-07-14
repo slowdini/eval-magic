@@ -130,7 +130,7 @@ pub(crate) fn write_manifest(
 /// found and torn down.
 pub fn teardown_guard(stage_root: &Path) -> bool {
     let mut torn = false;
-    for harness in Harness::ALL {
+    for harness in Harness::known() {
         let adapter = crate::adapters::adapter_for(harness);
         torn |= teardown_guard_from_skills_dir(&adapter.skills_dir(stage_root));
         if let Some(hook_dir) = adapter.guard_hook_cleanup_dir(stage_root) {
@@ -143,7 +143,7 @@ pub fn teardown_guard(stage_root: &Path) -> bool {
 /// True when any harness has a live guard marker under `stage_root`.
 pub(crate) fn guard_is_armed(stage_root: &Path) -> bool {
     let now = now_ms();
-    Harness::ALL.iter().any(|&harness| {
+    Harness::known().any(|harness| {
         let marker_path = crate::adapters::adapter_for(harness)
             .skills_dir(stage_root)
             .join(GUARD_MARKER);
@@ -215,6 +215,23 @@ mod tests {
     fn teardown_is_a_safe_no_op_when_nothing_is_installed() {
         let c = setup();
         assert!(!teardown_guard(&c.stage_root));
+    }
+
+    #[test]
+    fn teardown_sweeps_stray_marker_without_manifest() {
+        let c = setup();
+        // A stray marker (no manifest) in any harness's skills dir must still
+        // be swept so the guard can't stay armed.
+        for skills_dir in [
+            c.stage_root.join(".claude").join("skills"),
+            c.stage_root.join(".opencode").join("skills"),
+        ] {
+            fs::create_dir_all(&skills_dir).unwrap();
+            let marker = skills_dir.join(GUARD_MARKER);
+            fs::write(&marker, "{}").unwrap();
+            assert!(teardown_guard(&c.stage_root));
+            assert!(!marker.exists(), "stray marker at {marker:?} was not swept");
+        }
     }
 
     #[test]

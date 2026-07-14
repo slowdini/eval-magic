@@ -397,20 +397,77 @@ fn build_registry(
     entries
 }
 
+/// The registry-level default harness — what `--harness` falls back to when
+/// absent. A registry concept rather than a descriptor field, so layered
+/// user-supplied descriptor files (#136) can never fight over an
+/// exactly-one-default invariant.
+pub const DEFAULT_HARNESS_NAME: &str = "claude-code";
+
+/// A harness name that no registry entry matches. Names every registered
+/// harness so the rejection is actionable wherever it surfaces (artifact
+/// deserialization, direct resolution).
+#[derive(Debug, thiserror::Error)]
+#[error("unknown harness '{name}'; known harnesses: {}", known.join(", "))]
+pub struct UnknownHarnessError {
+    pub name: String,
+    pub known: Vec<&'static str>,
+}
+
+impl Harness {
+    /// Resolve a kebab-case identifier against the descriptor registry — the
+    /// only way to obtain a [`Harness`], so every held handle is valid.
+    pub fn resolve(name: &str) -> Result<Harness, UnknownHarnessError> {
+        REGISTRY
+            .iter()
+            .find(|e| e.label == name)
+            .map(|e| Harness::from_static_name(e.label))
+            .ok_or_else(|| UnknownHarnessError {
+                name: name.to_string(),
+                known: Harness::known().map(Harness::name).collect(),
+            })
+    }
+
+    /// Every registered harness, in registry (embedded descriptor) order —
+    /// for code that must sweep all of them (e.g. guard teardown scans each
+    /// harness's skills dir for a marker).
+    pub fn known() -> impl Iterator<Item = Harness> {
+        REGISTRY.iter().map(|e| Harness::from_static_name(e.label))
+    }
+}
+
+impl Default for Harness {
+    fn default() -> Self {
+        Harness::resolve(DEFAULT_HARNESS_NAME)
+            .expect("the embedded registry contains the default harness")
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for Harness {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let name = String::deserialize(deserializer)?;
+        Harness::resolve(&name).map_err(serde::de::Error::custom)
+    }
+}
+
+/// The `--harness` value parser: registry-driven possible values, so clap
+/// renders `[possible values: …]` in help, suggests near-misses, and rejects
+/// unknown names listing the known ones — with no compile-time harness set.
+pub fn harness_value_parser() -> clap::builder::ValueParser {
+    use clap::builder::TypedValueParser as _;
+    let names: Vec<&'static str> = Harness::known().map(Harness::name).collect();
+    clap::builder::PossibleValuesParser::new(names)
+        .map(|name| Harness::resolve(&name).expect("clap only passes registry-known names"))
+        .into()
+}
+
 /// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
 /// the harness identifier for all harness-specific behavior; every other
 /// module goes through the returned trait object.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
-    // Bridge while `Harness` is still an enum: its serde form is the
-    // kebab-case identifier the registry is keyed by.
-    let name = serde_json::to_value(harness)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .expect("Harness serializes to its kebab-case identifier");
     &REGISTRY
         .iter()
-        .find(|e| e.label == name)
-        .unwrap_or_else(|| panic!("no descriptor registered for harness {name:?}"))
+        .find(|e| e.label == harness.name())
+        .expect("Harness handles originate from the registry")
         .adapter
 }
 
@@ -485,7 +542,10 @@ mod tests {
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
-        for h in [Harness::Codex, Harness::OpenCode] {
+        for h in [
+            Harness::resolve("codex").unwrap(),
+            Harness::resolve("opencode").unwrap(),
+        ] {
             assert_eq!(
                 adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
                 None
@@ -500,39 +560,76 @@ mod tests {
     }
 
     #[test]
+    fn resolve_unknown_name_lists_known_harnesses() {
+        let err = Harness::resolve("nonexistent").unwrap_err().to_string();
+        assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
+        for name in ["claude-code", "codex", "opencode"] {
+            assert!(err.contains(name), "error must name {name}: {err}");
+        }
+    }
+
+    #[test]
+    fn resolve_round_trips_every_registry_entry() {
+        for harness in Harness::known() {
+            assert_eq!(Harness::resolve(harness.name()).unwrap(), harness);
+        }
+    }
+
+    #[test]
+    fn default_harness_is_claude_code() {
+        assert_eq!(DEFAULT_HARNESS_NAME, "claude-code");
+        assert_eq!(Harness::default().name(), DEFAULT_HARNESS_NAME);
+    }
+
+    #[test]
+    fn known_iterates_in_descriptor_order() {
+        let names: Vec<_> = Harness::known().map(Harness::name).collect();
+        assert_eq!(names, ["claude-code", "codex", "opencode"]);
+    }
+
+    #[test]
     fn labels_match_kebab_case_identifiers() {
-        assert_eq!(adapter_for(Harness::ClaudeCode).label(), "claude-code");
-        assert_eq!(adapter_for(Harness::Codex).label(), "codex");
-        assert_eq!(adapter_for(Harness::OpenCode).label(), "opencode");
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).label(),
+            "claude-code"
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).label(),
+            "codex"
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).label(),
+            "opencode"
+        );
     }
 
     #[test]
     fn skills_dir_is_harness_native() {
         let root = Path::new("/repo");
         assert_eq!(
-            adapter_for(Harness::ClaudeCode).skills_dir(root),
+            adapter_for(Harness::resolve("claude-code").unwrap()).skills_dir(root),
             root.join(".claude").join("skills")
         );
         assert_eq!(
-            adapter_for(Harness::Codex).skills_dir(root),
+            adapter_for(Harness::resolve("codex").unwrap()).skills_dir(root),
             root.join(".agents").join("skills")
         );
         assert_eq!(
-            adapter_for(Harness::OpenCode).skills_dir(root),
+            adapter_for(Harness::resolve("opencode").unwrap()).skills_dir(root),
             root.join(".opencode").join("skills")
         );
     }
 
     #[test]
     fn only_codex_and_opencode_rewrite_frontmatter() {
-        assert!(!adapter_for(Harness::ClaudeCode).rewrites_frontmatter_name());
-        assert!(adapter_for(Harness::Codex).rewrites_frontmatter_name());
-        assert!(adapter_for(Harness::OpenCode).rewrites_frontmatter_name());
+        assert!(!adapter_for(Harness::resolve("claude-code").unwrap()).rewrites_frontmatter_name());
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).rewrites_frontmatter_name());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).rewrites_frontmatter_name());
     }
 
     #[test]
     fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
-        for h in Harness::ALL {
+        for h in Harness::known() {
             let out = adapter_for(h).render_plan_mode_context("BODY");
             assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
             assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
@@ -545,17 +642,17 @@ mod tests {
 
     #[test]
     fn run_capabilities_capture_run_option_support_by_harness() {
-        let claude = adapter_for(Harness::ClaudeCode).run_capabilities();
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap()).run_capabilities();
         assert!(claude.supports_guard);
         assert!(claude.supports_bootstrap_with_no_stage);
         assert!(claude.supports_stage_name_with_no_stage);
 
-        let codex = adapter_for(Harness::Codex).run_capabilities();
+        let codex = adapter_for(Harness::resolve("codex").unwrap()).run_capabilities();
         assert!(codex.supports_guard);
         assert!(!codex.supports_bootstrap_with_no_stage);
         assert!(!codex.supports_stage_name_with_no_stage);
 
-        let opencode = adapter_for(Harness::OpenCode).run_capabilities();
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap()).run_capabilities();
         assert!(!opencode.supports_guard);
         assert!(opencode.supports_bootstrap_with_no_stage);
         assert!(opencode.supports_stage_name_with_no_stage);
@@ -565,7 +662,7 @@ mod tests {
     fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
         // The post-arm `--guard` banner names the harness's native hook surface,
         // so it lives behind the adapter rather than in generic run code.
-        let claude = adapter_for(Harness::ClaudeCode)
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap())
             .guard_armed_message()
             .expect("claude code has a write guard");
         assert!(
@@ -573,7 +670,7 @@ mod tests {
             "claude banner names its hook file: {claude}"
         );
 
-        let codex = adapter_for(Harness::Codex)
+        let codex = adapter_for(Harness::resolve("codex").unwrap())
             .guard_armed_message()
             .expect("codex has a write guard");
         assert!(
@@ -583,18 +680,31 @@ mod tests {
 
         // OpenCode has no write guard (its install_guard errors), so there is no
         // banner to print.
-        assert_eq!(adapter_for(Harness::OpenCode).guard_armed_message(), None);
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).guard_armed_message(),
+            None
+        );
     }
 
     #[test]
     fn staged_slug_default_and_opencode_override_preserve_the_prefix() {
         let prefix = "slow-powers-eval-";
         assert_eq!(
-            adapter_for(Harness::ClaudeCode).staged_slug(prefix, 2, "with_skill", "my-skill"),
+            adapter_for(Harness::resolve("claude-code").unwrap()).staged_slug(
+                prefix,
+                2,
+                "with_skill",
+                "my-skill"
+            ),
             "slow-powers-eval-2-with_skill__my-skill"
         );
         assert_eq!(
-            adapter_for(Harness::OpenCode).staged_slug(prefix, 2, "with_skill", "my-skill"),
+            adapter_for(Harness::resolve("opencode").unwrap()).staged_slug(
+                prefix,
+                2,
+                "with_skill",
+                "my-skill"
+            ),
             "slow-powers-eval-2-with-skill-my-skill"
         );
     }

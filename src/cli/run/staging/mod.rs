@@ -201,7 +201,7 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
 #[cfg(test)]
 pub fn stage_skill_for_cc(opts: &StageSkillOpts) -> Result<String, RunError> {
     stage_skill_for_harness(&StageSkillOpts {
-        harness: Harness::ClaudeCode,
+        harness: Harness::resolve("claude-code").unwrap(),
         ..opts.clone()
     })
 }

@@ -346,7 +346,7 @@ mod tests {
 
     fn next_steps(harness: Harness, agent_model: Option<&str>) -> String {
         adapter_for(harness).cli_next_steps(CliDispatchContext {
-            guard: harness == Harness::Codex,
+            guard: harness == Harness::resolve("codex").unwrap(),
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             iteration: 2,
             agent_model,
@@ -355,27 +355,28 @@ mod tests {
 
     #[test]
     fn exec_recipe_includes_model_only_when_declared() {
-        let with = next_steps(Harness::ClaudeCode, Some("opus"));
+        let with = next_steps(Harness::resolve("claude-code").unwrap(), Some("opus"));
         assert!(with.contains("--model opus"), "{with}");
-        let without = next_steps(Harness::ClaudeCode, None);
+        let without = next_steps(Harness::resolve("claude-code").unwrap(), None);
         assert!(!without.contains("--model "), "{without}");
     }
 
     #[test]
     fn codex_recipes_gate_hook_trust_on_guard() {
-        let guarded = next_steps(Harness::Codex, Some("gpt-5-mini"));
+        let guarded = next_steps(Harness::resolve("codex").unwrap(), Some("gpt-5-mini"));
         assert!(
             guarded.contains(
                 "codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust -m gpt-5-mini --json \\"
             ),
             "{guarded}"
         );
-        let unguarded = adapter_for(Harness::Codex).cli_next_steps(CliDispatchContext {
-            guard: false,
-            target_args: "",
-            iteration: 2,
-            agent_model: None,
-        });
+        let unguarded =
+            adapter_for(Harness::resolve("codex").unwrap()).cli_next_steps(CliDispatchContext {
+                guard: false,
+                target_args: "",
+                iteration: 2,
+                agent_model: None,
+            });
         assert!(
             !unguarded.contains("--dangerously-bypass-hook-trust"),
             "{unguarded}"
@@ -384,7 +385,7 @@ mod tests {
 
     #[test]
     fn codex_judge_recipe_splices_model_arg_in_one_command_shape() {
-        let recipe = adapter_for(Harness::Codex)
+        let recipe = adapter_for(Harness::resolve("codex").unwrap())
             .cli_judge_next_steps(CliJudgeContext {
                 guard: true,
                 iteration_dir: Path::new("/work/iter-1"),
@@ -409,7 +410,7 @@ mod tests {
     fn claude_judge_recipe_snapshot_is_stable() {
         // Full-string pin carried over from the pre-descriptor adapter: locks
         // the Claude judge recipe byte-for-byte through the descriptor path.
-        let recipe = adapter_for(Harness::ClaudeCode)
+        let recipe = adapter_for(Harness::resolve("claude-code").unwrap())
             .cli_judge_next_steps(CliJudgeContext {
                 guard: false,
                 iteration_dir: Path::new("/work/iter-1"),
@@ -441,21 +442,24 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
     fn skills_blocks_render_each_harness_native_shape() {
         let skills = vec![skill("zebra", "z skill"), skill("alpha", "a skill")];
 
-        let claude = adapter_for(Harness::ClaudeCode).render_available_skills_block(&skills);
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap())
+            .render_available_skills_block(&skills);
         assert!(
             claude.starts_with("The following skills are available for use with the Skill tool:"),
             "{claude}"
         );
         assert!(claude.contains("\n- alpha: a skill"), "{claude}");
 
-        let codex = adapter_for(Harness::Codex).render_available_skills_block(&skills);
+        let codex =
+            adapter_for(Harness::resolve("codex").unwrap()).render_available_skills_block(&skills);
         assert!(codex.starts_with("## Skills"), "{codex}");
         assert!(
             codex.contains("- alpha: a skill (file: /x/alpha/SKILL.md)"),
             "{codex}"
         );
 
-        let opencode = adapter_for(Harness::OpenCode).render_available_skills_block(&skills);
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap())
+            .render_available_skills_block(&skills);
         assert!(opencode.starts_with("<available_skills>"), "{opencode}");
         assert!(opencode.ends_with("\n</available_skills>"), "{opencode}");
         assert!(opencode.contains("<name>alpha</name>"), "{opencode}");
@@ -465,7 +469,7 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
         );
 
         // Sorted by name in every shape, and empty renders empty.
-        for harness in Harness::ALL {
+        for harness in Harness::known() {
             let block = adapter_for(harness).render_available_skills_block(&skills);
             assert!(
                 block.find("alpha").unwrap() < block.find("zebra").unwrap(),
@@ -477,7 +481,7 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
 
     #[test]
     fn opencode_stage_name_rules_match_the_old_validator() {
-        let adapter = adapter_for(Harness::OpenCode);
+        let adapter = adapter_for(Harness::resolve("opencode").unwrap());
         assert!(adapter.validate_stage_name("valid-name-2").is_ok());
         for invalid in [
             "Invalid_Name",

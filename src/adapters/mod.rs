@@ -23,8 +23,9 @@ mod skills_block;
 pub mod transcript;
 
 pub use harness::{
-    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
-    ToolVocabulary, adapter_for, all_config_dir_names, all_tool_vocabulary,
+    CliDispatchContext, CliJudgeContext, CliManifestContext, DEFAULT_HARNESS_NAME, HarnessAdapter,
+    RUNBOOK_TEMPLATE, ToolVocabulary, UnknownHarnessError, adapter_for, all_config_dir_names,
+    all_tool_vocabulary, harness_value_parser,
 };
 pub use skill_shadow::{
     PluginShadowReport, ShadowSource, format_shadow_banner, shadow_validity_warnings,

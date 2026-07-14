@@ -18,7 +18,7 @@ mod tests {
 
     #[test]
     fn claude_adapter_advertises_cli_events_file_and_model_flag() {
-        let a = adapter_for(Harness::ClaudeCode);
+        let a = adapter_for(Harness::resolve("claude-code").unwrap());
         assert_eq!(
             a.cli_events_filename().as_deref(),
             Some("claude-events.jsonl")
@@ -45,7 +45,7 @@ mod tests {
             .join("\n");
         std::fs::write(&path, format!("{body}\n")).unwrap();
 
-        let a = adapter_for(Harness::ClaudeCode);
+        let a = adapter_for(Harness::resolve("claude-code").unwrap());
         let summary = a.parse_cli_events_full(&path).unwrap();
         assert_eq!(summary.final_text, Some("Done".into()));
         assert_eq!(summary.duration_ms, Some(5637));

@@ -364,7 +364,7 @@ mod tests {
             "I could not read the prompt file.",
         );
 
-        let result = record_runs(iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
         assert_eq!(result.skipped_prompt_unread, 1);
         assert_eq!(result.recorded, 0);
@@ -401,7 +401,7 @@ mod tests {
             "Done.",
         );
 
-        let result = record_runs(iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
         assert_eq!(result.recorded, 1);
         assert_eq!(result.skipped_prompt_unread, 0);
@@ -532,7 +532,7 @@ mod tests {
         write_claude_events(&paths[0].outputs_dir, "unused");
         write_claude_events(&paths[1].outputs_dir, "unused");
 
-        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 2);
         assert_eq!(result.missing_transcript, 0);
 
@@ -595,7 +595,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = record_runs(&iter, Harness::Codex, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 2);
 
         for k in [1u32, 2] {
@@ -621,7 +621,7 @@ mod tests {
         );
         write_codex_events(&paths[0].outputs_dir, "Codex final.");
 
-        let result = record_runs(&iter, Harness::Codex, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 0);
 
@@ -653,7 +653,7 @@ mod tests {
         );
         write_codex_events(&paths[0].outputs_dir, "Closing summary from Codex.");
 
-        let result = record_runs(&iter, Harness::Codex, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(
             read_run(&iter, "crash", "with_skill").final_message,
@@ -681,7 +681,7 @@ mod tests {
         });
         fs::write(&paths[0].run_record_path, hand_written.to_string()).unwrap();
 
-        let skipped = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        let skipped = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(skipped.recorded, 0);
         assert_eq!(skipped.skipped_existing, 1);
         assert_eq!(
@@ -689,7 +689,7 @@ mod tests {
             "Agent-authored."
         );
 
-        let replaced = record_runs(&iter, Harness::ClaudeCode, true).unwrap();
+        let replaced = record_runs(&iter, Harness::resolve("claude-code").unwrap(), true).unwrap();
         assert_eq!(replaced.recorded, 1);
         assert_eq!(read_run(&iter, "crash", "with_skill").final_message, "New.");
     }
@@ -713,7 +713,7 @@ mod tests {
         )
         .unwrap();
 
-        record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
         // Agent-captured completion-event timing wins; not overwritten.
         let timing = read_timing_value(&iter, "crash", "with_skill");
@@ -736,7 +736,7 @@ mod tests {
         );
         // No final-message.md, no transcript.
 
-        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 0);
         assert_eq!(result.skipped_no_final_message, 1);
         assert!(!run_exists(&iter, "crash", "with_skill"));
@@ -757,7 +757,7 @@ mod tests {
         );
         // final-message.md exists but no events file is present.
 
-        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 1);
 
@@ -772,7 +772,7 @@ mod tests {
         let root = TempDir::new().unwrap();
         let iter = dirs(&root);
         // Hand-authored/operator runs have no dispatch.json — the manual path owns them.
-        let err = record_runs(&iter, Harness::ClaudeCode, false).unwrap_err();
+        let err = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap_err();
         assert!(
             err.to_string().contains("dispatch.json"),
             "error was: {err}"
@@ -786,7 +786,11 @@ mod tests {
             missing_transcript: 0,
             ..Default::default()
         };
-        assert!(result.transcript_warning(Harness::ClaudeCode).is_none());
+        assert!(
+            result
+                .transcript_warning(Harness::resolve("claude-code").unwrap())
+                .is_none()
+        );
     }
 
     #[test]
@@ -796,7 +800,9 @@ mod tests {
             missing_transcript: 1,
             ..Default::default()
         };
-        let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
+        let warning = result
+            .transcript_warning(Harness::resolve("claude-code").unwrap())
+            .unwrap();
         assert!(warning.contains('1'), "names the count: {warning}");
     }
 
@@ -807,7 +813,9 @@ mod tests {
             missing_transcript: 2,
             ..Default::default()
         };
-        let warning = result.transcript_warning(Harness::Codex).unwrap();
+        let warning = result
+            .transcript_warning(Harness::resolve("codex").unwrap())
+            .unwrap();
         assert!(
             warning.contains("codex-events.jsonl"),
             "names the Codex source: {warning}"
@@ -832,7 +840,7 @@ mod tests {
         );
         write_claude_events(&paths[0].outputs_dir, "Closing summary.");
 
-        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 0);
 
@@ -866,7 +874,7 @@ mod tests {
         );
         write_claude_events(&paths[0].outputs_dir, "Closing summary from claude -p.");
 
-        let result = record_runs(&iter, Harness::ClaudeCode, false).unwrap();
+        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(
             read_run(&iter, "crash", "with_skill").final_message,
@@ -881,7 +889,9 @@ mod tests {
             missing_transcript: 2,
             ..Default::default()
         };
-        let warning = result.transcript_warning(Harness::ClaudeCode).unwrap();
+        let warning = result
+            .transcript_warning(Harness::resolve("claude-code").unwrap())
+            .unwrap();
         assert!(
             warning.contains("claude-events.jsonl"),
             "names the Claude CLI events source: {warning}"

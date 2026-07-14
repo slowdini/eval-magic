@@ -115,7 +115,7 @@ fn render_manifest(harness: Harness, guard: bool, agent_model: Option<&str>) -> 
 
 #[test]
 fn golden_runbook_per_harness() {
-    for harness in Harness::ALL {
+    for harness in Harness::known() {
         let label = adapter_for(harness).label();
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
         let book = build_runbook(&RunbookContext {
@@ -137,7 +137,7 @@ fn golden_runbook_per_harness() {
 
 #[test]
 fn golden_manifest_per_harness() {
-    for harness in Harness::ALL {
+    for harness in Harness::known() {
         let label = adapter_for(harness).label();
         let manifest = render_manifest(harness, true, Some("model-x"));
         assert_golden(&format!("{label}/manifest.golden.md"), &manifest);
@@ -147,20 +147,20 @@ fn golden_manifest_per_harness() {
 #[test]
 fn golden_manifest_codex_without_guard() {
     // Pins the hook-trust conditional: no --dangerously-bypass-hook-trust.
-    let manifest = render_manifest(Harness::Codex, false, Some("model-x"));
+    let manifest = render_manifest(Harness::resolve("codex").unwrap(), false, Some("model-x"));
     assert_golden("codex/manifest-noguard.golden.md", &manifest);
 }
 
 #[test]
 fn golden_manifest_claude_without_model() {
     // Pins the empty model-arg rendering.
-    let manifest = render_manifest(Harness::ClaudeCode, true, None);
+    let manifest = render_manifest(Harness::resolve("claude-code").unwrap(), true, None);
     assert_golden("claude-code/manifest-nomodel.golden.md", &manifest);
 }
 
 #[test]
 fn golden_dispatch_prompt_per_harness() {
-    for harness in Harness::ALL {
+    for harness in Harness::known() {
         let label = adapter_for(harness).label();
         let slug =
             adapter_for(harness).staged_slug("slow-powers-eval-", 2, "with_skill", "widget-skill");
@@ -176,7 +176,7 @@ fn golden_dispatch_prompt_per_harness() {
 
 #[test]
 fn golden_skills_block_per_harness() {
-    for harness in Harness::ALL {
+    for harness in Harness::known() {
         let label = adapter_for(harness).label();
         let block = adapter_for(harness).render_available_skills_block(&fixed_skills());
         assert_golden(&format!("{label}/skills-block.golden.txt"), &block);
@@ -187,14 +187,18 @@ fn golden_skills_block_per_harness() {
 fn golden_judge_recipe_claude_and_codex() {
     for (harness, guard, rel) in [
         (
-            Harness::ClaudeCode,
+            Harness::resolve("claude-code").unwrap(),
             true,
             "claude-code/judge-recipe.golden.md",
         ),
-        (Harness::Codex, true, "codex/judge-recipe.golden.md"),
+        (
+            Harness::resolve("codex").unwrap(),
+            true,
+            "codex/judge-recipe.golden.md",
+        ),
         // Pins the hook-trust conditional in the judge command line.
         (
-            Harness::Codex,
+            Harness::resolve("codex").unwrap(),
             false,
             "codex/judge-recipe-noguard.golden.md",
         ),
@@ -215,12 +219,13 @@ fn golden_opencode_next_steps_with_and_without_model() {
         (Some("model-x"), "opencode/next-steps-model.golden.txt"),
         (None, "opencode/next-steps-nomodel.golden.txt"),
     ] {
-        let steps = adapter_for(Harness::OpenCode).cli_next_steps(CliDispatchContext {
-            guard: false,
-            target_args: " --skill-dir /tmp/skills --skill widget-skill",
-            iteration: 2,
-            agent_model,
-        });
+        let steps =
+            adapter_for(Harness::resolve("opencode").unwrap()).cli_next_steps(CliDispatchContext {
+                guard: false,
+                target_args: " --skill-dir /tmp/skills --skill widget-skill",
+                iteration: 2,
+                agent_model,
+            });
         assert_golden(rel, &steps);
     }
 }
