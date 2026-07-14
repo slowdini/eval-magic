@@ -85,11 +85,11 @@ impl HarnessAdapter for DescriptorAdapter {
         self.descriptor.label.clone()
     }
 
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        self.descriptor
-            .skills_dir
-            .split('/')
-            .fold(repo_root.to_path_buf(), |path, segment| path.join(segment))
+    fn skills_dir(&self, repo_root: &Path) -> Option<PathBuf> {
+        self.descriptor.skills_dir.as_ref().map(|dir| {
+            dir.split('/')
+                .fold(repo_root.to_path_buf(), |path, segment| path.join(segment))
+        })
     }
 
     fn run_capabilities(&self) -> HarnessRunCapabilities {

@@ -59,8 +59,10 @@ pub trait HarnessAdapter {
     /// **Baseline.** The project-local directory staged skills live under for
     /// this harness. Under `--no-stage` nothing is staged into it, so a
     /// baseline harness may point this at any repo-local path its discovery
-    /// would read.
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf;
+    /// would read. `None` when the harness declares no skills directory —
+    /// native staging is then unavailable and the run preflight forces
+    /// `--no-stage` (each SKILL.md is inlined into its dispatch prompt).
+    fn skills_dir(&self, repo_root: &Path) -> Option<PathBuf>;
 
     // ── Run-option capabilities (defaulted) ──────────────────────────────────
 
@@ -383,15 +385,15 @@ mod tests {
         let root = Path::new("/repo");
         assert_eq!(
             adapter_for(Harness::resolve("claude-code").unwrap()).skills_dir(root),
-            root.join(".claude").join("skills")
+            Some(root.join(".claude").join("skills"))
         );
         assert_eq!(
             adapter_for(Harness::resolve("codex").unwrap()).skills_dir(root),
-            root.join(".agents").join("skills")
+            Some(root.join(".agents").join("skills"))
         );
         assert_eq!(
             adapter_for(Harness::resolve("opencode").unwrap()).skills_dir(root),
-            root.join(".opencode").join("skills")
+            Some(root.join(".opencode").join("skills"))
         );
     }
 

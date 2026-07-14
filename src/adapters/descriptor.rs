@@ -47,7 +47,7 @@ pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 3] = [
 #[derive(Debug, Clone, Deserialize)]
 pub struct HarnessDescriptor {
     pub label: String,
-    pub skills_dir: String,
+    pub skills_dir: Option<String>,
     #[serde(default)]
     pub config_dirs: Vec<String>,
     #[serde(default)]
@@ -310,7 +310,7 @@ armed_message = "guard armed"
     fn minimal_descriptor_loads() {
         let d = load(MINIMAL).unwrap();
         assert_eq!(d.label, "demo");
-        assert_eq!(d.skills_dir, ".demo/skills");
+        assert_eq!(d.skills_dir.as_deref(), Some(".demo/skills"));
         assert_eq!(d.config_dirs, vec![".demo".to_string()]);
         // Section defaults match the trait defaults.
         assert!(!d.run.supports_guard);
@@ -326,6 +326,44 @@ armed_message = "guard armed"
         let d = load(GUARDED).unwrap();
         assert!(d.run.supports_guard);
         assert!(d.guard.is_some());
+    }
+
+    #[test]
+    fn label_only_descriptor_loads_as_baseline() {
+        let d = load("label = \"demo\"\n").unwrap();
+        assert_eq!(d.label, "demo");
+        assert!(d.skills_dir.is_none(), "no skills dir declared");
+        assert!(d.config_dirs.is_empty());
+        assert!(!d.run.supports_guard);
+    }
+
+    #[test]
+    fn rejects_staging_without_skills_dir() {
+        let err = err_of("label = \"demo\"\n\n[staging]\nsurface_phrase = \"skill\"\n");
+        assert!(err.contains("staging"), "{err}");
+        assert!(err.contains("skills_dir"), "{err}");
+    }
+
+    #[test]
+    fn rejects_guard_without_skills_dir() {
+        let toml = r#"
+label = "demo"
+config_dirs = [".demo"]
+
+[run]
+supports_guard = true
+
+[tools]
+write = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
+shell = ["Bash"]
+
+[guard]
+engine = "claude-hooks"
+armed_message = "guard armed"
+"#;
+        let err = err_of(toml);
+        assert!(err.contains("guard"), "{err}");
+        assert!(err.contains("skills_dir"), "{err}");
     }
 
     #[test]
