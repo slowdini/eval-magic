@@ -13,6 +13,7 @@ mod basics;
 mod grade;
 mod grade_models;
 mod guard;
+mod harness;
 mod init;
 mod package;
 mod stray_writes;

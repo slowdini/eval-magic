@@ -7,7 +7,11 @@ use tempfile::TempDir;
 
 /// Build a `Command` for the built `eval-magic` binary.
 pub fn skill_eval() -> Command {
-    Command::cargo_bin("eval-magic").expect("binary `eval-magic` should build")
+    let mut cmd = Command::cargo_bin("eval-magic").expect("binary `eval-magic` should build");
+    // Disable user-global descriptor discovery so a developer's
+    // ~/.config/eval-magic/harnesses never leaks into the tests.
+    cmd.env("EVAL_MAGIC_CONFIG_DIR", "");
+    cmd
 }
 
 /// A canonicalized temp root (resolves macOS /var → /private/var so the binary's

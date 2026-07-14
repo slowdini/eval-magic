@@ -21,10 +21,13 @@ mod run;
 use args::{Cli, Commands, CommonArgs, RunArgs};
 use commands::*;
 
-/// Parse process arguments, dispatch to the selected subcommand, and return its
-/// result. Called by the binary entry point.
+/// Parse process arguments, initialize the harness descriptor registry (every
+/// layer, including an optional `--harness-file`), dispatch to the selected
+/// subcommand, and return its result. Called by the binary entry point.
 pub fn run() -> anyhow::Result<()> {
-    dispatch(Cli::parse().command)
+    let cli = Cli::parse();
+    crate::adapters::registry::init_registry(cli.harness_file.as_deref().map(Path::new))?;
+    dispatch(cli.command)
 }
 
 fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {

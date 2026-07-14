@@ -177,13 +177,59 @@ pub enum DescriptorError {
 /// Parse, schema-check, and invariant-check one descriptor. `source` names the
 /// descriptor in error messages (its file path).
 pub fn load_descriptor(toml_src: &str, source: &str) -> Result<HarnessDescriptor, DescriptorError> {
+    finalize_descriptor(&parse_descriptor_value(toml_src, source)?, source)
+}
+
+/// Parse one descriptor file's TOML into a JSON value and schema-check it.
+/// This is the per-file gate every layered source passes individually — the
+/// schema requires only `label`, so partial override files validate here too,
+/// while unknown fields and bad capability names are still rejected with the
+/// file's own path in the message.
+pub fn parse_descriptor_value(
+    toml_src: &str,
+    source: &str,
+) -> Result<serde_json::Value, DescriptorError> {
     let value: serde_json::Value = toml::from_str(toml_src).map_err(|e| DescriptorError::Toml {
         path: source.to_string(),
         message: e.to_string(),
     })?;
-    let descriptor: HarnessDescriptor =
+    let _: serde_json::Value =
         validate_against_schema(SchemaName::HarnessDescriptor, &value, source)?;
-    validation::validate_descriptor(&descriptor, source)?;
+    Ok(value)
+}
+
+/// Merge `overlay` onto `base`, field by field: objects merge recursively per
+/// key; scalars, arrays, and nulls replace wholesale. This is the layering
+/// rule — a later descriptor file overrides individual fields of an earlier
+/// one, never whole-file shadowing.
+pub fn merge_descriptor_value(base: &mut serde_json::Value, overlay: serde_json::Value) {
+    match (base, overlay) {
+        (serde_json::Value::Object(base), serde_json::Value::Object(overlay)) => {
+            for (key, value) in overlay {
+                match base.get_mut(&key) {
+                    Some(slot) if slot.is_object() && value.is_object() => {
+                        merge_descriptor_value(slot, value);
+                    }
+                    _ => {
+                        base.insert(key, value);
+                    }
+                }
+            }
+        }
+        (base, overlay) => *base = overlay,
+    }
+}
+
+/// Deserialize and invariant-check a (possibly merged) descriptor value.
+/// `provenance` names every contributing file (e.g. `base.toml (built-in) +
+/// overlay.toml (project)`) so a post-merge violation is traceable.
+pub fn finalize_descriptor(
+    value: &serde_json::Value,
+    provenance: &str,
+) -> Result<HarnessDescriptor, DescriptorError> {
+    let descriptor: HarnessDescriptor =
+        validate_against_schema(SchemaName::HarnessDescriptor, value, provenance)?;
+    validation::validate_descriptor(&descriptor, provenance)?;
     Ok(descriptor)
 }
 
@@ -398,6 +444,54 @@ armed_message = "guard armed"
     fn rejects_unknown_guard_engine_name() {
         let err = err_of(&GUARDED.replace("claude-hooks", "mystery-hooks"));
         assert!(err.contains("harness-descriptor schema"), "{err}");
+    }
+
+    #[test]
+    fn merge_deep_merges_tables_and_replaces_scalars_and_arrays() {
+        let mut base: serde_json::Value = toml::from_str(
+            r#"
+label = "demo"
+config_dirs = [".demo"]
+
+[model]
+flag = "--model"
+
+[dispatch]
+capture_prefix = "demo"
+"#,
+        )
+        .unwrap();
+        let overlay: serde_json::Value = toml::from_str(
+            r#"
+label = "demo"
+config_dirs = [".other"]
+
+[model]
+flag = "--model-x"
+"#,
+        )
+        .unwrap();
+        merge_descriptor_value(&mut base, overlay);
+        // Nested-table scalar replaced; sibling table untouched; array replaced
+        // wholesale (no element-wise merge).
+        assert_eq!(base["model"]["flag"], "--model-x");
+        assert_eq!(base["dispatch"]["capture_prefix"], "demo");
+        assert_eq!(base["config_dirs"], serde_json::json!([".other"]));
+    }
+
+    #[test]
+    fn finalize_names_every_contributing_file_on_invariant_breaks() {
+        // A merged value violating an invariant reports the provenance chain,
+        // not a single path.
+        let value: serde_json::Value =
+            toml::from_str("label = \"demo\"\nskills_dir = \".demo/skills\"\n").unwrap();
+        let err = finalize_descriptor(&value, "base.toml (built-in) + overlay.toml (project)")
+            .expect_err("missing config_dirs parent should be rejected")
+            .to_string();
+        assert!(
+            err.contains("base.toml (built-in) + overlay.toml (project)"),
+            "{err}"
+        );
     }
 
     #[test]

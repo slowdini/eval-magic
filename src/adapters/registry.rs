@@ -7,12 +7,19 @@
 //! and the artifact `Deserialize`), [`Harness::known`] enumerates the entries,
 //! and [`adapter_for`] serves each handle's [`HarnessAdapter`].
 
+use std::path::Path;
 use std::sync::{LazyLock, OnceLock};
 
 use crate::core::Harness;
 
-use super::descriptor::layers::{DescriptorSource, Layer, embedded_sources};
-use super::descriptor::{DescriptorError, load_descriptor};
+use super::descriptor::layers::{
+    DescriptorSource, HarnessFileError, Layer, check_user_layer_restrictions, default_config_root,
+    discover_sources, embedded_sources,
+};
+use super::descriptor::{
+    DescriptorError, HarnessDescriptor, finalize_descriptor, merge_descriptor_value,
+    parse_descriptor_value,
+};
 use super::descriptor_adapter::DescriptorAdapter;
 use super::harness::{HarnessAdapter, ToolVocabulary};
 
@@ -40,12 +47,66 @@ fn registry() -> &'static Vec<RegistryEntry> {
         // the descriptor's own actionable message.
         build_registry(embedded_sources())
             .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"))
+            .entries
     })
 }
 
-/// A descriptor source set that cannot form a registry.
+/// The registry could not be initialized from the layered sources.
 #[derive(Debug, thiserror::Error)]
-enum RegistryBuildError {
+pub enum RegistryInitError {
+    #[error(transparent)]
+    HarnessFile(#[from] HarnessFileError),
+    #[error(transparent)]
+    Build(#[from] RegistryBuildError),
+    #[error("the harness registry is already initialized")]
+    AlreadyInitialized,
+}
+
+/// When `--harness-file` is in play, its descriptor's label — consulted by
+/// `Default for Harness` so the one-off harness doesn't have to be repeated
+/// via `--harness`.
+static SESSION_DEFAULT_HARNESS: OnceLock<&'static str> = OnceLock::new();
+
+/// Initialize the registry from every descriptor layer: embedded built-ins →
+/// user-global (`<config-root>/harnesses/*.toml`) → project-local
+/// (`<cwd>/.eval-magic/harnesses/*.toml`) → the optional one-off
+/// `--harness-file`. Called once by the CLI entry point, before anything
+/// resolves a harness.
+///
+/// Discovered files that fail to load are skipped with a warning on stderr
+/// (pointing at `harness lint`); a broken `--harness-file` is a hard error.
+/// When `--harness-file` names a descriptor, its label becomes the session's
+/// default harness.
+pub fn init_registry(harness_file: Option<&Path>) -> Result<(), RegistryInitError> {
+    let project_root = std::env::current_dir().unwrap_or_default();
+    let (sources, io_warnings) = discover_sources(
+        default_config_root().as_deref(),
+        &project_root,
+        harness_file,
+    )?;
+    let built = build_registry(sources)?;
+    for warning in io_warnings.iter().chain(&built.warnings) {
+        eprintln!("⚠ {warning}");
+    }
+    if harness_file.is_some()
+        && let Some(entry) = built
+            .entries
+            .iter()
+            .find(|e| e.sources.iter().any(|(l, _)| *l == Layer::HarnessFile))
+    {
+        let _ = SESSION_DEFAULT_HARNESS.set(entry.label);
+    }
+    REGISTRY
+        .set(built.entries)
+        .map_err(|_| RegistryInitError::AlreadyInitialized)
+}
+
+/// A descriptor source set that cannot form a registry. Only embedded and
+/// `--harness-file` sources can produce this — discovered layer files fail
+/// soft (skipped with a warning in [`BuiltRegistry::warnings`]) so a broken
+/// user descriptor never bricks the CLI.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryBuildError {
     #[error(transparent)]
     Descriptor(#[from] DescriptorError),
     #[error("duplicate harness label {label:?}: {first} and {second}")]
@@ -56,38 +117,134 @@ enum RegistryBuildError {
     },
 }
 
-/// Load descriptor sources into registry entries, keyed by each descriptor's
-/// `label`. The label is the harness identity — `--harness <label>`, artifact
-/// values, and adapter lookup all resolve through it — so two sources
-/// producing the same label collide.
-fn build_registry(
-    sources: Vec<DescriptorSource>,
-) -> Result<Vec<RegistryEntry>, RegistryBuildError> {
-    let mut entries: Vec<RegistryEntry> = Vec::new();
+/// The outcome of loading a layered source set: the label-keyed entries plus
+/// the warnings for every discovered file that was skipped.
+#[derive(Debug)]
+struct BuiltRegistry {
+    entries: Vec<RegistryEntry>,
+    warnings: Vec<String>,
+}
+
+/// One label's in-progress state while folding layered sources.
+struct PendingEntry {
+    label: String,
+    value: serde_json::Value,
+    descriptor: HarnessDescriptor,
+    sources: Vec<(Layer, String)>,
+}
+
+/// Load descriptor sources into label-keyed entries with layered overrides.
+///
+/// Sources arrive in precedence order. The first source for a label defines
+/// it; a later source with the same label from a *different* layer merges
+/// field-by-field on top ([`merge_descriptor_value`]) and the merged result is
+/// re-validated with the full provenance chain in its error messages. Two
+/// same-label files within one layer have no precedence between them, so the
+/// second is rejected (fatal for embedded, a skip-warning otherwise).
+///
+/// Failure policy per layer: embedded sources are known-valid (a failure is a
+/// programmer error, propagated), `--harness-file` was explicitly named (a
+/// failure is the user's answer, propagated), and discovered user/project
+/// files fail soft — the file is skipped, the message lands in
+/// [`BuiltRegistry::warnings`], and any earlier state for that label survives.
+fn build_registry(sources: Vec<DescriptorSource>) -> Result<BuiltRegistry, RegistryBuildError> {
+    let mut pending: Vec<PendingEntry> = Vec::new();
+    let mut warnings: Vec<String> = Vec::new();
     for source in sources {
-        let descriptor = load_descriptor(&source.toml_src, &source.path)?;
-        if let Some(existing) = entries.iter().find(|e| e.label == descriptor.label) {
-            return Err(RegistryBuildError::DuplicateLabel {
-                label: descriptor.label,
-                first: existing
+        let strict = matches!(source.layer, Layer::Embedded | Layer::HarnessFile);
+        let mut fail_soft = |e: RegistryBuildError| -> Result<(), RegistryBuildError> {
+            if strict {
+                Err(e)
+            } else {
+                warnings.push(format!(
+                    "skipping harness descriptor: {e}\n  (run `eval-magic harness lint <file>` \
+                     for the full report)"
+                ));
+                Ok(())
+            }
+        };
+
+        let value = match parse_descriptor_value(&source.toml_src, &source.path) {
+            Ok(value) => value,
+            Err(e) => {
+                fail_soft(e.into())?;
+                continue;
+            }
+        };
+        if source.layer != Layer::Embedded
+            && let Err(e) = check_user_layer_restrictions(&value, &source.path)
+        {
+            fail_soft(e.into())?;
+            continue;
+        }
+        let label = value
+            .get("label")
+            .and_then(serde_json::Value::as_str)
+            .expect("the schema gate requires a string label")
+            .to_string();
+
+        match pending.iter().position(|p| p.label == label) {
+            None => match finalize_descriptor(&value, &source.path) {
+                Ok(descriptor) => pending.push(PendingEntry {
+                    label,
+                    value,
+                    descriptor,
+                    sources: vec![(source.layer, source.path)],
+                }),
+                Err(e) => fail_soft(e.into())?,
+            },
+            Some(index) => {
+                let entry = &mut pending[index];
+                let (last_layer, last_path) = entry
                     .sources
                     .last()
-                    .expect("every entry records its source")
-                    .1
-                    .clone(),
-                second: source.path,
-            });
+                    .expect("every entry records its source");
+                if *last_layer == source.layer {
+                    fail_soft(RegistryBuildError::DuplicateLabel {
+                        label,
+                        first: last_path.clone(),
+                        second: source.path,
+                    })?;
+                    continue;
+                }
+                let mut merged = entry.value.clone();
+                merge_descriptor_value(&mut merged, value);
+                let provenance = provenance_chain(&entry.sources, &source);
+                match finalize_descriptor(&merged, &provenance) {
+                    Ok(descriptor) => {
+                        entry.value = merged;
+                        entry.descriptor = descriptor;
+                        entry.sources.push((source.layer, source.path));
+                    }
+                    Err(e) => fail_soft(e.into())?,
+                }
+            }
         }
-        // Leaked once per registry entry per process: the label becomes the
-        // `'static` identity the rest of the crate passes around by handle.
-        let label: &'static str = Box::leak(descriptor.label.clone().into_boxed_str());
-        entries.push(RegistryEntry {
-            label,
-            sources: vec![(source.layer, source.path)],
-            adapter: DescriptorAdapter::from_descriptor(descriptor),
-        });
     }
-    Ok(entries)
+
+    let entries = pending
+        .into_iter()
+        .map(|p| RegistryEntry {
+            // Leaked once per registry entry per process: the label becomes
+            // the `'static` identity the rest of the crate passes around by
+            // handle.
+            label: Box::leak(p.label.into_boxed_str()),
+            sources: p.sources,
+            adapter: DescriptorAdapter::from_descriptor(p.descriptor),
+        })
+        .collect();
+    Ok(BuiltRegistry { entries, warnings })
+}
+
+/// `base.toml (built-in) + overlay.toml (project)` — the provenance string a
+/// merged descriptor's validation errors carry.
+fn provenance_chain(sources: &[(Layer, String)], next: &DescriptorSource) -> String {
+    sources
+        .iter()
+        .map(|(layer, path)| format!("{path} ({})", layer.display_name()))
+        .chain([format!("{} ({})", next.path, next.layer.display_name())])
+        .collect::<Vec<_>>()
+        .join(" + ")
 }
 
 /// The registry-level default harness — what `--harness` falls back to when
@@ -132,8 +289,13 @@ impl Harness {
 
 impl Default for Harness {
     fn default() -> Self {
-        Harness::resolve(DEFAULT_HARNESS_NAME)
-            .expect("the embedded registry contains the default harness")
+        // A `--harness-file` descriptor becomes the session default, so the
+        // one-off harness doesn't have to be repeated via `--harness`.
+        let name = SESSION_DEFAULT_HARNESS
+            .get()
+            .copied()
+            .unwrap_or(DEFAULT_HARNESS_NAME);
+        Harness::resolve(name).expect("the session default resolves against the registry")
     }
 }
 
@@ -223,8 +385,16 @@ mod tests {
         assert_eq!(vocab.read_tools, ["Glob", "Grep", "Read"]);
     }
 
+    fn src(layer: Layer, path: &str, toml_src: &str) -> DescriptorSource {
+        DescriptorSource {
+            layer,
+            path: path.to_string(),
+            toml_src: toml_src.to_string(),
+        }
+    }
+
     #[test]
-    fn duplicate_label_in_same_layer_errors() {
+    fn duplicate_embedded_label_errors() {
         let mut sources = embedded_sources();
         sources.push(sources[0].clone());
         let err = build_registry(sources).unwrap_err().to_string();
@@ -238,9 +408,10 @@ mod tests {
 
     #[test]
     fn registry_entries_record_embedded_provenance() {
-        let entries = build_registry(embedded_sources()).unwrap();
-        assert_eq!(entries.len(), EMBEDDED_DESCRIPTORS.len());
-        for entry in &entries {
+        let built = build_registry(embedded_sources()).unwrap();
+        assert!(built.warnings.is_empty(), "{:?}", built.warnings);
+        assert_eq!(built.entries.len(), EMBEDDED_DESCRIPTORS.len());
+        for entry in &built.entries {
             assert_eq!(entry.sources.len(), 1, "one contributing file per built-in");
             assert_eq!(entry.sources[0].0, Layer::Embedded);
             assert!(
@@ -249,6 +420,190 @@ mod tests {
                 entry.sources[0].1
             );
         }
+    }
+
+    #[test]
+    fn project_layer_overrides_a_single_field_of_a_builtin() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::ProjectLocal,
+            ".eval-magic/harnesses/claude-code.toml",
+            "label = \"claude-code\"\n\n[model]\nflag = \"--model-x\"\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        assert!(built.warnings.is_empty(), "{:?}", built.warnings);
+        assert_eq!(built.entries.len(), EMBEDDED_DESCRIPTORS.len());
+        let entry = built
+            .entries
+            .iter()
+            .find(|e| e.label == "claude-code")
+            .unwrap();
+        // The overridden field changed; everything else survives from the
+        // embedded base (field-level merge, not file shadowing).
+        assert_eq!(entry.adapter.cli_model_flag(), Some("--model-x".into()));
+        assert!(entry.adapter.run_capabilities().supports_guard);
+        assert_eq!(
+            entry.sources,
+            vec![
+                (Layer::Embedded, "harnesses/claude-code.toml".to_string()),
+                (
+                    Layer::ProjectLocal,
+                    ".eval-magic/harnesses/claude-code.toml".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn new_label_in_a_user_layer_registers_a_new_harness() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::ProjectLocal,
+            ".eval-magic/harnesses/cool.toml",
+            "label = \"cool-custom-harness\"\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        assert!(built.warnings.is_empty(), "{:?}", built.warnings);
+        let entry = built
+            .entries
+            .iter()
+            .find(|e| e.label == "cool-custom-harness")
+            .expect("new harness registered");
+        assert_eq!(entry.sources[0].0, Layer::ProjectLocal);
+        assert!(entry.adapter.skills_dir(Path::new("/r")).is_none());
+    }
+
+    #[test]
+    fn discovered_file_declaring_a_guard_warns_and_is_skipped() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::ProjectLocal,
+            ".eval-magic/harnesses/armed.toml",
+            "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        assert_eq!(
+            built.entries.len(),
+            EMBEDDED_DESCRIPTORS.len(),
+            "file skipped"
+        );
+        assert_eq!(built.warnings.len(), 1);
+        assert!(
+            built.warnings[0].contains("may not declare [guard]"),
+            "{}",
+            built.warnings[0]
+        );
+    }
+
+    #[test]
+    fn discovered_overlay_breaking_invariants_warns_and_keeps_the_base() {
+        let mut sources = embedded_sources();
+        // Replacing config_dirs orphans skills_dir's parent — an invariant
+        // break that only shows post-merge.
+        sources.push(src(
+            Layer::ProjectLocal,
+            ".eval-magic/harnesses/claude-code.toml",
+            "label = \"claude-code\"\nconfig_dirs = [\".other\"]\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        assert_eq!(built.warnings.len(), 1);
+        assert!(
+            built.warnings[0].contains(".eval-magic/harnesses/claude-code.toml"),
+            "names the offending file: {}",
+            built.warnings[0]
+        );
+        let entry = built
+            .entries
+            .iter()
+            .find(|e| e.label == "claude-code")
+            .unwrap();
+        assert_eq!(
+            entry.adapter.config_dir_names(),
+            vec![".claude".to_string()],
+            "embedded base survives the dropped overlay"
+        );
+        assert_eq!(
+            entry.sources.len(),
+            1,
+            "the bad overlay records no provenance"
+        );
+    }
+
+    #[test]
+    fn same_label_twice_in_one_discovered_layer_warns_and_skips_the_second() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::ProjectLocal,
+            "a.toml",
+            "label = \"claude-code\"\n\n[model]\nflag = \"--from-a\"\n",
+        ));
+        sources.push(src(
+            Layer::ProjectLocal,
+            "b.toml",
+            "label = \"claude-code\"\n\n[model]\nflag = \"--from-b\"\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        assert_eq!(built.warnings.len(), 1);
+        assert!(
+            built.warnings[0].contains("a.toml"),
+            "{}",
+            built.warnings[0]
+        );
+        assert!(
+            built.warnings[0].contains("b.toml"),
+            "{}",
+            built.warnings[0]
+        );
+        let entry = built
+            .entries
+            .iter()
+            .find(|e| e.label == "claude-code")
+            .unwrap();
+        assert_eq!(entry.adapter.cli_model_flag(), Some("--from-a".into()));
+    }
+
+    #[test]
+    fn harness_file_failures_are_fatal() {
+        let mut sources = embedded_sources();
+        sources.push(src(Layer::HarnessFile, "one-off.toml", "label = "));
+        let err = build_registry(sources).unwrap_err().to_string();
+        assert!(err.contains("one-off.toml"), "{err}");
+    }
+
+    #[test]
+    fn harness_file_guard_rejection_is_fatal() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::HarnessFile,
+            "one-off.toml",
+            "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
+        ));
+        let err = build_registry(sources).unwrap_err().to_string();
+        assert!(err.contains("may not declare [guard]"), "{err}");
+    }
+
+    #[test]
+    fn harness_file_overlay_merges_on_top_of_discovered_layers() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::ProjectLocal,
+            "p.toml",
+            "label = \"claude-code\"\n\n[model]\nflag = \"--from-project\"\n",
+        ));
+        sources.push(src(
+            Layer::HarnessFile,
+            "one-off.toml",
+            "label = \"claude-code\"\n\n[model]\nflag = \"--from-file\"\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        assert!(built.warnings.is_empty(), "{:?}", built.warnings);
+        let entry = built
+            .entries
+            .iter()
+            .find(|e| e.label == "claude-code")
+            .unwrap();
+        assert_eq!(entry.adapter.cli_model_flag(), Some("--from-file".into()));
+        assert_eq!(entry.sources.len(), 3);
     }
 
     #[test]

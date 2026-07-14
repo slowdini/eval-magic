@@ -33,6 +33,16 @@ use clap::{Args, Parser, Subcommand};
     after_help = super::help::AFTER_HELP
 )]
 pub(crate) struct Cli {
+    /// Load a one-off harness descriptor file as the top registry layer.
+    ///
+    /// The file merges field-by-field onto any registered harness with the same
+    /// `label` (or defines a new one), exactly like a project-local descriptor
+    /// in `.eval-magic/harnesses/`, and — when `--harness` is omitted — its
+    /// label becomes the invocation's default harness. Unlike discovered
+    /// descriptor files (skipped with a warning when broken), errors in this
+    /// explicitly named file are fatal.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub harness_file: Option<String>,
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
