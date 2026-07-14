@@ -356,51 +356,62 @@ pub struct CliJudgeContext<'a> {
     pub iteration_dir: &'a Path,
 }
 
-/// The built-in adapters, one descriptor-backed adapter per [`Harness`]
-/// variant, loaded once from the embedded descriptor files.
-struct Registry {
-    claude_code: DescriptorAdapter,
-    codex: DescriptorAdapter,
-    opencode: DescriptorAdapter,
+/// One registry entry: a harness identity (the descriptor's `label`) and its
+/// descriptor-backed adapter.
+struct RegistryEntry {
+    label: &'static str,
+    adapter: DescriptorAdapter,
 }
 
-/// Built on first `adapter_for` call. The embedded descriptors are bundled and
-/// known-valid, so a load failure here is a programmer error (a bad descriptor
-/// edit) and panics — mirroring the bundled-schema panics in
-/// `validation::schema` — with the descriptor's own actionable message.
-static REGISTRY: LazyLock<Registry> = LazyLock::new(|| Registry {
-    claude_code: build_embedded(Harness::ClaudeCode, EMBEDDED_DESCRIPTORS[0]),
-    codex: build_embedded(Harness::Codex, EMBEDDED_DESCRIPTORS[1]),
-    opencode: build_embedded(Harness::OpenCode, EMBEDDED_DESCRIPTORS[2]),
-});
+/// Built on first use. The embedded descriptors are bundled and known-valid,
+/// so a load failure here is a programmer error (a bad descriptor edit) and
+/// panics — mirroring the bundled-schema panics in `validation::schema` —
+/// with the descriptor's own actionable message.
+static REGISTRY: LazyLock<Vec<RegistryEntry>> =
+    LazyLock::new(|| build_registry(EMBEDDED_DESCRIPTORS));
 
-fn build_embedded(harness: Harness, (source, toml_src): (&str, &str)) -> DescriptorAdapter {
-    let descriptor = load_descriptor(toml_src, source)
-        .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"));
-    // Label ↔ variant lockstep: the descriptor's label must be the variant's
-    // serde/CLI identifier, or `--harness <label>` and the descriptor would
-    // name different harnesses.
-    let expected = serde_json::to_value(harness)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .expect("Harness serializes to its kebab-case identifier");
-    assert_eq!(
-        descriptor.label, expected,
-        "bundled descriptor {source} label {:?} does not match the {expected} harness identifier",
-        descriptor.label
-    );
-    DescriptorAdapter::from_descriptor(descriptor)
+/// Load descriptor sources into registry entries, keyed by each descriptor's
+/// `label`. The label is the harness identity — `--harness <label>`, artifact
+/// values, and adapter lookup all resolve through it — so a duplicate is a
+/// programmer error and panics. Layering user-supplied descriptor files
+/// (#136) means feeding more sources through here.
+fn build_registry(
+    sources: impl IntoIterator<Item = (&'static str, &'static str)>,
+) -> Vec<RegistryEntry> {
+    let mut entries: Vec<RegistryEntry> = Vec::new();
+    for (source, toml_src) in sources {
+        let descriptor = load_descriptor(toml_src, source)
+            .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"));
+        // Leaked once per registry entry per process: the label becomes the
+        // `'static` identity the rest of the crate passes around by handle.
+        let label: &'static str = Box::leak(descriptor.label.clone().into_boxed_str());
+        assert!(
+            !entries.iter().any(|e| e.label == label),
+            "duplicate harness label {label:?} (from {source})"
+        );
+        entries.push(RegistryEntry {
+            label,
+            adapter: DescriptorAdapter::from_descriptor(descriptor),
+        });
+    }
+    entries
 }
 
 /// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
-/// the harness variant for all harness-specific behavior; every other module
-/// goes through the returned trait object.
+/// the harness identifier for all harness-specific behavior; every other
+/// module goes through the returned trait object.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
-    match harness {
-        Harness::ClaudeCode => &REGISTRY.claude_code,
-        Harness::Codex => &REGISTRY.codex,
-        Harness::OpenCode => &REGISTRY.opencode,
-    }
+    // Bridge while `Harness` is still an enum: its serde form is the
+    // kebab-case identifier the registry is keyed by.
+    let name = serde_json::to_value(harness)
+        .ok()
+        .and_then(|v| v.as_str().map(str::to_string))
+        .expect("Harness serializes to its kebab-case identifier");
+    &REGISTRY
+        .iter()
+        .find(|e| e.label == name)
+        .unwrap_or_else(|| panic!("no descriptor registered for harness {name:?}"))
+        .adapter
 }
 
 /// The union of every harness's project-local config dir names (sorted,
@@ -408,9 +419,9 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
 /// staging's sibling-asset filter, the guard's Bash tamper rule, and
 /// detect-stray-writes' staging-dir lookbehind.
 pub fn all_config_dir_names() -> Vec<String> {
-    let mut names: Vec<String> = Harness::ALL
+    let mut names: Vec<String> = REGISTRY
         .iter()
-        .flat_map(|&h| adapter_for(h).config_dir_names())
+        .flat_map(|e| e.adapter.config_dir_names())
         .collect();
     names.sort_unstable();
     names.dedup();
@@ -423,8 +434,8 @@ pub fn all_config_dir_names() -> Vec<String> {
 pub fn all_tool_vocabulary() -> &'static ToolVocabulary {
     static ALL: LazyLock<ToolVocabulary> = LazyLock::new(|| {
         let mut union = ToolVocabulary::default();
-        for &h in Harness::ALL.iter() {
-            let vocab = adapter_for(h).tool_vocabulary();
+        for entry in REGISTRY.iter() {
+            let vocab = entry.adapter.tool_vocabulary();
             union.write_tools.extend(vocab.write_tools);
             union.patch_tools.extend(vocab.patch_tools);
             union.shell_tools.extend(vocab.shell_tools);
@@ -480,6 +491,12 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate harness label")]
+    fn duplicate_label_panics() {
+        build_registry([EMBEDDED_DESCRIPTORS[0], EMBEDDED_DESCRIPTORS[0]]);
     }
 
     #[test]
