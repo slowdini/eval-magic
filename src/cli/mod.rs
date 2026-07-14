@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail};
 use clap::Parser;
 
-use crate::core::{DetectInput, RunContext, detect_run_context};
+use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
 mod args;
 mod commands;
@@ -86,12 +86,16 @@ pub(crate) fn run_context_with_bootstrap(
     args: &CommonArgs,
     bootstrap: Option<String>,
 ) -> anyhow::Result<RunContext> {
+    // `--harness` parses as a plain string so runtime-loaded descriptors can
+    // name harnesses clap never saw; resolution against the registry happens
+    // here, after parsing.
+    let harness = args.harness.as_deref().map(Harness::resolve).transpose()?;
     Ok(detect_run_context(DetectInput {
         skill_dir: args.skill_dir.clone(),
         skill: args.skill.clone(),
         bootstrap,
         workspace_dir: args.workspace_dir.clone(),
-        harness: args.harness,
+        harness,
         cwd: None,
     })?)
 }

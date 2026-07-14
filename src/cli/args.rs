@@ -6,8 +6,6 @@
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::core::Harness;
-
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
 ///
 /// An eval dispatches a fresh subagent twice per test case — once with the skill
@@ -78,9 +76,11 @@ pub struct CommonArgs {
     /// `--guard`. Each reads its own per-task events file (`claude-events.jsonl`,
     /// `codex-events.jsonl`); Codex stages skills under `.agents/skills`.
     /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
-    /// `--guard` are not yet wired for OpenCode.
-    #[arg(long, value_parser = crate::adapters::harness_value_parser())]
-    pub harness: Option<Harness>,
+    /// `--guard` are not yet wired for OpenCode. The name is resolved against
+    /// the harness descriptor registry after parsing; an unknown name errors
+    /// listing every registered harness.
+    #[arg(long)]
+    pub harness: Option<String>,
     /// Workspace directory (defaults to `<cwd>/.eval-magic`).
     ///
     /// The artifact root. Pass the same value to every command of a run, including

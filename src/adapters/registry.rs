@@ -144,17 +144,6 @@ impl<'de> serde::Deserialize<'de> for Harness {
     }
 }
 
-/// The `--harness` value parser: registry-driven possible values, so clap
-/// renders `[possible values: …]` in help, suggests near-misses, and rejects
-/// unknown names listing the known ones — with no compile-time harness set.
-pub fn harness_value_parser() -> clap::builder::ValueParser {
-    use clap::builder::TypedValueParser as _;
-    let names: Vec<&'static str> = Harness::known().map(Harness::name).collect();
-    clap::builder::PossibleValuesParser::new(names)
-        .map(|name| Harness::resolve(&name).expect("clap only passes registry-known names"))
-        .into()
-}
-
 /// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
 /// the harness identifier for all harness-specific behavior; every other
 /// module goes through the returned trait object.

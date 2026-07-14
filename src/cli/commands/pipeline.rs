@@ -44,7 +44,7 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
         skill: step.skill.clone(),
         iteration: Some(step.iteration),
         mode: None,
-        harness: Some(step.harness),
+        harness: Some(step.harness.name().to_string()),
         workspace_dir: step.workspace_dir.clone(),
         only: None,
         skip: None,
