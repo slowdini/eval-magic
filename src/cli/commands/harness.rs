@@ -228,7 +228,11 @@ fn lint_name(name: &str) -> anyhow::Result<()> {
     }
 
     if failed > 0 {
-        bail!("descriptor lint failed for {name}: {failed} check(s) failed");
+        bail!(
+            "descriptor lint found {failed} failing check(s) across the discovered layers \
+             (see ✗ lines above; broken files are reported even when their label is not \
+             {name:?}, since a file that fails to parse has no readable label)"
+        );
     }
     println!("Linted {name}: all checks passed.");
     Ok(())

@@ -3,9 +3,9 @@
 //!
 //! Descriptor sources load into label-keyed entries, and every way the rest of
 //! the crate names a harness funnels through them: [`Harness::resolve`] turns
-//! a string into a validated handle (also behind the `--harness` value parser
-//! and the artifact `Deserialize`), [`Harness::known`] enumerates the entries,
-//! and [`adapter_for`] serves each handle's [`HarnessAdapter`].
+//! a string into a validated handle (resolving `--harness` after parsing, and
+//! behind the artifact `Deserialize`), [`Harness::known`] enumerates the
+//! entries, and [`adapter_for`] serves each handle's [`HarnessAdapter`].
 
 use std::path::Path;
 use std::sync::{LazyLock, OnceLock};

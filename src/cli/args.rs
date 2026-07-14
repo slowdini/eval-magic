@@ -136,7 +136,10 @@ pub(crate) enum HarnessCommands {
     /// The output is authorable: the provenance header lists every contributing
     /// file as `#` comments, and the body is valid descriptor TOML you can copy
     /// into a layer file (`.eval-magic/harnesses/<name>.toml`) and edit. Fields
-    /// at their baseline defaults are omitted.
+    /// at their baseline defaults are omitted. When reusing a guarded built-in's
+    /// output as a user layer, drop its `[guard]` table and
+    /// `run.supports_guard` first — user-supplied descriptors may not declare
+    /// them.
     Show {
         /// Registered harness name (see `harness list`).
         name: String,

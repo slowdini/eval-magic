@@ -94,8 +94,9 @@ flag = "--model-x"
 
 `eval-magic harness show claude-code` prints the resolved post-merge descriptor (as authorable
 TOML, headed by the contributing files) — the fastest way to see what a layer actually changed.
-Note the merge can't *delete*: an override can replace a field's value but cannot remove an
-embedded table.
+Two caveats: the merge can't *delete* (an override can replace a field's value but cannot remove
+an embedded table), and a guarded built-in's output isn't copy-paste-safe as a user layer until
+you drop its `[guard]` table and `run.supports_guard` (see the guard restriction below).
 
 **Broken discovered files never brick the CLI** — they are skipped with a warning pointing at
 `eval-magic harness lint <file>`. A broken `--harness-file` is a hard error (you named it

@@ -26,7 +26,17 @@ use commands::*;
 /// subcommand, and return its result. Called by the binary entry point.
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    crate::adapters::registry::init_registry(cli.harness_file.as_deref().map(Path::new))?;
+    // The hidden guard hooks fire on every PreToolUse in a dispatched session
+    // and only ever need the embedded descriptors — skip layered discovery so
+    // a broken user descriptor can't add noise or latency per tool call (the
+    // lazy registry fallback serves them embedded-only).
+    let is_guard_hook = matches!(
+        cli.command,
+        Some(Commands::Guard { .. } | Commands::GuardCodex { .. })
+    );
+    if !is_guard_hook {
+        crate::adapters::registry::init_registry(cli.harness_file.as_deref().map(Path::new))?;
+    }
     dispatch(cli.command)
 }
 
