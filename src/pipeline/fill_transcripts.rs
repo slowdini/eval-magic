@@ -222,7 +222,12 @@ mod tests {
         )
         .unwrap();
 
-        let result = fill_transcripts(&iteration_dir, Harness::ClaudeCode, false).unwrap();
+        let result = fill_transcripts(
+            &iteration_dir,
+            Harness::resolve("claude-code").unwrap(),
+            false,
+        )
+        .unwrap();
         assert_eq!(result.filled, 1);
         assert_eq!(result.missing, 0);
 
@@ -266,7 +271,8 @@ mod tests {
         )
         .unwrap();
 
-        let result = fill_transcripts(&iteration_dir, Harness::Codex, false).unwrap();
+        let result =
+            fill_transcripts(&iteration_dir, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.filled, 1);
         assert_eq!(result.missing, 0);
 
@@ -309,7 +315,8 @@ mod tests {
             .unwrap();
         }
 
-        let result = fill_transcripts(&iteration_dir, Harness::Codex, false).unwrap();
+        let result =
+            fill_transcripts(&iteration_dir, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.filled, 2);
         assert_eq!(result.missing, 0);
 

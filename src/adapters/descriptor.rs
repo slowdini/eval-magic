@@ -22,7 +22,7 @@ use super::capabilities::{GuardEngine, ShadowPreflight, SlugCapability, Transcri
 mod validation;
 
 /// The three built-in harness descriptors, embedded like the schemas: a
-/// `(source path, TOML text)` pair per harness, in `Harness::ALL` order.
+/// `(source path, TOML text)` pair per harness, in registry order.
 pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 3] = [
     (
         "harnesses/claude-code.toml",

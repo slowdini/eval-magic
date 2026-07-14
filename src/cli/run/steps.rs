@@ -150,7 +150,7 @@ mod tests {
             skill_dir: Some("/skills"),
             skill: Some("mr-review"),
             iteration: 2,
-            harness: Harness::Codex,
+            harness: Harness::resolve("codex").unwrap(),
             ..Default::default()
         });
         assert_eq!(
@@ -162,7 +162,11 @@ mod tests {
                 "grade"
             ]
         );
-        assert!(steps.iter().all(|s| s.harness == Harness::Codex));
+        assert!(
+            steps
+                .iter()
+                .all(|s| s.harness == Harness::resolve("codex").unwrap())
+        );
     }
 
     #[test]
@@ -188,7 +192,7 @@ mod tests {
             skill_dir: None,
             skill: None,
             iteration: 0,
-            harness: Harness::ClaudeCode,
+            harness: Harness::resolve("claude-code").unwrap(),
             workspace_dir: None,
         }
     }

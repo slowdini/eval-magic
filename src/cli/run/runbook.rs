@@ -151,7 +151,7 @@ mod tests {
     fn runbook_is_human_followed_cli_recipe() {
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
         let ctx = RunbookContext {
-            harness: Harness::Codex,
+            harness: Harness::resolve("codex").unwrap(),
             skill_name: "widget-skill",
             iteration: 2,
             iteration_dir: &dir,

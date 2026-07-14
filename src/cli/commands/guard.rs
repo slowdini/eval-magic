@@ -19,7 +19,7 @@ use crate::sandbox;
 pub(crate) fn run_guard(marker: Option<String>) -> anyhow::Result<()> {
     let marker_path = marker
         .map(PathBuf::from)
-        .unwrap_or_else(|| default_marker_path(Harness::ClaudeCode));
+        .unwrap_or_else(|| default_marker_path("claude-code"));
     let payload = io::read_to_string(io::stdin()).unwrap_or_default();
     if let Some(verdict) =
         claude_code::guard::guard_decision(&payload, sandbox::read_marker(&marker_path))
@@ -35,7 +35,7 @@ pub(crate) fn run_guard(marker: Option<String>) -> anyhow::Result<()> {
 pub(crate) fn run_guard_codex(marker: Option<String>) -> anyhow::Result<()> {
     let marker_path = marker
         .map(PathBuf::from)
-        .unwrap_or_else(|| default_marker_path(Harness::Codex));
+        .unwrap_or_else(|| default_marker_path("codex"));
     let payload = io::read_to_string(io::stdin()).unwrap_or_default();
     if let Some(verdict) =
         codex::guard::guard_decision(&payload, sandbox::read_marker(&marker_path))
@@ -63,7 +63,10 @@ pub(crate) fn run_teardown_guard() -> anyhow::Result<()> {
 
 /// The marker path a guard hook reads when argv carries none: the harness's
 /// skills dir under the cwd, e.g. `<cwd>/.claude/skills/.slow-powers-eval-guard.json`.
-fn default_marker_path(harness: Harness) -> PathBuf {
+/// The names are bundled-harness literals because each hook entry point IS its
+/// harness's on-disk contract (see the module docs).
+fn default_marker_path(harness_name: &str) -> PathBuf {
+    let harness = Harness::resolve(harness_name).expect("bundled harness");
     adapter_for(harness)
         .skills_dir(&std::env::current_dir().unwrap_or_default())
         .join(sandbox::GUARD_MARKER)

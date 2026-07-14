@@ -21,7 +21,9 @@ mod tests {
         let line = json!({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bun test", "output": "ok"}});
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
-        let inv = adapter_for(Harness::Codex).parse_cli_events(&path).unwrap();
+        let inv = adapter_for(Harness::resolve("codex").unwrap())
+            .parse_cli_events(&path)
+            .unwrap();
         assert_eq!(inv.len(), 1);
         assert_eq!(inv[0].name, "command_execution");
     }

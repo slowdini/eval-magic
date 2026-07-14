@@ -79,7 +79,7 @@ pub struct CommonArgs {
     /// `codex-events.jsonl`); Codex stages skills under `.agents/skills`.
     /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
     /// `--guard` are not yet wired for OpenCode.
-    #[arg(long)]
+    #[arg(long, value_parser = crate::adapters::harness_value_parser())]
     pub harness: Option<Harness>,
     /// Workspace directory (defaults to `<cwd>/.eval-magic`).
     ///

@@ -7,26 +7,38 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-/// The agent harness an eval runs against. Single source of truth, shared with
-/// the CLI layer (it derives `clap::ValueEnum` so flags can parse it directly).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-#[value(rename_all = "kebab-case")]
-pub enum Harness {
-    #[default]
-    ClaudeCode,
-    Codex,
-    #[serde(rename = "opencode")]
-    #[value(name = "opencode")]
-    OpenCode,
+/// The agent harness an eval runs against: a validated handle to an entry in
+/// the descriptor registry. Constructible only through registry resolution, so
+/// a held `Harness` always names a registered harness and adapter lookup never
+/// fails. The registry-dependent behavior lives next to the registry in
+/// `crate::adapters::harness`: `Harness::resolve` (the string-to-handle
+/// gateway, also behind the `--harness` value parser), `Harness::known` (every
+/// registered harness), `Default` (the registry's default harness), and
+/// `Deserialize` (resolves artifact values, rejecting unknown names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Harness {
+    name: &'static str,
 }
 
 impl Harness {
-    /// Every supported harness, for code that must sweep all of them (e.g.
-    /// guard teardown scans each harness's skills dir for a marker).
-    pub const ALL: [Harness; 3] = [Harness::ClaudeCode, Harness::Codex, Harness::OpenCode];
+    /// Registry-only constructor: `name` must be a registry entry's label.
+    pub(crate) const fn from_static_name(name: &'static str) -> Self {
+        Harness { name }
+    }
+
+    /// The kebab-case identifier (`claude-code`, `codex`, `opencode`, …) — the
+    /// `--harness` flag value and the `harness` value in artifacts.
+    pub fn name(self) -> &'static str {
+        self.name
+    }
+}
+
+impl Serialize for Harness {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name)
+    }
 }
 
 /// The resolved environment for a run: validated skill location, sibling skills,
@@ -46,8 +58,9 @@ pub struct RunContext {
 }
 
 /// Already-parsed flag values handed to [`detect_run_context`]. `clap` owns the
-/// actual argv parsing (and, once wired, the harness `ValueEnum` rejection); this
-/// struct carries the raw values through to filesystem validation and defaulting.
+/// actual argv parsing (including the registry-driven `--harness` rejection);
+/// this struct carries the raw values through to filesystem validation and
+/// defaulting.
 #[derive(Debug, Clone, Default)]
 pub struct DetectInput {
     pub skill_dir: Option<String>,
@@ -409,7 +422,7 @@ mod tests {
         );
         assert!(ctx.sibling_skill_names.is_empty());
         assert!(ctx.bootstrap_path.is_none());
-        assert_eq!(ctx.harness, Harness::ClaudeCode);
+        assert_eq!(ctx.harness, Harness::resolve("claude-code").unwrap());
     }
 
     #[test]
@@ -487,11 +500,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(DetectInput {
-            harness: Some(Harness::Codex),
+            harness: Some(Harness::resolve("codex").unwrap()),
             ..input(&skill_dir, "foo")
         })
         .unwrap();
-        assert_eq!(ctx.harness, Harness::Codex);
+        assert_eq!(ctx.harness, Harness::resolve("codex").unwrap());
     }
 
     #[test]
@@ -499,10 +512,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(DetectInput {
-            harness: Some(Harness::OpenCode),
+            harness: Some(Harness::resolve("opencode").unwrap()),
             ..input(&skill_dir, "foo")
         })
         .unwrap();
-        assert_eq!(ctx.harness, Harness::OpenCode);
+        assert_eq!(ctx.harness, Harness::resolve("opencode").unwrap());
     }
 }

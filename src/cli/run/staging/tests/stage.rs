@@ -170,7 +170,7 @@ fn codex_stages_under_agents_skills_and_rewrites_frontmatter_name() {
         condition: "with_skill",
         skill_name: "mr-review",
         repo_root: tmp.path(),
-        harness: Harness::Codex,
+        harness: Harness::resolve("codex").unwrap(),
         ..Default::default()
     })
     .unwrap();
@@ -198,7 +198,7 @@ fn codex_stage_name_override_is_dir_and_frontmatter_name() {
         condition: "with_skill",
         skill_name: "mr-review",
         repo_root: tmp.path(),
-        harness: Harness::Codex,
+        harness: Harness::resolve("codex").unwrap(),
         stage_name_override: Some("mr-review"),
         ..Default::default()
     })
@@ -220,7 +220,7 @@ fn opencode_stages_under_opencode_skills_and_rewrites_frontmatter_name() {
         condition: "with_skill",
         skill_name: "my-skill",
         repo_root: tmp.path(),
-        harness: Harness::OpenCode,
+        harness: Harness::resolve("opencode").unwrap(),
         ..Default::default()
     })
     .unwrap();
@@ -249,7 +249,7 @@ fn opencode_rejects_invalid_stage_name_override() {
         condition: "with_skill",
         skill_name: "my-skill",
         repo_root: tmp.path(),
-        harness: Harness::OpenCode,
+        harness: Harness::resolve("opencode").unwrap(),
         stage_name_override: Some("invalid_name"),
         ..Default::default()
     })
@@ -281,7 +281,7 @@ fn register_appends_custom_dir_so_cleanup_removes_it() {
     register_staged_skill_for_cleanup(
         tmp.path(),
         "verification-before-completion",
-        Harness::ClaudeCode,
+        Harness::resolve("claude-code").unwrap(),
     )
     .unwrap();
 
@@ -293,7 +293,7 @@ fn register_appends_custom_dir_so_cleanup_removes_it() {
     names.sort();
     assert_eq!(names, vec!["sibling-a", "verification-before-completion"]);
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
     assert!(!custom_dir.exists());
 }
 
@@ -311,8 +311,18 @@ fn register_is_idempotent() {
         .unwrap(),
     );
 
-    register_staged_skill_for_cleanup(tmp.path(), "foo-staged", Harness::ClaudeCode).unwrap();
-    register_staged_skill_for_cleanup(tmp.path(), "foo-staged", Harness::ClaudeCode).unwrap();
+    register_staged_skill_for_cleanup(
+        tmp.path(),
+        "foo-staged",
+        Harness::resolve("claude-code").unwrap(),
+    )
+    .unwrap();
+    register_staged_skill_for_cleanup(
+        tmp.path(),
+        "foo-staged",
+        Harness::resolve("claude-code").unwrap(),
+    )
+    .unwrap();
 
     let count = read_manifest(&skills_dir)
         .created_entries

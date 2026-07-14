@@ -109,8 +109,24 @@ pub struct ConditionEntry {
     pub name: String,
     pub skill_path: Option<String>,
     /// Optional and nullable: absent (omitted), explicit `null`, or a slug.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_key"
+    )]
     pub staged_skill_slug: Option<Option<String>>,
+}
+
+/// Tri-state field deserializer: a present key — even an explicit `null` —
+/// becomes `Some(inner)`, while a missing key falls back to `None` via
+/// `default`. The stock `Option<Option<T>>` impl collapses `null` to the outer
+/// `None`, which would drop the key on re-serialization and break artifact
+/// round-trips.
+fn deserialize_present_key<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// The conditions manifest written for a run.
@@ -391,6 +407,16 @@ mod tests {
             some.get("staged_skill_slug"),
             Some(&Value::String("slug-1".into()))
         );
+        // Deserialization preserves all three states (explicit null must stay
+        // a present key, not collapse to absent).
+        let back = |v| {
+            serde_json::from_value::<ConditionEntry>(v)
+                .unwrap()
+                .staged_skill_slug
+        };
+        assert_eq!(back(absent), None);
+        assert_eq!(back(null), Some(None));
+        assert_eq!(back(some), Some(Some("slug-1".into())));
     }
 
     #[test]
@@ -400,7 +426,7 @@ mod tests {
             baseline: None,
             conditions: vec![],
             timestamp: "2026-06-08T00:00:00Z".into(),
-            harness: Some(Harness::ClaudeCode),
+            harness: Some(Harness::resolve("claude-code").unwrap()),
             run_nonce: None,
             runs: None,
             agent_model: None,
@@ -416,6 +442,61 @@ mod tests {
         // Absent optionals omitted.
         assert!(out.get("baseline").is_none());
         assert!(out.get("run_nonce").is_none());
+    }
+
+    /// Fixture artifacts captured from the pre-#135 binary (compile-time
+    /// `Harness` enum era). Parsing and re-serializing with the artifact
+    /// writer format (`to_string_pretty` + trailing newline, matching
+    /// `pipeline::io::write_json`) must reproduce every byte, so opening the
+    /// harness identifier can never reshape existing artifacts.
+    #[test]
+    fn conditions_json_fixtures_round_trip_byte_identically() {
+        for (name, fixture) in [
+            (
+                "claude-code",
+                include_str!("../../tests/fixtures/conditions/claude-code.json"),
+            ),
+            (
+                "codex",
+                include_str!("../../tests/fixtures/conditions/codex.json"),
+            ),
+            (
+                "opencode",
+                include_str!("../../tests/fixtures/conditions/opencode.json"),
+            ),
+            (
+                "no-harness",
+                include_str!("../../tests/fixtures/conditions/no-harness.json"),
+            ),
+        ] {
+            let record: ConditionsRecord = serde_json::from_str(fixture)
+                .unwrap_or_else(|e| panic!("fixture {name} no longer parses: {e}"));
+            let mut out = serde_json::to_string_pretty(&record).unwrap();
+            out.push('\n');
+            assert_eq!(
+                out, fixture,
+                "fixture {name} did not round-trip byte-identically"
+            );
+        }
+    }
+
+    /// A `conditions.json` naming a harness the registry doesn't know must
+    /// fail deserialization with the known harnesses listed, mirroring the
+    /// `--harness` CLI rejection.
+    #[test]
+    fn conditions_json_with_unknown_harness_errors_naming_known_harnesses() {
+        let err = serde_json::from_value::<ConditionsRecord>(json!({
+            "mode": "new-skill",
+            "conditions": [],
+            "timestamp": "2026-06-08T00:00:00Z",
+            "harness": "nonexistent"
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
+        for name in ["claude-code", "codex", "opencode"] {
+            assert!(err.contains(name), "error must name {name}: {err}");
+        }
     }
 
     #[test]

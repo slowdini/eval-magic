@@ -16,27 +16,24 @@
 //!   ingest, the write guard). Override the methods of an enhancement to wire
 //!   it for a harness.
 //!
-//! Generic code resolves an adapter with [`adapter_for`] and then calls the
-//! trait — so [`adapter_for`] is the one place that names a concrete harness
-//! for this surface. The impls live in the per-harness modules
-//! ([`claude_code`](super::claude_code), [`codex`](super::codex),
-//! [`opencode`](super::opencode)).
+//! Generic code resolves an adapter with [`adapter_for`](super::registry::adapter_for)
+//! and then calls the trait — so the [`registry`](super::registry) is the one
+//! place that names a concrete harness for this surface. The impls live in the
+//! per-harness modules ([`claude_code`](super::claude_code),
+//! [`codex`](super::codex), [`opencode`](super::opencode)).
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::LazyLock;
 use std::time::Duration;
 
-use crate::core::{AvailableSkill, Harness, HarnessRunCapabilities, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 
 use super::TranscriptSummary;
-use super::descriptor::{EMBEDDED_DESCRIPTORS, load_descriptor};
-use super::descriptor_adapter::DescriptorAdapter;
 use super::skill_shadow::PluginShadowReport;
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
-/// union across all harnesses ([`all_tool_vocabulary`]).
+/// union across all harnesses ([`all_tool_vocabulary`](super::registry::all_tool_vocabulary)).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolVocabulary {
     /// Tools that write the filesystem with a single target path argument.
@@ -83,7 +80,8 @@ pub trait HarnessAdapter {
     /// The project-local config dir names this harness reads or the adapter
     /// writes (e.g. `.claude`). Staging excludes every harness's config dirs
     /// when copying a skill's sibling assets, so a stray checked-in config dir
-    /// never rides into a staged env. Via [`all_config_dir_names`] this list
+    /// never rides into a staged env. Via
+    /// [`all_config_dir_names`](super::registry::all_config_dir_names) this list
     /// also feeds the guard's Bash tamper rule and detect-stray-writes'
     /// staging-dir lookbehind, so adding a dir here automatically grows the
     /// write-guard's deny surface. List the parent of
@@ -94,7 +92,8 @@ pub trait HarnessAdapter {
     }
 
     /// The tool names this harness's guard hook payloads and parsed transcripts
-    /// use, grouped by role. Via [`all_tool_vocabulary`] this feeds the guard
+    /// use, grouped by role. Via
+    /// [`all_tool_vocabulary`](super::registry::all_tool_vocabulary) this feeds the guard
     /// arbiter's tool classification and detect-stray-writes' invocation audit,
     /// so list every name this harness's surfaces produce — even names another
     /// harness also uses; the union dedups. Default empty: a harness with no
@@ -356,117 +355,11 @@ pub struct CliJudgeContext<'a> {
     pub iteration_dir: &'a Path,
 }
 
-/// The built-in adapters, one descriptor-backed adapter per [`Harness`]
-/// variant, loaded once from the embedded descriptor files.
-struct Registry {
-    claude_code: DescriptorAdapter,
-    codex: DescriptorAdapter,
-    opencode: DescriptorAdapter,
-}
-
-/// Built on first `adapter_for` call. The embedded descriptors are bundled and
-/// known-valid, so a load failure here is a programmer error (a bad descriptor
-/// edit) and panics — mirroring the bundled-schema panics in
-/// `validation::schema` — with the descriptor's own actionable message.
-static REGISTRY: LazyLock<Registry> = LazyLock::new(|| Registry {
-    claude_code: build_embedded(Harness::ClaudeCode, EMBEDDED_DESCRIPTORS[0]),
-    codex: build_embedded(Harness::Codex, EMBEDDED_DESCRIPTORS[1]),
-    opencode: build_embedded(Harness::OpenCode, EMBEDDED_DESCRIPTORS[2]),
-});
-
-fn build_embedded(harness: Harness, (source, toml_src): (&str, &str)) -> DescriptorAdapter {
-    let descriptor = load_descriptor(toml_src, source)
-        .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"));
-    // Label ↔ variant lockstep: the descriptor's label must be the variant's
-    // serde/CLI identifier, or `--harness <label>` and the descriptor would
-    // name different harnesses.
-    let expected = serde_json::to_value(harness)
-        .ok()
-        .and_then(|v| v.as_str().map(str::to_string))
-        .expect("Harness serializes to its kebab-case identifier");
-    assert_eq!(
-        descriptor.label, expected,
-        "bundled descriptor {source} label {:?} does not match the {expected} harness identifier",
-        descriptor.label
-    );
-    DescriptorAdapter::from_descriptor(descriptor)
-}
-
-/// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
-/// the harness variant for all harness-specific behavior; every other module
-/// goes through the returned trait object.
-pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
-    match harness {
-        Harness::ClaudeCode => &REGISTRY.claude_code,
-        Harness::Codex => &REGISTRY.codex,
-        Harness::OpenCode => &REGISTRY.opencode,
-    }
-}
-
-/// The union of every harness's project-local config dir names (sorted,
-/// deduplicated): the dirs harness-agnostic code must treat as protected —
-/// staging's sibling-asset filter, the guard's Bash tamper rule, and
-/// detect-stray-writes' staging-dir lookbehind.
-pub fn all_config_dir_names() -> Vec<String> {
-    let mut names: Vec<String> = Harness::ALL
-        .iter()
-        .flat_map(|&h| adapter_for(h).config_dir_names())
-        .collect();
-    names.sort_unstable();
-    names.dedup();
-    names
-}
-
-/// The union of every harness's tool vocabulary (each list sorted,
-/// deduplicated). Computed once behind a `LazyLock` — the guard arbiter
-/// consults it on every hooked tool call.
-pub fn all_tool_vocabulary() -> &'static ToolVocabulary {
-    static ALL: LazyLock<ToolVocabulary> = LazyLock::new(|| {
-        let mut union = ToolVocabulary::default();
-        for &h in Harness::ALL.iter() {
-            let vocab = adapter_for(h).tool_vocabulary();
-            union.write_tools.extend(vocab.write_tools);
-            union.patch_tools.extend(vocab.patch_tools);
-            union.shell_tools.extend(vocab.shell_tools);
-            union.read_tools.extend(vocab.read_tools);
-        }
-        for list in [
-            &mut union.write_tools,
-            &mut union.patch_tools,
-            &mut union.shell_tools,
-            &mut union.read_tools,
-        ] {
-            list.sort_unstable();
-            list.dedup();
-        }
-        union
-    });
-    &ALL
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn all_config_dir_names_unions_every_adapter() {
-        assert_eq!(
-            all_config_dir_names(),
-            [".agents", ".claude", ".codex", ".opencode"]
-        );
-    }
-
-    #[test]
-    fn all_tool_vocabulary_unions_every_adapter() {
-        let vocab = all_tool_vocabulary();
-        assert_eq!(
-            vocab.write_tools,
-            ["Edit", "MultiEdit", "NotebookEdit", "Write", "file_change"]
-        );
-        assert_eq!(vocab.patch_tools, ["apply_patch"]);
-        assert_eq!(vocab.shell_tools, ["Bash", "command_execution"]);
-        assert_eq!(vocab.read_tools, ["Glob", "Grep", "Read"]);
-    }
+    use crate::adapters::registry::adapter_for;
+    use crate::core::Harness;
 
     // Cross-method invariants (guard/banner lockstep, hook-matcher ⊆
     // vocabulary, slug ↔ naming rules, …) are enforced at descriptor load
@@ -474,7 +367,10 @@ mod tests {
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
-        for h in [Harness::Codex, Harness::OpenCode] {
+        for h in [
+            Harness::resolve("codex").unwrap(),
+            Harness::resolve("opencode").unwrap(),
+        ] {
             assert_eq!(
                 adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
                 None
@@ -483,39 +379,32 @@ mod tests {
     }
 
     #[test]
-    fn labels_match_kebab_case_identifiers() {
-        assert_eq!(adapter_for(Harness::ClaudeCode).label(), "claude-code");
-        assert_eq!(adapter_for(Harness::Codex).label(), "codex");
-        assert_eq!(adapter_for(Harness::OpenCode).label(), "opencode");
-    }
-
-    #[test]
     fn skills_dir_is_harness_native() {
         let root = Path::new("/repo");
         assert_eq!(
-            adapter_for(Harness::ClaudeCode).skills_dir(root),
+            adapter_for(Harness::resolve("claude-code").unwrap()).skills_dir(root),
             root.join(".claude").join("skills")
         );
         assert_eq!(
-            adapter_for(Harness::Codex).skills_dir(root),
+            adapter_for(Harness::resolve("codex").unwrap()).skills_dir(root),
             root.join(".agents").join("skills")
         );
         assert_eq!(
-            adapter_for(Harness::OpenCode).skills_dir(root),
+            adapter_for(Harness::resolve("opencode").unwrap()).skills_dir(root),
             root.join(".opencode").join("skills")
         );
     }
 
     #[test]
     fn only_codex_and_opencode_rewrite_frontmatter() {
-        assert!(!adapter_for(Harness::ClaudeCode).rewrites_frontmatter_name());
-        assert!(adapter_for(Harness::Codex).rewrites_frontmatter_name());
-        assert!(adapter_for(Harness::OpenCode).rewrites_frontmatter_name());
+        assert!(!adapter_for(Harness::resolve("claude-code").unwrap()).rewrites_frontmatter_name());
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).rewrites_frontmatter_name());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).rewrites_frontmatter_name());
     }
 
     #[test]
     fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
-        for h in Harness::ALL {
+        for h in Harness::known() {
             let out = adapter_for(h).render_plan_mode_context("BODY");
             assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
             assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
@@ -528,17 +417,17 @@ mod tests {
 
     #[test]
     fn run_capabilities_capture_run_option_support_by_harness() {
-        let claude = adapter_for(Harness::ClaudeCode).run_capabilities();
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap()).run_capabilities();
         assert!(claude.supports_guard);
         assert!(claude.supports_bootstrap_with_no_stage);
         assert!(claude.supports_stage_name_with_no_stage);
 
-        let codex = adapter_for(Harness::Codex).run_capabilities();
+        let codex = adapter_for(Harness::resolve("codex").unwrap()).run_capabilities();
         assert!(codex.supports_guard);
         assert!(!codex.supports_bootstrap_with_no_stage);
         assert!(!codex.supports_stage_name_with_no_stage);
 
-        let opencode = adapter_for(Harness::OpenCode).run_capabilities();
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap()).run_capabilities();
         assert!(!opencode.supports_guard);
         assert!(opencode.supports_bootstrap_with_no_stage);
         assert!(opencode.supports_stage_name_with_no_stage);
@@ -548,7 +437,7 @@ mod tests {
     fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
         // The post-arm `--guard` banner names the harness's native hook surface,
         // so it lives behind the adapter rather than in generic run code.
-        let claude = adapter_for(Harness::ClaudeCode)
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap())
             .guard_armed_message()
             .expect("claude code has a write guard");
         assert!(
@@ -556,7 +445,7 @@ mod tests {
             "claude banner names its hook file: {claude}"
         );
 
-        let codex = adapter_for(Harness::Codex)
+        let codex = adapter_for(Harness::resolve("codex").unwrap())
             .guard_armed_message()
             .expect("codex has a write guard");
         assert!(
@@ -566,18 +455,31 @@ mod tests {
 
         // OpenCode has no write guard (its install_guard errors), so there is no
         // banner to print.
-        assert_eq!(adapter_for(Harness::OpenCode).guard_armed_message(), None);
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).guard_armed_message(),
+            None
+        );
     }
 
     #[test]
     fn staged_slug_default_and_opencode_override_preserve_the_prefix() {
         let prefix = "slow-powers-eval-";
         assert_eq!(
-            adapter_for(Harness::ClaudeCode).staged_slug(prefix, 2, "with_skill", "my-skill"),
+            adapter_for(Harness::resolve("claude-code").unwrap()).staged_slug(
+                prefix,
+                2,
+                "with_skill",
+                "my-skill"
+            ),
             "slow-powers-eval-2-with_skill__my-skill"
         );
         assert_eq!(
-            adapter_for(Harness::OpenCode).staged_slug(prefix, 2, "with_skill", "my-skill"),
+            adapter_for(Harness::resolve("opencode").unwrap()).staged_slug(
+                prefix,
+                2,
+                "with_skill",
+                "my-skill"
+            ),
             "slow-powers-eval-2-with-skill-my-skill"
         );
     }
