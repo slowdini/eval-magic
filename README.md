@@ -256,6 +256,8 @@ For the `without_skill` / baseline condition, the dispatch reflects "this skill 
 
 Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record means the same thing regardless of which harness produced it. Harness support is **a minimal baseline plus progressive enhancements**: any harness with a headless one-shot CLI can run evals at baseline (`--no-stage` inlines the skill into each dispatch prompt, `llm_judge` grades, `detect-stray-writes` audits), and each enhancement a harness's adapter wires raises fidelity from there. What each enhancement is, why it needs harness-specific support, and what its fallback is are documented in [docs/progressive-enhancements.md](docs/progressive-enhancements.md).
 
+**Bring your own harness:** a harness eval-magic has never seen is added with a TOML descriptor file — no code. Descriptors layer (embedded built-ins → `~/.config/eval-magic/harnesses/` → `.eval-magic/harnesses/` → `--harness-file`) with field-level merge, so a project can also retune a single field of a built-in. `eval-magic harness list|show|lint` inspect and validate the registry; the authoring guide is [docs/byoh.md](docs/byoh.md).
+
 ### How dispatch works
 
 Every eval test and judge is dispatched the same way: through the harness's one-shot CLI (`claude -p`, `codex exec`), one subprocess per task, each `cd`'d into its `(group, condition)` env and writing its events transcript to disk. `run` prepares the envs and `RUNBOOK.md`; from there an **agent session** can drive the loop (reading the runbook and shelling out each recipe) or a **human** can follow the same runbook by hand. The generated `RUNBOOK.md` / `dispatch-manifest.md` carry the exact per-task recipes for the selected harness — they, not this README, are the runtime reference for dispatch commands.
@@ -272,7 +274,7 @@ This table is the source of truth for per-harness enhancement support:
 
 ¹ `run --harness opencode` stages skills and emits native dispatch prompts, but prints manual `opencode run` guidance instead of a copy-pasteable recipe.
 
-A missing enhancement degrades fidelity, never correctness — every column has a fallback: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, `--guard` is rejected and `detect-stray-writes` audits after the fact.
+A missing enhancement degrades fidelity, never correctness — every column has a fallback, and the `run` preflight warns naming it: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, `--guard` continues unguarded and `detect-stray-writes` audits after the fact.
 
 Per-harness implementation notes for developers wiring features live in [docs/claude-notes.md](docs/claude-notes.md), [docs/codex-notes.md](docs/codex-notes.md), and [docs/opencode-notes.md](docs/opencode-notes.md).
 
@@ -281,6 +283,7 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 | Where | What's in it |
 |-------|--------------|
 | `eval-magic --help` / `eval-magic <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
+| [docs/byoh.md](docs/byoh.md) | Bring your own harness: authoring a descriptor file for an unknown harness, layering/merge rules, named capabilities, and the `harness list`/`show`/`lint` workflow |
 | [docs/progressive-enhancements.md](docs/progressive-enhancements.md) | Development doc: the harness baseline-vs-enhancement contract — what each enhancement unlocks, why it needs harness-specific code, and its fallback |
 | [docs/claude-notes.md](docs/claude-notes.md) / [docs/codex-notes.md](docs/codex-notes.md) / [docs/opencode-notes.md](docs/opencode-notes.md) | Development docs: per-harness implementation notes for working on eval-magic's harness support |
 | [GitHub issues](https://github.com/slowdini/eval-magic/issues) | Planned features and known limitations |

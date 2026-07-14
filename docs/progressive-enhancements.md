@@ -3,7 +3,9 @@
 > **Audience:** developers working on the eval-magic codebase. The README and `eval-magic --help`
 > are the user-facing docs; this file explains how harness support is structured in code and what
 > wiring more of it buys. Per-harness implementation notes live in [claude-notes.md](claude-notes.md),
-> [codex-notes.md](codex-notes.md), and [opencode-notes.md](opencode-notes.md).
+> [codex-notes.md](codex-notes.md), and [opencode-notes.md](opencode-notes.md). Pointing eval-magic
+> at a harness it doesn't know — user-supplied descriptor files, layering, `harness
+> list`/`show`/`lint` — is the user-facing [byoh.md](byoh.md).
 
 Harness compatibility is not a parity checklist to audit — it is **a minimal baseline every harness
 satisfies, plus optional enhancements** a harness's adapter opts into. A missing enhancement
@@ -34,9 +36,12 @@ That baseline already yields a working eval: `llm_judge` assertions grade every 
 run records exist. Run records without a transcript parser are assembled by hand per
 `schema/run-record.schema.json`.
 
-In descriptor terms the baseline is two required fields: `label` and `skills_dir`. Everything else
-in a harness descriptor is optional — an absent field or table gets a working generic fallback or
-an `Unsupported` error naming the enhancement it belongs to.
+In descriptor terms the baseline is one required field: `label`. Everything else in a harness
+descriptor is optional — an absent field or table gets a working generic fallback, and the `run`
+preflight *warns* naming that fallback rather than rejecting (a harness without `skills_dir`
+forces `--no-stage`; `--guard` without a declared guard continues unguarded behind the
+`detect-stray-writes` audit; requested models without a model flag are recorded as provenance
+only). Only genuinely contradictory flag combinations stay errors.
 
 ## Where this lives in code
 
@@ -44,20 +49,30 @@ an `Unsupported` error naming the enhancement it belongs to.
   declarative value (labels, dirs, capability booleans, phrases, command templates, banner prose).
   Descriptors are schema-gated (`schema/harness-descriptor.schema.json`) and invariant-checked at
   load time.
+- `src/adapters/registry.rs` — the label-keyed registry: `init_registry` loads every **layer**
+  (embedded → user-global → project-local → `--harness-file`) with field-level merge per label,
+  and `adapter_for()` resolves each `Harness` handle to its descriptor-backed adapter — still the
+  single dispatch point. Broken discovered files skip with a warning; the layer model itself is
+  documented in [byoh.md](byoh.md).
+- `src/adapters/descriptor/layers.rs` — layer discovery (config-root resolution, per-directory
+  scans, the `--harness-file` top layer) and the user-layer restrictions (no `[guard]`).
 - `src/adapters/harness.rs` — the `HarnessAdapter` trait, tiered into baseline and enhancement
-  sections; `adapter_for()` resolves each `Harness` variant to a descriptor-backed adapter in the
-  embedded registry — still the single place a concrete harness is named.
-- `src/adapters/descriptor.rs` — the descriptor model, TOML loading, and `validate_descriptor`
-  (the load-time invariants); `src/adapters/descriptor_adapter.rs` — the one generic
-  `DescriptorAdapter` implementing the trait from a descriptor.
+  sections.
+- `src/adapters/descriptor.rs` — the descriptor model, the per-file schema gate
+  (`parse_descriptor_value`), field-level merge (`merge_descriptor_value`), and
+  `finalize_descriptor` (the load-time invariants, with merged-file provenance in every message);
+  `src/adapters/descriptor_adapter.rs` — the one generic `DescriptorAdapter` implementing the
+  trait from a descriptor.
 - `src/adapters/capabilities.rs` — the **named capabilities**: closed enums a descriptor references
   by kebab-case name for everything that is real code (transcript parsers, guard engines, slug
   generation, shadow preflight).
 - `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, guard
   hooks, the plugin-shadow scan, the OpenCode slug sanitizer.
-- `run_capabilities()` (descriptor table `[run]`) — the narrow table the `run` preflight uses to
-  accept or reject run options (`--guard`, `--bootstrap`/`--stage-name` with `--no-stage`) per
-  harness.
+- `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
+  (`src/cli/run/util.rs`) — the `run` preflight: undeclared enhancements warn naming their
+  fallback and adjust the options (`--guard` forced off, missing `skills_dir` forces
+  `--no-stage`); only contradictory flag combinations (`--bootstrap`/`--stage-name` where the
+  descriptor declares them incompatible with `--no-stage`) reject.
 
 ## The enhancements
 
@@ -141,7 +156,9 @@ The guard arbiter and `detect-stray-writes` classify tool names against the cros
 vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser without declaring
 the harness's tool names is rejected at descriptor load. The hidden `guard` / `guard-codex`
 subcommands are the hook entry points — their names are a stable on-disk contract. Shared
-marker/manifest/teardown machinery lives in `src/sandbox/`.
+marker/manifest/teardown machinery lives in `src/sandbox/`. **User-supplied descriptors may not
+declare `[guard]`** (fail-open safety — the engine installs native hook config); the restriction
+lifts when the guard engine is opened up.
 
 ### Shadow preflight
 
@@ -195,18 +212,20 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
 
 ## Adding a new harness
 
-1. Add the variant to `Harness` in `src/core/context.rs` (it derives `clap::ValueEnum`).
-2. Create `harnesses/<label>.toml` with the baseline fields (`label`, `skills_dir`, `config_dirs`),
-   embed it in `EMBEDDED_DESCRIPTORS` (`src/adapters/descriptor.rs`), and register it in the
-   registry behind `adapter_for()` (`src/adapters/harness.rs`). The label must match the variant's
-   kebab-case identifier — the registry asserts it.
+1. **Start as a user descriptor** — author `.eval-magic/harnesses/<label>.toml` per
+   [byoh.md](byoh.md) and iterate with `harness lint`/`show` and real runs. No Rust, no rebuild;
+   this is also where the descriptor's field set gets proven.
+2. **Promote to a built-in** once it earns bundling: move the file to `harnesses/<label>.toml` and
+   add it to `EMBEDDED_DESCRIPTORS` (`src/adapters/descriptor.rs`). The registry keys on the
+   descriptor's `label`.
 3. Create `docs/<harness>-notes.md` with the implementation notes discovered along the way.
 4. Add the harness to the README support table (all enhancements ❌ at baseline).
 5. Wire enhancements in leverage order — dispatch recipes and transcript parser first (they carry
-   the most fidelity), then staging, model flag, guard — updating the table as each lands. Most
-   enhancements are descriptor fields; add a named capability in
-   `src/adapters/capabilities.rs` (plus its `src/adapters/<harness>/` module) only when the
-   harness's stream or hooks are incompatible with every existing capability.
+   the most fidelity), then staging, model flag, guard (guard requires built-in status — user
+   descriptors may not declare one) — updating the table as each lands. Most enhancements are
+   descriptor fields; add a named capability in `src/adapters/capabilities.rs` (plus its
+   `src/adapters/<harness>/` module) only when the harness's stream or hooks are incompatible with
+   every existing capability.
 
 ## Guardrails
 

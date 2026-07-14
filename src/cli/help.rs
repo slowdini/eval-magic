@@ -50,4 +50,15 @@ EXAMPLES:
   eval-magic run --harness opencode
   # ...dispatch each task with `opencode run`, then assemble records manually
   # until OpenCode transcript ingest is wired.
+
+  # Bring your own harness: describe it in a TOML file (see docs/byoh.md) —
+  # project-local descriptors live in .eval-magic/harnesses/*.toml
+  eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml
+  eval-magic harness list
+  eval-magic run --harness cool-custom-harness
+  # ...or load a one-off descriptor (its label becomes the default harness):
+  eval-magic run --harness-file ./cool-custom-harness.toml
+
+  # Inspect the resolved descriptor after layer merging (built-ins included)
+  eval-magic harness show claude-code
 ";
