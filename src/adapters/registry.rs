@@ -7,53 +7,87 @@
 //! and the artifact `Deserialize`), [`Harness::known`] enumerates the entries,
 //! and [`adapter_for`] serves each handle's [`HarnessAdapter`].
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, OnceLock};
 
 use crate::core::Harness;
 
-use super::descriptor::{EMBEDDED_DESCRIPTORS, load_descriptor};
+use super::descriptor::layers::{DescriptorSource, Layer, embedded_sources};
+use super::descriptor::{DescriptorError, load_descriptor};
 use super::descriptor_adapter::DescriptorAdapter;
 use super::harness::{HarnessAdapter, ToolVocabulary};
 
-/// One registry entry: a harness identity (the descriptor's `label`) and its
-/// descriptor-backed adapter.
+/// One registry entry: a harness identity (the descriptor's `label`), the
+/// descriptor sources that contributed to it (for `harness list`/`show`
+/// provenance), and its descriptor-backed adapter.
+#[derive(Debug)]
 struct RegistryEntry {
     label: &'static str,
+    sources: Vec<(Layer, String)>,
     adapter: DescriptorAdapter,
 }
 
-/// Built on first use. The embedded descriptors are bundled and known-valid,
-/// so a load failure here is a programmer error (a bad descriptor edit) and
-/// panics — mirroring the bundled-schema panics in `validation::schema` —
-/// with the descriptor's own actionable message.
-static REGISTRY: LazyLock<Vec<RegistryEntry>> =
-    LazyLock::new(|| build_registry(EMBEDDED_DESCRIPTORS));
+/// Set once by `init_registry` (layered sources), or lazily to the embedded
+/// built-ins on first pre-init access. The lazy fallback keeps unit tests
+/// hermetic: they never call `init_registry`, so user-supplied descriptor
+/// layers can't leak into them.
+static REGISTRY: OnceLock<Vec<RegistryEntry>> = OnceLock::new();
+
+fn registry() -> &'static Vec<RegistryEntry> {
+    REGISTRY.get_or_init(|| {
+        // The embedded descriptors are bundled and known-valid, so a failure
+        // here is a programmer error (a bad descriptor edit) and panics —
+        // mirroring the bundled-schema panics in `validation::schema` — with
+        // the descriptor's own actionable message.
+        build_registry(embedded_sources())
+            .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"))
+    })
+}
+
+/// A descriptor source set that cannot form a registry.
+#[derive(Debug, thiserror::Error)]
+enum RegistryBuildError {
+    #[error(transparent)]
+    Descriptor(#[from] DescriptorError),
+    #[error("duplicate harness label {label:?}: {first} and {second}")]
+    DuplicateLabel {
+        label: String,
+        first: String,
+        second: String,
+    },
+}
 
 /// Load descriptor sources into registry entries, keyed by each descriptor's
 /// `label`. The label is the harness identity — `--harness <label>`, artifact
-/// values, and adapter lookup all resolve through it — so a duplicate is a
-/// programmer error and panics. Layering user-supplied descriptor files
-/// (#136) means feeding more sources through here.
+/// values, and adapter lookup all resolve through it — so two sources
+/// producing the same label collide.
 fn build_registry(
-    sources: impl IntoIterator<Item = (&'static str, &'static str)>,
-) -> Vec<RegistryEntry> {
+    sources: Vec<DescriptorSource>,
+) -> Result<Vec<RegistryEntry>, RegistryBuildError> {
     let mut entries: Vec<RegistryEntry> = Vec::new();
-    for (source, toml_src) in sources {
-        let descriptor = load_descriptor(toml_src, source)
-            .unwrap_or_else(|e| panic!("bundled harness descriptor is invalid: {e}"));
+    for source in sources {
+        let descriptor = load_descriptor(&source.toml_src, &source.path)?;
+        if let Some(existing) = entries.iter().find(|e| e.label == descriptor.label) {
+            return Err(RegistryBuildError::DuplicateLabel {
+                label: descriptor.label,
+                first: existing
+                    .sources
+                    .last()
+                    .expect("every entry records its source")
+                    .1
+                    .clone(),
+                second: source.path,
+            });
+        }
         // Leaked once per registry entry per process: the label becomes the
         // `'static` identity the rest of the crate passes around by handle.
         let label: &'static str = Box::leak(descriptor.label.clone().into_boxed_str());
-        assert!(
-            !entries.iter().any(|e| e.label == label),
-            "duplicate harness label {label:?} (from {source})"
-        );
         entries.push(RegistryEntry {
             label,
+            sources: vec![(source.layer, source.path)],
             adapter: DescriptorAdapter::from_descriptor(descriptor),
         });
     }
-    entries
+    Ok(entries)
 }
 
 /// The registry-level default harness — what `--harness` falls back to when
@@ -76,7 +110,7 @@ impl Harness {
     /// Resolve a kebab-case identifier against the descriptor registry — the
     /// only way to obtain a [`Harness`], so every held handle is valid.
     pub fn resolve(name: &str) -> Result<Harness, UnknownHarnessError> {
-        REGISTRY
+        registry()
             .iter()
             .find(|e| e.label == name)
             .map(|e| Harness::from_static_name(e.label))
@@ -90,7 +124,9 @@ impl Harness {
     /// for code that must sweep all of them (e.g. guard teardown scans each
     /// harness's skills dir for a marker).
     pub fn known() -> impl Iterator<Item = Harness> {
-        REGISTRY.iter().map(|e| Harness::from_static_name(e.label))
+        registry()
+            .iter()
+            .map(|e| Harness::from_static_name(e.label))
     }
 }
 
@@ -123,7 +159,7 @@ pub fn harness_value_parser() -> clap::builder::ValueParser {
 /// the harness identifier for all harness-specific behavior; every other
 /// module goes through the returned trait object.
 pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
-    &REGISTRY
+    &registry()
         .iter()
         .find(|e| e.label == harness.name())
         .expect("Harness handles originate from the registry")
@@ -135,7 +171,7 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
 /// staging's sibling-asset filter, the guard's Bash tamper rule, and
 /// detect-stray-writes' staging-dir lookbehind.
 pub fn all_config_dir_names() -> Vec<String> {
-    let mut names: Vec<String> = REGISTRY
+    let mut names: Vec<String> = registry()
         .iter()
         .flat_map(|e| e.adapter.config_dir_names())
         .collect();
@@ -150,7 +186,7 @@ pub fn all_config_dir_names() -> Vec<String> {
 pub fn all_tool_vocabulary() -> &'static ToolVocabulary {
     static ALL: LazyLock<ToolVocabulary> = LazyLock::new(|| {
         let mut union = ToolVocabulary::default();
-        for entry in REGISTRY.iter() {
+        for entry in registry().iter() {
             let vocab = entry.adapter.tool_vocabulary();
             union.write_tools.extend(vocab.write_tools);
             union.patch_tools.extend(vocab.patch_tools);
@@ -175,6 +211,9 @@ pub fn all_tool_vocabulary() -> &'static ToolVocabulary {
 mod tests {
     use super::*;
 
+    use crate::adapters::descriptor::EMBEDDED_DESCRIPTORS;
+    use crate::adapters::descriptor::layers::{Layer, embedded_sources};
+
     #[test]
     fn all_config_dir_names_unions_every_adapter() {
         assert_eq!(
@@ -196,9 +235,31 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "duplicate harness label")]
-    fn duplicate_label_panics() {
-        build_registry([EMBEDDED_DESCRIPTORS[0], EMBEDDED_DESCRIPTORS[0]]);
+    fn duplicate_label_in_same_layer_errors() {
+        let mut sources = embedded_sources();
+        sources.push(sources[0].clone());
+        let err = build_registry(sources).unwrap_err().to_string();
+        assert!(err.contains("duplicate harness label"), "{err}");
+        assert!(err.contains("claude-code"), "names the label: {err}");
+        assert!(
+            err.contains("harnesses/claude-code.toml"),
+            "names the colliding source files: {err}"
+        );
+    }
+
+    #[test]
+    fn registry_entries_record_embedded_provenance() {
+        let entries = build_registry(embedded_sources()).unwrap();
+        assert_eq!(entries.len(), EMBEDDED_DESCRIPTORS.len());
+        for entry in &entries {
+            assert_eq!(entry.sources.len(), 1, "one contributing file per built-in");
+            assert_eq!(entry.sources[0].0, Layer::Embedded);
+            assert!(
+                entry.sources[0].1.contains(entry.label),
+                "source path names the harness: {}",
+                entry.sources[0].1
+            );
+        }
     }
 
     #[test]

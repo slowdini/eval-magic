@@ -19,6 +19,7 @@ use crate::validation::{SchemaName, ValidationError, validate_against_schema};
 
 use super::capabilities::{GuardEngine, ShadowPreflight, SlugCapability, TranscriptParser};
 
+pub mod layers;
 mod validation;
 
 /// The three built-in harness descriptors, embedded like the schemas: a

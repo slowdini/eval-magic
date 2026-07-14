@@ -23,6 +23,7 @@ use super::skill_shadow::PluginShadowReport;
 use super::skills_block::{DEFAULT_HEADER, DEFAULT_ITEM, render_skills_block};
 
 /// A [`HarnessAdapter`] backed by a validated [`HarnessDescriptor`].
+#[derive(Debug)]
 pub struct DescriptorAdapter {
     descriptor: HarnessDescriptor,
     /// Compiled `staging.stage_name_pattern`; validated to compile at load
