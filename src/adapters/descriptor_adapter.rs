@@ -265,8 +265,26 @@ impl HarnessAdapter for DescriptorAdapter {
     }
 
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
+        let ingest_line = format!(
+            "ingest{} --iteration {} --harness {}",
+            ctx.target_args, ctx.iteration, self.descriptor.label
+        );
         let Some(template) = &self.descriptor.dispatch.next_steps_template else {
-            return String::new();
+            // Generic fallbacks: a descriptor with just an exec template still
+            // earns a copy-pasteable recipe; a baseline descriptor gets the
+            // harness-agnostic handoff.
+            return match &self.descriptor.dispatch.exec_template {
+                Some(_) => format!(
+                    "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task \
+                     with:\n{}\nThen run `{ingest_line}`.",
+                    self.exec_command(ctx.guard, ctx.agent_model)
+                ),
+                None => format!(
+                    "\nNext: read dispatch-manifest.md and dispatch each task through your \
+                     harness's one-shot CLI from the task's eval_root, saving the agent's \
+                     final reply to outputs/final-message.md.\nThen run `{ingest_line}`."
+                ),
+            };
         };
         let exec_command = self.exec_command(ctx.guard, ctx.agent_model);
         let iteration = ctx.iteration.to_string();
@@ -287,7 +305,24 @@ impl HarnessAdapter for DescriptorAdapter {
     }
 
     fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        let template = self.descriptor.dispatch.manifest_template.as_ref()?;
+        let Some(template) = self.descriptor.dispatch.manifest_template.as_ref() else {
+            // An exec template without a manifest template still earns a
+            // generic recipe section; without either, the manifest's shared
+            // header text already covers the baseline handoff.
+            self.descriptor.dispatch.exec_template.as_ref()?;
+            let exec_command = self.exec_command(ctx.guard, ctx.agent_model);
+            return Some(
+                format!(
+                    "## Dispatch recipe\n\nFrom each task's `eval_root`, dispatch with:\n\
+                     {exec_command}\n\nEnsure the agent's final reply lands in the task's \
+                     `outputs/final-message.md` (capture it yourself if the command does not \
+                     write it).\n"
+                )
+                .split('\n')
+                .map(String::from)
+                .collect(),
+            );
+        };
         let exec_command = self.exec_command(ctx.guard, ctx.agent_model);
         let parallel_recipe = match &self.descriptor.dispatch.parallel_command_template {
             Some(block_template) => {
@@ -359,6 +394,69 @@ mod tests {
             iteration: 2,
             agent_model,
         })
+    }
+
+    fn adapter_from(toml_src: &str) -> super::DescriptorAdapter {
+        super::DescriptorAdapter::from_descriptor(
+            crate::adapters::descriptor::load_descriptor(toml_src, "test.toml").unwrap(),
+        )
+    }
+
+    #[test]
+    fn exec_template_alone_yields_generic_dispatch_recipes() {
+        use crate::adapters::harness::{CliManifestContext, HarnessAdapter};
+        let adapter = adapter_from(
+            "label = \"cool-custom-harness\"\n\n[dispatch]\nexec_template = \"cool-cli run <dispatch_prompt_path>{model_arg}\"\n",
+        );
+        let next = adapter.cli_next_steps(CliDispatchContext {
+            guard: false,
+            target_args: " --skill-dir /s --skill x",
+            iteration: 3,
+            agent_model: None,
+        });
+        assert!(next.contains("cool-cli run"), "{next}");
+        assert!(
+            next.contains(
+                "ingest --skill-dir /s --skill x --iteration 3 --harness cool-custom-harness"
+            ),
+            "{next}"
+        );
+        let manifest = adapter
+            .cli_manifest_section(CliManifestContext {
+                guard: false,
+                agent_model: None,
+            })
+            .expect("an exec template earns a generic manifest recipe")
+            .join("\n");
+        assert!(manifest.contains("cool-cli run"), "{manifest}");
+        assert!(manifest.contains("final-message.md"), "{manifest}");
+    }
+
+    #[test]
+    fn baseline_descriptor_yields_the_generic_handoff() {
+        use crate::adapters::harness::{CliManifestContext, HarnessAdapter};
+        let adapter = adapter_from("label = \"cool-custom-harness\"\n");
+        let next = adapter.cli_next_steps(CliDispatchContext {
+            guard: false,
+            target_args: " --skill x",
+            iteration: 1,
+            agent_model: None,
+        });
+        assert!(next.contains("one-shot CLI"), "{next}");
+        assert!(next.contains("outputs/final-message.md"), "{next}");
+        assert!(
+            next.contains("ingest --skill x --iteration 1 --harness cool-custom-harness"),
+            "{next}"
+        );
+        assert!(
+            adapter
+                .cli_manifest_section(CliManifestContext {
+                    guard: false,
+                    agent_model: None,
+                })
+                .is_none(),
+            "the manifest's generic header already covers the no-recipe baseline"
+        );
     }
 
     #[test]
