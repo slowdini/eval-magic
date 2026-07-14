@@ -109,8 +109,24 @@ pub struct ConditionEntry {
     pub name: String,
     pub skill_path: Option<String>,
     /// Optional and nullable: absent (omitted), explicit `null`, or a slug.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_present_key"
+    )]
     pub staged_skill_slug: Option<Option<String>>,
+}
+
+/// Tri-state field deserializer: a present key — even an explicit `null` —
+/// becomes `Some(inner)`, while a missing key falls back to `None` via
+/// `default`. The stock `Option<Option<T>>` impl collapses `null` to the outer
+/// `None`, which would drop the key on re-serialization and break artifact
+/// round-trips.
+fn deserialize_present_key<'de, D>(deserializer: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Option::<String>::deserialize(deserializer).map(Some)
 }
 
 /// The conditions manifest written for a run.
@@ -391,6 +407,16 @@ mod tests {
             some.get("staged_skill_slug"),
             Some(&Value::String("slug-1".into()))
         );
+        // Deserialization preserves all three states (explicit null must stay
+        // a present key, not collapse to absent).
+        let back = |v| {
+            serde_json::from_value::<ConditionEntry>(v)
+                .unwrap()
+                .staged_skill_slug
+        };
+        assert_eq!(back(absent), None);
+        assert_eq!(back(null), Some(None));
+        assert_eq!(back(some), Some(Some("slug-1".into())));
     }
 
     #[test]
