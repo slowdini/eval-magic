@@ -1,9 +1,10 @@
 //! OpenCode-harness behavior: `.opencode/skills` staging, slug sanitization,
 //! native `<available_skills>` dispatch rendering, plan-mode approximation, and
-//! the `--guard` rejection. Characterization tests pinning current behavior so
-//! the run-mode refactor stays behavior-preserving.
+//! the `--guard` warn-and-continue fallback. Characterization tests pinning
+//! current behavior so the run-mode refactor stays behavior-preserving.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 use std::path::Path;
@@ -148,9 +149,11 @@ fn opencode_plan_mode_injects_profile_and_records_flag() {
 }
 
 #[test]
-fn opencode_rejects_guard() {
+fn opencode_guard_warns_and_continues_unguarded() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // The #126 model: an undeclared enhancement warns naming its fallback and
+    // the run proceeds — it never rejects.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -165,11 +168,26 @@ fn opencode_rejects_guard() {
             "--guard",
         ])
         .assert()
-        .failure()
-        .stderr(contains("Unsupported for --harness opencode: --guard"));
+        .success()
+        .stderr(
+            contains("declares no write guard")
+                .and(contains("detect-stray-writes"))
+                .and(contains("Unsupported for --harness").not()),
+        );
 
-    assert!(!cwd.join(".opencode/skills").exists());
-    assert!(!iteration_dir(&cwd).exists());
+    // The run was built (staged, dispatch written) — just without a guard.
+    assert!(iteration_dir(&cwd).exists());
+    let with_skill_env = cli_env_dir(&cwd, "g1", "with_skill");
+    assert!(
+        with_skill_env.join(".opencode/skills").exists(),
+        "staging proceeded"
+    );
+    assert!(
+        !with_skill_env
+            .join(".opencode/skills/.slow-powers-eval-guard.json")
+            .exists(),
+        "no guard marker was installed"
+    );
 }
 
 #[test]

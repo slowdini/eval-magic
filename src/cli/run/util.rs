@@ -63,16 +63,33 @@ pub(crate) fn resolve_plan_mode_profile() -> &'static str {
     include_str!("../../../profiles/shared/plan-mode.md")
 }
 
-/// Reject run options not supported by the selected harness's current mechanism.
-pub(crate) fn validate_harness_run_options(
-    opts: &RunOptions,
+/// The harness preflight verdict: possibly-adjusted run options plus the
+/// warnings to print, each naming the fallback that carries the run.
+pub(crate) struct HarnessPreflight<'a> {
+    pub opts: RunOptions<'a>,
+    pub warnings: Vec<String>,
+}
+
+/// Check the run options against the selected harness's declared enhancements
+/// — the #126 model: a missing enhancement *warns* naming its fallback and the
+/// run continues degraded; only genuinely contradictory flag combinations
+/// (options the harness declares incompatible with `--no-stage`) stay errors.
+///
+/// Adjustments: `--guard` on a guard-less harness is forced off (the
+/// detect-stray-writes audit is the fallback), and a harness without a
+/// `skills_dir` forces `--no-stage` (each SKILL.md is inlined into its
+/// dispatch prompt).
+pub(crate) fn harness_run_preflight<'a>(
+    opts: &RunOptions<'a>,
     ctx: &RunContext,
-) -> Result<(), RunError> {
-    let capabilities = adapter_for(ctx.harness).run_capabilities();
+) -> Result<HarnessPreflight<'a>, RunError> {
+    let adapter = adapter_for(ctx.harness);
+    let capabilities = adapter.run_capabilities();
+    let label = harness_label(ctx.harness);
+
+    // Contradictory-flag declarations stay hard errors: the harness's staging
+    // mechanism conflicts with these options, so no fallback can honor them.
     let mut unsupported: Vec<&str> = Vec::new();
-    if opts.guard && !capabilities.supports_guard {
-        unsupported.push("--guard");
-    }
     if ctx.bootstrap_path.is_some()
         && opts.no_stage
         && !capabilities.supports_bootstrap_with_no_stage
@@ -83,15 +100,49 @@ pub(crate) fn validate_harness_run_options(
     {
         unsupported.push("--stage-name with --no-stage");
     }
-    if unsupported.is_empty() {
-        Ok(())
-    } else {
-        Err(RunError::msg(format!(
+    if !unsupported.is_empty() {
+        return Err(RunError::msg(format!(
             "Unsupported for --harness {}: {}.",
-            harness_label(ctx.harness),
+            label,
             unsupported.join(", ")
-        )))
+        )));
     }
+
+    let mut opts = opts.clone();
+    let mut warnings = Vec::new();
+    if opts.guard && !capabilities.supports_guard {
+        opts.guard = false;
+        warnings.push(format!(
+            "--guard: --harness {label} declares no write guard — continuing unguarded; \
+             out-of-bounds writes are detected after the fact by the detect-stray-writes \
+             audit (folded into `ingest`), never blocked."
+        ));
+    }
+    if !opts.no_stage && adapter.skills_dir(Path::new(".")).is_none() {
+        opts.no_stage = true;
+        warnings.push(format!(
+            "--harness {label} declares no skills_dir — native staging is unavailable; \
+             falling back to --no-stage (each SKILL.md is inlined into its dispatch prompt)."
+        ));
+    }
+    if adapter.cli_events_filename().is_none() {
+        warnings.push(format!(
+            "--harness {label} declares no transcript parser — transcript_check assertions \
+             will grade as unverifiable and llm_judge carries the grading; tokens/duration \
+             go unrecorded. Recover each final message into outputs/final-message.md \
+             (see RUNBOOK.md)."
+        ));
+    }
+    if (opts.agent_model.is_some() || opts.judge_model.is_some())
+        && adapter.cli_model_flag().is_none()
+    {
+        warnings.push(format!(
+            "--harness {label} declares no model flag — models are recorded in \
+             conditions.json as provenance only; dispatches run on the harness's \
+             default model."
+        ));
+    }
+    Ok(HarnessPreflight { opts, warnings })
 }
 
 /// A per-run nonce (`<millis-base36>-<6 hex>`) that namespaces dispatch
@@ -161,15 +212,86 @@ mod tests {
     }
 
     #[test]
-    fn claude_allows_guard() {
+    fn claude_preflight_is_quiet_and_keeps_guard() {
         // `claude -p` loads the project `.claude/settings.local.json` PreToolUse
-        // hook from its cwd, so the write guard fires under CLI dispatch.
+        // hook from its cwd, so the write guard fires under CLI dispatch. A
+        // fully-enhanced harness produces no fallback warnings.
         let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
         let opts = RunOptions {
             guard: true,
             ..Default::default()
         };
-        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
+        let preflight = harness_run_preflight(&opts, &ctx).unwrap();
+        assert!(preflight.opts.guard);
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
+    }
+
+    #[test]
+    fn guard_on_a_guardless_harness_warns_and_continues_unguarded() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let opts = RunOptions {
+            guard: true,
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx).unwrap();
+        assert!(!preflight.opts.guard, "guard is forced off, not rejected");
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("--guard"))
+            .expect("a guard warning fires");
+        assert!(
+            warning.contains("detect-stray-writes"),
+            "names the fallback: {warning}"
+        );
+        assert!(warning.contains("never blocked"), "{warning}");
+    }
+
+    #[test]
+    fn transcriptless_harness_warns_naming_the_llm_judge_fallback() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("transcript"))
+            .expect("a transcript warning fires");
+        assert!(warning.contains("unverifiable"), "{warning}");
+        assert!(
+            warning.contains("llm_judge"),
+            "names the fallback: {warning}"
+        );
+        assert!(warning.contains("final-message.md"), "{warning}");
+    }
+
+    #[test]
+    fn model_flags_without_a_descriptor_model_flag_warn_provenance_only() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let opts = RunOptions {
+            agent_model: Some("some-model"),
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("model flag"))
+            .expect("a model warning fires");
+        assert!(
+            warning.contains("provenance"),
+            "names the fallback: {warning}"
+        );
+    }
+
+    #[test]
+    fn no_model_warning_when_no_models_are_requested() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx).unwrap();
+        assert!(
+            !preflight.warnings.iter().any(|w| w.contains("model flag")),
+            "{:?}",
+            preflight.warnings
+        );
     }
 
     #[test]

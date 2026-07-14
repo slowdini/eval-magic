@@ -13,9 +13,7 @@ use super::super::RunError;
 use super::super::dispatch::select_evals;
 use super::super::fixtures::fixture_pairs;
 use super::super::grouping::{GroupInput, compute_groups};
-use super::super::util::{
-    condition_names_for, make_run_nonce, next_iteration, validate_harness_run_options,
-};
+use super::super::util::{condition_names_for, make_run_nonce, next_iteration};
 use super::{Resolved, RunOptions};
 
 pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Resolved, RunError> {
@@ -30,7 +28,6 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     if opts.runs == 0 {
         return Err(RunError::msg("--runs must be at least 1"));
     }
-    validate_harness_run_options(opts, ctx)?;
 
     let skill_md_path = ctx.skill_subdir.join("SKILL.md");
     if !skill_md_path.exists() {
