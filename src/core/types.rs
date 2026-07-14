@@ -444,6 +444,42 @@ mod tests {
         assert!(out.get("run_nonce").is_none());
     }
 
+    /// Fixture artifacts captured from the pre-#135 binary (compile-time
+    /// `Harness` enum era). Parsing and re-serializing with the artifact
+    /// writer format (`to_string_pretty` + trailing newline, matching
+    /// `pipeline::io::write_json`) must reproduce every byte, so opening the
+    /// harness identifier can never reshape existing artifacts.
+    #[test]
+    fn conditions_json_fixtures_round_trip_byte_identically() {
+        for (name, fixture) in [
+            (
+                "claude-code",
+                include_str!("../../tests/fixtures/conditions/claude-code.json"),
+            ),
+            (
+                "codex",
+                include_str!("../../tests/fixtures/conditions/codex.json"),
+            ),
+            (
+                "opencode",
+                include_str!("../../tests/fixtures/conditions/opencode.json"),
+            ),
+            (
+                "no-harness",
+                include_str!("../../tests/fixtures/conditions/no-harness.json"),
+            ),
+        ] {
+            let record: ConditionsRecord = serde_json::from_str(fixture)
+                .unwrap_or_else(|e| panic!("fixture {name} no longer parses: {e}"));
+            let mut out = serde_json::to_string_pretty(&record).unwrap();
+            out.push('\n');
+            assert_eq!(
+                out, fixture,
+                "fixture {name} did not round-trip byte-identically"
+            );
+        }
+    }
+
     #[test]
     fn timing_source_kebab_roundtrips() {
         let v = serde_json::to_value(TimingSource::CompletionEvent).unwrap();

@@ -1,6 +1,7 @@
 //! Help output, `validate`, and parser-level dispatch (unknown subcommands).
 
 use crate::helpers::skill_eval;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 use tempfile::TempDir;
@@ -134,4 +135,35 @@ fn validate_requires_a_skill_context() {
 #[test]
 fn unknown_subcommand_is_rejected() {
     skill_eval().arg("does-not-exist").assert().failure();
+}
+
+/// An unknown `--harness` value is rejected with an error naming the offending
+/// value and every known harness.
+#[test]
+fn unknown_harness_value_is_rejected_naming_known_harnesses() {
+    skill_eval()
+        .args(["aggregate", "--harness", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(
+            contains("invalid value 'nonexistent'")
+                .and(contains("claude-code"))
+                .and(contains("codex"))
+                .and(contains("opencode")),
+        );
+}
+
+/// `run --help` lists the known harnesses as possible values for `--harness`.
+#[test]
+fn run_help_lists_harness_possible_values() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            contains("--harness")
+                .and(contains("claude-code"))
+                .and(contains("codex"))
+                .and(contains("opencode")),
+        );
 }

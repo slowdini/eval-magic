@@ -1,0 +1,19 @@
+{
+  "mode": "new-skill",
+  "conditions": [
+    {
+      "name": "with_skill",
+      "skill_path": "/tmp/eval/skill-dir/mr-review/SKILL.md",
+      "staged_skill_slug": "slow-powers-eval-1-with_skill__mr-review"
+    },
+    {
+      "name": "without_skill",
+      "skill_path": null,
+      "staged_skill_slug": null
+    }
+  ],
+  "timestamp": "2026-07-14T04:29:09.046Z",
+  "harness": "codex",
+  "run_nonce": "mrk5j60f-535258",
+  "runs": 1
+}
