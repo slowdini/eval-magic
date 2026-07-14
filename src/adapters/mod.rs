@@ -8,7 +8,9 @@
 //! references by name live in [`capabilities`], backed by the per-harness
 //! module trees ([`claude_code`], [`codex`], [`opencode`]): transcript
 //! parsers, write-guard hooks, plugin-shadow detection, slug sanitization.
-//! Generic code resolves an adapter with [`adapter_for`] and calls the trait.
+//! The [`registry`] loads the descriptors into label-keyed entries and owns
+//! harness-identifier resolution; generic code resolves an adapter with
+//! [`adapter_for`] and calls the trait.
 
 pub mod capabilities;
 pub mod claude_code;
@@ -18,13 +20,17 @@ pub mod descriptor;
 pub mod descriptor_adapter;
 pub mod harness;
 pub mod opencode;
+pub mod registry;
 pub mod skill_shadow;
 mod skills_block;
 pub mod transcript;
 
 pub use harness::{
-    CliDispatchContext, CliJudgeContext, CliManifestContext, DEFAULT_HARNESS_NAME, HarnessAdapter,
-    RUNBOOK_TEMPLATE, ToolVocabulary, UnknownHarnessError, adapter_for, all_config_dir_names,
+    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
+    ToolVocabulary,
+};
+pub use registry::{
+    DEFAULT_HARNESS_NAME, UnknownHarnessError, adapter_for, all_config_dir_names,
     all_tool_vocabulary, harness_value_parser,
 };
 pub use skill_shadow::{

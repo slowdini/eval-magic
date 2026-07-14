@@ -333,7 +333,8 @@ impl HarnessAdapter for DescriptorAdapter {
 mod tests {
     use std::path::Path;
 
-    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext, adapter_for};
+    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext};
+    use crate::adapters::registry::adapter_for;
     use crate::core::{AvailableSkill, Harness};
 
     fn skill(name: &str, description: &str) -> AvailableSkill {
