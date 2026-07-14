@@ -13,7 +13,7 @@
 //! same checks.
 
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::validation::{SchemaName, ValidationError, validate_against_schema};
 
@@ -44,30 +44,36 @@ pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 3] = [
 /// Field docs live in `schema/harness-descriptor.schema.json` (the schema gate
 /// and this struct are kept honest against each other by
 /// [`validate_against_schema`]'s deserialize step).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct HarnessDescriptor {
     pub label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skills_dir: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_dirs: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "RunSection::is_default")]
     pub run: RunSection,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "ToolsSection::is_empty")]
     pub tools: ToolsSection,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "StagingSection::is_unconfigured")]
     pub staging: StagingSection,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub skills_block: Option<SkillsBlockSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub transcript: Option<TranscriptSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<ModelSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub guard: Option<GuardSection>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub shadow: Option<ShadowSection>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "DispatchSection::is_empty")]
     pub dispatch: DispatchSection,
 }
 
 /// Run-option capabilities. The `Default` mirrors the baseline every harness
 /// gets without opting in: no guard, bootstrap/stage-name allowed unstaged.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct RunSection {
     #[serde(default)]
     pub supports_guard: bool,
@@ -75,6 +81,14 @@ pub struct RunSection {
     pub supports_bootstrap_with_no_stage: bool,
     #[serde(default = "default_true")]
     pub supports_stage_name_with_no_stage: bool,
+}
+
+impl RunSection {
+    /// True when every capability sits at its baseline default — the signal
+    /// `harness show` uses to omit the section from authorable output.
+    pub fn is_default(&self) -> bool {
+        *self == RunSection::default()
+    }
 }
 
 impl Default for RunSection {
@@ -87,79 +101,147 @@ impl Default for RunSection {
     }
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct ToolsSection {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub write: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub patch: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub shell: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub read: Vec<String>,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+impl ToolsSection {
+    /// True when no role declares any tool names.
+    pub fn is_empty(&self) -> bool {
+        self.write.is_empty()
+            && self.patch.is_empty()
+            && self.shell.is_empty()
+            && self.read.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct StagingSection {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub slug_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub slug_capability: Option<SlugCapability>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_name_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_name_max_len: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub stage_name_invalid_message: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub rewrites_frontmatter_name: bool,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub advertises_staged_slug_name: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub surface_phrase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub unresolved_phrase: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+impl StagingSection {
+    /// True when any field departs from the defaults — the signal that the
+    /// descriptor actually configures native staging.
+    pub fn is_configured(&self) -> bool {
+        !self.is_unconfigured()
+    }
+
+    fn is_unconfigured(&self) -> bool {
+        self.slug_template.is_none()
+            && self.slug_capability.is_none()
+            && self.stage_name_pattern.is_none()
+            && self.stage_name_max_len.is_none()
+            && self.stage_name_invalid_message.is_none()
+            && !self.rewrites_frontmatter_name
+            && !self.advertises_staged_slug_name
+            && self.surface_phrase.is_none()
+            && self.unresolved_phrase.is_none()
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SkillsBlockSection {
     pub header: String,
     pub item: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub footer: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TranscriptSection {
     pub events_filename: String,
     pub parser: TranscriptParser,
-    #[serde(default = "default_true")]
+    #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub surfaces_skill_invocation: bool,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ModelSection {
     pub flag: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GuardSection {
     pub engine: GuardEngine,
     pub armed_message: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ShadowSection {
     pub preflight: ShadowPreflight,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DispatchSection {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_prefix: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub guard_args: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub model_note: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub next_steps_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub exec_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_command_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub judge_command_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_template: Option<String>,
+}
+
+impl DispatchSection {
+    /// True when no dispatch field is set.
+    pub fn is_empty(&self) -> bool {
+        self.capture_prefix.is_none()
+            && self.guard_args.is_none()
+            && self.model_note.is_none()
+            && self.next_steps_template.is_none()
+            && self.exec_template.is_none()
+            && self.parallel_command_template.is_none()
+            && self.judge_command_template.is_none()
+            && self.manifest_template.is_none()
+    }
 }
 
 fn default_true() -> bool {
     true
+}
+
+/// `skip_serializing_if` helpers for boolean fields at their defaults.
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
 }
 
 /// A descriptor that failed to load. Every variant carries the descriptor's

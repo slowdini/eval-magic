@@ -112,6 +112,54 @@ pub struct CommonArgs {
     pub overwrite: bool,
 }
 
+/// `harness` groups the descriptor-inspection subcommands.
+#[derive(Debug, Args)]
+pub struct HarnessArgs {
+    #[command(subcommand)]
+    pub command: HarnessCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum HarnessCommands {
+    /// List every registered harness: name, source layer(s), enhancements.
+    ///
+    /// One line per harness with the layers that contributed to it (built-in,
+    /// user, project, file — a merged descriptor shows all of them, e.g.
+    /// `built-in + project`) and the enhancements the resolved descriptor
+    /// declares (staging, skills-block, transcript, model-flag, guard,
+    /// shadow-preflight, dispatch-recipes; `baseline` when none). The session's
+    /// default harness — `claude-code`, or the `--harness-file` descriptor when
+    /// one is loaded — is marked `(default)`.
+    List,
+    /// Print one harness's resolved descriptor (after layer merging) as TOML.
+    ///
+    /// The output is authorable: the provenance header lists every contributing
+    /// file as `#` comments, and the body is valid descriptor TOML you can copy
+    /// into a layer file (`.eval-magic/harnesses/<name>.toml`) and edit. Fields
+    /// at their baseline defaults are omitted.
+    Show {
+        /// Registered harness name (see `harness list`).
+        name: String,
+    },
+    /// Validate a descriptor file, or every layer of a registered harness.
+    ///
+    /// A file target runs the full load pipeline with one ✓/✗ line per check:
+    /// TOML syntax + schema (unknown fields, bad capability names), the
+    /// user-layer restrictions (`[guard]` and `run.supports_guard = true` stay
+    /// built-in-only; unguarded runs fall back to the detect-stray-writes
+    /// audit), and the cross-field invariants — merged onto the registered
+    /// harness with the same `label` when one exists, so a partial override is
+    /// checked against its real merge target. A name target re-lints every
+    /// discovered layer file strictly, surfacing descriptors that registry
+    /// initialization skipped with a warning. Exits non-zero when any check
+    /// fails. (A future `--probe` flag is reserved for a live dispatch probe
+    /// through the exec template.)
+    Lint {
+        /// Descriptor file path, or a registered harness name.
+        target: String,
+    },
+}
+
 /// `validate` only needs to know where to look.
 #[derive(Debug, Args)]
 pub struct ValidateArgs {
@@ -445,6 +493,18 @@ pub(crate) enum Commands {
     PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),
+    /// Inspect and validate harness descriptors (built-in and user-supplied).
+    ///
+    /// Harnesses are described by layered TOML descriptor files: embedded
+    /// built-ins → user-global (`$EVAL_MAGIC_CONFIG_DIR`,
+    /// `$XDG_CONFIG_HOME/eval-magic`, or `~/.config/eval-magic`, each under
+    /// `harnesses/*.toml`) → project-local (`.eval-magic/harnesses/*.toml`) →
+    /// a one-off `--harness-file <path>`. A later file whose `label` matches an
+    /// earlier descriptor overrides individual fields (field-level merge, not
+    /// whole-file shadowing); a new `label` defines a new harness usable with
+    /// `--harness`. `list` surveys the registry, `show` prints one resolved
+    /// descriptor, and `lint` validates a descriptor file or registered name.
+    Harness(HarnessArgs),
     /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
     /// hook as `eval-magic guard <marker>`, not by users; hidden from help.
     #[command(hide = true)]

@@ -49,6 +49,12 @@ impl DescriptorAdapter {
         }
     }
 
+    /// The resolved descriptor behind this adapter — the `harness show`/`list`
+    /// data source.
+    pub(crate) fn descriptor(&self) -> &HarnessDescriptor {
+        &self.descriptor
+    }
+
     /// The single-dispatch command: the exec template with `{model_arg}` /
     /// `{guard_args}` filled for this run. Empty when no template is wired.
     fn exec_command(&self, guard: bool, agent_model: Option<&str>) -> String {

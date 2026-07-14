@@ -25,11 +25,13 @@ use super::harness::{HarnessAdapter, ToolVocabulary};
 
 /// One registry entry: a harness identity (the descriptor's `label`), the
 /// descriptor sources that contributed to it (for `harness list`/`show`
-/// provenance), and its descriptor-backed adapter.
+/// provenance), the merged descriptor value (the base `harness lint` merges
+/// candidate overlays onto), and its descriptor-backed adapter.
 #[derive(Debug)]
 struct RegistryEntry {
     label: &'static str,
     sources: Vec<(Layer, String)>,
+    value: serde_json::Value,
     adapter: DescriptorAdapter,
 }
 
@@ -230,6 +232,7 @@ fn build_registry(sources: Vec<DescriptorSource>) -> Result<BuiltRegistry, Regis
             // handle.
             label: Box::leak(p.label.into_boxed_str()),
             sources: p.sources,
+            value: p.value,
             adapter: DescriptorAdapter::from_descriptor(p.descriptor),
         })
         .collect();
@@ -291,11 +294,8 @@ impl Default for Harness {
     fn default() -> Self {
         // A `--harness-file` descriptor becomes the session default, so the
         // one-off harness doesn't have to be repeated via `--harness`.
-        let name = SESSION_DEFAULT_HARNESS
-            .get()
-            .copied()
-            .unwrap_or(DEFAULT_HARNESS_NAME);
-        Harness::resolve(name).expect("the session default resolves against the registry")
+        Harness::resolve(default_harness_name())
+            .expect("the session default resolves against the registry")
     }
 }
 
@@ -315,6 +315,36 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
         .find(|e| e.label == harness.name())
         .expect("Harness handles originate from the registry")
         .adapter
+}
+
+/// One registered harness as `harness list`/`show`/`lint` see it: identity,
+/// contributing sources in layer order, the merged descriptor value, and the
+/// resolved descriptor.
+pub struct HarnessInfo {
+    pub label: &'static str,
+    pub sources: &'static [(Layer, String)],
+    pub value: &'static serde_json::Value,
+    pub descriptor: &'static HarnessDescriptor,
+}
+
+/// Every registered harness in registry order, with provenance and the
+/// resolved descriptor — the data source for the `harness` subcommands.
+pub fn harness_info() -> impl Iterator<Item = HarnessInfo> {
+    registry().iter().map(|e| HarnessInfo {
+        label: e.label,
+        sources: &e.sources,
+        value: &e.value,
+        descriptor: e.adapter.descriptor(),
+    })
+}
+
+/// The effective default harness name: the `--harness-file` descriptor's
+/// label when one is loaded, else [`DEFAULT_HARNESS_NAME`].
+pub fn default_harness_name() -> &'static str {
+    SESSION_DEFAULT_HARNESS
+        .get()
+        .copied()
+        .unwrap_or(DEFAULT_HARNESS_NAME)
 }
 
 /// The union of every harness's project-local config dir names (sorted,

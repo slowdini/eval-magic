@@ -43,7 +43,7 @@ pub(super) fn validate_descriptor(
     // staging copies skills into it, and the guard keeps its marker/manifest
     // there. Without a skills_dir neither has anywhere to operate.
     if d.skills_dir.is_none() {
-        if staging_is_configured(&d.staging) {
+        if d.staging.is_configured() {
             return fail(
                 "[staging] is configured but skills_dir is not declared; native staging \
                  copies skills into skills_dir — declare it, or drop [staging] and let \
@@ -283,21 +283,6 @@ pub(super) fn validate_descriptor(
     }
 
     Ok(())
-}
-
-/// True when any `[staging]` field departs from the defaults — the signal
-/// that the descriptor actually configures native staging rather than just
-/// inheriting the baseline.
-fn staging_is_configured(staging: &super::StagingSection) -> bool {
-    staging.slug_template.is_some()
-        || staging.slug_capability.is_some()
-        || staging.stage_name_pattern.is_some()
-        || staging.stage_name_max_len.is_some()
-        || staging.stage_name_invalid_message.is_some()
-        || staging.rewrites_frontmatter_name
-        || staging.advertises_staged_slug_name
-        || staging.surface_phrase.is_some()
-        || staging.unresolved_phrase.is_some()
 }
 
 #[cfg(test)]

@@ -71,6 +71,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         Commands::Grade(args) => run_grade(args),
         Commands::Aggregate(args) => run_aggregate(args),
+        Commands::Harness(args) => run_harness(args),
         Commands::Snapshot(args) => run_snapshot(args),
         Commands::Teardown(args) => run_teardown(args),
         Commands::PromoteBaseline(args) => run_promote_baseline(args),
