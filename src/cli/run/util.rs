@@ -8,6 +8,7 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::adapter_for;
+use crate::adapters::registry::has_embedded_layer;
 use crate::core::{Harness, Mode, RunContext};
 
 use super::RunError;
@@ -73,7 +74,9 @@ pub(crate) struct HarnessPreflight<'a> {
 /// Check the run options against the selected harness's declared enhancements
 /// — the #126 model: a missing enhancement *warns* naming its fallback and the
 /// run continues degraded; only genuinely contradictory flag combinations
-/// (options the harness declares incompatible with `--no-stage`) stay errors.
+/// (options the harness declares incompatible with `--no-stage`) and `--guard`
+/// on a harness defined by user-supplied descriptors alone (guards are
+/// embedded-only) stay errors.
 ///
 /// Adjustments: `--guard` on a guard-less harness is forced off (the
 /// detect-stray-writes audit is the fallback), and a harness without a
@@ -105,6 +108,21 @@ pub(crate) fn harness_run_preflight<'a>(
             "Unsupported for --harness {}: {}.",
             label,
             unsupported.join(", ")
+        )));
+    }
+
+    // `--guard` on a harness defined only by user-supplied descriptors is a
+    // hard error, not a downgrade: the write guard stays restricted to
+    // built-in descriptors (it fails open, so a mistyped user descriptor
+    // would silently disarm it), and a run the user asked to guard must not
+    // continue silently unguarded.
+    if opts.guard && !capabilities.supports_guard && !has_embedded_layer(ctx.harness) {
+        return Err(RunError::msg(format!(
+            "--guard: --harness {label} comes from user-supplied descriptors only, and the \
+             write guard stays restricted to built-in harnesses (it fails open, so a mistyped \
+             descriptor would silently disarm it). Rerun without --guard — out-of-bounds \
+             writes are detected after the fact by the detect-stray-writes audit (folded \
+             into `ingest`)."
         )));
     }
 
