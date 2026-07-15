@@ -14,7 +14,11 @@ references:
 |------|--------------|
 | `harnesses/codex.toml` | the descriptor — every declarative value + capability references |
 | `transcript.rs` | `item.completed` event-stream parsing (`codex-items`) |
-| `guard.rs` | write-guard hook install + `{"decision": "block"}` verdict (`codex-hooks`) |
+
+The write guard has no per-harness code: the descriptor's `[guard]` block (hook file, matcher,
+hook-entry and `{"decision": "block"}` verdict templates) is rendered by the generic engine in
+`src/adapters/guard.rs`; the hidden `guard-codex` subcommand is its frozen hook entry-point
+alias.
 
 ## Dispatch (`codex exec`)
 

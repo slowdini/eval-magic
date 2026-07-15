@@ -343,6 +343,9 @@ pub struct RunArgs {
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.
+    /// The guard is restricted to built-in harnesses: with a harness defined only
+    /// by user-supplied descriptors this flag is rejected in preflight (rerun
+    /// without it; `detect-stray-writes` audits after the fact).
     #[arg(long)]
     pub guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the

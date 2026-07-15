@@ -2,9 +2,9 @@
 //!
 //! A descriptor is a TOML file carrying every declarative value a harness
 //! adapter exposes (label, dirs, capability booleans, phrases, templates,
-//! banner prose) plus references to *named capabilities* — the code-backed
-//! features in [`super::capabilities`] (transcript parsers, guard engines,
-//! slug generation, shadow preflight).
+//! banner prose, the write-guard data block) plus references to *named
+//! capabilities* — the code-backed features in [`super::capabilities`]
+//! (transcript parsers, slug generation, shadow preflight).
 //!
 //! Loading is schema-gated: the TOML transcodes to JSON and must satisfy the
 //! bundled `schema/harness-descriptor.schema.json`, then the cross-field
