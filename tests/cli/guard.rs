@@ -105,6 +105,59 @@ fn guard_codex_subcommand_blocks_with_codex_verdict_shape() {
         .stdout(contains("blocked Bash"));
 }
 
+/// Byte-pin of the Claude deny verdict: armed hooks from previous releases keep
+/// reading this exact shape, so the serialized bytes are a compatibility
+/// contract — full-string equality, not substrings.
+#[test]
+fn guard_deny_verdict_bytes_are_stable() {
+    let tmp = TempDir::new().unwrap();
+    let marker = tmp.path().join("marker.json");
+    fs::write(
+        &marker,
+        r#"{"active":true,"allowedRoots":["/work/env"],"expiresAt":"2999-01-01T00:00:00.000Z"}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .arg("guard")
+        .arg(&marker)
+        .write_stdin(r#"{ "tool_name": "Write", "tool_input": { "file_path": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout(
+            "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\
+             \"permissionDecision\":\"deny\",\"permissionDecisionReason\":\
+             \"eval guard: Write to /etc/passwd is outside the eval sandbox \
+             (allowed: /work/env)\"}}",
+        );
+}
+
+/// Byte-pin of the Codex block verdict — same compatibility contract as the
+/// Claude pin above.
+#[test]
+fn guard_codex_block_verdict_bytes_are_stable() {
+    let tmp = TempDir::new().unwrap();
+    let marker = tmp.path().join("marker.json");
+    fs::write(
+        &marker,
+        r#"{"active":true,"allowedRoots":["/work/env"],"expiresAt":"2999-01-01T00:00:00.000Z"}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .arg("guard-codex")
+        .arg(&marker)
+        .write_stdin(
+            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+        )
+        .assert()
+        .success()
+        .stdout(
+            "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
+             (package install/add) — runs outside the eval sandbox\"}",
+        );
+}
+
 /// `guard` fails open when the marker is absent: empty stdout, exit 0.
 #[test]
 fn guard_fails_open_without_marker() {
