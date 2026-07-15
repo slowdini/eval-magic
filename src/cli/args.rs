@@ -525,4 +525,18 @@ pub(crate) enum Commands {
         /// `<cwd>/.agents/skills/.slow-powers-eval-guard.json`.
         marker: Option<String>,
     },
+    /// Internal generic PreToolUse hook entry point. Invoked by the installed
+    /// write-guard hook as `eval-magic guard-hook --harness <name> <marker>`,
+    /// not by users; hidden from help. `guard` / `guard-codex` are frozen
+    /// aliases of this for the claude-code and codex harnesses.
+    #[command(hide = true, name = "guard-hook")]
+    GuardHook {
+        /// Harness whose embedded descriptor supplies the verdict shape; an
+        /// unknown name fails open (allows the call).
+        #[arg(long)]
+        harness: String,
+        /// Path to the guard marker file. Defaults to the harness's
+        /// `<skills_dir>/.slow-powers-eval-guard.json` under the cwd.
+        marker: Option<String>,
+    },
 }

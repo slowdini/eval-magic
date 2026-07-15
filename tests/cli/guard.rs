@@ -17,6 +17,10 @@ fn guard_subcommand_is_hidden_but_callable() {
         .stdout(contains("PreToolUse hook entry point").not());
 
     skill_eval().arg("guard").arg("--help").assert().success();
+    skill_eval()
+        .args(["guard-hook", "--help"])
+        .assert()
+        .success();
 }
 
 /// Write an armed guard marker scoping writes to `<allowed>`, and return its path.
@@ -169,6 +173,71 @@ fn guard_fails_open_without_marker() {
         .assert()
         .success()
         .stdout("");
+}
+
+/// The generic `guard-hook --harness <name>` entry point resolves the verdict
+/// shape from the named harness's embedded descriptor — Claude's deny shape
+/// for claude-code, Codex's block shape for codex. Future guard-capable
+/// built-ins use this instead of minting another alias.
+#[test]
+fn guard_hook_resolves_the_harness_verdict_shape() {
+    let tmp = TempDir::new().unwrap();
+    let marker = write_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "claude-code"])
+        .arg(&marker)
+        .write_stdin(r#"{ "tool_name": "Write", "tool_input": { "file_path": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout(contains(r#""permissionDecision":"deny""#));
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "codex"])
+        .arg(&marker)
+        .write_stdin(
+            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+        )
+        .assert()
+        .success()
+        .stdout(contains(r#""decision":"block""#));
+}
+
+/// `guard-hook` fails open on an unknown harness: empty stdout, exit 0 — the
+/// hook must never brick a session, whatever config invoked it.
+#[test]
+fn guard_hook_fails_open_for_an_unknown_harness() {
+    let tmp = TempDir::new().unwrap();
+    let marker = write_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "mystery"])
+        .arg(&marker)
+        .write_stdin(r#"{ "tool_name": "Write", "tool_input": { "file_path": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout("");
+}
+
+/// Like `guard`, the generic entry point must stay off layered descriptor
+/// discovery: it fires per tool call and reads embedded descriptors only.
+#[test]
+fn guard_hook_generic_skips_descriptor_discovery() {
+    let tmp = TempDir::new().unwrap();
+    let marker = write_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+    let harnesses = tmp.path().join(".eval-magic").join("harnesses");
+    fs::create_dir_all(&harnesses).unwrap();
+    fs::write(harnesses.join("broken.toml"), "label = ").unwrap();
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "claude-code"])
+        .arg(&marker)
+        .current_dir(tmp.path())
+        .write_stdin(r#"{ "tool_name": "Write", "tool_input": { "file_path": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout(contains(r#""permissionDecision":"deny""#))
+        .stderr(contains("skipping harness descriptor").not());
 }
 
 /// `teardown-guard` reports when no guard is installed (cwd has no marker).
