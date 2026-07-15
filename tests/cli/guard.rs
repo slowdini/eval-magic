@@ -149,3 +149,25 @@ fn teardown_guard_removes_installed_guard() {
             .exists()
     );
 }
+
+/// The guard hook fires on every PreToolUse in a dispatched session, so it
+/// must not run layered descriptor discovery: a broken user descriptor in the
+/// eval env must not spam a skip-warning (or any other noise) per tool call.
+#[test]
+fn guard_hook_skips_descriptor_discovery() {
+    let tmp = TempDir::new().unwrap();
+    let marker = write_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+    let harnesses = tmp.path().join(".eval-magic").join("harnesses");
+    fs::create_dir_all(&harnesses).unwrap();
+    fs::write(harnesses.join("broken.toml"), "label = ").unwrap();
+
+    skill_eval()
+        .arg("guard")
+        .arg(&marker)
+        .current_dir(tmp.path())
+        .write_stdin(r#"{ "tool_name": "Write", "tool_input": { "file_path": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout(contains(r#""permissionDecision":"deny""#))
+        .stderr(contains("skipping harness descriptor").not());
+}

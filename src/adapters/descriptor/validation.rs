@@ -39,6 +39,28 @@ pub(super) fn validate_descriptor(
         ));
     }
 
+    // Native staging and the write guard both live under the skills dir:
+    // staging copies skills into it, and the guard keeps its marker/manifest
+    // there. Without a skills_dir neither has anywhere to operate.
+    if d.skills_dir.is_none() {
+        if d.staging.is_configured() {
+            return fail(
+                "[staging] is configured but skills_dir is not declared; native staging \
+                 copies skills into skills_dir — declare it, or drop [staging] and let \
+                 runs fall back to --no-stage"
+                    .into(),
+            );
+        }
+        if d.guard.is_some() {
+            return fail(
+                "[guard] is declared but skills_dir is not; the guard's marker and \
+                 teardown manifest live under skills_dir — declare it, or drop the \
+                 guard and rely on the detect-stray-writes audit"
+                    .into(),
+            );
+        }
+    }
+
     // Slug shape: one source of truth, all four placeholders, and the
     // generated slug must satisfy the descriptor's own naming rules.
     if d.staging.slug_template.is_some() && d.staging.slug_capability.is_some() {
@@ -81,13 +103,15 @@ pub(super) fn validate_descriptor(
 
     // The skills dir must live under a declared config dir, or staging's
     // sibling-asset filter would copy a checked-in copy into staged envs.
-    let top = d.skills_dir.split('/').next().unwrap_or_default();
-    if !d.config_dirs.iter().any(|dir| dir == top) {
-        return fail(format!(
-            "config_dirs {:?} misses \"{top}\", the parent of skills_dir — staging's \
-             sibling-asset filter and the guard tamper rules key off config_dirs",
-            d.config_dirs
-        ));
+    if let Some(skills_dir) = &d.skills_dir {
+        let top = skills_dir.split('/').next().unwrap_or_default();
+        if !d.config_dirs.iter().any(|dir| dir == top) {
+            return fail(format!(
+                "config_dirs {:?} misses \"{top}\", the parent of skills_dir — staging's \
+                 sibling-asset filter and the guard tamper rules key off config_dirs",
+                d.config_dirs
+            ));
+        }
     }
 
     // Every tool the guard engine hooks must be declared in the vocabulary,

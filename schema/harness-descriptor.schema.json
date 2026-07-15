@@ -4,7 +4,7 @@
   "title": "Harness Descriptor",
   "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript parsers, guard engines, slug generation, shadow preflight). Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage) are enforced by the Rust loader on top of this schema.",
   "type": "object",
-  "required": ["label", "skills_dir"],
+  "required": ["label"],
   "additionalProperties": false,
   "properties": {
     "label": {
@@ -15,7 +15,7 @@
     "skills_dir": {
       "type": "string",
       "minLength": 1,
-      "description": "Project-local staged-skills directory, `/`-separated relative to the repo root (e.g. \".claude/skills\")."
+      "description": "Project-local staged-skills directory, `/`-separated relative to the repo root (e.g. \".claude/skills\"). Optional: a harness without one cannot stage skills natively, so runs fall back to --no-stage (each SKILL.md inlined into its dispatch prompt) with a preflight warning."
     },
     "config_dirs": {
       "type": "array",

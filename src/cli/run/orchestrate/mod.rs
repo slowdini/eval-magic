@@ -85,6 +85,15 @@ struct Staged {
 
 /// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
+    // The harness preflight warns about undeclared enhancements (naming each
+    // fallback) and adjusts the options — it only rejects genuinely
+    // contradictory flag combinations.
+    let preflight = super::util::harness_run_preflight(opts, ctx)?;
+    for warning in &preflight.warnings {
+        eprintln!("⚠ {warning}");
+    }
+    let opts = &preflight.opts;
+
     let resolved = resolve::resolve_request(ctx, opts)?;
 
     // Redirect staging into the isolated env dir. `resolve_request` has now

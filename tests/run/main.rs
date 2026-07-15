@@ -9,6 +9,7 @@
 
 mod helpers;
 
+mod byoh;
 mod claude_cli;
 mod codex;
 mod env_layout;

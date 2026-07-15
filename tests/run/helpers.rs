@@ -10,7 +10,11 @@ pub const STAGED_MANIFEST: &str = ".slow-powers-eval-manifest.json";
 pub const DEFAULT_EVALS: &str = r#"{ "skill_name": "mr-review", "evals": [ { "id": "e1", "prompt": "review this MR", "expected_output": "a review" } ] }"#;
 
 pub fn skill_eval() -> Command {
-    Command::cargo_bin("eval-magic").expect("binary `eval-magic` should build")
+    let mut cmd = Command::cargo_bin("eval-magic").expect("binary `eval-magic` should build");
+    // Disable user-global descriptor discovery so a developer's
+    // ~/.config/eval-magic/harnesses never leaks into the tests.
+    cmd.env("EVAL_MAGIC_CONFIG_DIR", "");
+    cmd
 }
 
 /// Build `<root>/skill-dir/mr-review/{SKILL.md,evals/evals.json}` and a `work`

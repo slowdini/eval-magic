@@ -108,7 +108,9 @@ impl Default for StageSiblingOpts<'_> {
 
 /// `<repo_root>/.agents/skills` (Codex) or `<repo_root>/.claude/skills`.
 pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> PathBuf {
-    adapter_for(harness).skills_dir(repo_root)
+    adapter_for(harness)
+        .skills_dir(repo_root)
+        .expect("staging requires skills_dir; the run preflight forces --no-stage otherwise")
 }
 
 /// True when `name` is any harness's project-local config dir (`.claude`,

@@ -132,7 +132,11 @@ pub fn teardown_guard(stage_root: &Path) -> bool {
     let mut torn = false;
     for harness in Harness::known() {
         let adapter = crate::adapters::adapter_for(harness);
-        torn |= teardown_guard_from_skills_dir(&adapter.skills_dir(stage_root));
+        // A harness without a skills dir cannot host a guard (descriptor
+        // validation rejects the combination), so there is nothing to sweep.
+        if let Some(skills_dir) = adapter.skills_dir(stage_root) {
+            torn |= teardown_guard_from_skills_dir(&skills_dir);
+        }
         if let Some(hook_dir) = adapter.guard_hook_cleanup_dir(stage_root) {
             let _ = prune_if_empty(&hook_dir);
         }
@@ -144,10 +148,12 @@ pub fn teardown_guard(stage_root: &Path) -> bool {
 pub(crate) fn guard_is_armed(stage_root: &Path) -> bool {
     let now = now_ms();
     Harness::known().any(|harness| {
-        let marker_path = crate::adapters::adapter_for(harness)
+        crate::adapters::adapter_for(harness)
             .skills_dir(stage_root)
-            .join(GUARD_MARKER);
-        marker_is_armed(read_marker(&marker_path).as_ref(), now)
+            .is_some_and(|skills_dir| {
+                let marker_path = skills_dir.join(GUARD_MARKER);
+                marker_is_armed(read_marker(&marker_path).as_ref(), now)
+            })
     })
 }
 

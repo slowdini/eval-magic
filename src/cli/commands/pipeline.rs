@@ -44,7 +44,7 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
         skill: step.skill.clone(),
         iteration: Some(step.iteration),
         mode: None,
-        harness: Some(step.harness),
+        harness: Some(step.harness.name().to_string()),
         workspace_dir: step.workspace_dir.clone(),
         only: None,
         skip: None,
@@ -68,6 +68,16 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
+
+    let adapter = crate::adapters::adapter_for(ctx.harness);
+    if adapter.cli_events_filename().is_none() {
+        eprintln!(
+            "ℹ --harness {}: no transcript parser — records come from outputs/final-message.md \
+             only; steps/tokens/duration go unrecorded and transcript_check assertions grade \
+             as unverifiable (llm_judge carries the grading).",
+            adapter.label()
+        );
+    }
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
         skill_dir: args.skill_dir.as_deref(),

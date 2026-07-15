@@ -69,5 +69,6 @@ fn default_marker_path(harness_name: &str) -> PathBuf {
     let harness = Harness::resolve(harness_name).expect("bundled harness");
     adapter_for(harness)
         .skills_dir(&std::env::current_dir().unwrap_or_default())
+        .expect("bundled guard-capable harnesses declare skills_dir")
         .join(sandbox::GUARD_MARKER)
 }

@@ -14,7 +14,7 @@ use serde::Serialize;
 /// a held `Harness` always names a registered harness and adapter lookup never
 /// fails. The registry-dependent behavior lives next to the registry in
 /// `crate::adapters::harness`: `Harness::resolve` (the string-to-handle
-/// gateway, also behind the `--harness` value parser), `Harness::known` (every
+/// gateway, resolving `--harness` after parsing), `Harness::known` (every
 /// registered harness), `Default` (the registry's default harness), and
 /// `Deserialize` (resolves artifact values, rejecting unknown names).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -58,9 +58,9 @@ pub struct RunContext {
 }
 
 /// Already-parsed flag values handed to [`detect_run_context`]. `clap` owns the
-/// actual argv parsing (including the registry-driven `--harness` rejection);
-/// this struct carries the raw values through to filesystem validation and
-/// defaulting.
+/// actual argv parsing, and `--harness` is resolved against the registry before
+/// this struct is built (unknown names are rejected there); it carries the raw
+/// values through to filesystem validation and defaulting.
 #[derive(Debug, Clone, Default)]
 pub struct DetectInput {
     pub skill_dir: Option<String>,

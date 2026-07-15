@@ -31,7 +31,7 @@ pub use harness::{
 };
 pub use registry::{
     DEFAULT_HARNESS_NAME, UnknownHarnessError, adapter_for, all_config_dir_names,
-    all_tool_vocabulary, harness_value_parser,
+    all_tool_vocabulary,
 };
 pub use skill_shadow::{
     PluginShadowReport, ShadowSource, format_shadow_banner, shadow_validity_warnings,

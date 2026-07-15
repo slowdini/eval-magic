@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail};
 use clap::Parser;
 
-use crate::core::{DetectInput, RunContext, detect_run_context};
+use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
 mod args;
 mod commands;
@@ -21,10 +21,23 @@ mod run;
 use args::{Cli, Commands, CommonArgs, RunArgs};
 use commands::*;
 
-/// Parse process arguments, dispatch to the selected subcommand, and return its
-/// result. Called by the binary entry point.
+/// Parse process arguments, initialize the harness descriptor registry (every
+/// layer, including an optional `--harness-file`), dispatch to the selected
+/// subcommand, and return its result. Called by the binary entry point.
 pub fn run() -> anyhow::Result<()> {
-    dispatch(Cli::parse().command)
+    let cli = Cli::parse();
+    // The hidden guard hooks fire on every PreToolUse in a dispatched session
+    // and only ever need the embedded descriptors — skip layered discovery so
+    // a broken user descriptor can't add noise or latency per tool call (the
+    // lazy registry fallback serves them embedded-only).
+    let is_guard_hook = matches!(
+        cli.command,
+        Some(Commands::Guard { .. } | Commands::GuardCodex { .. })
+    );
+    if !is_guard_hook {
+        crate::adapters::registry::init_registry(cli.harness_file.as_deref().map(Path::new))?;
+    }
+    dispatch(cli.command)
 }
 
 fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
@@ -68,6 +81,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         Commands::Grade(args) => run_grade(args),
         Commands::Aggregate(args) => run_aggregate(args),
+        Commands::Harness(args) => run_harness(args),
         Commands::Snapshot(args) => run_snapshot(args),
         Commands::Teardown(args) => run_teardown(args),
         Commands::PromoteBaseline(args) => run_promote_baseline(args),
@@ -86,12 +100,16 @@ pub(crate) fn run_context_with_bootstrap(
     args: &CommonArgs,
     bootstrap: Option<String>,
 ) -> anyhow::Result<RunContext> {
+    // `--harness` parses as a plain string so runtime-loaded descriptors can
+    // name harnesses clap never saw; resolution against the registry happens
+    // here, after parsing.
+    let harness = args.harness.as_deref().map(Harness::resolve).transpose()?;
     Ok(detect_run_context(DetectInput {
         skill_dir: args.skill_dir.clone(),
         skill: args.skill.clone(),
         bootstrap,
         workspace_dir: args.workspace_dir.clone(),
-        harness: args.harness,
+        harness,
         cwd: None,
     })?)
 }

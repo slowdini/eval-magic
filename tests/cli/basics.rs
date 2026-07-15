@@ -137,8 +137,9 @@ fn unknown_subcommand_is_rejected() {
     skill_eval().arg("does-not-exist").assert().failure();
 }
 
-/// An unknown `--harness` value is rejected with an error naming the offending
-/// value and every known harness.
+/// An unknown `--harness` value is rejected by the registry resolver with an
+/// error naming the offending value and every known harness. (Resolution
+/// happens after parsing, not in clap, so runtime-loaded descriptors count.)
 #[test]
 fn unknown_harness_value_is_rejected_naming_known_harnesses() {
     skill_eval()
@@ -146,16 +147,16 @@ fn unknown_harness_value_is_rejected_naming_known_harnesses() {
         .assert()
         .failure()
         .stderr(
-            contains("invalid value 'nonexistent'")
+            contains("unknown harness 'nonexistent'")
                 .and(contains("claude-code"))
                 .and(contains("codex"))
                 .and(contains("opencode")),
         );
 }
 
-/// `run --help` lists the known harnesses as possible values for `--harness`.
+/// `run --help` names the built-in harnesses in the `--harness` doc text.
 #[test]
-fn run_help_lists_harness_possible_values() {
+fn run_help_names_builtin_harnesses() {
     skill_eval()
         .args(["run", "--help"])
         .assert()
