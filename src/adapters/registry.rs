@@ -423,6 +423,20 @@ mod tests {
         }
     }
 
+    /// A schema-valid user descriptor declaring a [guard] block — must be
+    /// rejected by the user-layer restriction, not the schema gate.
+    const USER_GUARD_TOML: &str = r#"
+label = "armed"
+
+[guard]
+hooks_file = ".armed/hooks.json"
+matcher = "Write"
+command_template = '"{exe}" guard-hook --harness armed "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = "x"
+"#;
+
     #[test]
     fn duplicate_embedded_label_errors() {
         let mut sources = embedded_sources();
@@ -509,7 +523,7 @@ mod tests {
         sources.push(src(
             Layer::ProjectLocal,
             ".eval-magic/harnesses/armed.toml",
-            "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
+            USER_GUARD_TOML,
         ));
         let built = build_registry(sources).unwrap();
         assert_eq!(
@@ -603,11 +617,7 @@ mod tests {
     #[test]
     fn harness_file_guard_rejection_is_fatal() {
         let mut sources = embedded_sources();
-        sources.push(src(
-            Layer::HarnessFile,
-            "one-off.toml",
-            "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
-        ));
+        sources.push(src(Layer::HarnessFile, "one-off.toml", USER_GUARD_TOML));
         let err = build_registry(sources).unwrap_err().to_string();
         assert!(err.contains("may not declare [guard]"), "{err}");
     }

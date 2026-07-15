@@ -1,12 +1,12 @@
 //! Claude Code harness support — the default harness.
 //!
-//! The declarative half of this harness lives in `harnesses/claude-code.toml`;
-//! this module tree keeps only the code-backed capabilities the descriptor
-//! references: `claude -p` stream-json transcript parsing ([`stream_json`] +
-//! [`transcript`]), plugin-shadow detection ([`plugin_shadow`]), and the
-//! write-guard hook ([`guard`]).
+//! The declarative half of this harness lives in `harnesses/claude-code.toml`
+//! (including the write-guard data rendered by the generic engine in
+//! [`crate::adapters::guard`]); this module tree keeps only the code-backed
+//! capabilities the descriptor references: `claude -p` stream-json transcript
+//! parsing ([`stream_json`] + [`transcript`]) and plugin-shadow detection
+//! ([`plugin_shadow`]).
 
-pub(crate) mod guard;
 pub mod plugin_shadow;
 pub mod stream_json;
 pub mod transcript;

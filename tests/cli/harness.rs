@@ -231,7 +231,17 @@ fn harness_lint_rejects_a_user_guard_block() {
     let file = tmp.path().join("armed.toml");
     fs::write(
         &file,
-        "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
+        r#"
+label = "armed"
+
+[guard]
+hooks_file = ".armed/hooks.json"
+matcher = "Write"
+command_template = '"{exe}" guard-hook --harness armed "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = "x"
+"#,
     )
     .unwrap();
 

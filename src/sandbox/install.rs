@@ -314,12 +314,14 @@ mod tests {
     fn guard_is_armed_detects_claude_or_codex_marker() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        crate::adapters::claude_code::guard::install_guard(&c.stage_root, exe, None).unwrap();
+        let claude = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
+        claude.install_guard(&c.stage_root, exe, None).unwrap();
         assert!(guard_is_armed(&c.stage_root));
         teardown_guard(&c.stage_root);
         assert!(!guard_is_armed(&c.stage_root));
 
-        crate::adapters::codex::guard::install_guard(&c.stage_root, exe, None).unwrap();
+        let codex = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
+        codex.install_guard(&c.stage_root, exe, None).unwrap();
         assert!(guard_is_armed(&c.stage_root));
     }
 }

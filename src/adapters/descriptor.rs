@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::validation::{SchemaName, ValidationError, validate_against_schema};
 
-use super::capabilities::{GuardEngine, ShadowPreflight, SlugCapability, TranscriptParser};
+use super::capabilities::{ShadowPreflight, SlugCapability, TranscriptParser};
 
 pub mod layers;
 mod validation;
@@ -186,9 +186,29 @@ pub struct ModelSection {
     pub flag: String,
 }
 
+/// The write-guard data block: everything the generic guard engine
+/// ([`super::guard`]) needs to arm a hook and render a deny verdict. Embedded
+/// built-in descriptors only — the guard fails open, so
+/// [`layers::check_user_layer_restrictions`] bars user layers from declaring
+/// it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GuardSection {
-    pub engine: GuardEngine,
+    /// Hook-config file the entry is merged into, `/`-separated relative to
+    /// the staged env root (e.g. `.claude/settings.local.json`).
+    pub hooks_file: String,
+    /// Tool-name matcher the hook registers for; also the source of the
+    /// matcher⊆vocabulary invariant.
+    pub matcher: String,
+    /// Shell command the hook runs, with `{exe}` and `{marker}` placeholders.
+    pub command_template: String,
+    /// JSON template of the hook entry appended to the hook config's
+    /// `hooks.PreToolUse` array, with `{matcher}` and `{command}` placeholders
+    /// in its string values. Authored key order is serialized verbatim.
+    pub hook_entry: String,
+    /// JSON template of the deny verdict printed on stdout, with a `{reason}`
+    /// placeholder. Authored key order is the harness's on-disk contract.
+    pub verdict_template: String,
+    /// Banner printed after `--guard` arms the hook.
     pub armed_message: String,
 }
 
@@ -430,7 +450,11 @@ write = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
 shell = ["Bash"]
 
 [guard]
-engine = "claude-hooks"
+hooks_file = ".demo/hooks.json"
+matcher = "Write|Edit|MultiEdit|NotebookEdit|Bash"
+command_template = '"{exe}" guard-hook --harness demo "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
 armed_message = "guard armed"
 "#;
 
@@ -453,7 +477,14 @@ armed_message = "guard armed"
     fn guarded_descriptor_loads() {
         let d = load(GUARDED).unwrap();
         assert!(d.run.supports_guard);
-        assert!(d.guard.is_some());
+        let guard = d.guard.expect("guard section loads");
+        assert_eq!(guard.hooks_file, ".demo/hooks.json");
+        assert_eq!(guard.matcher, "Write|Edit|MultiEdit|NotebookEdit|Bash");
+        assert_eq!(
+            guard.command_template,
+            r#""{exe}" guard-hook --harness demo "{marker}""#
+        );
+        assert_eq!(guard.armed_message, "guard armed");
     }
 
     #[test]
@@ -474,21 +505,7 @@ armed_message = "guard armed"
 
     #[test]
     fn rejects_guard_without_skills_dir() {
-        let toml = r#"
-label = "demo"
-config_dirs = [".demo"]
-
-[run]
-supports_guard = true
-
-[tools]
-write = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
-shell = ["Bash"]
-
-[guard]
-engine = "claude-hooks"
-armed_message = "guard armed"
-"#;
+        let toml = &GUARDED.replace("skills_dir = \".demo/skills\"\n", "");
         let err = err_of(toml);
         assert!(err.contains("guard"), "{err}");
         assert!(err.contains("skills_dir"), "{err}");
@@ -522,9 +539,15 @@ armed_message = "guard armed"
         assert!(err.contains("harness-descriptor schema"), "{err}");
     }
 
+    /// Migration canary: the pre-#137 named-engine shape must fail the schema
+    /// gate, so a stale `engine = "..."` line is caught with a schema message
+    /// instead of silently ignored.
     #[test]
-    fn rejects_unknown_guard_engine_name() {
-        let err = err_of(&GUARDED.replace("claude-hooks", "mystery-hooks"));
+    fn rejects_the_retired_guard_engine_field() {
+        let err = err_of(&GUARDED.replace(
+            "hooks_file = \".demo/hooks.json\"",
+            "engine = \"claude-hooks\"",
+        ));
         assert!(err.contains("harness-descriptor schema"), "{err}");
     }
 

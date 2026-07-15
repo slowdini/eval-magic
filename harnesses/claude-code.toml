@@ -39,8 +39,16 @@ surfaces_skill_invocation = true
 [model]
 flag = "--model"
 
+# Guard data rendered by the generic engine (src/adapters/guard.rs). The JSON
+# templates' key order is written/serialized verbatim and is an on-disk
+# contract with armed hooks from earlier releases — do not reorder keys. The
+# `guard` subcommand in command_template is a frozen alias for the same reason.
 [guard]
-engine = "claude-hooks"
+hooks_file = ".claude/settings.local.json"
+matcher = "Write|Edit|MultiEdit|NotebookEdit|Bash"
+command_template = '"{exe}" guard "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"{reason}"}}'
 armed_message = '''
 
 🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json

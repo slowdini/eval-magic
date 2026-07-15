@@ -217,10 +217,10 @@ mod tests {
 
     #[test]
     fn user_layer_may_not_declare_a_guard_table() {
-        let value: serde_json::Value = toml::from_str(
-            "label = \"demo\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
-        )
-        .unwrap();
+        // The restriction fires on the [guard] table's presence alone — field
+        // shape is irrelevant (the schema gate owns that).
+        let value: serde_json::Value =
+            toml::from_str("label = \"demo\"\n\n[guard]\narmed_message = \"x\"\n").unwrap();
         let err = check_user_layer_restrictions(&value, "user.toml")
             .unwrap_err()
             .to_string();

@@ -44,8 +44,17 @@ surfaces_skill_invocation = false
 [model]
 flag = "-m"
 
+# Guard data rendered by the generic engine (src/adapters/guard.rs). The JSON
+# templates' key order is written/serialized verbatim and is an on-disk
+# contract with armed hooks from earlier releases — do not reorder keys. The
+# `guard-codex` subcommand in command_template is a frozen alias for the same
+# reason.
 [guard]
-engine = "codex-hooks"
+hooks_file = ".codex/hooks.json"
+matcher = "^Bash$|^apply_patch$|^Edit$|^Write$"
+command_template = '"{exe}" guard-codex "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}","timeout":30,"statusMessage":"Checking eval write boundary"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
 armed_message = '''
 
 🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json
