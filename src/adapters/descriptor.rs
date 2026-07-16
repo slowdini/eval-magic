@@ -15,9 +15,12 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::core::ToolInvocation;
 use crate::validation::{SchemaName, ValidationError, validate_against_schema};
 
 use super::capabilities::{ShadowPreflight, SlugCapability, TranscriptParser};
+use super::extract::ExtractSpec;
+use super::transcript::TranscriptSummary;
 
 pub mod layers;
 mod validation;
@@ -176,9 +179,45 @@ pub struct SkillsBlockSection {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TranscriptSection {
     pub events_filename: String,
-    pub parser: TranscriptParser,
+    /// Named code parser — for streams that need stitching (keyed joins,
+    /// content coercion). Exactly one of `parser`/`extract` is declared.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parser: Option<TranscriptParser>,
+    /// Declarative extractor for flat event streams.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extract: Option<ExtractSpec>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub surfaces_skill_invocation: bool,
+}
+
+impl TranscriptSection {
+    /// Parse the events file into ordered tool invocations, through whichever
+    /// tier the descriptor declares.
+    pub(crate) fn parse(&self, path: &std::path::Path) -> std::io::Result<Vec<ToolInvocation>> {
+        match (&self.parser, &self.extract) {
+            (Some(parser), _) => parser.parse(path),
+            (None, Some(extract)) => super::extract::parse(extract, path),
+            // Validation guarantees one tier is declared; fail like a
+            // parser-less harness if a section slips through unchecked.
+            (None, None) => Err(unwired_error()),
+        }
+    }
+
+    /// Parse the events file into a full [`TranscriptSummary`].
+    pub(crate) fn parse_full(&self, path: &std::path::Path) -> std::io::Result<TranscriptSummary> {
+        match (&self.parser, &self.extract) {
+            (Some(parser), _) => parser.parse_full(path),
+            (None, Some(extract)) => super::extract::parse_full(extract, path),
+            (None, None) => Err(unwired_error()),
+        }
+    }
+}
+
+fn unwired_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "[transcript] declares neither a parser nor an extract block",
+    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -457,6 +496,91 @@ hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{comm
 verdict_template = '{"decision":"block","reason":"{reason}"}'
 armed_message = "guard armed"
 "#;
+
+    /// A descriptor whose transcript ingest is the declarative extract tier.
+    const EXTRACTED: &str = r#"
+label = "demo"
+skills_dir = ".demo/skills"
+config_dirs = [".demo"]
+
+[tools]
+write = ["file_change"]
+shell = ["command_execution"]
+
+[transcript]
+events_filename = "demo-events.jsonl"
+
+[transcript.extract.tools]
+where = { type = "item.completed" }
+item = "item"
+name_field = "type"
+skip_names = ["agent_message"]
+args_omit = ["id", "type", "output"]
+result_coalesce = ["output"]
+
+[transcript.extract.final_text]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.tokens]
+where = { type = "turn.completed" }
+sum = ["usage.input_tokens", "usage.output_tokens"]
+
+[transcript.extract.duration]
+timestamp_spread = "timestamp"
+"#;
+
+    #[test]
+    fn extract_descriptor_loads_and_reserializes_to_loadable_toml() {
+        let d = load(EXTRACTED).unwrap();
+        let transcript = d.transcript.as_ref().expect("transcript section loads");
+        assert!(transcript.parser.is_none());
+        assert!(transcript.extract.is_some());
+
+        // `harness show` re-serializes resolved descriptors to TOML; the
+        // extract tier must survive the round trip.
+        let shown = toml::to_string(&d).expect("descriptor re-serializes");
+        let reloaded = load(&shown).unwrap();
+        let extract = reloaded.transcript.unwrap().extract.unwrap();
+        assert_eq!(
+            extract.tokens.unwrap().sum,
+            vec!["usage.input_tokens", "usage.output_tokens"]
+        );
+        assert_eq!(
+            extract
+                .tools
+                .unwrap()
+                .r#where
+                .get("type")
+                .map(String::as_str),
+            Some("item.completed")
+        );
+    }
+
+    #[test]
+    fn transcript_section_dispatches_parse_to_the_extract_engine() {
+        let transcript = load(EXTRACTED).unwrap().transcript.unwrap();
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("demo-events.jsonl");
+        std::fs::write(
+            &path,
+            concat!(
+                r#"{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"ls","output":"ok"}}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"id":"i2","type":"agent_message","text":"Done."}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+
+        let invocations = transcript.parse(&path).unwrap();
+        assert_eq!(invocations.len(), 1);
+        assert_eq!(invocations[0].name, "command_execution");
+
+        let full = transcript.parse_full(&path).unwrap();
+        assert_eq!(full.final_text, Some("Done.".into()));
+        assert_eq!(full.tool_invocations.len(), 1);
+    }
 
     #[test]
     fn minimal_descriptor_loads() {

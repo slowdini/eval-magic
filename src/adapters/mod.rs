@@ -19,6 +19,7 @@ mod cli_command;
 pub mod codex;
 pub mod descriptor;
 pub mod descriptor_adapter;
+pub mod extract;
 pub(crate) mod guard;
 pub mod harness;
 pub mod opencode;

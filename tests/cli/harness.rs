@@ -296,6 +296,64 @@ fn harness_lint_checks_a_partial_override_against_its_merge_target() {
 }
 
 #[test]
+fn harness_lint_passes_an_extract_descriptor() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("flat.toml");
+    fs::write(
+        &file,
+        r#"label = "flat"
+
+[tools]
+write = ["file_write"]
+shell = ["shell"]
+
+[transcript]
+events_filename = "flat-events.jsonl"
+
+[transcript.extract.tools]
+where = { kind = "tool.call" }
+name_field = "tool"
+
+[transcript.extract.final_text]
+where = { kind = "message" }
+field = "text"
+"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .assert()
+        .success()
+        .stdout(contains("✓"));
+}
+
+#[test]
+fn harness_lint_reports_extract_overlaying_a_builtin_parser() {
+    let tmp = TempDir::new().unwrap();
+    // Standalone this partial is fine; merged onto claude-code it collides
+    // with the built-in's named parser — transcript ingest reads through
+    // exactly one tier, and an overlay cannot delete the inherited parser.
+    let file = tmp.path().join("claude-code.toml");
+    fs::write(
+        &file,
+        "label = \"claude-code\"\n\n[transcript]\nevents_filename = \"events.jsonl\"\n\n\
+         [transcript.extract.final_text]\nfield = \"result\"\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .assert()
+        .failure()
+        .stderr(contains("exactly one").and(contains("new label")));
+}
+
+#[test]
 fn harness_lint_accepts_a_registered_harness_name() {
     let tmp = TempDir::new().unwrap();
     skill_eval()

@@ -120,7 +120,7 @@ map as inline comments in its scaffolded template. The short map:
 |-------|----------|----------------------|
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
 | `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
-| `[transcript]` | `events_filename` + `parser` (a named capability) | `transcript_check` grades unverifiable, `llm_judge` carries grading, tokens/duration unrecorded |
+| `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable, `llm_judge` carries grading, tokens/duration unrecorded |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
@@ -152,6 +152,72 @@ parser = "codex-items"
 ```
 
 An unknown capability name fails the schema gate listing the allowed values.
+
+### The declarative extractor: flat streams with zero code
+
+A stream where every tool event is **self-contained** — name, args, and result in the same
+record — doesn't need a code parser at all: a `[transcript.extract]` block describes the mapping
+and one generic engine executes it, unlocking the same transcript ingest a named parser gives
+(`transcript_check` grading, parsed invocations in `run.json`, token/duration backfill into
+`timing.json`). The built-in `codex` harness ingests through exactly this block:
+
+```toml
+[transcript]
+events_filename = "codex-events.jsonl"
+surfaces_skill_invocation = false
+
+# Flat tool-item mapping: each matching record's item object becomes one
+# tool invocation, in stream order.
+[transcript.extract.tools]
+where = { type = "item.completed" }
+item = "item"       # dotted path to the tool object; omit when the record is the item
+name_field = "type" # the item field naming the tool; records without it are skipped
+skip_names = ["agent_message", "reasoning", "plan_update"]
+args_omit = ["id", "type", "status", "output", "result", "error"]
+result_coalesce = ["output", "result", "error"]
+
+# Final text: dotted-path string pick over matching records; last match wins.
+[transcript.extract.final_text]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+# Tokens: over matching records, sum the listed integer fields.
+[transcript.extract.tokens]
+where = { type = "turn.completed" }
+sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_tokens"]
+
+# Duration: last minus first RFC 3339 timestamp — or `field = "<path>"` to
+# pick a millisecond value directly (declare exactly one of the two).
+[transcript.extract.duration]
+timestamp_spread = "timestamp"
+```
+
+The primitive set is exactly five, deliberately minimal:
+
+1. **`where`** — a dotted-path → expected-string equality filter shared by every sub-table
+   (omitted = every record matches). String equality only: no operators, negation, or wildcards.
+2. **`final_text`** — a field pick; the last matching record wins.
+3. **`tools`** — the flat tool-item mapping: name from `name_field`, args = the item minus
+   `args_omit` (key order preserved; `null` when nothing remains), result = the first *present*
+   field of `result_coalesce` (present-but-null counts; strings verbatim, everything else compact
+   JSON).
+4. **`tokens`** — sum the `sum` fields over matching records. A missing or non-integer field
+   counts 0, but a record where *no* listed path resolves leaves the total untouched — it never
+   turns an absent total into zero.
+5. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
+   minus first; needs at least two parseable timestamps).
+
+Dotted paths (`"usage.input_tokens"`, `"item.text"`) descend nested objects only — there is no
+array indexing, and keys containing literal dots are unaddressable. Malformed JSONL lines are
+silently skipped, as with every parser. `[transcript]` requires the `[tools]` write/shell
+vocabulary alongside it (the stray-writes audit classifies by it). Leave
+`surfaces_skill_invocation` false unless the mapping verifiably yields invocations named `Skill`
+carrying an `args.skill` field.
+
+**If a stream needs more than these primitives, it's a code capability, not a bigger DSL.** The
+line is cross-event state: a stream whose tool results arrive in *separate* records joined by id
+(Claude Code's `tool_use`/`tool_result` pairing), or whose content needs shape-dependent
+coercion, is what named parsers are for — that's `claude-stream-json`, and it stays code.
 
 ### The guard restriction
 
@@ -198,8 +264,9 @@ beyond a mechanical registration. What counts as data vs code:
 
 - **Data — one descriptor PR:** the descriptor file itself: `label` / `skills_dir` /
   `config_dirs`, the `[dispatch]` templates, `[model]`, `[staging]` + `[skills_block]`,
-  `[tools]`, the `[run]` booleans, and `[transcript]` / `[shadow]` **when they reuse an existing
-  named capability** (`claude-stream-json`, `codex-items`, `opencode`, `claude-plugins`).
+  `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (the declarative tier is pure
+  data), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
+  (`claude-stream-json`, `codex-items`, `opencode`, `claude-plugins`).
 - **Code — one capability per PR, separate from the descriptor PR:** a new transcript parser,
   slug capability, or shadow preflight (each is `src/adapters/capabilities.rs` + a
   `src/adapters/<harness>/` module + a schema enum entry), and guard support (`[guard]` data is

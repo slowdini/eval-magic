@@ -218,6 +218,53 @@ pub(super) fn validate_descriptor(
         );
     }
 
+    // Transcript ingest reads through exactly one tier: a named code parser
+    // or the declarative extract block.
+    if let Some(transcript) = &d.transcript {
+        match (&transcript.parser, &transcript.extract) {
+            (Some(_), Some(_)) => {
+                return fail(
+                    "[transcript] declares both a parser and an extract block; ingest reads \
+                     through exactly one — drop one of them. Layered overrides merge fields \
+                     and cannot delete an inherited parser, so moving a harness from parser \
+                     to extract needs a new label rather than an overlay"
+                        .into(),
+                );
+            }
+            (None, None) => {
+                return fail(
+                    "[transcript] declares neither a parser nor an extract block; declare \
+                     exactly one — name a parser capability or add [transcript.extract] — \
+                     or drop the table and let llm_judge carry the grading"
+                        .into(),
+                );
+            }
+            _ => {}
+        }
+        if let Some(extract) = &transcript.extract {
+            if extract.tools.is_none()
+                && extract.final_text.is_none()
+                && extract.tokens.is_none()
+                && extract.duration.is_none()
+            {
+                return fail(
+                    "[transcript.extract] declares none of tools/final_text/tokens/duration; \
+                     an empty extract block parses nothing — declare at least one output"
+                        .into(),
+                );
+            }
+            if let Some(duration) = &extract.duration
+                && duration.field.is_some() == duration.timestamp_spread.is_some()
+            {
+                return fail(
+                    "[transcript.extract.duration] must declare exactly one of field \
+                     (a millisecond pick) or timestamp_spread (last minus first timestamp)"
+                        .into(),
+                );
+            }
+        }
+    }
+
     // Tool roles are disjoint: one name in two roles would double-classify
     // invocations in the stray-writes audit.
     let mut seen: Vec<&str> = Vec::new();
@@ -548,6 +595,70 @@ armed_message = "guard armed"
             "{MINIMAL}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\nparser = \"codex-items\"\n"
         ));
         assert!(err.contains("detect-stray-writes"), "{err}");
+    }
+
+    /// Transcript-shape tests need a tool vocabulary so only the shape rule
+    /// under test can fire.
+    const TOOLED: &str = r#"
+label = "demo"
+skills_dir = ".demo/skills"
+config_dirs = [".demo"]
+
+[tools]
+write = ["file_change"]
+shell = ["command_execution"]
+"#;
+
+    #[test]
+    fn rejects_extract_transcript_without_write_and_shell_tools() {
+        let err = err_of(&format!(
+            "{MINIMAL}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\n\
+             [transcript.extract.final_text]\nfield = \"text\"\n"
+        ));
+        assert!(err.contains("detect-stray-writes"), "{err}");
+    }
+
+    #[test]
+    fn rejects_transcript_with_parser_and_extract() {
+        let err = err_of(&format!(
+            "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\nparser = \"codex-items\"\n\n\
+             [transcript.extract.final_text]\nfield = \"text\"\n"
+        ));
+        assert!(err.contains("exactly one"), "{err}");
+        assert!(err.contains("new label"), "{err}");
+    }
+
+    #[test]
+    fn rejects_transcript_with_neither_parser_nor_extract() {
+        let err = err_of(&format!(
+            "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n"
+        ));
+        assert!(err.contains("exactly one"), "{err}");
+        assert!(err.contains("llm_judge"), "{err}");
+    }
+
+    #[test]
+    fn rejects_empty_extract_block() {
+        let err = err_of(&format!(
+            "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\n[transcript.extract]\n"
+        ));
+        assert!(err.contains("[transcript.extract]"), "{err}");
+        assert!(err.contains("at least one"), "{err}");
+    }
+
+    #[test]
+    fn rejects_duration_with_both_variants_or_neither() {
+        for duration_block in [
+            "field = \"elapsed_ms\"\ntimestamp_spread = \"timestamp\"\n",
+            "",
+        ] {
+            let err = err_of(&format!(
+                "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\n\
+                 [transcript.extract.duration]\n{duration_block}"
+            ));
+            assert!(err.contains("duration"), "{err}");
+            assert!(err.contains("exactly one"), "{err}");
+        }
     }
 
     #[test]

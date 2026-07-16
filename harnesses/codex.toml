@@ -36,10 +36,33 @@ item = "\n- {name}: {description} (file: {path})"
 
 # Codex's JSONL exposes no deterministic skill-tool event, so the
 # `__skill_invoked` meta-check uses the LLM-judge fallback.
+#
+# The stream is flat (every tool event self-contained), so ingest is the
+# declarative extract tier; `parser = "codex-items"` is the equivalent code
+# capability, kept as the reference implementation the extract engine's
+# differential test compares against (src/adapters/extract.rs).
 [transcript]
 events_filename = "codex-events.jsonl"
-parser = "codex-items"
 surfaces_skill_invocation = false
+
+[transcript.extract.tools]
+where = { type = "item.completed" }
+item = "item"
+name_field = "type"
+skip_names = ["agent_message", "reasoning", "plan_update"]
+args_omit = ["id", "type", "status", "output", "result", "error"]
+result_coalesce = ["output", "result", "error"]
+
+[transcript.extract.final_text]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.tokens]
+where = { type = "turn.completed" }
+sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_tokens"]
+
+[transcript.extract.duration]
+timestamp_spread = "timestamp"
 
 [model]
 flag = "-m"
