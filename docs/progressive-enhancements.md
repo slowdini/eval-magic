@@ -64,10 +64,11 @@ only). Only genuinely contradictory flag combinations stay errors.
   `src/adapters/descriptor_adapter.rs` — the one generic `DescriptorAdapter` implementing the
   trait from a descriptor.
 - `src/adapters/capabilities.rs` — the **named capabilities**: closed enums a descriptor references
-  by kebab-case name for everything that is real code (transcript parsers, guard engines, slug
-  generation, shadow preflight).
-- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, guard
-  hooks, the plugin-shadow scan, the OpenCode slug sanitizer.
+  by kebab-case name for everything that is real code (transcript parsers, slug generation,
+  shadow preflight). The write guard needs no named capability: it is pure `[guard]` data
+  rendered by the one generic engine in `src/adapters/guard.rs`.
+- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, the
+  plugin-shadow scan, the OpenCode slug sanitizer.
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
   (`src/cli/run/util.rs`) — the `run` preflight: undeclared enhancements warn naming their
   fallback and adjust the options (`--guard` forced off, missing `skills_dir` forces
@@ -147,18 +148,24 @@ afterwards.
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
 arm; fatal in revision mode, where the `old_skill` arm then sees new-skill content.)
 
-*Descriptor fields:* the `[guard]` table — `engine`, `armed_message` — plus `[tools]` (the
-write/patch/shell/read vocabulary) and `run.supports_guard` (validated to stay in lockstep with
-the `[guard]` table).
-*Capability:* `guard.engine` names the hook installer (`claude-hooks`, `codex-hooks`); each engine
-also exposes its hook matcher so validation can prove every hooked tool is declared in `[tools]`.
-The guard arbiter and `detect-stray-writes` classify tool names against the cross-harness
-vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser without declaring
-the harness's tool names is rejected at descriptor load. The hidden `guard` / `guard-codex`
-subcommands are the hook entry points — their names are a stable on-disk contract. Shared
+*Descriptor fields:* the `[guard]` table — `hooks_file`, `matcher`, `command_template`,
+`hook_entry`, `verdict_template`, `armed_message` — plus `[tools]` (the write/patch/shell/read
+vocabulary) and `run.supports_guard` (validated to stay in lockstep with the `[guard]` table).
+There is no guard code capability: one generic engine (`src/adapters/guard.rs`) renders the
+install (hook entry merged into `hooks_file`) and the deny verdict from these templates, whose
+authored JSON key order is serialized verbatim — the verdict bytes are the harness's on-disk
+contract. Validation proves every hooked `matcher` tool is declared in `[tools]`, that the
+templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit in
+string values. The guard arbiter and `detect-stray-writes` classify tool names against the
+cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser
+without declaring the harness's tool names is rejected at descriptor load. The hidden `guard` /
+`guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a
+future guard-capable built-in uses the generic `guard-hook --harness <label>` entry point — a
+descriptor `[guard]` block is all it takes, no bespoke install/verdict code. Shared
 marker/manifest/teardown machinery lives in `src/sandbox/`. **User-supplied descriptors may not
-declare `[guard]`** (fail-open safety — the engine installs native hook config); the restriction
-lifts when the guard engine is opened up.
+declare `[guard]`** — the guard fails open, so a mistyped user guard block would silently disarm
+it; `--guard` with a harness defined only by user descriptors is rejected in preflight, naming
+the `detect-stray-writes` fallback.
 
 ### Shadow preflight
 

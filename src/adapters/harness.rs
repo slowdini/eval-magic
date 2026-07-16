@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
+use crate::sandbox::GuardMarker;
 
 use super::TranscriptSummary;
 use super::skill_shadow::PluginShadowReport;
@@ -260,6 +261,15 @@ pub trait HarnessAdapter {
     /// [`install_guard`](Self::install_guard) errors), in which case no banner
     /// is printed.
     fn guard_armed_message(&self) -> Option<String> {
+        None
+    }
+
+    /// **Enhancement: write guard.** Evaluate a PreToolUse hook `payload`
+    /// against `marker`, returning the serialized deny verdict to print on
+    /// stdout, or `None` to allow. The default fails open — a harness with no
+    /// guard never denies — matching the hook entry points' contract that a
+    /// guard invocation can never brick a session.
+    fn guard_verdict(&self, _payload: &str, _marker: Option<GuardMarker>) -> Option<String> {
         None
     }
 

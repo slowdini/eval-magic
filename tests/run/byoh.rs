@@ -132,6 +132,43 @@ fn descriptor_alone_carries_a_complete_run() {
     }
 }
 
+/// `--guard` with a harness that exists only in user-supplied descriptors is
+/// a hard preflight error: guards are restricted to embedded built-ins (fail-
+/// open safety), and a run the user asked to guard must not continue silently
+/// unguarded. The message names the detect-stray-writes fallback.
+#[test]
+fn guard_with_a_user_only_harness_is_rejected_in_preflight() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+            "--guard",
+        ])
+        .assert()
+        .failure()
+        .stderr(
+            contains("built-in")
+                .and(contains("detect-stray-writes"))
+                .and(contains("--guard")),
+        );
+
+    assert!(
+        !iteration_dir(&cwd).join("dispatch.json").exists(),
+        "the run must stop in preflight, before building anything"
+    );
+}
+
 /// A `--harness-file` descriptor becomes the invocation's default harness
 /// when `--harness` is omitted.
 #[test]

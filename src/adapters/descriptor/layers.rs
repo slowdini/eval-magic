@@ -173,10 +173,11 @@ pub fn default_config_root() -> Option<PathBuf> {
 }
 
 /// Reject descriptor content user-supplied files may not declare: the write
-/// guard installs native hook config into dispatch environments, so it stays
-/// restricted to built-in descriptors until the guard engine is opened up.
-/// The check runs on each file's own content, so a user overlay of a guarded
-/// built-in still inherits the embedded guard cleanly.
+/// guard fails open (an unrenderable or mistyped guard block silently allows
+/// everything), so guard data stays restricted to the embedded built-ins
+/// until user guards get an explicit trust story. The check runs on each
+/// file's own content, so a user overlay of a guarded built-in still inherits
+/// the embedded guard cleanly.
 pub fn check_user_layer_restrictions(
     value: &serde_json::Value,
     path: &str,
@@ -190,10 +191,10 @@ pub fn check_user_layer_restrictions(
         return Err(DescriptorError::Invariant {
             path: path.to_string(),
             message: "user-supplied descriptors may not declare [guard] or set \
-                      run.supports_guard = true — the write guard installs native hook \
-                      config and stays restricted to built-in descriptors until the guard \
-                      engine is opened up (see the guard-engine follow-up issue). Remove \
-                      it; unguarded runs fall back to the detect-stray-writes audit."
+                      run.supports_guard = true — the write guard fails open, so a mistyped \
+                      guard block would silently disarm it; guard data stays restricted to \
+                      built-in descriptors. Remove it; unguarded runs fall back to the \
+                      detect-stray-writes audit."
                 .to_string(),
         });
     }
@@ -217,10 +218,10 @@ mod tests {
 
     #[test]
     fn user_layer_may_not_declare_a_guard_table() {
-        let value: serde_json::Value = toml::from_str(
-            "label = \"demo\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
-        )
-        .unwrap();
+        // The restriction fires on the [guard] table's presence alone — field
+        // shape is irrelevant (the schema gate owns that).
+        let value: serde_json::Value =
+            toml::from_str("label = \"demo\"\n\n[guard]\narmed_message = \"x\"\n").unwrap();
         let err = check_user_layer_restrictions(&value, "user.toml")
             .unwrap_err()
             .to_string();

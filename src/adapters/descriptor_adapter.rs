@@ -10,6 +10,7 @@ use std::time::Duration;
 use regex::Regex;
 
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
+use crate::sandbox::GuardMarker;
 
 use super::TranscriptSummary;
 use super::cli_command::{
@@ -231,7 +232,12 @@ impl HarnessAdapter for DescriptorAdapter {
         ttl: Option<Duration>,
     ) -> io::Result<PathBuf> {
         match &self.descriptor.guard {
-            Some(guard) => guard.engine.install_guard(stage_root, guard_exe, ttl),
+            Some(guard) => {
+                let skills_dir = self
+                    .skills_dir(stage_root)
+                    .expect("descriptor validation pairs [guard] with skills_dir");
+                super::guard::install_guard(guard, &skills_dir, stage_root, guard_exe, ttl)
+            }
             None => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!("--guard is not supported for the {} harness", self.label()),
@@ -246,11 +252,15 @@ impl HarnessAdapter for DescriptorAdapter {
             .map(|g| g.armed_message.clone())
     }
 
+    fn guard_verdict(&self, payload: &str, marker: Option<GuardMarker>) -> Option<String> {
+        let guard = self.descriptor.guard.as_ref()?;
+        super::guard::guard_verdict(guard, payload, marker)
+    }
+
     fn guard_hook_cleanup_dir(&self, stage_root: &Path) -> Option<PathBuf> {
-        self.descriptor
-            .guard
-            .as_ref()
-            .and_then(|g| g.engine.hook_cleanup_dir(stage_root))
+        self.descriptor.guard.as_ref().and_then(|g| {
+            super::guard::hook_cleanup_dir(g, self.descriptor.skills_dir.as_deref(), stage_root)
+        })
     }
 
     fn detect_shadowed_skills(

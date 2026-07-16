@@ -35,6 +35,16 @@ struct RegistryEntry {
     adapter: DescriptorAdapter,
 }
 
+impl RegistryEntry {
+    /// True when any contributing source is an embedded built-in — the
+    /// provenance check behind guard gating (guards are embedded-only).
+    fn has_embedded_layer(&self) -> bool {
+        self.sources
+            .iter()
+            .any(|(layer, _)| *layer == Layer::Embedded)
+    }
+}
+
 /// Set once by `init_registry` (layered sources), or lazily to the embedded
 /// built-ins on first pre-init access. The lazy fallback keeps unit tests
 /// hermetic: they never call `init_registry`, so user-supplied descriptor
@@ -317,6 +327,18 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
         .adapter
 }
 
+/// True when `harness` has an embedded built-in descriptor among its sources
+/// — i.e. it is not defined by user-supplied descriptor files alone. Preflight
+/// uses this to hard-reject `--guard` on user-only harnesses (the write guard
+/// stays restricted to built-ins because it fails open).
+pub fn has_embedded_layer(harness: Harness) -> bool {
+    registry()
+        .iter()
+        .find(|e| e.label == harness.name())
+        .expect("Harness handles originate from the registry")
+        .has_embedded_layer()
+}
+
 /// One registered harness as `harness list`/`show`/`lint` see it: identity,
 /// contributing sources in layer order, the merged descriptor value, and the
 /// resolved descriptor.
@@ -423,6 +445,20 @@ mod tests {
         }
     }
 
+    /// A schema-valid user descriptor declaring a [guard] block — must be
+    /// rejected by the user-layer restriction, not the schema gate.
+    const USER_GUARD_TOML: &str = r#"
+label = "armed"
+
+[guard]
+hooks_file = ".armed/hooks.json"
+matcher = "Write"
+command_template = '"{exe}" guard-hook --harness armed "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = "x"
+"#;
+
     #[test]
     fn duplicate_embedded_label_errors() {
         let mut sources = embedded_sources();
@@ -509,7 +545,7 @@ mod tests {
         sources.push(src(
             Layer::ProjectLocal,
             ".eval-magic/harnesses/armed.toml",
-            "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
+            USER_GUARD_TOML,
         ));
         let built = build_registry(sources).unwrap();
         assert_eq!(
@@ -603,11 +639,7 @@ mod tests {
     #[test]
     fn harness_file_guard_rejection_is_fatal() {
         let mut sources = embedded_sources();
-        sources.push(src(
-            Layer::HarnessFile,
-            "one-off.toml",
-            "label = \"armed\"\n\n[guard]\nengine = \"claude-hooks\"\narmed_message = \"x\"\n",
-        ));
+        sources.push(src(Layer::HarnessFile, "one-off.toml", USER_GUARD_TOML));
         let err = build_registry(sources).unwrap_err().to_string();
         assert!(err.contains("may not declare [guard]"), "{err}");
     }
@@ -634,6 +666,26 @@ mod tests {
             .unwrap();
         assert_eq!(entry.adapter.cli_model_flag(), Some("--from-file".into()));
         assert_eq!(entry.sources.len(), 3);
+    }
+
+    #[test]
+    fn embedded_layer_provenance_distinguishes_built_ins_from_user_only_harnesses() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::ProjectLocal,
+            ".eval-magic/harnesses/cool.toml",
+            "label = \"cool\"\n",
+        ));
+        let built = build_registry(sources).unwrap();
+        let entry = |label: &str| built.entries.iter().find(|e| e.label == label).unwrap();
+        assert!(
+            entry("claude-code").has_embedded_layer(),
+            "built-ins carry their embedded source"
+        );
+        assert!(
+            !entry("cool").has_embedded_layer(),
+            "a user-only harness has no embedded layer"
+        );
     }
 
     #[test]

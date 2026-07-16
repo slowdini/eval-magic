@@ -240,16 +240,88 @@ mod tests {
         }
     }
 
+    /// Byte-pin of a fresh Claude hook file: armed envs and their backups are an
+    /// on-disk compatibility surface, so the merged settings must keep this exact
+    /// 2-space-pretty shape, key order, and trailing newline.
+    #[test]
+    fn claude_install_writes_this_exact_hook_file() {
+        let c = setup();
+        let adapter = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
+        let marker = adapter
+            .install_guard(&c.stage_root, Path::new("/g/eval-magic"), None)
+            .unwrap();
+
+        let settings =
+            fs::read_to_string(c.stage_root.join(".claude").join("settings.local.json")).unwrap();
+        let expected = format!(
+            r#"{{
+  "hooks": {{
+    "PreToolUse": [
+      {{
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [
+          {{
+            "type": "command",
+            "command": "\"/g/eval-magic\" guard \"{marker}\""
+          }}
+        ]
+      }}
+    ]
+  }}
+}}
+"#,
+            marker = marker.display()
+        );
+        assert_eq!(settings, expected);
+    }
+
+    /// Byte-pin of a fresh Codex hook file — same compatibility contract as the
+    /// Claude pin, plus the Codex-only `timeout`/`statusMessage` keys.
+    #[test]
+    fn codex_install_writes_this_exact_hook_file() {
+        let c = setup();
+        let adapter = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
+        let marker = adapter
+            .install_guard(&c.stage_root, Path::new("/g/eval-magic"), None)
+            .unwrap();
+
+        let hooks = fs::read_to_string(c.stage_root.join(".codex").join("hooks.json")).unwrap();
+        let expected = format!(
+            r#"{{
+  "hooks": {{
+    "PreToolUse": [
+      {{
+        "matcher": "^Bash$|^apply_patch$|^Edit$|^Write$",
+        "hooks": [
+          {{
+            "type": "command",
+            "command": "\"/g/eval-magic\" guard-codex \"{marker}\"",
+            "timeout": 30,
+            "statusMessage": "Checking eval write boundary"
+          }}
+        ]
+      }}
+    ]
+  }}
+}}
+"#,
+            marker = marker.display()
+        );
+        assert_eq!(hooks, expected);
+    }
+
     #[test]
     fn guard_is_armed_detects_claude_or_codex_marker() {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
-        crate::adapters::claude_code::guard::install_guard(&c.stage_root, exe, None).unwrap();
+        let claude = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
+        claude.install_guard(&c.stage_root, exe, None).unwrap();
         assert!(guard_is_armed(&c.stage_root));
         teardown_guard(&c.stage_root);
         assert!(!guard_is_armed(&c.stage_root));
 
-        crate::adapters::codex::guard::install_guard(&c.stage_root, exe, None).unwrap();
+        let codex = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
+        codex.install_guard(&c.stage_root, exe, None).unwrap();
         assert!(guard_is_armed(&c.stage_root));
     }
 }

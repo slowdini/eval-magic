@@ -1,11 +1,11 @@
 //! Codex harness support.
 //!
-//! The declarative half of this harness lives in `harnesses/codex.toml`; this
-//! module tree keeps only the code-backed capabilities the descriptor
-//! references: `item.completed` event-stream parsing ([`transcript`]) and the
-//! write-guard hook ([`guard`]).
+//! The declarative half of this harness lives in `harnesses/codex.toml`
+//! (including the write-guard data rendered by the generic engine in
+//! [`crate::adapters::guard`]); this module tree keeps only the code-backed
+//! capability the descriptor references: `item.completed` event-stream
+//! parsing ([`transcript`]).
 
-pub(crate) mod guard;
 pub mod transcript;
 
 #[cfg(test)]

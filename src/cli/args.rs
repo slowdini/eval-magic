@@ -343,6 +343,9 @@ pub struct RunArgs {
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.
+    /// The guard is restricted to built-in harnesses: with a harness defined only
+    /// by user-supplied descriptors this flag is rejected in preflight (rerun
+    /// without it; `detect-stray-writes` audits after the fact).
     #[arg(long)]
     pub guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the
@@ -523,6 +526,20 @@ pub(crate) enum Commands {
     GuardCodex {
         /// Path to the guard marker file. Defaults to
         /// `<cwd>/.agents/skills/.slow-powers-eval-guard.json`.
+        marker: Option<String>,
+    },
+    /// Internal generic PreToolUse hook entry point. Invoked by the installed
+    /// write-guard hook as `eval-magic guard-hook --harness <name> <marker>`,
+    /// not by users; hidden from help. `guard` / `guard-codex` are frozen
+    /// aliases of this for the claude-code and codex harnesses.
+    #[command(hide = true, name = "guard-hook")]
+    GuardHook {
+        /// Harness whose embedded descriptor supplies the verdict shape; an
+        /// unknown name fails open (allows the call).
+        #[arg(long)]
+        harness: String,
+        /// Path to the guard marker file. Defaults to the harness's
+        /// `<skills_dir>/.slow-powers-eval-guard.json` under the cwd.
         marker: Option<String>,
     },
 }

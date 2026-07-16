@@ -4,6 +4,8 @@
 
 use regex::Regex;
 
+use crate::adapters::guard;
+
 use super::{DescriptorError, HarnessDescriptor, render_staged_slug, stage_name_error};
 
 /// The placeholders a slug template must carry to keep cleanup prefix-scans
@@ -114,9 +116,12 @@ pub(super) fn validate_descriptor(
         }
     }
 
-    // Every tool the guard engine hooks must be declared in the vocabulary,
-    // or the write-guard arbiter would silently wave it through.
+    // The guard block is rendered by the generic engine at arm/verdict time,
+    // and the guard fails open — so every data contract is proven here, before
+    // any run arms the hook.
     if let Some(guard) = &d.guard {
+        // Every tool the guard hooks must be declared in the vocabulary, or
+        // the write-guard arbiter would silently wave it through.
         let vocabulary: Vec<&str> = d
             .tools
             .write
@@ -125,13 +130,80 @@ pub(super) fn validate_descriptor(
             .chain(&d.tools.shell)
             .map(String::as_str)
             .collect();
-        for token in guard.engine.hook_matcher().split('|') {
+        for token in guard.matcher.split('|') {
             let token = token.trim_matches(['^', '$']);
             if !vocabulary.contains(&token) {
                 return fail(format!(
-                    "the guard engine hooks tool \"{token}\" but [tools] does not declare it \
+                    "the guard matcher hooks tool \"{token}\" but [tools] does not declare it \
                      in write/patch/shell — the write-guard arbiter would not recognize it"
                 ));
+            }
+        }
+
+        if guard.hooks_file.starts_with('/')
+            || guard
+                .hooks_file
+                .split('/')
+                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+        {
+            return fail(format!(
+                "guard.hooks_file must be a relative `/`-separated path without \".\" or \
+                 \"..\" segments (got \"{}\") — it resolves under the staged env root",
+                guard.hooks_file
+            ));
+        }
+
+        for placeholder in ["{exe}", "{marker}"] {
+            if !guard.command_template.contains(placeholder) {
+                return fail(format!(
+                    "guard.command_template must reference {placeholder} — the armed hook \
+                     invokes this binary with the marker path"
+                ));
+            }
+        }
+
+        match serde_json::from_str::<serde_json::Value>(&guard.hook_entry) {
+            Err(e) => {
+                return fail(format!(
+                    "guard.hook_entry does not parse as JSON ({e}); it is the hook object \
+                     appended to the harness's hook config"
+                ));
+            }
+            Ok(entry) => {
+                if !entry.is_object() {
+                    return fail(
+                        "guard.hook_entry must be a JSON object — it is appended to the hook \
+                         config's hooks.PreToolUse array"
+                            .into(),
+                    );
+                }
+                for placeholder in ["{matcher}", "{command}"] {
+                    if !guard::any_string_value_contains(&entry, placeholder) {
+                        return fail(format!(
+                            "guard.hook_entry must reference the {placeholder} placeholder in \
+                             a string value — placeholders substitute into string values only, \
+                             so anywhere else would render an inert hook"
+                        ));
+                    }
+                }
+            }
+        }
+
+        match serde_json::from_str::<serde_json::Value>(&guard.verdict_template) {
+            Err(e) => {
+                return fail(format!(
+                    "guard.verdict_template does not parse as JSON ({e}); it is printed \
+                     verbatim as the deny verdict"
+                ));
+            }
+            Ok(verdict) => {
+                if !guard::any_string_value_contains(&verdict, "{reason}") {
+                    return fail(
+                        "guard.verdict_template must reference the {reason} placeholder in a \
+                         string value — a deny verdict that hides the reason is undebuggable"
+                            .into(),
+                    );
+                }
             }
         }
     }
@@ -303,8 +375,8 @@ skills_dir = ".demo/skills"
 config_dirs = [".demo"]
 "#;
 
-    /// A guard-wired descriptor whose tool vocabulary covers the claude-hooks
-    /// matcher; the base for guard/matcher mutation tests.
+    /// A guard-wired descriptor whose tool vocabulary covers its matcher; the
+    /// base for guard/matcher mutation tests.
     const GUARDED: &str = r#"
 label = "demo"
 skills_dir = ".demo/skills"
@@ -318,7 +390,11 @@ write = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
 shell = ["Bash"]
 
 [guard]
-engine = "claude-hooks"
+hooks_file = ".demo/hooks.json"
+matcher = "Write|Edit|MultiEdit|NotebookEdit|Bash"
+command_template = '"{exe}" guard-hook --harness demo "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
 armed_message = "guard armed"
 "#;
 
@@ -372,11 +448,98 @@ armed_message = "guard armed"
 
     #[test]
     fn rejects_guard_matcher_tool_missing_from_vocabulary() {
-        // claude-hooks matches Write|Edit|MultiEdit|NotebookEdit|Bash; drop
-        // Bash from the shell vocabulary and the arbiter would wave it through.
+        // The matcher hooks Write|Edit|MultiEdit|NotebookEdit|Bash; drop Bash
+        // from the shell vocabulary and the arbiter would wave it through.
         let err = err_of(&GUARDED.replace("shell = [\"Bash\"]", "shell = [\"Shell\"]"));
         assert!(err.contains("Bash"), "{err}");
         assert!(err.contains("[tools]"), "{err}");
+    }
+
+    #[test]
+    fn rejects_hook_entry_that_is_not_json() {
+        let err = err_of(&GUARDED.replace(
+            r#"hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'"#,
+            "hook_entry = 'not json'",
+        ));
+        assert!(err.contains("guard.hook_entry"), "{err}");
+        assert!(err.contains("JSON"), "{err}");
+    }
+
+    #[test]
+    fn rejects_hook_entry_missing_a_placeholder() {
+        // {command} in a JSON *key* must not count: only string values are
+        // substituted, so a key-side placeholder would render an inert hook.
+        for (mutated, needle) in [
+            (
+                r#"hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","{command}":"x"}]}'"#,
+                "{command}",
+            ),
+            (
+                r#"hook_entry = '{"matcher":"Write","hooks":[{"type":"command","command":"{command}"}]}'"#,
+                "{matcher}",
+            ),
+        ] {
+            let err = err_of(&GUARDED.replace(
+                r#"hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'"#,
+                mutated,
+            ));
+            assert!(err.contains("guard.hook_entry"), "{err}");
+            assert!(err.contains(needle), "expected {needle} in: {err}");
+        }
+    }
+
+    #[test]
+    fn rejects_verdict_template_that_is_not_json() {
+        let err = err_of(&GUARDED.replace(
+            r#"verdict_template = '{"decision":"block","reason":"{reason}"}'"#,
+            "verdict_template = 'block it'",
+        ));
+        assert!(err.contains("guard.verdict_template"), "{err}");
+        assert!(err.contains("JSON"), "{err}");
+    }
+
+    #[test]
+    fn rejects_verdict_template_without_reason_placeholder() {
+        let err = err_of(&GUARDED.replace(
+            r#"verdict_template = '{"decision":"block","reason":"{reason}"}'"#,
+            r#"verdict_template = '{"decision":"block"}'"#,
+        ));
+        assert!(err.contains("guard.verdict_template"), "{err}");
+        assert!(err.contains("{reason}"), "{err}");
+    }
+
+    #[test]
+    fn rejects_command_template_missing_exe_or_marker() {
+        for (mutated, needle) in [
+            (
+                r#"command_template = 'eval-magic guard-hook "{marker}"'"#,
+                "{exe}",
+            ),
+            (
+                r#"command_template = '"{exe}" guard-hook --harness demo'"#,
+                "{marker}",
+            ),
+        ] {
+            let err = err_of(&GUARDED.replace(
+                r#"command_template = '"{exe}" guard-hook --harness demo "{marker}"'"#,
+                mutated,
+            ));
+            assert!(err.contains("guard.command_template"), "{err}");
+            assert!(err.contains(needle), "expected {needle} in: {err}");
+        }
+    }
+
+    #[test]
+    fn rejects_hooks_file_that_escapes_the_env() {
+        for mutated in [
+            "hooks_file = \"/etc/hooks.json\"",
+            "hooks_file = \"../hooks.json\"",
+            "hooks_file = \"./hooks.json\"",
+        ] {
+            let err = err_of(&GUARDED.replace("hooks_file = \".demo/hooks.json\"", mutated));
+            assert!(err.contains("guard.hooks_file"), "{err}");
+            assert!(err.contains("relative"), "{err}");
+        }
     }
 
     #[test]

@@ -7,7 +7,8 @@
 //! generic [`descriptor_adapter`]); the code-backed features a descriptor
 //! references by name live in [`capabilities`], backed by the per-harness
 //! module trees ([`claude_code`], [`codex`], [`opencode`]): transcript
-//! parsers, write-guard hooks, plugin-shadow detection, slug sanitization.
+//! parsers, plugin-shadow detection, slug sanitization. The write guard is
+//! pure descriptor data rendered by the generic engine in [`guard`].
 //! The [`registry`] loads the descriptors into label-keyed entries and owns
 //! harness-identifier resolution; generic code resolves an adapter with
 //! [`adapter_for`] and calls the trait.
@@ -18,6 +19,7 @@ mod cli_command;
 pub mod codex;
 pub mod descriptor;
 pub mod descriptor_adapter;
+pub(crate) mod guard;
 pub mod harness;
 pub mod opencode;
 pub mod registry;

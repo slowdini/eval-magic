@@ -122,9 +122,9 @@ and fallbacks per enhancement are in
 
 ### Named capabilities: real code for free
 
-Everything that is genuinely code — transcript stitching, guard hooks, slug sanitization, shadow
-scanning — is a **named capability** a descriptor references. If your harness emits a compatible
-stream, you get the full feature from configuration alone:
+Everything that is genuinely code — transcript stitching, slug sanitization, shadow scanning —
+is a **named capability** a descriptor references. If your harness emits a compatible stream,
+you get the full feature from configuration alone:
 
 - `transcript.parser = "claude-stream-json"` — Claude Code `-p --output-format stream-json` events.
 - `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL.
@@ -149,11 +149,12 @@ An unknown capability name fails the schema gate listing the allowed values.
 ### The guard restriction
 
 User-supplied descriptors may **not** declare `[guard]` or set `run.supports_guard = true`: the
-write guard installs native hook config into dispatch environments and stays restricted to
-built-in descriptors until the guard engine is opened up (fail-open safety). Unguarded runs fall
-back to the `detect-stray-writes` audit. A project-local overlay of a guarded built-in is fine —
-the restriction applies to the user file's own content, and the embedded guard merges through
-underneath it.
+write guard **fails open** — a mistyped guard block would silently disarm it — so guard data
+stays restricted to the embedded built-in descriptors. Unguarded runs fall back to the
+`detect-stray-writes` audit, and `run --guard` with a harness defined only by user descriptors is
+rejected in preflight (the run stops rather than continuing silently unguarded). A project-local
+overlay of a guarded built-in is fine — the restriction applies to the user file's own content,
+and the embedded guard merges through underneath it.
 
 ## The workflow
 

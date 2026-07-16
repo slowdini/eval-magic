@@ -12,7 +12,7 @@ mod run;
 mod validate;
 mod workspace;
 
-pub(crate) use guard::{run_guard, run_guard_codex, run_teardown_guard};
+pub(crate) use guard::{run_guard, run_guard_codex, run_guard_hook, run_teardown_guard};
 pub(crate) use harness::run_harness;
 pub(crate) use init::run_init;
 pub(crate) use pipeline::{

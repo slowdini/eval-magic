@@ -1,11 +1,13 @@
 //! Execution sandbox: shared write-guard machinery and write-boundary policy.
 //!
 //! The hook entry points are hidden subcommands on this binary (see `cli`), so
-//! the installed PreToolUse hook invokes `eval-magic guard <marker>` or
-//! `eval-magic guard-codex <marker>` — no separate hook script to ship or
-//! locate. Each harness's installer and verdict shape live in its adapter
-//! module (`crate::adapters::<harness>::guard`); this module holds the shared
-//! marker/manifest/teardown machinery and the boundary policy.
+//! the installed PreToolUse hook invokes `eval-magic guard <marker>`,
+//! `eval-magic guard-codex <marker>`, or the generic
+//! `eval-magic guard-hook --harness <name> <marker>` — no separate hook script
+//! to ship or locate. Each harness's hook path, matcher, and verdict shape are
+//! descriptor data rendered by the generic engine (`crate::adapters::guard`);
+//! this module holds the shared marker/manifest/teardown machinery and the
+//! boundary policy.
 
 pub mod decide;
 pub mod guard;

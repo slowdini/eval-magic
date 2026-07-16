@@ -16,7 +16,10 @@ descriptor references:
 | `stream_json.rs` | `-p --output-format stream-json` transcript parsing (`claude-stream-json`) |
 | `transcript.rs` | JSONL record shapes + shared tool-call extractors |
 | `plugin_shadow.rs` | plugin-shadow detection + isolation banner (`claude-plugins`) |
-| `guard.rs` | write-guard hook install + `hookSpecificOutput` deny verdict (`claude-hooks`) |
+
+The write guard has no per-harness code: the descriptor's `[guard]` block (hook file, matcher,
+hook-entry and `hookSpecificOutput` verdict templates) is rendered by the generic engine in
+`src/adapters/guard.rs`; the hidden `guard` subcommand is its frozen hook entry-point alias.
 
 ## Dispatch quirks (all forced by the `claude` CLI)
 

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/harness-descriptor.schema.json",
   "title": "Harness Descriptor",
-  "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript parsers, guard engines, slug generation, shadow preflight). Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage) are enforced by the Rust loader on top of this schema.",
+  "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript parsers, slug generation, shadow preflight). The write guard is pure data (the [guard] block) rendered by one generic engine. Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage, guard template contracts) are enforced by the Rust loader on top of this schema.",
   "type": "object",
   "required": ["label"],
   "additionalProperties": false,
@@ -106,11 +106,42 @@
     },
     "guard": {
       "type": "object",
-      "required": ["engine", "armed_message"],
+      "required": [
+        "hooks_file",
+        "matcher",
+        "command_template",
+        "hook_entry",
+        "verdict_template",
+        "armed_message"
+      ],
       "additionalProperties": false,
-      "description": "Write guard: the named hook engine and the post-arm banner.",
+      "description": "Write guard: the data the generic guard engine renders into a PreToolUse hook and a deny verdict. Restricted to embedded built-in descriptors (the guard fails open, so a mistyped user descriptor would silently disarm it).",
       "properties": {
-        "engine": { "enum": ["claude-hooks", "codex-hooks"] },
+        "hooks_file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hook-config file the entry is merged into, `/`-separated relative to the staged env root (e.g. \".claude/settings.local.json\")."
+        },
+        "matcher": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool-name matcher the hook registers for; every hooked tool must be declared in [tools] write/patch/shell."
+        },
+        "command_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shell command the armed hook runs, with {exe} and {marker} placeholders (e.g. '\"{exe}\" guard \"{marker}\"')."
+        },
+        "hook_entry": {
+          "type": "string",
+          "minLength": 1,
+          "description": "JSON template of the hook entry appended to the hook config's hooks.PreToolUse array, with {matcher} and {command} placeholders in its string values; authored key order is written verbatim."
+        },
+        "verdict_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "JSON template of the deny verdict printed on stdout, with a {reason} placeholder; authored key order is the harness's on-disk contract."
+        },
         "armed_message": { "type": "string", "minLength": 1 }
       }
     },

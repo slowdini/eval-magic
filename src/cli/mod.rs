@@ -32,7 +32,7 @@ pub fn run() -> anyhow::Result<()> {
     // lazy registry fallback serves them embedded-only).
     let is_guard_hook = matches!(
         cli.command,
-        Some(Commands::Guard { .. } | Commands::GuardCodex { .. })
+        Some(Commands::Guard { .. } | Commands::GuardCodex { .. } | Commands::GuardHook { .. })
     );
     if !is_guard_hook {
         crate::adapters::registry::init_registry(cli.harness_file.as_deref().map(Path::new))?;
@@ -76,6 +76,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::TeardownGuard(_) => run_teardown_guard(),
         Commands::Guard { marker } => run_guard(marker),
         Commands::GuardCodex { marker } => run_guard_codex(marker),
+        Commands::GuardHook { harness, marker } => run_guard_hook(&harness, marker),
         Commands::RecordRuns(args) => run_record_runs(args),
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
