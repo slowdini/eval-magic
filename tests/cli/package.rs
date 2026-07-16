@@ -78,6 +78,8 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "harnesses/claude-code.toml",
         "harnesses/codex.toml",
         "harnesses/opencode.toml",
+        "harnesses/template.toml",
+        "harnesses/template-notes.md",
         "src/main.rs",
     ] {
         assert!(

@@ -256,7 +256,7 @@ For the `without_skill` / baseline condition, the dispatch reflects "this skill 
 
 Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record means the same thing regardless of which harness produced it. Harness support is **a minimal baseline plus progressive enhancements**: any harness with a headless one-shot CLI can run evals at baseline (`--no-stage` inlines the skill into each dispatch prompt, `llm_judge` grades, `detect-stray-writes` audits), and each enhancement a harness's adapter wires raises fidelity from there. What each enhancement is, why it needs harness-specific support, and what its fallback is are documented in [docs/progressive-enhancements.md](docs/progressive-enhancements.md).
 
-**Bring your own harness:** a harness eval-magic has never seen is added with a TOML descriptor file — no code. Descriptors layer (embedded built-ins → `~/.config/eval-magic/harnesses/` → `.eval-magic/harnesses/` → `--harness-file`) with field-level merge, so a project can also retune a single field of a built-in. `eval-magic harness list|show|lint` inspect and validate the registry; the authoring guide is [docs/byoh.md](docs/byoh.md).
+**Bring your own harness:** a harness eval-magic has never seen is added with a TOML descriptor file — no code. `eval-magic harness init <name>` scaffolds the descriptor with every field explained inline (plus a notes skeleton for recording verified values), and descriptors layer (embedded built-ins → `~/.config/eval-magic/harnesses/` → `.eval-magic/harnesses/` → `--harness-file`) with field-level merge, so a project can also retune a single field of a built-in. `eval-magic harness list|show|lint` inspect and validate the registry; the authoring guide is [docs/byoh.md](docs/byoh.md). A descriptor that proves out can be upstreamed as a data-only PR and lands as a new row in the support table below — baseline first, enhancement columns flipping as each is wired.
 
 ### How dispatch works
 
@@ -283,7 +283,7 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 | Where | What's in it |
 |-------|--------------|
 | `eval-magic --help` / `eval-magic <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
-| [docs/byoh.md](docs/byoh.md) | Bring your own harness: authoring a descriptor file for an unknown harness, layering/merge rules, named capabilities, and the `harness list`/`show`/`lint` workflow |
+| [docs/byoh.md](docs/byoh.md) | Bring your own harness: the `harness init` scaffold, authoring a descriptor file for an unknown harness, layering/merge rules, named capabilities, the `harness list`/`show`/`lint` workflow, and upstreaming a descriptor as a data-only PR |
 | [docs/progressive-enhancements.md](docs/progressive-enhancements.md) | Development doc: the harness baseline-vs-enhancement contract — what each enhancement unlocks, why it needs harness-specific code, and its fallback |
 | [docs/claude-notes.md](docs/claude-notes.md) / [docs/codex-notes.md](docs/codex-notes.md) / [docs/opencode-notes.md](docs/opencode-notes.md) | Development docs: per-harness implementation notes for working on eval-magic's harness support |
 | [GitHub issues](https://github.com/slowdini/eval-magic/issues) | Planned features and known limitations |
@@ -291,7 +291,7 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 ## Bundled assets
 
 - `schema/` — JSON Schemas for every artifact (`evals`, run records, `grading`, `stray-writes`, `benchmark`, `judge-tasks`, harness descriptors); the portable cross-harness contract, embedded in the binary
-- `harnesses/` — the built-in harness descriptor files (one TOML per harness: declarative values plus named-capability references), schema-validated and embedded in the binary
+- `harnesses/` — the built-in harness descriptor files (one TOML per harness: declarative values plus named-capability references), schema-validated and embedded in the binary, plus the commented `harness init` templates
 - `profiles/` — the shared plan-mode procedure profile (`--plan-mode`) and runbook templates, embedded in the binary
 
 ## Development

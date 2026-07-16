@@ -121,6 +121,41 @@ pub struct HarnessArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum HarnessCommands {
+    /// Scaffold a commented descriptor template and notes skeleton for a new
+    /// harness.
+    ///
+    /// Writes two files into the project-local descriptor layer:
+    /// `.eval-magic/harnesses/<name>.toml`, pre-filled with `label = "<name>"`
+    /// and every optional table present as a commented-out, inline-explained
+    /// example; and `.eval-magic/harnesses/<name>-notes.md`, the
+    /// verification-record skeleton where each filled-in value's source is
+    /// recorded. The scaffold is lint-clean exactly as written — `harness
+    /// lint` passes before a single field is filled in, and the file registers
+    /// `<name>` as a baseline harness immediately. Values must be verified
+    /// against the harness's own documentation or observed output, never
+    /// guessed. Scaffolding an already-registered name (e.g. the built-in
+    /// `claude-code`) is allowed with a note: descriptor layers merge
+    /// field-by-field, so the file overlays the registered harness instead of
+    /// defining a new one. The `[guard]` table is never scaffolded —
+    /// user-supplied descriptors may not declare it. The authoring guide is
+    /// docs/byoh.md; its "Upstreaming your descriptor" section covers
+    /// contributing the finished descriptor.
+    Init {
+        /// Label for the new harness (kebab-case, e.g. `cool-cli`); becomes
+        /// the descriptor's `label` and both file names.
+        name: String,
+        /// Print the rendered descriptor template to stdout instead of
+        /// writing files.
+        ///
+        /// Prints only the template (no notes skeleton, no next steps), so
+        /// the output is redirectable — e.g. into a user-global layer
+        /// (`~/.config/eval-magic/harnesses/`) or a one-off `--harness-file`.
+        #[arg(long)]
+        stdout: bool,
+        /// Overwrite existing scaffold files.
+        #[arg(long)]
+        force: bool,
+    },
     /// List every registered harness: name, source layer(s), enhancements.
     ///
     /// One line per harness with the layers that contributed to it (built-in,

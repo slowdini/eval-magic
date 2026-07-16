@@ -219,13 +219,18 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
 
 ## Adding a new harness
 
-1. **Start as a user descriptor** — author `.eval-magic/harnesses/<label>.toml` per
-   [byoh.md](byoh.md) and iterate with `harness lint`/`show` and real runs. No Rust, no rebuild;
+1. **Start as a user descriptor** — scaffold it with `eval-magic harness init <label>` (a
+   commented template plus a notes skeleton, lint-clean as written), fill in verified values per
+   [byoh.md](byoh.md), and iterate with `harness lint`/`show` and real runs. No Rust, no rebuild;
    this is also where the descriptor's field set gets proven.
 2. **Promote to a built-in** once it earns bundling: move the file to `harnesses/<label>.toml` and
    add it to `EMBEDDED_DESCRIPTORS` (`src/adapters/descriptor.rs`). The registry keys on the
-   descriptor's `label`.
-3. Create `docs/<harness>-notes.md` with the implementation notes discovered along the way.
+   descriptor's `label`. This is the data-only descriptor-contribution PR described in byoh.md's
+   "Upstreaming your descriptor" — open it with
+   `.github/PULL_REQUEST_TEMPLATE/harness-descriptor.md`.
+3. Create `docs/<harness>-notes.md` with the implementation notes discovered along the way —
+   promoted from the scaffolded `.eval-magic/harnesses/<label>-notes.md`. The PR template
+   requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
 4. Add the harness to the README support table (all enhancements ❌ at baseline).
 5. Wire enhancements in leverage order — dispatch recipes and transcript parser first (they carry
    the most fidelity), then staging, model flag, guard (guard requires built-in status — user
@@ -244,4 +249,5 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
 - **One enhancement per PR.** Wiring a harness happens one capability at a time.
 - **Don't guess harness details.** CLI flags, hook shapes, and event vocabularies come from the
   harness's own documentation or observed output — record what you verified in the harness's notes
-  file.
+  file. The `harness init` scaffold embeds these prompts inline at every field, and the
+  harness-descriptor PR template requires the per-field source attestation.
