@@ -27,13 +27,13 @@ A harness qualifies at baseline with no harness-specific code beyond naming itse
 1. **A headless exec command** — some way to invoke the harness with a prompt from a chosen cwd and
    let it run to completion.
 2. **A recoverable final message** — the agent writes `outputs/final-message.md` (the dispatch
-   prompt asks for this), or the transcript parser recovers it where one exists.
+   prompt asks for this), or transcript ingest recovers it where it is wired.
 3. **`--no-stage` when native staging isn't wired** — each `SKILL.md` is inlined into its dispatch
    prompt instead of staged for native discovery.
 
 That baseline already yields a working eval: `llm_judge` assertions grade every behavior, and the
 `detect-stray-writes` post-pass (folded into `ingest`) audits out-of-bounds writes from whatever
-run records exist. Run records without a transcript parser are assembled by hand per
+run records exist. Run records without transcript ingest are assembled by hand per
 `schema/run-record.schema.json`.
 
 In descriptor terms the baseline is one required field: `label`. Everything else in a harness
@@ -82,12 +82,17 @@ with defaults. Wire them together; load-time descriptor validation (`validate_de
 `src/adapters/descriptor.rs`) rejects the combinations that must move in lockstep, with an
 actionable message per violation.
 
-### Transcript parser
+### Transcript ingest
 
 *Why harness-specific:* every harness persists a different event stream (Claude Code's `-p`
-stream-json, Codex's `item.completed` JSONL) — parsing is real per-harness code, not a mapping.
+stream-json, Codex's `item.completed` JSONL) — but not all of them need per-harness code. Ingest
+is two-tier: a **flat** stream (each tool event self-contained) is a declarative mapping the
+generic extract engine (`src/adapters/extract.rs`) executes from descriptor data alone, while a
+stream needing cross-event state — keyed `tool_use`/`tool_result` joins, shape-dependent content
+coercion — is real per-harness code behind a named capability. If a stream needs more than the
+extract primitives, it's a code capability, not a bigger DSL.
 
-*What it unlocks:* `transcript_check` assertions, token/cost/duration capture, automatic
+*What it unlocks:* `transcript_check` assertions, token/duration capture, automatic
 `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
 event — a deterministic `__skill_invoked` meta-check.
 
@@ -96,11 +101,18 @@ suites toward `llm_judge` for such a harness), tokens/duration go unrecorded, re
 hand-assembled, and the meta-check uses the LLM-judge fallback.
 
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
-ingest pipeline never calls a parser), `parser`, `surfaces_skill_invocation`.
-*Capability:* `transcript.parser` names the code that stitches the stream (`claude-stream-json`,
-`codex-items`) — a new harness emitting a compatible event stream reuses one with zero code.
-The tool names the parser emits must be declared in `[tools]` (see the write-guard enhancement) or
-`detect-stray-writes` audits nothing for the harness — validation rejects the combination.
+ingest pipeline never calls a parser), exactly one of `parser`/`extract` (validation rejects both
+or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
+five fixed primitives (equality `where` filter, final-text pick, flat tool-item mapping, token
+sum, duration rule), documented with a worked example in [byoh.md](byoh.md) — the built-in `codex`
+descriptor ingests through it.
+*Capability:* `transcript.parser` names the code that stitches a non-flat stream
+(`claude-stream-json`; `codex-items` is the reference implementation the extract engine's
+differential test compares against) — a new harness emitting a compatible event stream reuses one
+with zero code.
+The tool names the transcript yields must be declared in `[tools]` (see the write-guard
+enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
+combination.
 
 ### Native skill staging + skills block
 
@@ -157,7 +169,7 @@ authored JSON key order is serialized verbatim — the verdict bytes are the har
 contract. Validation proves every hooked `matcher` tool is declared in `[tools]`, that the
 templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit in
 string values. The guard arbiter and `detect-stray-writes` classify tool names against the
-cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript parser
+cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript ingest
 without declaring the harness's tool names is rejected at descriptor load. The hidden `guard` /
 `guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a
 future guard-capable built-in uses the generic `guard-hook --harness <label>` entry point — a
@@ -232,7 +244,7 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
    promoted from the scaffolded `.eval-magic/harnesses/<label>-notes.md`. The PR template
    requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
 4. Add the harness to the README support table (all enhancements ❌ at baseline).
-5. Wire enhancements in leverage order — dispatch recipes and transcript parser first (they carry
+5. Wire enhancements in leverage order — dispatch recipes and transcript ingest first (they carry
    the most fidelity), then staging, model flag, guard (guard requires built-in status — user
    descriptors may not declare one) — updating the table as each lands. Most enhancements are
    descriptor fields; add a named capability in `src/adapters/capabilities.rs` (plus its

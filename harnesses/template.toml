@@ -86,17 +86,26 @@ label = "{label}"
 # read = ["file_read"]
 
 ## -------------------------------------------------------------------------------------------
-## [transcript] — declaring an events file + parser unlocks transcript_check grading,
-## token/cost/duration capture, and the deterministic skill-invocation meta-check.
+## [transcript] — declaring an events file plus exactly one reader (parser OR extract) unlocks
+## transcript_check grading, token/duration capture, and the deterministic skill-invocation
+## meta-check.
 ## parser is a NAMED CAPABILITY — real parsing code reused from configuration alone:
 ##   parser = "claude-stream-json"   Claude Code `-p --output-format stream-json` events
 ##   parser = "codex-items"          Codex `item.started`/`item.completed` JSONL
-## If this harness emits neither shape, a new parser is a code contribution (one capability per
-## PR — see docs/byoh.md "Upstreaming your descriptor"); leave this table commented and
-## llm_judge carries the grading meanwhile.
-## VERIFY: capture a real events file and check its line shapes against the parser you name —
+## extract is the DECLARATIVE tier for flat event streams (each tool event self-contained):
+##   [transcript.extract.tools]       where / item / name_field / skip_names / args_omit /
+##                                    result_coalesce — each matching item becomes an invocation
+##   [transcript.extract.final_text]  where + field — dotted-path pick, last match wins
+##   [transcript.extract.tokens]      where + sum — add up the listed integer fields
+##   [transcript.extract.duration]    field (millisecond pick) OR timestamp_spread (last minus
+##                                    first RFC 3339 timestamp)
+## See docs/byoh.md "The declarative extractor" for the worked Codex-shaped example. A stream
+## that needs more than these primitives (keyed cross-event joins, content coercion) is a
+## named-parser code contribution (one capability per PR — see docs/byoh.md "Upstreaming your
+## descriptor"); leave this table commented and llm_judge carries the grading meanwhile.
+## VERIFY: capture a real events file and check its line shapes against the reader you declare —
 ## an unknown parser name fails the schema gate listing the allowed values. Leave
-## surfaces_skill_invocation false unless you verified the stream emits a deterministic
+## surfaces_skill_invocation false unless you verified the stream yields a deterministic
 ## skill-invocation event (false routes the __skill_invoked meta-check to the LLM judge).
 # [transcript]
 # events_filename = "{label}-events.jsonl"

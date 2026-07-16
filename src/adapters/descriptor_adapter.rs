@@ -190,7 +190,7 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
         match &self.descriptor.transcript {
-            Some(transcript) => transcript.parser.parse(path),
+            Some(transcript) => transcript.parse(path),
             None => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!(
@@ -203,7 +203,7 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
         match &self.descriptor.transcript {
-            Some(transcript) => transcript.parser.parse_full(path),
+            Some(transcript) => transcript.parse_full(path),
             None => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 format!(

@@ -84,15 +84,107 @@
     },
     "transcript": {
       "type": "object",
-      "required": ["events_filename", "parser"],
+      "required": ["events_filename"],
       "additionalProperties": false,
-      "description": "Transcript ingest: the events file the CLI dispatch captures and the named parser that reads it.",
+      "description": "Transcript ingest: the events file the CLI dispatch captures, read by exactly one of `parser` (a named code capability, for streams that need stitching) or `extract` (the declarative tier for flat event streams). The exactly-one rule is a Rust loader invariant.",
       "properties": {
         "events_filename": { "type": "string", "minLength": 1 },
         "parser": { "enum": ["claude-stream-json", "codex-items"] },
+        "extract": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Declarative extractor for flat event streams — five fixed primitives, no more: an equality filter (`where`), a final-text field pick (last match wins), a flat tool-item mapping, a token sum, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
+          "properties": {
+            "tools": {
+              "type": "object",
+              "required": ["name_field"],
+              "additionalProperties": false,
+              "description": "Flat tool-item mapping: each matching record's item object becomes one tool invocation, in stream order.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "item": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Dotted path to the tool object within the record; omit when the record itself is the item. Records where the path resolves to nothing or a non-object are skipped."
+                },
+                "name_field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Field of the item whose string value is the invocation name; records without it are skipped."
+                },
+                "skip_names": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Names that are not tools (message/reasoning items sharing the tool event shape)."
+                },
+                "args_omit": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Structural item keys excluded from args; whatever remains (key order preserved) is the args object, null when empty."
+                },
+                "result_coalesce": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Result = first present of these item fields (present-but-null counts), strings verbatim and everything else compact JSON."
+                }
+              }
+            },
+            "final_text": {
+              "type": "object",
+              "required": ["field"],
+              "additionalProperties": false,
+              "description": "Final assistant text: dotted-path string pick over matching records; the last match wins.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "field": { "type": "string", "minLength": 1 }
+              }
+            },
+            "tokens": {
+              "type": "object",
+              "required": ["sum"],
+              "additionalProperties": false,
+              "description": "Token total: over matching records, sum the listed integer fields (missing or non-integer fields count 0; a record where no listed path resolves never turns an absent total into zero).",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "sum": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "minLength": 1 },
+                  "description": "Dotted paths to the token counts to add up."
+                }
+              }
+            },
+            "duration": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Wall-clock duration from exactly one of: `field` (a millisecond value; last match wins) or `timestamp_spread` (last minus first RFC 3339 timestamp; needs at least two parseable matches). The exactly-one rule is a Rust loader invariant.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "field": { "type": "string", "minLength": 1 },
+                "timestamp_spread": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
         "surfaces_skill_invocation": {
           "type": "boolean",
-          "description": "Whether the transcript deterministically surfaces a skill invocation (false routes the meta-check to the LLM-judge fallback)."
+          "description": "Whether the transcript deterministically surfaces a skill invocation (false routes the meta-check to the LLM-judge fallback). For extract descriptors, leave false unless the mapping verifiably yields invocations named `Skill` carrying an `args.skill` field."
         }
       }
     },

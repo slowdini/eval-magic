@@ -19,7 +19,8 @@ Title: feat(harness): add <label> descriptor
 - [ ] This PR adds/changes descriptor **data only** — no parser, slug, shadow,
       or guard code (those are separate one-capability-per-PR contributions)
 - [ ] `[transcript]`/`[shadow]`/`[staging]` (if declared) reuse an existing named
-      capability: `claude-stream-json` / `codex-items` / `opencode` / `claude-plugins`
+      capability (`claude-stream-json` / `codex-items` / `opencode` / `claude-plugins`)
+      or ingest through a `[transcript.extract]` block (declarative data)
 - [ ] No `[guard]` table and no `run.supports_guard = true` in this PR
 
 ## The diff (expected shape)
