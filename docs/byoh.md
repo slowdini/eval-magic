@@ -11,8 +11,19 @@
 From inside a project that dispatches through `cool-custom-harness`:
 
 ```sh
-mkdir -p .eval-magic/harnesses
-cat > .eval-magic/harnesses/cool-custom-harness.toml <<'EOF'
+eval-magic harness init cool-custom-harness
+# → .eval-magic/harnesses/cool-custom-harness.toml (a commented template, lint-clean as
+#   written) + cool-custom-harness-notes.md (the verification-record skeleton).
+# Fill in verified values following the template's inline comments, then:
+eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml
+eval-magic harness list
+eval-magic run --harness cool-custom-harness
+```
+
+The scaffold registers the name as a baseline harness before a single field is filled in; the
+first field worth uncommenting is `[dispatch] exec_template`, e.g.:
+
+```toml
 label = "cool-custom-harness"
 
 [dispatch]
@@ -20,11 +31,6 @@ exec_template = '''
 cool-cli run --cd <eval-root>{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly." \
   > <outputs_dir>/final-message.md'''
-EOF
-
-eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml
-eval-magic harness list
-eval-magic run --harness cool-custom-harness
 ```
 
 That run is complete: `run` warns about each enhancement the descriptor doesn't declare (naming the
@@ -107,7 +113,8 @@ explicitly).
 The authoritative field-by-field reference is the bundled schema,
 [`schema/harness-descriptor.schema.json`](../schema/harness-descriptor.schema.json); the semantics
 and fallbacks per enhancement are in
-[progressive-enhancements.md](progressive-enhancements.md). The short map:
+[progressive-enhancements.md](progressive-enhancements.md), and `harness init` writes the same
+map as inline comments in its scaffolded template. The short map:
 
 | Table | Declares | Fallback when absent |
 |-------|----------|----------------------|
@@ -156,9 +163,20 @@ rejected in preflight (the run stops rather than continuing silently unguarded).
 overlay of a guarded built-in is fine — the restriction applies to the user file's own content,
 and the embedded guard merges through underneath it.
 
+## Verify, don't guess
+
+Every CLI flag, events filename, and event shape in a descriptor must come from the harness's own
+documentation or from output you observed — never by analogy with another harness. Record each
+value's source (docs URL, `--help` output, observed events file) plus the harness version in the
+scaffolded notes file, `.eval-magic/harnesses/<name>-notes.md`: it is the verification record
+behind the descriptor, and the same file an upstream PR promotes to `docs/<name>-notes.md`. The
+`harness init` template embeds a VERIFY prompt at every field where guessing is tempting.
+
 ## The workflow
 
 ```sh
+eval-magic harness init <name>   # scaffold the commented descriptor template + notes
+                                 # skeleton — lint-clean before a single field is filled in
 eval-magic harness lint <file>   # full per-file report: TOML + schema, user-layer
                                  # restrictions, cross-field invariants (merged onto the
                                  # registered harness with the same label, if any)
@@ -172,3 +190,33 @@ Then `run --harness <name>` and read the warnings: each one names the fallback c
 of the run, which doubles as your wiring roadmap — declare the enhancement and the warning
 disappears. (A `harness lint --probe` live dispatch check — rendering the exec template with a
 trivial prompt and verifying final-message recovery — is planned; see the tracking issue.)
+
+## Upstreaming your descriptor
+
+A descriptor that proves out locally can become a built-in — as a **data-only PR**, no Rust
+beyond a mechanical registration. What counts as data vs code:
+
+- **Data — one descriptor PR:** the descriptor file itself: `label` / `skills_dir` /
+  `config_dirs`, the `[dispatch]` templates, `[model]`, `[staging]` + `[skills_block]`,
+  `[tools]`, the `[run]` booleans, and `[transcript]` / `[shadow]` **when they reuse an existing
+  named capability** (`claude-stream-json`, `codex-items`, `opencode`, `claude-plugins`).
+- **Code — one capability per PR, separate from the descriptor PR:** a new transcript parser,
+  slug capability, or shadow preflight (each is `src/adapters/capabilities.rs` + a
+  `src/adapters/<harness>/` module + a schema enum entry), and guard support (`[guard]` data is
+  built-in-only — see the guard restriction above).
+
+The PR itself is four files — open it with the
+[harness-descriptor PR template](../.github/PULL_REQUEST_TEMPLATE/harness-descriptor.md), either
+via the compare-URL query `?template=harness-descriptor.md&expand=1` or with
+`gh pr create --body-file` on a filled copy:
+
+1. `harnesses/<label>.toml` — your `.eval-magic/harnesses/<label>.toml`, promoted.
+2. `src/adapters/descriptor.rs` — its `EMBEDDED_DESCRIPTORS` entry (mechanical registration).
+3. `docs/<label>-notes.md` — your scaffolded notes file, promoted: the verification record for
+   every field, per the don't-guess guardrail.
+4. `README.md` — a new support-table row, baseline first, only the wired enhancement columns
+   checked. Only upstreamed built-ins get a table row — project-local descriptors never do.
+
+Attach the evidence the template asks for: clean `harness lint` output, a smoke eval run
+end-to-end (`run` → dispatch → `ingest` → `finalize`), and the harness version you verified
+against.

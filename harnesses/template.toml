@@ -1,0 +1,175 @@
+## eval-magic harness descriptor — scaffolded by `eval-magic harness init {label}`.
+##
+## How to use this file:
+##   - Only `label` is live; everything else is a commented-out example (single `# ` prefix).
+##   - Uncomment a table's `# [table]` header together with the fields you fill in — a field
+##     uncommented without its header lands at the top level and fails the schema gate.
+##   - Prose lines (double `## ` prefix) are commentary; leave them commented.
+##   - Verify, don't guess: every flag, filename, and event shape you uncomment must come from
+##     this harness's own --help/docs or from output you observed — never by analogy with
+##     another harness. Record each value's source in .eval-magic/harnesses/{label}-notes.md
+##     (scaffolded next to this file; an upstream PR promotes it to docs/{label}-notes.md).
+##   - Re-lint after every edit:  eval-magic harness lint .eval-magic/harnesses/{label}.toml
+##
+## References: `eval-magic harness show claude-code` prints the richest wired descriptor;
+## schema/harness-descriptor.schema.json is the field-by-field reference; docs/byoh.md is the
+## authoring guide (layering, named capabilities, upstreaming).
+
+## `label` is the only required field: this file alone registers a baseline harness — runs fall
+## back to --no-stage (each SKILL.md inlined into its dispatch prompt), llm_judge carries the
+## grading, and detect-stray-writes audits after the fact.
+label = "{label}"
+
+## Where the harness discovers project-local skills. Declaring skills_dir unlocks native
+## staging; without it every run is forced to --no-stage. The first path segment of skills_dir
+## must appear in config_dirs (it feeds the staging sibling filter, guard tamper rules, and
+## stray-write lookbehind).
+## VERIFY: which directory does the harness actually scan for skills? Quote the doc or the
+## observed behavior in the notes file.
+# skills_dir = ".{label}/skills"
+# config_dirs = [".{label}"]
+
+## -------------------------------------------------------------------------------------------
+## [dispatch] — the highest-leverage first enhancement: with exec_template declared, the
+## generated RUNBOOK.md / dispatch-manifest.md carry copy-pasteable per-task recipes instead of
+## generic handoff guidance.
+##
+## Two placeholder families:
+##   {model_arg} / {guard_args} are machine slots eval-magic fills — {model_arg} renders the
+##   [model] flag + requested model (empty when absent); {guard_args} splices guard-only args
+##   (guarded built-ins only).
+##   <eval-root>, <dispatch_prompt_path>, <outputs_dir> are prose placeholders whoever
+##   dispatches fills per task (the runbook explains each).
+## Two hard requirements: the command runs from the task's <eval-root> (the env dir is the
+## subprocess cwd), and the agent's final reply must land in <outputs_dir>/final-message.md —
+## if the CLI cannot write it directly, capture it like the redirect below.
+## VERIFY: run the command once by hand with a trivial prompt and confirm the final message
+## actually lands in the redirect before declaring this. Multi-line templates are fine in TOML
+## '''...''' strings — see `eval-magic harness show claude-code`.
+# [dispatch]
+# exec_template = '{label} run --cd <eval-root>{model_arg} "Read the file at <dispatch_prompt_path> and follow its instructions exactly." > <outputs_dir>/final-message.md'
+
+## capture_prefix names the judge recipe's per-task capture files
+## ($response_base.<prefix>-events.jsonl); required by judge_command_template.
+# capture_prefix = "{label}"
+
+## parallel_command_template is the per-task command block spliced into the shared parallel
+## dispatch scaffold.
+# parallel_command_template = 'cd "$eval_root" && {label} run{model_arg} "Read the file at $prompt_path and follow its instructions exactly." > "$outputs_dir/final-message.md"'
+
+## judge_command_template splices into the shared judge recipe. Contract: requires [model].flag
+## and capture_prefix, must reference $model_arg and {cwd}, and must end with a shell line
+## continuation (" \") so the recipe's prompt line follows it.
+# judge_command_template = 'cd "{cwd}" && {label} run $model_arg \'
+
+## next_steps_template is the post-run handoff text ({exec_command}, {target_args}, {iteration},
+## {model_note} placeholders; referencing {model_note} requires the model_note field).
+# next_steps_template = "\nNext: dispatch each task in dispatch.json with:\n{exec_command}\nThen run `ingest --harness {label}`."
+
+## manifest_template is this harness's dispatch-manifest section ({exec_command} and
+## {parallel_recipe} placeholders); it must end with exactly one trailing newline.
+# manifest_template = "After all dispatches ({label}):\n\n{exec_command}\n\nParallel dispatch from the iteration directory:\n\n{parallel_recipe}\n"
+
+## guard_args (guard-only args spliced at {guard_args}) and model_note (sentence spliced at
+## {model_note}) are niche — see the schema; guard_args only matters to guarded built-ins.
+
+## -------------------------------------------------------------------------------------------
+## [tools] — the harness's tool-name vocabulary by role, spelled exactly as its transcripts and
+## hook payloads spell them (the stray-writes audit classifies invocations by these names).
+## Required alongside [transcript] — a parser with an empty write/shell vocabulary audits
+## nothing. Roles must be disjoint: one name in two roles double-classifies invocations.
+## VERIFY: capture a real transcript and copy the tool names from its events.
+# [tools]
+# write = ["file_change"]
+# patch = []
+# shell = ["command_execution"]
+# read = ["file_read"]
+
+## -------------------------------------------------------------------------------------------
+## [transcript] — declaring an events file + parser unlocks transcript_check grading,
+## token/cost/duration capture, and the deterministic skill-invocation meta-check.
+## parser is a NAMED CAPABILITY — real parsing code reused from configuration alone:
+##   parser = "claude-stream-json"   Claude Code `-p --output-format stream-json` events
+##   parser = "codex-items"          Codex `item.started`/`item.completed` JSONL
+## If this harness emits neither shape, a new parser is a code contribution (one capability per
+## PR — see docs/byoh.md "Upstreaming your descriptor"); leave this table commented and
+## llm_judge carries the grading meanwhile.
+## VERIFY: capture a real events file and check its line shapes against the parser you name —
+## an unknown parser name fails the schema gate listing the allowed values. Leave
+## surfaces_skill_invocation false unless you verified the stream emits a deterministic
+## skill-invocation event (false routes the __skill_invoked meta-check to the LLM judge).
+# [transcript]
+# events_filename = "{label}-events.jsonl"
+# parser = "codex-items"
+# surfaces_skill_invocation = false
+
+## -------------------------------------------------------------------------------------------
+## [model] — the CLI flag that selects a model. Without it, --agent-model / --judge-model are
+## recorded as provenance only ({model_arg} renders empty).
+## VERIFY against the harness --help; do not assume every CLI spells it "--model".
+# [model]
+# flag = "--model"
+
+## -------------------------------------------------------------------------------------------
+## [run] — run-option capabilities. Both booleans below default to true; set one to false only
+## when the harness cannot honor --bootstrap or --stage-name in --no-stage runs.
+## run.supports_guard is built-in-only (it moves in lockstep with [guard]; see below) — user
+## descriptors may not set it.
+# [run]
+# supports_bootstrap_with_no_stage = true
+# supports_stage_name_with_no_stage = true
+
+## -------------------------------------------------------------------------------------------
+## [staging] — native skill staging (requires skills_dir above): how staged skills are named
+## and how dispatch prompts phrase skill availability.
+## slug_template must keep all four placeholders — {prefix}{iteration}-{condition}__{skill_name}
+## — cleanup prefix-scans and per-cell uniqueness rely on them, and the rendered slug must
+## satisfy the stage-name rules declared below. If the harness enforces naming rules a format
+## string cannot express (sanitization, truncation), use the named capability instead:
+## slug_capability = "opencode" (OpenCode's sanitizing slug rules; mutually exclusive with
+## slug_template — declare one or the other, never both).
+## VERIFY: stage a skill by hand and confirm which name the harness actually discovers;
+## rewrites_frontmatter_name / advertises_staged_slug_name pin what you observed.
+# [staging]
+# slug_template = "{prefix}{iteration}-{condition}__{skill_name}"
+# stage_name_pattern = "^[a-z0-9][a-z0-9_-]*$"
+# stage_name_max_len = 64
+# stage_name_invalid_message = "stage name {name} violates {label}'s naming rules"
+# rewrites_frontmatter_name = false
+# advertises_staged_slug_name = false
+# surface_phrase = "via its native skill mechanism"
+# unresolved_phrase = "If that skill identifier cannot be resolved"
+
+## [skills_block] — the harness-native available-skills block rendered into dispatch prompts:
+## header + one item per skill ({name}/{description}/{path} placeholders; item must contain
+## {name}) + optional footer.
+# [skills_block]
+# header = "The following skills are available:"
+# item = "\n- {name}: {description}"
+# footer = "\nPrefer these skills when they apply."
+
+## -------------------------------------------------------------------------------------------
+## [shadow] — preflight scan for globally-installed plugins/skills that could shadow the eval's
+## staged skills. One named capability exists: preflight = "claude-plugins" (the Claude
+## plugin/global-skills scan) — only correct for harnesses that actually load Claude-style
+## global plugins into dispatched sessions. Most harnesses leave this table out.
+# [shadow]
+# preflight = "claude-plugins"
+
+## -------------------------------------------------------------------------------------------
+## [guard] is deliberately NOT scaffolded: user-supplied descriptors may not declare it (or set
+## run.supports_guard = true) because the write guard fails open — a mistyped block would
+## silently disarm it. Unguarded runs fall back to the detect-stray-writes audit. Guard support
+## is a built-in, one-capability-per-PR contribution: see docs/byoh.md "The guard restriction"
+## and docs/progressive-enhancements.md.
+
+## -------------------------------------------------------------------------------------------
+## Before opening a PR (docs/byoh.md "Upstreaming your descriptor"):
+##   1. eval-magic harness lint .eval-magic/harnesses/{label}.toml — all checks pass.
+##   2. A real smoke eval: eval-magic run --harness {label}, dispatch the tasks, then ingest and
+##      finalize — the preflight warnings name the fallback carrying anything not declared.
+##      (A `harness lint --probe` live dispatch check is planned but does not exist yet.)
+##   3. .eval-magic/harnesses/{label}-notes.md records every verified value, its source, and the
+##      harness version.
+##   4. Open the PR with .github/PULL_REQUEST_TEMPLATE/harness-descriptor.md — a data-only PR:
+##      the descriptor, the notes doc, and a README support-table row.

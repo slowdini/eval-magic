@@ -1,5 +1,5 @@
-//! The `harness` subcommands: inspect and validate the layered harness
-//! descriptor registry (`list`, `show`, `lint`).
+//! The `harness` subcommands: scaffold, inspect, and validate the layered
+//! harness descriptor registry (`init`, `list`, `show`, `lint`).
 
 use std::fs;
 use std::path::Path;
@@ -10,19 +10,119 @@ use crate::adapters::descriptor::layers::{
     Layer, check_user_layer_restrictions, default_config_root, discover_sources,
 };
 use crate::adapters::descriptor::{
-    HarnessDescriptor, finalize_descriptor, merge_descriptor_value, parse_descriptor_value,
+    HarnessDescriptor, finalize_descriptor, merge_descriptor_value, parse_descriptor_value, subst,
 };
 use crate::adapters::registry::{HarnessInfo, default_harness_name, harness_info};
 use crate::core::Harness;
 
 use crate::cli::args::{HarnessArgs, HarnessCommands};
 
+/// The `harness init` descriptor scaffold; `{label}` is substituted with the
+/// new harness's name.
+const INIT_TEMPLATE: &str = include_str!("../../../harnesses/template.toml");
+
+/// The `harness init` notes skeleton scaffolded beside the descriptor.
+const INIT_NOTES_TEMPLATE: &str = include_str!("../../../harnesses/template-notes.md");
+
 pub(crate) fn run_harness(args: HarnessArgs) -> anyhow::Result<()> {
     match args.command {
+        HarnessCommands::Init {
+            name,
+            stdout,
+            force,
+        } => run_init_scaffold(&name, stdout, force),
         HarnessCommands::List => run_list(),
         HarnessCommands::Show { name } => run_show(&name),
         HarnessCommands::Lint { target } => run_lint(&target),
     }
+}
+
+/// Scaffold the commented descriptor template and notes skeleton for `name`
+/// into the project-local layer (or print the template with `--stdout`).
+fn run_init_scaffold(name: &str, stdout: bool, force: bool) -> anyhow::Result<()> {
+    // Friendlier than the schema gate's pattern error, and before any I/O.
+    let is_kebab = !name.is_empty()
+        && name.split('-').all(|seg| {
+            !seg.is_empty()
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        });
+    if !is_kebab {
+        bail!(
+            "harness name {name:?} must be kebab-case (lowercase alphanumerics separated by \
+             single hyphens), e.g. cool-cli"
+        );
+    }
+
+    // Prove the scaffold is lint-clean before anything lands on disk — a
+    // template regression fails loudly here instead of shipping a broken file.
+    let rendered = subst(INIT_TEMPLATE, &[("label", name)]);
+    let source = format!("harness init {name} (rendered template)");
+    let value = parse_descriptor_value(&rendered, &source)?;
+    check_user_layer_restrictions(&value, &source)?;
+    finalize_descriptor(&value, &source)?;
+
+    if stdout {
+        print!("{rendered}");
+        return Ok(());
+    }
+
+    // A colliding label is legitimate layering, not an error: the new file
+    // overlays the registered harness field-by-field.
+    if let Some(info) = harness_info().find(|info| info.label == name) {
+        eprintln!(
+            "note: '{name}' is already registered ({}) — this file will overlay it \
+             field-by-field (docs/byoh.md \"Layering\"); pick a new name for a new harness, \
+             or start an overlay from `eval-magic harness show {name}`.",
+            layer_chain(&info)
+        );
+    }
+
+    let dir = Path::new(".eval-magic").join("harnesses");
+    let descriptor_path = dir.join(format!("{name}.toml"));
+    let notes_path = dir.join(format!("{name}-notes.md"));
+    if !force {
+        for path in [&descriptor_path, &notes_path] {
+            if path.exists() {
+                bail!(
+                    "{} already exists — pass --force to overwrite it",
+                    path.display()
+                );
+            }
+        }
+    }
+    fs::create_dir_all(&dir).with_context(|| format!("cannot create {}", dir.display()))?;
+    fs::write(&descriptor_path, &rendered)
+        .with_context(|| format!("cannot write {}", descriptor_path.display()))?;
+    fs::write(&notes_path, subst(INIT_NOTES_TEMPLATE, &[("label", name)]))
+        .with_context(|| format!("cannot write {}", notes_path.display()))?;
+
+    println!(
+        "Scaffolded harness descriptor: {}",
+        descriptor_path.display()
+    );
+    println!("Scaffolded notes skeleton:     {}", notes_path.display());
+    println!();
+    lint_file(&descriptor_path)?;
+    println!();
+    println!("Next:");
+    println!("  1. Fill in verified values — follow the template's comments; never guess a flag");
+    println!(
+        "     (record each value's source in {}).",
+        notes_path.display()
+    );
+    println!(
+        "  2. Re-lint after every edit: eval-magic harness lint {}",
+        descriptor_path.display()
+    );
+    println!(
+        "  3. Smoke eval: eval-magic run --harness {name}  (dispatch, then ingest + finalize)"
+    );
+    println!(
+        "  4. Upstreaming the proven descriptor: docs/byoh.md \"Upstreaming your descriptor\"."
+    );
+    Ok(())
 }
 
 /// One line per registered harness: label, contributing layers, declared
@@ -284,5 +384,117 @@ fn declared_enhancements(descriptor: &HarnessDescriptor) -> String {
         "baseline".to_string()
     } else {
         list.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::adapters::descriptor::load_descriptor;
+
+    #[test]
+    fn rendered_template_passes_the_full_descriptor_pipeline() {
+        let rendered = subst(INIT_TEMPLATE, &[("label", "demo")]);
+        let value = parse_descriptor_value(&rendered, "template").expect("schema-clean");
+        check_user_layer_restrictions(&value, "template").expect("no guard data");
+        let descriptor = load_descriptor(&rendered, "template").expect("invariant-clean");
+
+        // As written the scaffold is a pure baseline harness: only `label`
+        // is live, every enhancement stays commented out.
+        assert_eq!(descriptor.label, "demo");
+        assert!(descriptor.skills_dir.is_none());
+        assert!(descriptor.transcript.is_none());
+        assert!(descriptor.guard.is_none());
+        assert!(descriptor.dispatch.is_empty());
+    }
+
+    #[test]
+    fn template_substitutes_only_the_label_token() {
+        let rendered = subst(INIT_TEMPLATE, &[("label", "demo")]);
+        assert!(!rendered.contains("{label}"));
+        // Placeholders that belong to the examples survive substitution.
+        for survivor in ["{prefix}", "{model_arg}", "{name}", "{cwd}"] {
+            assert!(
+                rendered.contains(survivor),
+                "{survivor} should pass through subst"
+            );
+        }
+    }
+
+    /// The drift guard: a schema field or capability name that the template
+    /// never mentions is invisible to an agent authoring from the scaffold.
+    #[test]
+    fn template_mentions_every_schema_field_and_capability_name() {
+        let schema: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../schema/harness-descriptor.schema.json"
+        ))
+        .expect("schema parses");
+        let properties = schema["properties"]
+            .as_object()
+            .expect("schema has properties");
+
+        for (field, spec) in properties {
+            assert!(
+                INIT_TEMPLATE.contains(field),
+                "template never mentions {field:?}"
+            );
+            // [guard] subfields are deliberately not scaffolded (user layers
+            // may not declare the table); the table name itself is asserted
+            // above via the "guard" mention and below as literal prose.
+            if field == "guard" {
+                continue;
+            }
+            if let Some(nested) = spec["properties"].as_object() {
+                for (nested_field, nested_spec) in nested {
+                    assert!(
+                        INIT_TEMPLATE.contains(nested_field),
+                        "template never mentions {field}.{nested_field}"
+                    );
+                    if let Some(values) = nested_spec["enum"].as_array() {
+                        for value in values {
+                            let value = value.as_str().expect("string enum");
+                            assert!(
+                                INIT_TEMPLATE.contains(value),
+                                "template never mentions capability {field}.{nested_field} = \
+                                 {value:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        assert!(
+            INIT_TEMPLATE.contains("[guard]"),
+            "the guard restriction must be explained"
+        );
+    }
+
+    /// Every commented-out example must jointly form one coherent fictional
+    /// descriptor — so an agent uncommenting any subset of tables starts from
+    /// mutually consistent values. `## ` lines are prose and stay comments;
+    /// `# ` lines are the uncommentable examples.
+    #[test]
+    fn fully_uncommented_template_is_a_coherent_descriptor() {
+        let rendered = subst(INIT_TEMPLATE, &[("label", "demo")]);
+        let uncommented: String = rendered
+            .lines()
+            .map(|line| line.strip_prefix("# ").unwrap_or(line))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let value =
+            parse_descriptor_value(&uncommented, "uncommented template").expect("schema-clean");
+        check_user_layer_restrictions(&value, "uncommented template").expect("no guard data");
+        let descriptor =
+            load_descriptor(&uncommented, "uncommented template").expect("invariant-clean");
+
+        // The examples exercise every scaffolded table.
+        assert!(descriptor.skills_dir.is_some());
+        assert!(descriptor.transcript.is_some());
+        assert!(descriptor.model.is_some());
+        assert!(descriptor.skills_block.is_some());
+        assert!(descriptor.shadow.is_some());
+        assert!(!descriptor.dispatch.is_empty());
+        assert!(descriptor.guard.is_none());
     }
 }
