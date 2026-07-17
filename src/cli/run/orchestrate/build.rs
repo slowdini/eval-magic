@@ -1,7 +1,7 @@
 //! Phases 3 & 4 — build every `(eval, condition)` dispatch task and write
 //! `conditions.json` / `dispatch-manifest.md` / per-task prompts / `dispatch.json`
-//! ([`write_dispatch`]), then arm the opt-in write guard and run the plugin-shadow
-//! preflight ([`post_build`]).
+//! ([`write_dispatch`]), then arm the write guard (auto-armed; `--no-guard`
+//! opts out) and run the harness's shadow preflight ([`post_build`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -9,12 +9,8 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::adapters::{
-    adapter_for, config_dir_from_env, detect_plugin_shadows, format_shadow_banner,
-};
-use crate::core::{
-    AvailableSkill, ConditionEntry, ConditionsRecord, DispatchMechanism, Harness, RunContext,
-};
+use crate::adapters::{adapter_for, format_shadow_banner};
+use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
 use super::super::dispatch::{
@@ -55,7 +51,6 @@ pub(super) fn write_dispatch(
         ],
         timestamp: now_iso8601(),
         harness: Some(ctx.harness),
-        run_mode: Some(ctx.run_mode),
         run_nonce: Some(r.run_nonce.clone()),
         runs: Some(opts.runs),
         agent_model: opts.agent_model.map(str::to_owned),
@@ -125,16 +120,13 @@ pub(super) fn write_dispatch(
         fixtures_by_eval.insert(ev.id.as_str(), dests);
     }
 
-    let mechanism = ctx.run_mode.mechanism();
-    // A single group keeps the pre-grouping task shape (no `group`/`eval_root`
-    // keys); >1 group, or any Cli run (per-(group, condition) envs), tags tasks.
+    // A single group keeps the `group` key off each task (>1 group tags them);
+    // `eval_root` (the per-task cwd) is always set, one env per (group, condition).
     let multi_group = r.groups.len() > 1;
 
     let mut tasks = Vec::new();
-    // Build tasks CONDITION-outer, GROUP-inner — so the in-session runbook reads
-    // tasks[] top to bottom as: dispatch each (condition, group) segment, with a
-    // `reset-batch` between groups and one `switch-condition` between conditions.
-    // A single group collapses this to the legacy condition-outer order.
+    // Build tasks CONDITION-outer, GROUP-inner. A single group collapses this to
+    // the legacy condition-outer order.
     for (cond_name, cond_skill_path, cond_slug) in [
         (
             r.cond_a,
@@ -148,7 +140,7 @@ pub(super) fn write_dispatch(
         ),
     ] {
         for group in &r.groups {
-            let env_root = task_env_root(&r.iteration_dir, mechanism, &group.id, cond_name);
+            let env_root = task_env_root(&r.iteration_dir, &group.id, cond_name);
             let env_root_str = env_root.to_string_lossy().into_owned();
             let staged_path = staged_skill_path_for(&env_root, cond_slug);
             let available_skills = available_skills_for(&env_root, cond_skill_path, cond_slug);
@@ -213,13 +205,9 @@ pub(super) fn write_dispatch(
                         run_index,
                         // Tag the group only when there's more than one (keeps the
                         // single-group task byte-identical). `eval_root` is the
-                        // per-task cwd the Cli recipe `cd`s into; the in-session
-                        // path shares one env, so it stays `None`.
+                        // per-task cwd the CLI recipe `cd`s into.
                         group: multi_group.then_some(group.id.as_str()),
-                        eval_root: match mechanism {
-                            DispatchMechanism::Cli => Some(env_root_str.as_str()),
-                            DispatchMechanism::InSession => None,
-                        },
+                        eval_root: Some(env_root_str.as_str()),
                     })?);
                 }
             }
@@ -238,8 +226,7 @@ pub(super) fn write_dispatch(
             &tasks,
             ManifestContext {
                 harness: ctx.harness,
-                mechanism: ctx.run_mode.mechanism(),
-                guard: opts.guard,
+                guard: opts.guard_armed(),
                 agent_model: opts.agent_model,
             },
         ),
@@ -265,53 +252,45 @@ pub(super) fn write_dispatch(
         "label": conditions.label,
         "conditions": conditions.conditions,
         "harness": ctx.harness,
-        "run_mode": ctx.run_mode,
         "tasks": tasks,
     });
     // The isolation-batch plan the executing session/human follows: which evals
-    // share an env, why, and (per condition) the env each batch runs in. Omitted in
-    // the trivial single-group in-session case so its dispatch.json stays
-    // byte-identical; emitted whenever the layout is non-trivial (>1 group, or any
-    // Cli run with per-(group, condition) envs).
-    if multi_group || mechanism == DispatchMechanism::Cli {
-        let groups: Vec<Value> = r
-            .groups
-            .iter()
-            .map(|g| {
-                let envs: Vec<Value> = [r.cond_a, r.cond_b]
-                    .iter()
-                    .map(|cond| {
-                        json!({
-                            "condition": cond,
-                            "dir": task_env_root(&r.iteration_dir, mechanism, &g.id, cond)
-                                .to_string_lossy(),
-                        })
+    // share an env, why, and (per condition) the env each batch runs in. There is
+    // one env per (group, condition).
+    let groups: Vec<Value> = r
+        .groups
+        .iter()
+        .map(|g| {
+            let envs: Vec<Value> = [r.cond_a, r.cond_b]
+                .iter()
+                .map(|cond| {
+                    json!({
+                        "condition": cond,
+                        "dir": task_env_root(&r.iteration_dir, &g.id, cond).to_string_lossy(),
                     })
-                    .collect();
-                json!({
-                    "id": g.id,
-                    "evals": g.eval_ids,
-                    "rationale": g.rationale,
-                    "envs": envs,
                 })
+                .collect();
+            json!({
+                "id": g.id,
+                "evals": g.eval_ids,
+                "rationale": g.rationale,
+                "envs": envs,
             })
-            .collect();
-        dispatch_json
-            .as_object_mut()
-            .expect("dispatch_json is a JSON object")
-            .insert("groups".to_string(), Value::Array(groups));
-    }
+        })
+        .collect();
+    dispatch_json
+        .as_object_mut()
+        .expect("dispatch_json is a JSON object")
+        .insert("groups".to_string(), Value::Array(groups));
     write_json(&dispatch_json_path, &dispatch_json)?;
 
-    // The followable handoff artifact: a fresh isolated session (interactive) or
-    // a human (headless) reads RUNBOOK.md to run the loop. It references eval-magic
-    // meta (dispatch.json, benchmark.json) under `iteration_dir`, so `RunbookContext`
-    // keeps `iteration_dir`, not the env. Generated, not version controlled.
+    // The followable handoff artifact: a human reads RUNBOOK.md to run the loop.
+    // It references eval-magic meta (dispatch.json, benchmark.json) under
+    // `iteration_dir`, so `RunbookContext` keeps `iteration_dir`, not the env, and
+    // the human drives from there. Generated, not version controlled.
     let target_args = command_target_args(ctx);
-    let group_ids: Vec<String> = r.groups.iter().map(|g| g.id.clone()).collect();
     let runbook = build_runbook(&RunbookContext {
         harness: ctx.harness,
-        run_mode: ctx.run_mode,
         skill_name: &ctx.skill_name,
         iteration: r.iteration,
         iteration_dir: &r.iteration_dir,
@@ -319,36 +298,28 @@ pub(super) fn write_dispatch(
         cond_a: r.cond_a,
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
-        groups: &group_ids,
         target_args: &target_args,
-        guard: opts.guard,
+        guard: opts.guard_armed(),
         agent_model: opts.agent_model,
     });
-    // In-session: written into the single `env/` (the isolated session's cwd, =
-    // `ctx.stage_root`). Cli: there is no single env (one per (group, condition)),
-    // and the human drives from the iteration dir, so it lands there.
-    let runbook_path = match mechanism {
-        DispatchMechanism::InSession => ctx.stage_root.join("RUNBOOK.md"),
-        DispatchMechanism::Cli => r.iteration_dir.join("RUNBOOK.md"),
-    };
-    fs::write(runbook_path, runbook)?;
+    fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
 
     Ok(tasks.len())
 }
 
-/// Post-build side effects: arm the opt-in write guard and run the Claude Code
-/// plugin-shadow preflight.
+/// Post-build side effects: arm the write guard (auto-armed when the harness
+/// declares one; `--no-guard` opts out) and run the harness's shadow
+/// preflight.
 pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
     r: &Resolved,
 ) -> Result<(), RunError> {
-    // Every env this run staged: one shared `env/` for in-session, one per
-    // (group, condition) for Cli. Computed once and reused below to arm the guard in
-    // each env and to point the plugin-shadow preflight at a real staged env.
+    // Every env this run staged: one per (group, condition). Computed once and
+    // reused below to arm the guard in each env and to point the plugin-shadow
+    // preflight at a real staged env.
     let targets = env_targets(&EnvLayoutInput {
         iteration_dir: &r.iteration_dir,
-        mechanism: ctx.run_mode.mechanism(),
         groups: &r.groups,
         cond_a: r.cond_a,
         cond_b: r.cond_b,
@@ -356,21 +327,19 @@ pub(super) fn post_build(
         skill_path_b: r.skill_path_b.as_deref(),
     });
 
-    // Opt-in hard guard: a PreToolUse hook blocking subagent writes/installs
-    // outside the eval sandbox while dispatches run. Armed in *every* env the run
-    // staged — since each subprocess loads its hook from its own cwd.
-    if opts.guard && !opts.dry_run {
-        if opts.no_stage {
-            eprintln!("\n⚠ --guard requires staging enabled; skipping guard install.");
-        } else {
-            let adapter = adapter_for(ctx.harness);
-            let exe = std::env::current_exe()?;
-            for target in &targets {
-                adapter.install_guard(&target.root, &exe, None)?;
-            }
-            if let Some(msg) = adapter.guard_armed_message() {
-                println!("{msg}");
-            }
+    // Hard guard: a PreToolUse hook blocking subagent writes/installs outside
+    // the eval sandbox while dispatches run. Armed in *every* env the run
+    // staged — since each subprocess loads its hook from its own cwd. The
+    // preflight resolved the guard state (no-stage and guardless-harness runs
+    // arrive with it off), so only --dry-run gates the install here.
+    if opts.guard_armed() && !opts.dry_run {
+        let adapter = adapter_for(ctx.harness);
+        let exe = std::env::current_exe()?;
+        for target in &targets {
+            adapter.install_guard(&target.root, &exe, None)?;
+        }
+        if let Some(msg) = adapter.guard_armed_message() {
+            println!("{msg}");
         }
     }
 
@@ -382,24 +351,19 @@ pub(super) fn post_build(
         eprintln!("{notice}");
     }
 
-    // Plugin-shadow preflight (Claude Code): a staged skill name also discoverable
-    // from an enabled plugin or the global skills dir contaminates the run. Scan the
-    // first staged env, not `ctx.stage_root` — under Cli the legacy single `env/` is
-    // never created, so the project-local `.claude/settings.json` enabledPlugins the
-    // scan reads must come from a real staged env. In-session's first target *is*
-    // `env/` (== `ctx.stage_root`), so this is unchanged there.
-    if ctx.harness == Harness::ClaudeCode {
-        let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
-        names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
-        let scan_root = targets
-            .first()
-            .map(|t| t.root.as_path())
-            .unwrap_or(ctx.stage_root.as_path());
-        let report = detect_plugin_shadows(&config_dir_from_env(), scan_root, &names);
-        if !report.shadowed.is_empty() {
-            write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
-            eprintln!("{}", format_shadow_banner(&report));
-        }
+    // Shadow preflight: a staged skill name also discoverable from the operator's
+    // live environment contaminates the run. Scan the first staged env, not
+    // `ctx.stage_root` — only the per-`(group, condition)` envs are created, so
+    // the project-local settings the scan reads must come from a real staged env.
+    let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
+    names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
+    let scan_root = targets
+        .first()
+        .map(|t| t.root.as_path())
+        .unwrap_or(ctx.stage_root.as_path());
+    if let Some(report) = adapter_for(ctx.harness).detect_shadowed_skills(scan_root, &names) {
+        write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
+        eprintln!("{}", format_shadow_banner(&report));
     }
     Ok(())
 }

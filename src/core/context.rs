@@ -7,22 +7,38 @@
 
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::core::run_mode::{RunMode, resolve_run_mode};
+/// The agent harness an eval runs against: a validated handle to an entry in
+/// the descriptor registry. Constructible only through registry resolution, so
+/// a held `Harness` always names a registered harness and adapter lookup never
+/// fails. The registry-dependent behavior lives next to the registry in
+/// `crate::adapters::harness`: `Harness::resolve` (the string-to-handle
+/// gateway, resolving `--harness` after parsing), `Harness::known` (every
+/// registered harness), `Default` (the registry's default harness), and
+/// `Deserialize` (resolves artifact values, rejecting unknown names).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Harness {
+    name: &'static str,
+}
 
-/// The agent harness an eval runs against. Single source of truth, shared with
-/// the CLI layer (it derives `clap::ValueEnum` so flags can parse it directly).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, clap::ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-#[value(rename_all = "kebab-case")]
-pub enum Harness {
-    #[default]
-    ClaudeCode,
-    Codex,
-    #[serde(rename = "opencode")]
-    #[value(name = "opencode")]
-    OpenCode,
+impl Harness {
+    /// Registry-only constructor: `name` must be a registry entry's label.
+    pub(crate) const fn from_static_name(name: &'static str) -> Self {
+        Harness { name }
+    }
+
+    /// The kebab-case identifier (`claude-code`, `codex`, `opencode`, …) — the
+    /// `--harness` flag value and the `harness` value in artifacts.
+    pub fn name(self) -> &'static str {
+        self.name
+    }
+}
+
+impl Serialize for Harness {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name)
+    }
 }
 
 /// The resolved environment for a run: validated skill location, sibling skills,
@@ -39,14 +55,12 @@ pub struct RunContext {
     pub stage_root: PathBuf,
     pub bootstrap_path: Option<PathBuf>,
     pub harness: Harness,
-    /// The resolved run mode (the dispatch mechanism + who drives the loop).
-    /// Resolved per harness from the `--run-mode` flag in [`detect_run_context`].
-    pub run_mode: RunMode,
 }
 
 /// Already-parsed flag values handed to [`detect_run_context`]. `clap` owns the
-/// actual argv parsing (and, once wired, the harness `ValueEnum` rejection); this
-/// struct carries the raw values through to filesystem validation and defaulting.
+/// actual argv parsing, and `--harness` is resolved against the registry before
+/// this struct is built (unknown names are rejected there); it carries the raw
+/// values through to filesystem validation and defaulting.
 #[derive(Debug, Clone, Default)]
 pub struct DetectInput {
     pub skill_dir: Option<String>,
@@ -54,7 +68,6 @@ pub struct DetectInput {
     pub bootstrap: Option<String>,
     pub workspace_dir: Option<String>,
     pub harness: Option<Harness>,
-    pub run_mode: Option<RunMode>,
     pub cwd: Option<PathBuf>,
 }
 
@@ -77,8 +90,6 @@ pub enum ContextError {
     SkillNotFound(String),
     #[error("--bootstrap file not found: {0}")]
     BootstrapNotFound(String),
-    #[error("{0}")]
-    UnsupportedRunMode(String),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -212,8 +223,6 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
     let stage_root = cwd;
 
     let harness = input.harness.unwrap_or_default();
-    let run_mode =
-        resolve_run_mode(harness, input.run_mode).map_err(ContextError::UnsupportedRunMode)?;
 
     Ok(RunContext {
         skill_dir,
@@ -225,7 +234,6 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
         stage_root,
         bootstrap_path,
         harness,
-        run_mode,
     })
 }
 
@@ -414,7 +422,7 @@ mod tests {
         );
         assert!(ctx.sibling_skill_names.is_empty());
         assert!(ctx.bootstrap_path.is_none());
-        assert_eq!(ctx.harness, Harness::ClaudeCode);
+        assert_eq!(ctx.harness, Harness::resolve("claude-code").unwrap());
     }
 
     #[test]
@@ -492,11 +500,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(DetectInput {
-            harness: Some(Harness::Codex),
+            harness: Some(Harness::resolve("codex").unwrap()),
             ..input(&skill_dir, "foo")
         })
         .unwrap();
-        assert_eq!(ctx.harness, Harness::Codex);
+        assert_eq!(ctx.harness, Harness::resolve("codex").unwrap());
     }
 
     #[test]
@@ -504,10 +512,10 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(DetectInput {
-            harness: Some(Harness::OpenCode),
+            harness: Some(Harness::resolve("opencode").unwrap()),
             ..input(&skill_dir, "foo")
         })
         .unwrap();
-        assert_eq!(ctx.harness, Harness::OpenCode);
+        assert_eq!(ctx.harness, Harness::resolve("opencode").unwrap());
     }
 }

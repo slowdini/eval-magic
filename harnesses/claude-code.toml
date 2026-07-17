@@ -1,0 +1,104 @@
+# Claude Code harness descriptor — the default harness.
+#
+# Command templates and banners use TOML *literal* strings ('...' / '''...''')
+# so shell line-continuation backslashes survive verbatim. The banner starts
+# with a blank line (a leading newline in the rendered message) and every
+# template's exact whitespace is pinned by the golden tests under tests/golden/.
+
+label = "claude-code"
+skills_dir = ".claude/skills"
+config_dirs = [".claude"]
+
+[run]
+supports_guard = true
+supports_bootstrap_with_no_stage = true
+supports_stage_name_with_no_stage = true
+
+[tools]
+write = ["Edit", "MultiEdit", "NotebookEdit", "Write"]
+patch = []
+shell = ["Bash"]
+read = ["Glob", "Grep", "Read"]
+
+[staging]
+slug_template = "{prefix}{iteration}-{condition}__{skill_name}"
+rewrites_frontmatter_name = false
+advertises_staged_slug_name = false
+surface_phrase = "via the Skill tool"
+unresolved_phrase = "If the Skill tool cannot resolve that identifier"
+
+[skills_block]
+header = "The following skills are available for use with the Skill tool:\n"
+item = "\n- {name}: {description}"
+
+[transcript]
+events_filename = "claude-events.jsonl"
+parser = "claude-stream-json"
+surfaces_skill_invocation = true
+
+[model]
+flag = "--model"
+
+# Guard data rendered by the generic engine (src/adapters/guard.rs). The JSON
+# templates' key order is written/serialized verbatim and is an on-disk
+# contract with armed hooks from earlier releases — do not reorder keys. The
+# `guard` subcommand in command_template is a frozen alias for the same reason.
+[guard]
+hooks_file = ".claude/settings.local.json"
+matcher = "Write|Edit|MultiEdit|NotebookEdit|Bash"
+command_template = '"{exe}" guard "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}"}]}'
+verdict_template = '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"{reason}"}}'
+armed_message = '''
+
+🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json
+   and will block writes/installs outside the eval sandbox during dispatches.
+   Each `claude -p` dispatch loads the hook from the env cwd it runs in.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard'''
+
+[shadow]
+preflight = "claude-plugins"
+
+[dispatch]
+capture_prefix = "claude"
+next_steps_template = '''
+
+Next: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:
+{exec_command}
+Then run `ingest{target_args} --iteration {iteration} --harness claude-code`.'''
+# `--output-format stream-json` requires `--verbose` in -p mode; there is no
+# --cd flag, so the dispatch runs from the env dir; and there is no
+# --output-last-message, so the final message is recovered from the stream-json
+# `result` event. `</dev/null` detaches stdin so a permission prompt cannot
+# block on a TTY and piped task data cannot become extra prompt context.
+exec_template = '''
+cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
+  </dev/null \
+  > <outputs_dir>/claude-events.jsonl \
+  2> <outputs_dir>/claude-stderr.log'''
+parallel_command_template = '''
+    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \
+      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
+      </dev/null \
+      > "$outputs_dir/claude-events.jsonl" \
+      2> "$outputs_dir/claude-stderr.log"'''
+judge_command_template = '    cd "{cwd}" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \'
+manifest_template = '''
+After all dispatches (Claude Code):
+
+Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.
+
+```bash
+{exec_command}
+```
+
+Parallel dispatch from this iteration directory:
+
+```bash
+{parallel_recipe}
+```
+
+Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.
+'''

@@ -1,72 +1,310 @@
-//! The harness adapter API — the single seam between generic run-mode code and
+//! The harness adapter API — the single seam between generic dispatch code and
 //! harness-specific behavior.
 //!
-//! Every harness-specific concern hangs off the [`HarnessAdapter`] trait: how
-//! discoverable skills are presented in a dispatch prompt, how a persisted
-//! transcript is parsed, where staged skills live, and which native hook the
-//! write guard installs. Generic code resolves an adapter with [`adapter_for`]
-//! and then calls the trait — so [`adapter_for`] is the one place that names a
-//! concrete harness for this surface.
+//! The trait is tiered into a **baseline** every harness must implement and
+//! **enhancements** that raise fidelity when a harness has the native support:
+//!
+//! - **Baseline (required):** [`label`](HarnessAdapter::label) and
+//!   [`skills_dir`](HarnessAdapter::skills_dir). A new harness compiles with
+//!   just these two methods; dispatched through its one-shot CLI (with
+//!   `--no-stage` inlining the skill when native staging isn't wired), it
+//!   already supports `llm_judge` grading and the `detect-stray-writes`
+//!   post-pass.
+//! - **Enhancements (defaulted):** every other method has a default — either a
+//!   working generic fallback (e.g. the plain available-skills block) or an
+//!   `Unsupported` error naming the enhancement it belongs to (e.g. transcript
+//!   ingest, the write guard). Override the methods of an enhancement to wire
+//!   it for a harness.
+//!
+//! Generic code resolves an adapter with [`adapter_for`](super::registry::adapter_for)
+//! and then calls the trait — so the [`registry`](super::registry) is the one
+//! place that names a concrete harness for this surface. The impls live in the
+//! per-harness modules ([`claude_code`](super::claude_code),
+//! [`codex`](super::codex), [`opencode`](super::opencode)).
 
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::core::{AvailableSkill, Harness, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
+use crate::sandbox::GuardMarker;
 
 use super::TranscriptSummary;
-use super::claude_cli::{
-    claude_exec_command_template, claude_judge_dispatch_recipe, claude_parallel_dispatch_recipe,
-};
-use super::codex_cli::{
-    codex_exec_command_template, codex_judge_dispatch_recipe, codex_parallel_dispatch_recipe,
-};
-use super::{
-    parse_claude_stream_json, parse_claude_stream_json_full, parse_codex_events,
-    parse_codex_events_full, parse_transcript, parse_transcript_full,
-    render_available_skills_block, render_codex_available_skills_block,
-    render_opencode_available_skills_block,
-};
+use super::skill_shadow::PluginShadowReport;
 
-/// The behavior that varies by harness. Generic run-mode code depends on this
-/// trait, never on a concrete harness variant.
+/// One harness's tool-name vocabulary: every name its guard hook payloads or
+/// transcript parser can produce, grouped by role. Consumers match against the
+/// union across all harnesses ([`all_tool_vocabulary`](super::registry::all_tool_vocabulary)).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ToolVocabulary {
+    /// Tools that write the filesystem with a single target path argument.
+    pub write_tools: Vec<String>,
+    /// apply_patch-style tools whose payload carries multiple patch targets.
+    pub patch_tools: Vec<String>,
+    /// Shell-execution tools carrying a `command` argument.
+    pub shell_tools: Vec<String>,
+    /// Read-only tools carrying a target path argument.
+    pub read_tools: Vec<String>,
+}
+
+/// The behavior that varies by harness. Generic dispatch code depends on this
+/// trait, never on a concrete harness variant. See the module docs for the
+/// baseline-vs-enhancement contract.
 pub trait HarnessAdapter {
-    /// The kebab-case identifier used in CLI flags, `dispatch.json`, and the
-    /// staged `conditions.json`.
-    fn label(&self) -> &'static str;
+    // ── Baseline (required) — every harness implements these ────────────────
 
-    /// The project-local directory staged skills live under for this harness.
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf;
+    /// **Baseline.** The kebab-case identifier used in CLI flags,
+    /// `dispatch.json`, and the staged `conditions.json`.
+    fn label(&self) -> String;
 
-    /// Whether a staged skill's frontmatter `name:` is rewritten to its slug so
-    /// the harness's repo-local discovery resolves the staged copy.
-    fn rewrites_frontmatter_name(&self) -> bool;
+    /// **Baseline.** The project-local directory staged skills live under for
+    /// this harness. Under `--no-stage` nothing is staged into it, so a
+    /// baseline harness may point this at any repo-local path its discovery
+    /// would read. `None` when the harness declares no skills directory —
+    /// native staging is then unavailable and the run preflight forces
+    /// `--no-stage` (each SKILL.md is inlined into its dispatch prompt).
+    fn skills_dir(&self, repo_root: &Path) -> Option<PathBuf>;
 
-    /// Whether the skill-under-test is advertised in the available-skills block
-    /// under its staged slug (vs. its natural name). True for Codex, whose
-    /// repo-local discovery keys on the rewritten frontmatter name. (OpenCode
-    /// also rewrites the frontmatter to the slug yet still advertises the natural
-    /// name — a known inconsistency tracked for a separate fix.)
-    fn advertises_staged_slug_name(&self) -> bool;
+    // ── Run-option capabilities (defaulted) ──────────────────────────────────
 
-    /// Render the discoverable skills the way this harness natively surfaces
-    /// them (e.g. Claude Code's Skill-tool list, Codex's `## Skills`, OpenCode's
-    /// `<available_skills>` XML).
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String;
+    /// The run options the generic `run` preflight may accept for this
+    /// harness. The default is the baseline: no write guard, `--bootstrap` and
+    /// `--stage-name` allowed alongside `--no-stage`. Override alongside the
+    /// enhancement that changes support (e.g. wiring the write guard flips
+    /// `supports_guard`).
+    fn run_capabilities(&self) -> HarnessRunCapabilities {
+        HarnessRunCapabilities {
+            supports_guard: false,
+            supports_bootstrap_with_no_stage: true,
+            supports_stage_name_with_no_stage: true,
+        }
+    }
 
-    /// How a staged skill is described as discoverable in the neutral
-    /// slug-disambiguation line (e.g. "via the Skill tool").
-    fn skill_surface_phrase(&self) -> &'static str;
+    /// The project-local config dir names this harness reads or the adapter
+    /// writes (e.g. `.claude`). Staging excludes every harness's config dirs
+    /// when copying a skill's sibling assets, so a stray checked-in config dir
+    /// never rides into a staged env. Via
+    /// [`all_config_dir_names`](super::registry::all_config_dir_names) this list
+    /// also feeds the guard's Bash tamper rule and detect-stray-writes'
+    /// staging-dir lookbehind, so adding a dir here automatically grows the
+    /// write-guard's deny surface. List the parent of
+    /// [`skills_dir`](Self::skills_dir) plus any hook/config dirs the adapter
+    /// writes.
+    fn config_dir_names(&self) -> Vec<String> {
+        Vec::new()
+    }
 
-    /// The lead-in for the fallback "read the skill from `<path>`" instruction
-    /// when the staged identifier can't be resolved.
-    fn skill_unresolved_phrase(&self) -> &'static str;
+    /// The tool names this harness's guard hook payloads and parsed transcripts
+    /// use, grouped by role. Via
+    /// [`all_tool_vocabulary`](super::registry::all_tool_vocabulary) this feeds the guard
+    /// arbiter's tool classification and detect-stray-writes' invocation audit,
+    /// so list every name this harness's surfaces produce — even names another
+    /// harness also uses; the union dedups. Default empty: a harness with no
+    /// guard and no transcript parser contributes nothing.
+    fn tool_vocabulary(&self) -> ToolVocabulary {
+        ToolVocabulary::default()
+    }
 
-    /// The verbatim plan-mode procedure profile bundled for this harness.
-    fn plan_mode_profile(&self) -> &'static str;
+    // ── Enhancement: native skill staging (defaulted) ────────────────────────
+    // Fallback without it: `--no-stage` inlines each SKILL.md into its
+    // dispatch prompt instead of staging files for native discovery.
 
-    /// Wrap a plan-mode profile as a `<system-reminder>` operating-context
-    /// layer. The default usually suffices.
+    /// **Enhancement: native staging.** Build the conspicuous staged-skill
+    /// slug. The default underscore form is fine for any harness without
+    /// naming rules; a harness with constrained skill names (e.g. OpenCode)
+    /// overrides it. `prefix` must be preserved so cleanup prefix-scans still
+    /// find the staged dir.
+    fn staged_slug(
+        &self,
+        prefix: &str,
+        iteration: u32,
+        condition: &str,
+        skill_name: &str,
+    ) -> String {
+        format!("{prefix}{iteration}-{condition}__{skill_name}")
+    }
+
+    /// **Enhancement: native staging.** Validate a staged-skill identifier
+    /// (generated slug or `--stage-name` override) against this harness's
+    /// naming rules. The default accepts anything.
+    fn validate_stage_name(&self, _name: &str) -> Result<(), String> {
+        Ok(())
+    }
+
+    /// **Enhancement: native staging.** Whether a staged skill's frontmatter
+    /// `name:` is rewritten to its slug so the harness's repo-local discovery
+    /// resolves the staged copy.
+    fn rewrites_frontmatter_name(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: native staging.** Whether the skill-under-test is
+    /// advertised in the available-skills block under its staged slug (vs. its
+    /// natural name). True for Codex, whose repo-local discovery keys on the
+    /// rewritten frontmatter name. (OpenCode also rewrites the frontmatter to
+    /// the slug yet still advertises the natural name — a known inconsistency
+    /// tracked for a separate fix.)
+    fn advertises_staged_slug_name(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: native staging.** Render the discoverable skills the way
+    /// this harness natively surfaces them (e.g. Claude Code's Skill-tool
+    /// list, Codex's `## Skills`, OpenCode's `<available_skills>` XML). The
+    /// default is a neutral bulleted list.
+    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
+        super::skills_block::render_skills_block(
+            super::skills_block::DEFAULT_HEADER,
+            super::skills_block::DEFAULT_ITEM,
+            "",
+            skills,
+        )
+    }
+
+    /// **Enhancement: native staging.** How a staged skill is described as
+    /// discoverable in the neutral slug-disambiguation line (e.g. "via the
+    /// Skill tool").
+    fn skill_surface_phrase(&self) -> String {
+        "as a discoverable skill".to_string()
+    }
+
+    /// **Enhancement: native staging.** The lead-in for the fallback "read the
+    /// skill from `<path>`" instruction when the staged identifier can't be
+    /// resolved.
+    fn skill_unresolved_phrase(&self) -> String {
+        "If the staged skill cannot be resolved".to_string()
+    }
+
+    // ── Enhancement: transcript parser (defaulted) ───────────────────────────
+    // Fallback without it: `transcript_check` assertions grade as
+    // unverifiable, `llm_judge` carries the grading, token/cost/duration go
+    // unrecorded, and run records are assembled by hand (or from
+    // `outputs/final-message.md`) instead of auto-ingested.
+
+    /// **Enhancement: transcript parser.** The filename (under a task's
+    /// `outputs/` dir) this harness's one-shot CLI writes the captured
+    /// transcript to. `None` when no transcript ingest is wired — the ingest
+    /// pipeline then never calls the parsers below.
+    fn cli_events_filename(&self) -> Option<String> {
+        None
+    }
+
+    /// **Enhancement: transcript parser.** Parse the events file this
+    /// harness's one-shot CLI wrote (the captured transcript) into ordered
+    /// tool invocations.
+    fn parse_cli_events(&self, _path: &Path) -> io::Result<Vec<ToolInvocation>> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "transcript ingest is not wired for the {} harness",
+                self.label()
+            ),
+        ))
+    }
+
+    /// **Enhancement: transcript parser.** The full-summary counterpart of
+    /// [`parse_cli_events`](Self::parse_cli_events): tool invocations, deduped
+    /// token usage, duration, and final message text.
+    fn parse_cli_events_full(&self, _path: &Path) -> io::Result<TranscriptSummary> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "transcript ingest is not wired for the {} harness",
+                self.label()
+            ),
+        ))
+    }
+
+    /// **Enhancement: transcript parser.** Whether the parsed transcript
+    /// exposes a deterministic skill-invocation event the `__skill_invoked`
+    /// meta-check can match. False for Codex (its JSONL has no skill-tool
+    /// event), which routes the meta-check to the LLM-judge fallback.
+    fn transcript_surfaces_skill_invocation(&self) -> bool {
+        true
+    }
+
+    // ── Enhancement: model flag (defaulted) ──────────────────────────────────
+    // Fallback without it: `--agent-model` / `--judge-model` are recorded as
+    // provenance only; dispatches run on the harness's default model.
+
+    /// **Enhancement: model flag.** The native model-selection flag accepted
+    /// by this harness's CLI. `None` means no model-selection support is
+    /// wired.
+    fn cli_model_flag(&self) -> Option<String> {
+        None
+    }
+
+    // ── Enhancement: write guard (defaulted) ─────────────────────────────────
+    // Fallback without it: the `detect-stray-writes` post-pass (folded into
+    // `ingest`) audits out-of-bounds writes after the fact.
+
+    /// **Enhancement: write guard.** Arm the write guard using this harness's
+    /// native pre-tool hook surface, returning the staged marker path. The
+    /// guard's allowed roots are derived from `stage_root` (the isolated env /
+    /// agent cwd), so it bounds the agent to the same env boundary that
+    /// isolates its reads.
+    fn install_guard(
+        &self,
+        _stage_root: &Path,
+        _guard_exe: &Path,
+        _ttl: Option<Duration>,
+    ) -> io::Result<PathBuf> {
+        Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!("--guard is not supported for the {} harness", self.label()),
+        ))
+    }
+
+    /// **Enhancement: write guard.** The banner printed after `--guard`
+    /// successfully arms, describing the harness's native hook surface and how
+    /// to remove it. `None` for a harness with no write guard (its
+    /// [`install_guard`](Self::install_guard) errors), in which case no banner
+    /// is printed.
+    fn guard_armed_message(&self) -> Option<String> {
+        None
+    }
+
+    /// **Enhancement: write guard.** Evaluate a PreToolUse hook `payload`
+    /// against `marker`, returning the serialized deny verdict to print on
+    /// stdout, or `None` to allow. The default fails open — a harness with no
+    /// guard never denies — matching the hook entry points' contract that a
+    /// guard invocation can never brick a session.
+    fn guard_verdict(&self, _payload: &str, _marker: Option<GuardMarker>) -> Option<String> {
+        None
+    }
+
+    /// **Enhancement: write guard.** A hook-config dir the guard install
+    /// created outside [`skills_dir`](Self::skills_dir) (e.g. Codex's
+    /// `.codex/`), which teardown prunes when restoring the original config
+    /// leaves it empty. `None` when the guard writes only under existing dirs.
+    fn guard_hook_cleanup_dir(&self, _stage_root: &Path) -> Option<PathBuf> {
+        None
+    }
+
+    // ── Enhancement: shadow preflight (defaulted) ────────────────────────────
+    // Fallback without it: no preflight — the run proceeds with no shadow
+    // report, exactly as for a harness whose dispatches load nothing global.
+
+    /// **Enhancement: shadow preflight.** Detect staged skill names that are
+    /// also discoverable from the operator's live environment (e.g. Claude
+    /// Code's enabled plugins or global skills dir), which contaminates the
+    /// with/without comparison. `scan_root` is a real staged env root — its
+    /// project-local settings participate in detection. `None` when the
+    /// harness has no shadow preflight (the default) or nothing is shadowed.
+    fn detect_shadowed_skills(
+        &self,
+        _scan_root: &Path,
+        _staged_skill_names: &[&str],
+    ) -> Option<PluginShadowReport> {
+        None
+    }
+
+    // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
+
+    /// **Enhancement: plan-mode context.** Wrap a plan-mode profile as an
+    /// operating-context layer. The shared `<system-reminder>` default
+    /// usually suffices; a harness with a real native plan mode could inject
+    /// it differently.
     fn render_plan_mode_context(&self, profile_text: &str) -> String {
         let trimmed = profile_text.trim();
         if trimmed.is_empty() {
@@ -75,107 +313,45 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
-    /// The **interactive** (agent-followed) `RUNBOOK.md` template a harness uses
-    /// under [`InSession`](crate::core::DispatchMechanism::InSession) dispatch,
-    /// carrying `{{TOKEN}}` placeholders the run fills. The default is the shared
-    /// headless template (harmless for the Cli-only harnesses that never read it
-    /// via this path); [`InSession`](crate::core::DispatchMechanism::InSession)
-    /// harnesses override it. The Cli-dispatch runbook always uses
-    /// [`HEADLESS_RUNBOOK_TEMPLATE`], selected by mechanism in `build_runbook`.
-    fn runbook_template(&self) -> &'static str {
-        HEADLESS_RUNBOOK_TEMPLATE
+    // ── Enhancement: dispatch recipes (defaulted) ────────────────────────────
+    // Fallback without them: `run` prints the generic handoff and the runbook
+    // carries no copy-pasteable per-task command.
+
+    /// **Enhancement: dispatch recipes.** Whether a copy-pasteable per-task
+    /// exec command is wired (the descriptor's `[dispatch] exec_template`).
+    /// `false` means `RUNBOOK.md` / `dispatch-manifest.md` carry handoff
+    /// guidance without a per-task command recipe, and the `run` preflight
+    /// warns naming that limitation.
+    fn has_dispatch_recipes(&self) -> bool {
+        false
     }
 
-    /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
-    /// filename (under a task's `outputs/` dir) its one-shot CLI writes the
-    /// transcript to. `None` when the harness dispatches in-session (no local
-    /// transcript) or has no Cli-mechanism transcript wired yet.
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        None
-    }
-
-    /// For a [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness, the
-    /// native model-selection flag accepted by the harness CLI. `None` means the
-    /// adapter has no model-selection support wired yet.
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        None
-    }
-
-    /// The `Next:` guidance printed after `run` for a
-    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness: how to
-    /// dispatch each task through this harness's one-shot CLI and then ingest.
-    /// Empty for in-session harnesses (their guidance is the mechanism's, not the
-    /// adapter's).
+    /// **Enhancement: dispatch recipes.** The `Next:` guidance printed after
+    /// `run`: how to dispatch each task through this harness's one-shot CLI
+    /// and then ingest. Empty when no dispatch recipe is wired.
     fn cli_next_steps(&self, _ctx: CliDispatchContext<'_>) -> String {
         String::new()
     }
 
-    /// Extra `dispatch-manifest.md` lines describing this harness's Cli dispatch
-    /// recipe (command template, parallel recipe, ingest note). `None` when the
-    /// harness contributes no Cli-specific manifest section.
+    /// **Enhancement: dispatch recipes.** Extra `dispatch-manifest.md` lines
+    /// describing this harness's dispatch recipe (command template, parallel
+    /// recipe, ingest note). `None` when the harness contributes no manifest
+    /// section.
     fn cli_manifest_section(&self, _ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
         None
     }
 
-    /// The post-`grade` / post-`ingest` judge dispatch guidance for a
-    /// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch harness. `None`
-    /// leaves the generic in-session-style judge handoff in place.
+    /// **Enhancement: dispatch recipes.** The post-`grade` / post-`ingest`
+    /// judge dispatch guidance for this harness. `None` leaves the generic
+    /// judge handoff in place.
     fn cli_judge_next_steps(&self, _ctx: CliJudgeContext<'_>) -> Option<String> {
-        None
-    }
-
-    /// Parse a persisted transcript into its ordered tool invocations.
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>>;
-
-    /// Parse a persisted transcript into the full summary: tool invocations,
-    /// deduped token usage, duration, and final message text.
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary>;
-
-    /// Parse a [`Cli`](crate::core::DispatchMechanism::Cli)-mechanism events file
-    /// (the harness CLI's captured output) into ordered tool invocations. Defaults
-    /// to [`parse_transcript`](Self::parse_transcript): for Codex/OpenCode the
-    /// on-disk parser already *is* the events parser, so the default is correct;
-    /// Claude Code overrides it, because its `parse_transcript` is the in-session
-    /// subagent parser while its Cli events are `claude -p` stream-json.
-    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        self.parse_transcript(path)
-    }
-
-    /// The full-summary counterpart of [`parse_cli_events`](Self::parse_cli_events).
-    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        self.parse_transcript_full(path)
-    }
-
-    /// Arm the write guard using this harness's native pre-tool hook surface,
-    /// returning the staged marker path. The guard's allowed roots are derived
-    /// from `stage_root` (the isolated env / agent cwd), so it bounds the agent to
-    /// the same env boundary that isolates its reads.
-    fn install_guard(
-        &self,
-        stage_root: &Path,
-        guard_exe: &Path,
-        ttl: Option<Duration>,
-    ) -> io::Result<PathBuf>;
-
-    /// The banner printed after `--guard` successfully arms, describing the
-    /// harness's native hook surface and how to remove it. Harness-specific text,
-    /// so it lives here rather than in generic run code. `None` for a harness with
-    /// no write guard (its [`install_guard`](Self::install_guard) errors), in which
-    /// case no banner is printed.
-    fn guard_armed_message(&self) -> Option<&'static str> {
         None
     }
 }
 
-/// The shared **headless** (human-followed) `RUNBOOK.md` template used by every
-/// [`Cli`](crate::core::DispatchMechanism::Cli)-dispatch run, regardless of
-/// harness (Codex, OpenCode, and Claude Code in hybrid/headless).
-pub const HEADLESS_RUNBOOK_TEMPLATE: &str =
-    include_str!("../../profiles/shared/runbook-headless.md");
-
-pub struct ClaudeCodeAdapter;
-pub struct CodexAdapter;
-pub struct OpenCodeAdapter;
+/// The shared (human-followed) `RUNBOOK.md` template used by every run,
+/// regardless of harness (Claude Code, Codex, OpenCode).
+pub const RUNBOOK_TEMPLATE: &str = include_str!("../../profiles/shared/runbook.md");
 
 /// Context for rendering a harness's one-shot CLI agent-dispatch guidance.
 #[derive(Debug, Clone, Copy)]
@@ -200,315 +376,96 @@ pub struct CliJudgeContext<'a> {
     pub iteration_dir: &'a Path,
 }
 
-impl HarnessAdapter for ClaudeCodeAdapter {
-    fn label(&self) -> &'static str {
-        "claude-code"
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".claude").join("skills")
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        false
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        false
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "via the Skill tool"
-    }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If the Skill tool cannot resolve that identifier"
-    }
-    fn plan_mode_profile(&self) -> &'static str {
-        include_str!("../../profiles/claude-code/plan-mode.md")
-    }
-    fn runbook_template(&self) -> &'static str {
-        include_str!("../../profiles/claude-code/runbook.md")
-    }
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        Some("claude-events.jsonl")
-    }
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        Some("--model")
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness claude-code`.",
-            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        Some(vec![
-            "After all dispatches (Claude Code hybrid):".to_string(),
-            String::new(),
-            "Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            claude_exec_command_template(self.cli_model_flag(), ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Parallel dispatch from this iteration directory:".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            claude_parallel_dispatch_recipe(self.cli_model_flag(), ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Then run `eval-magic ingest --harness claude-code --run-mode hybrid`; Claude hybrid ingest reads each task's `outputs/claude-events.jsonl`.".to_string(),
-            String::new(),
-        ])
-    }
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
-        Some(claude_judge_dispatch_recipe(
-            self.cli_model_flag(),
-            ctx.iteration_dir,
-        ))
-    }
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_transcript(path)
-    }
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_transcript_full(path)
-    }
-    fn parse_cli_events(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_claude_stream_json(path)
-    }
-    fn parse_cli_events_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_claude_stream_json_full(path)
-    }
-    fn install_guard(
-        &self,
-        stage_root: &Path,
-        guard_exe: &Path,
-        ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        crate::sandbox::install::install_claude_guard(stage_root, guard_exe, ttl)
-    }
-    fn guard_armed_message(&self) -> Option<&'static str> {
-        Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json\n   and will block writes/installs outside the eval sandbox during dispatches —\n   both in-session subagents and `claude -p` (hybrid/headless), which loads the\n   hook from the env cwd each dispatch runs in.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
-        )
-    }
-}
-
-impl HarnessAdapter for CodexAdapter {
-    fn label(&self) -> &'static str {
-        "codex"
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".agents").join("skills")
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        true
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        true
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_codex_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as a Codex skill"
-    }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If it does not load as a Codex skill"
-    }
-    fn plan_mode_profile(&self) -> &'static str {
-        include_str!("../../profiles/codex/plan-mode.md")
-    }
-    fn cli_events_filename(&self) -> Option<&'static str> {
-        Some("codex-events.jsonl")
-    }
-    fn cli_model_flag(&self) -> Option<&'static str> {
-        Some("-m")
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with:\n{}\nThen run `ingest{target_args} --iteration {iteration} --harness codex`.",
-            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    fn cli_manifest_section(&self, ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        Some(vec![
-            "After all dispatches (Codex):".to_string(),
-            String::new(),
-            "Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            codex_exec_command_template(self.cli_model_flag(), ctx.guard, ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Parallel dispatch from this iteration directory:".to_string(),
-            String::new(),
-            "```bash".to_string(),
-            codex_parallel_dispatch_recipe(self.cli_model_flag(), ctx.guard, ctx.agent_model),
-            "```".to_string(),
-            String::new(),
-            "Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.".to_string(),
-            String::new(),
-        ])
-    }
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
-        Some(codex_judge_dispatch_recipe(
-            self.cli_model_flag(),
-            ctx.guard,
-            ctx.iteration_dir,
-        ))
-    }
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_codex_events(path)
-    }
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_codex_events_full(path)
-    }
-    fn install_guard(
-        &self,
-        stage_root: &Path,
-        guard_exe: &Path,
-        ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        crate::sandbox::install::install_codex_guard(stage_root, guard_exe, ttl)
-    }
-    fn guard_armed_message(&self) -> Option<&'static str> {
-        Some(
-            "\n🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json\n   and will block writes/installs outside the eval sandbox during Codex dispatches.\n   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.\n   It auto-expires in 6h and is removed on the next run; to remove it now:\n     eval-magic teardown-guard",
-        )
-    }
-}
-
-impl HarnessAdapter for OpenCodeAdapter {
-    fn label(&self) -> &'static str {
-        "opencode"
-    }
-    fn skills_dir(&self, repo_root: &Path) -> PathBuf {
-        repo_root.join(".opencode").join("skills")
-    }
-    fn rewrites_frontmatter_name(&self) -> bool {
-        true
-    }
-    fn advertises_staged_slug_name(&self) -> bool {
-        false
-    }
-    fn render_available_skills_block(&self, skills: &[AvailableSkill]) -> String {
-        render_opencode_available_skills_block(skills)
-    }
-    fn skill_surface_phrase(&self) -> &'static str {
-        "as an OpenCode skill"
-    }
-    fn skill_unresolved_phrase(&self) -> &'static str {
-        "If it does not load as an OpenCode skill"
-    }
-    fn plan_mode_profile(&self) -> &'static str {
-        include_str!("../../profiles/opencode/plan-mode.md")
-    }
-    fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
-        let model_note = if ctx.agent_model.is_some() {
-            " Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet."
-        } else {
-            ""
-        };
-        format!(
-            "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`.{model_note} OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`.",
-            target_args = ctx.target_args,
-            iteration = ctx.iteration
-        )
-    }
-    // OpenCode transcript ingest is not yet wired. In the current dispatch flow
-    // this is unreachable (no subagents dir and no events file), so delegating to
-    // the shared JSONL parser preserves the pre-refactor behavior of the
-    // transcript-source branch until OpenCode ingest lands.
-    fn parse_transcript(&self, path: &Path) -> io::Result<Vec<ToolInvocation>> {
-        parse_transcript(path)
-    }
-    fn parse_transcript_full(&self, path: &Path) -> io::Result<TranscriptSummary> {
-        parse_transcript_full(path)
-    }
-    fn install_guard(
-        &self,
-        _stage_root: &Path,
-        _guard_exe: &Path,
-        _ttl: Option<Duration>,
-    ) -> io::Result<PathBuf> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "--guard is not yet supported for the opencode harness",
-        ))
-    }
-}
-
-/// Resolve the adapter for a [`Harness`]. This is the single dispatch point on
-/// the harness variant for all harness-specific behavior; every other module
-/// goes through the returned trait object.
-pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
-    match harness {
-        Harness::ClaudeCode => &ClaudeCodeAdapter,
-        Harness::Codex => &CodexAdapter,
-        Harness::OpenCode => &OpenCodeAdapter,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::registry::adapter_for;
+    use crate::core::Harness;
+
+    // Cross-method invariants (guard/banner lockstep, hook-matcher ⊆
+    // vocabulary, slug ↔ naming rules, …) are enforced at descriptor load
+    // time in `descriptor::validation`; only per-value pins live here.
 
     #[test]
-    fn labels_match_kebab_case_identifiers() {
-        assert_eq!(adapter_for(Harness::ClaudeCode).label(), "claude-code");
-        assert_eq!(adapter_for(Harness::Codex).label(), "codex");
-        assert_eq!(adapter_for(Harness::OpenCode).label(), "opencode");
+    fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
+        for h in [
+            Harness::resolve("codex").unwrap(),
+            Harness::resolve("opencode").unwrap(),
+        ] {
+            assert_eq!(
+                adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn has_dispatch_recipes_matches_the_readme_support_table() {
+        assert!(adapter_for(Harness::resolve("claude-code").unwrap()).has_dispatch_recipes());
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).has_dispatch_recipes());
+        assert!(!adapter_for(Harness::resolve("opencode").unwrap()).has_dispatch_recipes());
     }
 
     #[test]
     fn skills_dir_is_harness_native() {
         let root = Path::new("/repo");
         assert_eq!(
-            adapter_for(Harness::ClaudeCode).skills_dir(root),
-            root.join(".claude").join("skills")
+            adapter_for(Harness::resolve("claude-code").unwrap()).skills_dir(root),
+            Some(root.join(".claude").join("skills"))
         );
         assert_eq!(
-            adapter_for(Harness::Codex).skills_dir(root),
-            root.join(".agents").join("skills")
+            adapter_for(Harness::resolve("codex").unwrap()).skills_dir(root),
+            Some(root.join(".agents").join("skills"))
         );
         assert_eq!(
-            adapter_for(Harness::OpenCode).skills_dir(root),
-            root.join(".opencode").join("skills")
+            adapter_for(Harness::resolve("opencode").unwrap()).skills_dir(root),
+            Some(root.join(".opencode").join("skills"))
         );
     }
 
     #[test]
     fn only_codex_and_opencode_rewrite_frontmatter() {
-        assert!(!adapter_for(Harness::ClaudeCode).rewrites_frontmatter_name());
-        assert!(adapter_for(Harness::Codex).rewrites_frontmatter_name());
-        assert!(adapter_for(Harness::OpenCode).rewrites_frontmatter_name());
+        assert!(!adapter_for(Harness::resolve("claude-code").unwrap()).rewrites_frontmatter_name());
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).rewrites_frontmatter_name());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).rewrites_frontmatter_name());
     }
 
     #[test]
     fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
-        for h in [Harness::ClaudeCode, Harness::Codex, Harness::OpenCode] {
+        for h in Harness::known() {
             let out = adapter_for(h).render_plan_mode_context("BODY");
             assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
             assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
+            assert_eq!(
+                adapter_for(h).render_plan_mode_context("\n\n  BODY  \n\n"),
+                "<system-reminder>\nBODY\n</system-reminder>"
+            );
         }
     }
 
     #[test]
-    fn claude_adapter_advertises_cli_events_file_and_model_flag() {
-        let a = adapter_for(Harness::ClaudeCode);
-        assert_eq!(a.cli_events_filename(), Some("claude-events.jsonl"));
-        assert_eq!(a.cli_model_flag(), Some("--model"));
+    fn run_capabilities_capture_run_option_support_by_harness() {
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap()).run_capabilities();
+        assert!(claude.supports_guard);
+        assert!(claude.supports_bootstrap_with_no_stage);
+        assert!(claude.supports_stage_name_with_no_stage);
+
+        let codex = adapter_for(Harness::resolve("codex").unwrap()).run_capabilities();
+        assert!(codex.supports_guard);
+        assert!(!codex.supports_bootstrap_with_no_stage);
+        assert!(!codex.supports_stage_name_with_no_stage);
+
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap()).run_capabilities();
+        assert!(!opencode.supports_guard);
+        assert!(opencode.supports_bootstrap_with_no_stage);
+        assert!(opencode.supports_stage_name_with_no_stage);
     }
 
     #[test]
     fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
         // The post-arm `--guard` banner names the harness's native hook surface,
         // so it lives behind the adapter rather than in generic run code.
-        let claude = adapter_for(Harness::ClaudeCode)
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap())
             .guard_armed_message()
             .expect("claude code has a write guard");
         assert!(
@@ -516,7 +473,7 @@ mod tests {
             "claude banner names its hook file: {claude}"
         );
 
-        let codex = adapter_for(Harness::Codex)
+        let codex = adapter_for(Harness::resolve("codex").unwrap())
             .guard_armed_message()
             .expect("codex has a write guard");
         assert!(
@@ -526,50 +483,32 @@ mod tests {
 
         // OpenCode has no write guard (its install_guard errors), so there is no
         // banner to print.
-        assert_eq!(adapter_for(Harness::OpenCode).guard_armed_message(), None);
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).guard_armed_message(),
+            None
+        );
     }
 
     #[test]
-    fn claude_parse_cli_events_full_reads_stream_json_result_event() {
-        use serde_json::json;
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("claude-events.jsonl");
-        // No per-line timestamps; the result event is the only source of duration.
-        let lines = [
-            json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [
-                {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
-            ]}}),
-            json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 5637, "usage": {"input_tokens": 1, "output_tokens": 2, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}),
-        ];
-        let body = lines
-            .iter()
-            .map(|l| l.to_string())
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&path, format!("{body}\n")).unwrap();
-
-        let a = adapter_for(Harness::ClaudeCode);
-        let summary = a.parse_cli_events_full(&path).unwrap();
-        assert_eq!(summary.final_text, Some("Done".into()));
-        assert_eq!(summary.duration_ms, Some(5637));
-        assert_eq!(summary.tool_invocations.len(), 1);
-        assert_eq!(summary.tool_invocations[0].name, "Bash");
-
-        // The on-disk parser would find no duration here (no line timestamps),
-        // proving parse_cli_events_full routes to the stream-json parser.
-        assert_eq!(a.parse_transcript_full(&path).unwrap().duration_ms, None);
-    }
-
-    #[test]
-    fn codex_parse_cli_events_delegates_to_events_parser() {
-        use serde_json::json;
-        let dir = tempfile::TempDir::new().unwrap();
-        let path = dir.path().join("codex-events.jsonl");
-        let line = json!({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bun test", "output": "ok"}});
-        std::fs::write(&path, format!("{line}\n")).unwrap();
-
-        let inv = adapter_for(Harness::Codex).parse_cli_events(&path).unwrap();
-        assert_eq!(inv.len(), 1);
-        assert_eq!(inv[0].name, "command_execution");
+    fn staged_slug_default_and_opencode_override_preserve_the_prefix() {
+        let prefix = "slow-powers-eval-";
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).staged_slug(
+                prefix,
+                2,
+                "with_skill",
+                "my-skill"
+            ),
+            "slow-powers-eval-2-with_skill__my-skill"
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).staged_slug(
+                prefix,
+                2,
+                "with_skill",
+                "my-skill"
+            ),
+            "slow-powers-eval-2-with-skill-my-skill"
+        );
     }
 }

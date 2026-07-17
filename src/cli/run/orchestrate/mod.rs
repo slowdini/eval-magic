@@ -15,10 +15,10 @@ use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{DispatchMechanism, Eval, Mode, RunContext};
+use crate::core::{Eval, Mode, RunContext};
 
 use super::RunError;
-use super::util::{insession_isolated_handoff, mode_str};
+use super::util::mode_str;
 
 mod build;
 mod envs;
@@ -36,7 +36,10 @@ pub struct RunOptions<'a> {
     pub iteration: Option<u32>,
     pub dry_run: bool,
     pub no_stage: bool,
-    pub guard: bool,
+    /// Tri-state write guard: `None` = auto (the preflight resolves it to
+    /// `Some` — armed when the harness declares a guard and staging is
+    /// active), `Some` = explicit `--guard` / `--no-guard`.
+    pub guard: Option<bool>,
     pub stage_name: Option<&'a str>,
     pub plan_mode: bool,
     /// Runs per condition cell; per-eval `runs` overrides take precedence.
@@ -46,6 +49,14 @@ pub struct RunOptions<'a> {
     pub agent_model: Option<&'a str>,
     pub judge_model: Option<&'a str>,
     pub label: Option<&'a str>,
+}
+
+impl RunOptions<'_> {
+    /// Whether the preflight-resolved guard is armed. (`None` only occurs
+    /// before the preflight runs; it reads as unarmed.)
+    pub(crate) fn guard_armed(&self) -> bool {
+        self.guard == Some(true)
+    }
 }
 
 /// Everything [`resolve::resolve_request`] works out before any filesystem
@@ -85,7 +96,23 @@ struct Staged {
 
 /// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
+    // Resolve first (read-only): the preflight scopes its transcript warning
+    // to the eval config actually selected for the run.
     let resolved = resolve::resolve_request(ctx, opts)?;
+
+    // The harness preflight provides supported enhancements automatically (the
+    // write guard auto-arms), warns about undeclared ones (naming each
+    // fallback), and adjusts the options — it only rejects genuinely
+    // contradictory flag combinations.
+    let preflight = super::util::harness_run_preflight(
+        opts,
+        ctx,
+        super::util::evals_use_transcript_check(&resolved.selected_evals),
+    )?;
+    for warning in &preflight.warnings {
+        eprintln!("⚠ {warning}");
+    }
+    let opts = &preflight.opts;
 
     // Redirect staging into the isolated env dir. `resolve_request` has now
     // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
@@ -140,6 +167,11 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
             "  staging: disabled (--no-stage) — skills will be inlined into dispatch_prompt for harnesses without project-local skill discovery"
         );
     }
+    if opts.guard_armed() {
+        println!(
+            "  guard: armed — the write guard blocks out-of-env writes during dispatch (--no-guard to opt out)"
+        );
+    }
 }
 
 /// Print the workspace paths, dispatch count, and the harness-specific next-step
@@ -156,16 +188,10 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         r.iteration_dir.join("dispatch.json").display()
     );
 
-    match ctx.run_mode.mechanism() {
-        DispatchMechanism::InSession => println!(
-            "Runbook:            {} — start a fresh session in env/ and \"Read and follow RUNBOOK.md\".",
-            ctx.stage_root.join("RUNBOOK.md").display()
-        ),
-        DispatchMechanism::Cli => println!(
-            "Runbook:            {} — a human-followed copy of the steps below.",
-            r.iteration_dir.join("RUNBOOK.md").display()
-        ),
-    }
+    println!(
+        "Runbook:            {} — a human-followed copy of the steps below.",
+        r.iteration_dir.join("RUNBOOK.md").display()
+    );
     let run_counts: Vec<u32> = r
         .selected_evals
         .iter()
@@ -197,23 +223,14 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
-    match ctx.run_mode.mechanism() {
-        // In-session subagent dispatch (Claude Code's Task tool today). The env is
-        // built before the isolated session starts, so the summary just hands off:
-        // cd into env/, start a fresh session, "Read and follow RUNBOOK.md" — which
-        // carries the full dispatch → switch-condition → ingest → finalize loop.
-        DispatchMechanism::InSession => {
-            println!("\nNext: {}", insession_isolated_handoff(&ctx.stage_root))
-        }
-        // One-shot CLI dispatch; the exact command is harness-specific.
-        DispatchMechanism::Cli => println!(
-            "{}",
-            adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {
-                guard: opts.guard,
-                target_args: &target_args,
-                iteration,
-                agent_model: opts.agent_model,
-            })
-        ),
-    }
+    // One-shot CLI dispatch; the exact command is harness-specific.
+    println!(
+        "{}",
+        adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {
+            guard: opts.guard_armed(),
+            target_args: &target_args,
+            iteration,
+            agent_model: opts.agent_model,
+        })
+    );
 }

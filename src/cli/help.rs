@@ -12,21 +12,20 @@ EXAMPLES:
   eval-magic init
 
   # Mode A — evaluate a new skill (with vs. without)
-  eval-magic run --guard
-  # run builds the isolated env/ + RUNBOOK.md, then prints a handoff:
-  #   cd into env/, start a fresh session, say \"Read and follow RUNBOOK.md\".
-  # The fresh session walks the whole loop below from inside env/:
-  #   …dispatch each task in dispatch.json as a fresh subagent…
-  #   eval-magic ingest      # auto-resolves --subagents-dir from CLAUDE_CODE_SESSION_ID
-  #                          # (override: --session-id <id> or --subagents-dir <path>)
+  eval-magic run
+  # run builds per-(group, condition) envs + RUNBOOK.md (a human-followed recipe),
+  # arming the write guard automatically when the harness supports it.
+  # Follow it to dispatch each task in dispatch.json via `claude -p`, capturing each
+  # task's outputs/claude-events.jsonl, then:
+  #   eval-magic ingest      # reads each task's outputs/claude-events.jsonl
   #   …dispatch each judge task ingest listed…
   #   eval-magic finalize
   #   eval-magic teardown
-  eval-magic promote-baseline   # optional, from the prep session once benchmark.json lands
+  eval-magic promote-baseline   # optional, once benchmark.json lands
 
   # Mode B — evaluate a language change (edit-first)
   eval-magic snapshot --ref HEAD
-  eval-magic run --mode revision --guard
+  eval-magic run --mode revision
   # …then the same ingest → finalize → teardown steps as Mode A.
 
   # Reduced-set / dry runs
@@ -34,11 +33,14 @@ EXAMPLES:
   eval-magic run --only case-a,case-b
   eval-magic run --skip slow-case
 
+  # Opt out of the auto-armed write guard
+  eval-magic run --no-guard
+
   # Evaluate one skill from elsewhere, without staging sibling skills
-  eval-magic run --skill ./skills/my-skill --guard
+  eval-magic run --skill ./skills/my-skill
 
   # Opt in to seeded environment parity: stage sibling skills from a skills dir
-  eval-magic run --skill-dir ./skills --skill my-skill --guard
+  eval-magic run --skill-dir ./skills --skill my-skill
 
   # Codex harness: dispatch with stdin detached; ingest reads each task's codex-events.jsonl
   eval-magic run --harness codex
@@ -52,4 +54,16 @@ EXAMPLES:
   eval-magic run --harness opencode
   # ...dispatch each task with `opencode run`, then assemble records manually
   # until OpenCode transcript ingest is wired.
+
+  # Bring your own harness (docs/byoh.md): scaffold a commented descriptor +
+  # notes skeleton into .eval-magic/harnesses/, fill in verified values, lint, run
+  eval-magic harness init cool-custom-harness
+  eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml
+  eval-magic harness list
+  eval-magic run --harness cool-custom-harness
+  # ...or load a one-off descriptor (its label becomes the default harness):
+  eval-magic run --harness-file ./cool-custom-harness.toml
+
+  # Inspect the resolved descriptor after layer merging (built-ins included)
+  eval-magic harness show claude-code
 ";

@@ -32,9 +32,9 @@ pub(super) fn stage_conditions(
     };
 
     let plan_mode_content = if opts.plan_mode {
-        let profile = resolve_plan_mode_profile(ctx.harness)?;
+        let profile = resolve_plan_mode_profile();
         println!(
-            "  plan-mode: injecting {} plan-mode profile as operating context (issue #142; necessary-not-sufficient fidelity layer)",
+            "  plan-mode: injecting the shared plan-mode profile as operating context for {} (issue #142; necessary-not-sufficient fidelity layer)",
             harness_label(ctx.harness)
         );
         Some(profile.to_string())
@@ -70,12 +70,10 @@ pub(super) fn stage_conditions(
         ));
     }
 
-    // The environments to stage: one shared `env/` for in-session (hosting both
-    // conditions + the first group's fixtures), or one per (group, condition) for
-    // Cli (each with only its condition's skill + its group's fixtures).
+    // The environments to stage: one per (group, condition), each with only its
+    // condition's skill + its group's fixtures.
     let targets = env_targets(&EnvLayoutInput {
         iteration_dir: &r.iteration_dir,
-        mechanism: ctx.run_mode.mechanism(),
         groups: &r.groups,
         cond_a: r.cond_a,
         cond_b: r.cond_b,
@@ -89,7 +87,7 @@ pub(super) fn stage_conditions(
     for target in &targets {
         // Disarm a prior run's guard before re-staging, so a crashed run can't leave
         // the write-blocking hook armed across runs. Created unconditionally — even
-        // under --no-stage, fixtures (and the in-session RUNBOOK) still land here.
+        // under --no-stage, each env's fixtures still land here.
         teardown_guard(&target.root);
         fs::create_dir_all(&target.root)?;
 

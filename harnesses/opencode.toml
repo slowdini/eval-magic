@@ -1,0 +1,32 @@
+# OpenCode harness descriptor.
+#
+# Native staging only: transcript ingest, the model flag, the write guard, and
+# dispatch command recipes are not wired, so those tables are absent and the
+# enhancement defaults (unsupported-errors and generic handoff text) apply.
+
+label = "opencode"
+skills_dir = ".opencode/skills"
+config_dirs = [".opencode"]
+
+# Slug *generation* is the named `opencode` capability (sanitization +
+# truncation beyond a format string); the declarative rules below are the
+# validation half, exactly OpenCode's skill-name constraints.
+[staging]
+slug_capability = "opencode"
+stage_name_pattern = "^[a-z0-9]+(-[a-z0-9]+)*$"
+stage_name_max_len = 64
+stage_name_invalid_message = 'OpenCode skill name "{name}" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens'
+rewrites_frontmatter_name = true
+surface_phrase = "as an OpenCode skill"
+unresolved_phrase = "If it does not load as an OpenCode skill"
+
+[skills_block]
+header = "<available_skills>"
+item = "\n  <skill>\n    <name>{name}</name>\n    <description>{description}</description>\n  </skill>"
+footer = "\n</available_skills>"
+
+[dispatch]
+model_note = " Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet."
+next_steps_template = '''
+
+Next: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`.{model_note} OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`.'''

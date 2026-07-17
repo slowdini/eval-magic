@@ -8,7 +8,8 @@ use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::adapter_for;
-use crate::core::{Harness, Mode, RunContext, capabilities_for};
+use crate::adapters::registry::has_embedded_layer;
+use crate::core::{Assertion, Eval, Harness, Mode, RunContext};
 
 use super::RunError;
 use super::orchestrate::RunOptions;
@@ -56,96 +57,44 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
     )
 }
 
-/// The shared dispatch-instruction body, parameterized on the `tasks[]` filter so
-/// the condition-only and condition+group variants stay in lockstep.
-fn insession_dispatch_instruction(filter: &str) -> String {
-    format!(
-        "iterate the `tasks[]` entries in dispatch.json whose {filter} and \
-         dispatch each as a subagent, passing its `agent_description` verbatim as the subagent \
-         description (that string is the key that links each transcript back — without it tool \
-         calls, tokens, and duration come back empty)."
-    )
-}
-
-/// Dispatch instruction for one condition batch: iterate the matching `tasks[]`
-/// and dispatch each as a subagent with its `agent_description` verbatim. A building
-/// block of the interactive runbook's per-condition steps ([`super::runbook`]).
-pub(crate) fn insession_dispatch_batch(condition: &str) -> String {
-    insession_dispatch_instruction(&format!("`condition` is `{condition}`"))
-}
-
-/// Dispatch instruction for one `(condition, group)` segment — used when a run has
-/// more than one isolation group, so each group's batch dispatches separately with
-/// a [`insession_reset_batch_command`] barrier between groups ([`super::runbook`]).
-pub(crate) fn insession_dispatch_segment(condition: &str, group: &str) -> String {
-    insession_dispatch_instruction(&format!(
-        "`condition` is `{condition}` and `group` is `{group}`"
-    ))
-}
-
-/// The `reset-batch` barrier command between isolation-group batches: wipe the
-/// env working tree and re-seed it with `group`'s fixtures before dispatching it.
-/// A building block of the interactive runbook ([`super::runbook`]).
-pub(crate) fn insession_reset_batch_command(
-    target_args: &str,
-    iteration: u32,
-    group: &str,
-) -> String {
-    format!("eval-magic reset-batch{target_args} --iteration {iteration} --group {group}")
-}
-
-/// The `switch-condition` barrier command between batches: name the condition about
-/// to be dispatched (the one to keep). A building block of the interactive runbook
-/// ([`super::runbook`]).
-pub(crate) fn insession_switch_command(target_args: &str, iteration: u32, keep: &str) -> String {
-    format!("eval-magic switch-condition{target_args} --iteration {iteration} --condition {keep}")
-}
-
-/// The `ingest` hand-off command + its session-resolution hint. A building block of
-/// the interactive runbook ([`super::runbook`]).
-pub(crate) fn insession_ingest_command(target_args: &str, iteration: u32) -> String {
-    format!(
-        "eval-magic ingest{target_args} --iteration {iteration}\n\
-         (ingest auto-resolves the subagents dir from CLAUDE_CODE_SESSION_ID; outside that \
-         session, add --session-id <id> or --subagents-dir <path>.)"
-    )
-}
-
-/// The post-`run` handoff for the isolated in-session flow: cd into the env, start a
-/// *fresh* Claude Code session there, and have it read `RUNBOOK.md` — which carries the
-/// full dispatch → switch-condition → ingest → finalize loop. The env (incl.
-/// `env/.claude/skills/`) is built before that session starts, so the fresh session is
-/// structural, not a watcher workaround; the orchestrator no longer juggles the dispatch
-/// loop itself.
-pub(crate) fn insession_isolated_handoff(env_dir: &Path) -> String {
-    format!(
-        "start the isolated run in a fresh session:\n  \
-         1. cd {env}\n  \
-         2. start a fresh Claude Code session there (`claude`)\n  \
-         3. say: Read and follow RUNBOOK.md\n\
-         RUNBOOK.md walks the whole loop (dispatch → switch-condition → ingest → finalize) and \
-         writes benchmark.json; resume here to read it.",
-        env = env_dir.display()
-    )
-}
-
-/// Resolve the verbatim plan-mode procedure profile for a harness.
-/// The profile is a compile-time bundled asset, mirroring the schema embedding in
+/// Resolve the shared, harness-agnostic plan-mode procedure profile injected by
+/// `--plan-mode`. A compile-time bundled asset, mirroring the schema embedding in
 /// `validation`.
-pub(crate) fn resolve_plan_mode_profile(harness: Harness) -> Result<&'static str, RunError> {
-    Ok(adapter_for(harness).plan_mode_profile())
+pub(crate) fn resolve_plan_mode_profile() -> &'static str {
+    include_str!("../../../profiles/shared/plan-mode.md")
 }
 
-/// Reject run options not supported by the selected harness's current mechanism.
-pub(crate) fn validate_harness_run_options(
-    opts: &RunOptions,
+/// The harness preflight verdict: possibly-adjusted run options plus the
+/// warnings to print, each naming the fallback that carries the run.
+pub(crate) struct HarnessPreflight<'a> {
+    pub opts: RunOptions<'a>,
+    pub warnings: Vec<String>,
+}
+
+/// Check the run options against the selected harness's declared enhancements
+/// — the #126 model: each supported enhancement is provided automatically
+/// (the write guard auto-arms when the harness declares one and staging is
+/// active), a missing enhancement *warns* naming its fallback, and the run
+/// continues degraded. Only genuinely contradictory flag combinations
+/// (options the harness declares incompatible with `--no-stage`) and an
+/// explicit `--guard` on a harness defined by user-supplied descriptors alone
+/// (guards are embedded-only) stay errors.
+///
+/// Adjustments: `opts.guard` arrives tri-state (`None` = auto) and leaves
+/// resolved to `Some`; a harness without a `skills_dir` forces `--no-stage`
+/// (each SKILL.md is inlined into its dispatch prompt).
+pub(crate) fn harness_run_preflight<'a>(
+    opts: &RunOptions<'a>,
     ctx: &RunContext,
-) -> Result<(), RunError> {
-    let capabilities = capabilities_for(ctx.harness);
+    uses_transcript_check: bool,
+) -> Result<HarnessPreflight<'a>, RunError> {
+    let adapter = adapter_for(ctx.harness);
+    let capabilities = adapter.run_capabilities();
+    let label = harness_label(ctx.harness);
+
+    // Contradictory-flag declarations stay hard errors: the harness's staging
+    // mechanism conflicts with these options, so no fallback can honor them.
     let mut unsupported: Vec<&str> = Vec::new();
-    if opts.guard && !capabilities.supports_guard {
-        unsupported.push("--guard");
-    }
     if ctx.bootstrap_path.is_some()
         && opts.no_stage
         && !capabilities.supports_bootstrap_with_no_stage
@@ -156,22 +105,132 @@ pub(crate) fn validate_harness_run_options(
     {
         unsupported.push("--stage-name with --no-stage");
     }
-    if unsupported.is_empty() {
-        Ok(())
-    } else {
-        Err(RunError::msg(format!(
+    if !unsupported.is_empty() {
+        return Err(RunError::msg(format!(
             "Unsupported for --harness {}: {}.",
-            harness_label(ctx.harness),
+            label,
             unsupported.join(", ")
-        )))
+        )));
     }
+
+    // An explicit `--guard` on a harness defined only by user-supplied
+    // descriptors is a hard error, not a downgrade: the write guard stays
+    // restricted to built-in descriptors (it fails open, so a mistyped user
+    // descriptor would silently disarm it), and a run the user asked to guard
+    // must not continue silently unguarded. Auto-arm never errors here — it
+    // quietly stays off (warning below).
+    if opts.guard == Some(true) && !capabilities.supports_guard && !has_embedded_layer(ctx.harness)
+    {
+        return Err(RunError::msg(format!(
+            "--guard: --harness {label} comes from user-supplied descriptors only, and the \
+             write guard stays restricted to built-in harnesses (it fails open, so a mistyped \
+             descriptor would silently disarm it). Rerun without --guard — out-of-bounds \
+             writes are detected after the fact by the detect-stray-writes audit (folded \
+             into `ingest`)."
+        )));
+    }
+
+    let mut opts = opts.clone();
+    let mut warnings = Vec::new();
+
+    // Missing native staging forces --no-stage before the guard resolves, so
+    // the guard sees the *effective* staging state.
+    if !opts.no_stage && adapter.skills_dir(Path::new(".")).is_none() {
+        opts.no_stage = true;
+        warnings.push(format!(
+            "--harness {label} declares no skills_dir — native staging is unavailable; \
+             falling back to --no-stage (each SKILL.md is inlined into its dispatch prompt)."
+        ));
+    }
+
+    // Resolve the guard tri-state. The guard requires staging and a declared
+    // (embedded built-in) guard block; auto mode arms it whenever both hold.
+    let can_arm = capabilities.supports_guard && has_embedded_layer(ctx.harness) && !opts.no_stage;
+    match opts.guard {
+        Some(true) if !capabilities.supports_guard => {
+            opts.guard = Some(false);
+            warnings.push(format!(
+                "--guard: --harness {label} declares no write guard — continuing unguarded; \
+                 out-of-bounds writes are detected after the fact by the detect-stray-writes \
+                 audit (folded into `ingest`), never blocked."
+            ));
+        }
+        Some(true) if opts.no_stage => {
+            opts.guard = Some(false);
+            warnings.push(
+                "--guard: --no-stage disables the write guard (it requires staging) — \
+                 continuing unguarded; out-of-bounds writes are detected after the fact by \
+                 the detect-stray-writes audit (folded into `ingest`), never blocked."
+                    .to_string(),
+            );
+        }
+        Some(_) => {}
+        None => {
+            opts.guard = Some(can_arm);
+            if !capabilities.supports_guard {
+                warnings.push(format!(
+                    "--harness {label} declares no write guard — the run continues unguarded; \
+                     out-of-bounds writes are detected after the fact by the \
+                     detect-stray-writes audit (folded into `ingest`), never blocked. Pass \
+                     --no-guard to acknowledge and silence this."
+                ));
+            }
+            // A supported guard on a no-stage run stays off without a warning:
+            // the run-summary unguarded notice already covers it.
+        }
+    }
+
+    if adapter.cli_events_filename().is_none() {
+        warnings.push(if uses_transcript_check {
+            format!(
+                "--harness {label} declares no transcript parser — transcript_check assertions \
+                 will grade as unverifiable and llm_judge carries the grading; tokens/duration \
+                 go unrecorded. Recover each final message into outputs/final-message.md \
+                 (see RUNBOOK.md)."
+            )
+        } else {
+            format!(
+                "--harness {label} declares no transcript parser — tokens/duration go \
+                 unrecorded and run records are assembled from each task's \
+                 outputs/final-message.md (see RUNBOOK.md)."
+            )
+        });
+    }
+    if (opts.agent_model.is_some() || opts.judge_model.is_some())
+        && adapter.cli_model_flag().is_none()
+    {
+        warnings.push(format!(
+            "--harness {label} declares no model flag — models are recorded in \
+             conditions.json as provenance only; dispatches run on the harness's \
+             default model."
+        ));
+    }
+    if !adapter.has_dispatch_recipes() {
+        warnings.push(format!(
+            "--harness {label} declares no dispatch exec recipe — RUNBOOK.md and \
+             dispatch-manifest.md carry handoff guidance without a copy-pasteable per-task \
+             command; construct each dispatch through the harness's one-shot CLI yourself."
+        ));
+    }
+    Ok(HarnessPreflight { opts, warnings })
+}
+
+/// Whether any selected eval declares a `transcript_check` assertion — scopes
+/// the no-transcript-parser preflight warning to the eval configs it actually
+/// affects.
+pub(crate) fn evals_use_transcript_check(evals: &[Eval]) -> bool {
+    evals.iter().any(|e| {
+        e.assertions
+            .iter()
+            .flatten()
+            .any(|a| matches!(a, Assertion::TranscriptCheck(_)))
+    })
 }
 
 /// A per-run nonce (`<millis-base36>-<6 hex>`) that namespaces dispatch
-/// descriptions so transcripts can't collide across iterations sharing one parent
-/// session's subagents dir. With no RNG crate, the low bits of the
-/// sub-millisecond clock supply the entropy — enough, since the base36 millis
-/// prefix already differs between runs.
+/// descriptions so they stay unique across iterations of the same skill. With no
+/// RNG crate, the low bits of the sub-millisecond clock supply the entropy —
+/// enough, since the base36 millis prefix already differs between runs.
 pub(crate) fn make_run_nonce() -> String {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -204,18 +263,18 @@ pub(crate) fn mode_str(mode: Mode) -> &'static str {
     }
 }
 
-pub(crate) fn harness_label(harness: Harness) -> &'static str {
+pub(crate) fn harness_label(harness: Harness) -> String {
     adapter_for(harness).label()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{DetectInput, RunMode, detect_run_context};
+    use crate::core::{DetectInput, detect_run_context};
     use std::fs;
 
-    /// Build a `RunContext` for `harness`/`run_mode` against a throwaway skill dir.
-    fn ctx_for(harness: Harness, run_mode: RunMode) -> (tempfile::TempDir, RunContext) {
+    /// Build a `RunContext` for `harness` against a throwaway skill dir.
+    fn ctx_for(harness: Harness) -> (tempfile::TempDir, RunContext) {
         let tmp = tempfile::TempDir::new().unwrap();
         let skill = tmp.path().join("widget");
         fs::create_dir_all(&skill).unwrap();
@@ -227,7 +286,6 @@ mod tests {
         let ctx = detect_run_context(DetectInput {
             skill: Some(skill.display().to_string()),
             harness: Some(harness),
-            run_mode: Some(run_mode),
             cwd: Some(tmp.path().to_path_buf()),
             ..Default::default()
         })
@@ -236,35 +294,258 @@ mod tests {
     }
 
     #[test]
-    fn claude_hybrid_allows_guard() {
+    fn claude_preflight_is_quiet_and_keeps_guard() {
         // `claude -p` loads the project `.claude/settings.local.json` PreToolUse
-        // hook from its cwd, so the write guard fires under Cli dispatch too.
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Hybrid);
+        // hook from its cwd, so the write guard fires under CLI dispatch. A
+        // fully-enhanced harness produces no fallback warnings.
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
         let opts = RunOptions {
-            guard: true,
+            guard: Some(true),
             ..Default::default()
         };
-        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(true));
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
     }
 
     #[test]
-    fn claude_headless_allows_guard() {
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Headless);
-        let opts = RunOptions {
-            guard: true,
-            ..Default::default()
-        };
-        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
+    fn guard_auto_arms_on_a_supported_staged_run() {
+        // No guard flag at all: the enhancement is detected and provided
+        // automatically (#126), with no warning to acknowledge.
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(true), "auto-arm resolves to on");
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
     }
 
     #[test]
-    fn claude_interactive_allows_guard() {
-        let (_t, ctx) = ctx_for(Harness::ClaudeCode, RunMode::Interactive);
+    fn guard_auto_stays_off_quietly_with_no_stage() {
+        // Auto-arm never nags: an unstageable run stays unguarded without a
+        // preflight warning (the run-summary unguarded notice covers it).
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
         let opts = RunOptions {
-            guard: true,
+            no_stage: true,
             ..Default::default()
         };
-        assert!(validate_harness_run_options(&opts, &ctx).is_ok());
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(false));
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
+    }
+
+    #[test]
+    fn guard_auto_stays_off_and_warns_on_a_guardless_harness() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(false));
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("declares no write guard"))
+            .expect("a guard warning fires");
+        assert!(
+            !warning.starts_with("--guard:"),
+            "auto-arm, not the explicit flag, stayed off: {warning}"
+        );
+        assert!(
+            warning.contains("detect-stray-writes"),
+            "names the fallback: {warning}"
+        );
+        assert!(
+            warning.contains("--no-guard"),
+            "names the opt-out that silences it: {warning}"
+        );
+    }
+
+    #[test]
+    fn no_guard_opts_out_without_warnings() {
+        for name in ["claude-code", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let opts = RunOptions {
+                guard: Some(false),
+                ..Default::default()
+            };
+            let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+            assert_eq!(preflight.opts.guard, Some(false));
+            assert!(
+                !preflight.warnings.iter().any(|w| w.contains("write guard")),
+                "--no-guard acknowledges the state, no warning: {:?}",
+                preflight.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_guard_with_no_stage_warns_and_continues_unguarded() {
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let opts = RunOptions {
+            guard: Some(true),
+            no_stage: true,
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(false));
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.starts_with("--guard:"))
+            .expect("an explicit --guard request that can't be honored warns");
+        assert!(warning.contains("--no-stage"), "{warning}");
+        assert!(
+            warning.contains("detect-stray-writes"),
+            "names the fallback: {warning}"
+        );
+    }
+
+    #[test]
+    fn guard_on_a_guardless_harness_warns_and_continues_unguarded() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let opts = RunOptions {
+            guard: Some(true),
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(
+            preflight.opts.guard,
+            Some(false),
+            "guard is forced off, not rejected"
+        );
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("--guard"))
+            .expect("a guard warning fires");
+        assert!(
+            warning.contains("detect-stray-writes"),
+            "names the fallback: {warning}"
+        );
+        assert!(warning.contains("never blocked"), "{warning}");
+    }
+
+    #[test]
+    fn transcriptless_harness_warns_naming_the_llm_judge_fallback() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, true).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("transcript"))
+            .expect("a transcript warning fires");
+        assert!(warning.contains("unverifiable"), "{warning}");
+        assert!(
+            warning.contains("llm_judge"),
+            "names the fallback: {warning}"
+        );
+        assert!(warning.contains("final-message.md"), "{warning}");
+    }
+
+    #[test]
+    fn transcript_warning_omits_transcript_check_sentence_when_unused() {
+        // The eval config declares no transcript_check assertions, so the
+        // warning covers only the limitations that actually apply.
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("transcript parser"))
+            .expect("a transcript warning fires");
+        assert!(!warning.contains("unverifiable"), "{warning}");
+        assert!(!warning.contains("llm_judge"), "{warning}");
+        assert!(warning.contains("tokens/duration"), "{warning}");
+        assert!(warning.contains("final-message.md"), "{warning}");
+    }
+
+    #[test]
+    fn evals_use_transcript_check_detects_the_assertion_type() {
+        use crate::core::{Assertion, AssertionLlmJudge, AssertionTranscriptCheck, Eval};
+
+        fn eval_with(assertions: Option<Vec<Assertion>>) -> Eval {
+            Eval {
+                id: "e1".into(),
+                prompt: "p".into(),
+                expected_output: "o".into(),
+                files: None,
+                assertions,
+                skill_should_trigger: None,
+                runs: None,
+                isolation: None,
+            }
+        }
+
+        let transcript = Assertion::TranscriptCheck(AssertionTranscriptCheck {
+            id: "a1".into(),
+            check: "ran tests".into(),
+            pattern: None,
+            must_precede: None,
+        });
+        let judge = Assertion::LlmJudge(AssertionLlmJudge {
+            id: "a2".into(),
+            rubric: "r".into(),
+            model: None,
+        });
+
+        assert!(evals_use_transcript_check(&[eval_with(Some(vec![
+            judge.clone(),
+            transcript
+        ]))]));
+        assert!(!evals_use_transcript_check(&[
+            eval_with(Some(vec![judge])),
+            eval_with(None)
+        ]));
+        assert!(!evals_use_transcript_check(&[]));
+    }
+
+    #[test]
+    fn dispatchless_harness_warns_naming_the_generic_handoff() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("dispatch exec recipe"))
+            .expect("a dispatch-recipe warning fires");
+        assert!(warning.contains("RUNBOOK.md"), "{warning}");
+
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert!(
+            !preflight
+                .warnings
+                .iter()
+                .any(|w| w.contains("dispatch exec recipe")),
+            "{:?}",
+            preflight.warnings
+        );
+    }
+
+    #[test]
+    fn model_flags_without_a_descriptor_model_flag_warn_provenance_only() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let opts = RunOptions {
+            agent_model: Some("some-model"),
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("model flag"))
+            .expect("a model warning fires");
+        assert!(
+            warning.contains("provenance"),
+            "names the fallback: {warning}"
+        );
+    }
+
+    #[test]
+    fn no_model_warning_when_no_models_are_requested() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert!(
+            !preflight.warnings.iter().any(|w| w.contains("model flag")),
+            "{:?}",
+            preflight.warnings
+        );
     }
 
     #[test]
@@ -286,47 +567,21 @@ mod tests {
     }
 
     #[test]
-    fn isolated_handoff_points_into_env_and_at_the_runbook() {
-        let env = Path::new("/work/.eval-magic/widget/iteration-3/env");
-        let handoff = insession_isolated_handoff(env);
-        assert!(
-            handoff.contains("/work/.eval-magic/widget/iteration-3/env"),
-            "names the env to cd into: {handoff}"
-        );
-        assert!(handoff.contains("cd "), "spells out the cd step: {handoff}");
-        assert!(
-            handoff.contains("Read and follow RUNBOOK.md"),
-            "hands off to the runbook in a fresh session: {handoff}"
-        );
-        assert!(
-            handoff.contains("fresh"),
-            "names the fresh isolated session: {handoff}"
-        );
-        // The handoff replaces the old printed dispatch loop — it must not re-print it.
-        assert!(
-            !handoff.contains("one batch at a time"),
-            "the dispatch loop lives in RUNBOOK.md now, not the summary: {handoff}"
-        );
-    }
-
-    #[test]
-    fn opencode_plan_mode_profile_resolves() {
-        let profile = resolve_plan_mode_profile(Harness::OpenCode).unwrap();
-        assert!(profile.contains("OpenCode plan mode is active"));
-        assert!(profile.contains("plan agent"));
+    fn plan_mode_profile_is_shared_and_harness_agnostic() {
+        let profile = resolve_plan_mode_profile();
+        assert!(profile.contains("Plan mode is active"));
+        // Harness-agnostic content: no Claude-specific ExitPlanMode rail or
+        // Codex-specific <proposed_plan> block.
+        assert!(!profile.contains("ExitPlanMode"));
+        assert!(!profile.contains("<proposed_plan>"));
     }
 
     #[test]
     fn harness_label_opencode() {
-        assert_eq!(harness_label(Harness::OpenCode), "opencode");
-    }
-
-    #[test]
-    fn codex_plan_mode_profile_resolves() {
-        let profile = resolve_plan_mode_profile(Harness::Codex).unwrap();
-        assert!(profile.contains("Codex plan mode is active"));
-        assert!(profile.contains("<proposed_plan>"));
-        assert!(!profile.contains("ExitPlanMode"));
+        assert_eq!(
+            harness_label(Harness::resolve("opencode").unwrap()),
+            "opencode"
+        );
     }
 
     #[test]

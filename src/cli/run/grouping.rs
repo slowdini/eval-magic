@@ -5,9 +5,8 @@
 //! different content at the same path were a hard error. Grouping turns that into
 //! a decision: evals whose fixtures conflict (same env-relative dest from a
 //! *different* source) are routed into separate groups, and an eval may opt into
-//! its own singleton group via [`Isolation::Isolated`]. The realization differs by
-//! dispatch mechanism (one env + reset barrier for in-session; one env per
-//! `(group, condition)` for CLI), but the grouping decision here is shared.
+//! its own singleton group via [`Isolation::Isolated`]. Each group is realized as
+//! one env per `(group, condition)`, but the grouping decision here is shared.
 //!
 //! The conflict rule is identical to the per-env fixture-claim rule in
 //! [`super::fixtures`]: same dest + same source is an idempotent share (evals may

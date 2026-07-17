@@ -6,8 +6,6 @@
 
 use clap::{Args, Parser, Subcommand};
 
-use crate::core::{Harness, RunMode};
-
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
 ///
 /// An eval dispatches a fresh subagent twice per test case — once with the skill
@@ -35,6 +33,16 @@ use crate::core::{Harness, RunMode};
     after_help = super::help::AFTER_HELP
 )]
 pub(crate) struct Cli {
+    /// Load a one-off harness descriptor file as the top registry layer.
+    ///
+    /// The file merges field-by-field onto any registered harness with the same
+    /// `label` (or defines a new one), exactly like a project-local descriptor
+    /// in `.eval-magic/harnesses/`, and — when `--harness` is omitted — its
+    /// label becomes the invocation's default harness. Unlike discovered
+    /// descriptor files (skipped with a warning when broken), errors in this
+    /// explicitly named file are fatal.
+    #[arg(long, global = true, value_name = "PATH")]
+    pub harness_file: Option<String>,
     #[command(subcommand)]
     pub command: Option<Commands>,
 }
@@ -75,51 +83,20 @@ pub struct CommonArgs {
     /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
     /// Claude Code and Codex both support staged skills, transcript ingest, and
-    /// `--guard`. Codex stages skills under `.agents/skills` and reads each
-    /// task's `outputs/codex-events.jsonl` instead of a subagents dir.
-    /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
-    /// `--guard` are not yet wired for OpenCode.
+    /// the write guard (armed automatically). Each reads its own per-task events
+    /// file (`claude-events.jsonl`, `codex-events.jsonl`); Codex stages skills
+    /// under `.agents/skills`. OpenCode stages skills under `.opencode/skills`;
+    /// transcript ingest and the write guard are not yet wired for OpenCode.
+    /// The name is resolved against the harness descriptor registry after
+    /// parsing; an unknown name errors listing every registered harness.
     #[arg(long)]
-    pub harness: Option<Harness>,
-    /// Run mode: `interactive` (in-session subagents), `hybrid` (an agent
-    /// orchestrates while each dispatch shells out to the harness CLI), or
-    /// `headless` (CLI-only, no session).
-    ///
-    /// Defaults per harness — Claude Code → `interactive`, Codex/OpenCode →
-    /// `hybrid`. `hybrid`/`headless` dispatch through the harness CLI (`claude -p`,
-    /// `codex exec`) and read each task's `outputs/<harness>-events.jsonl`;
-    /// `interactive` dispatches in-session subagents. Claude Code wires all three
-    /// (`hybrid`/`headless` ride `claude -p` stream-json); Codex wires `hybrid` +
-    /// `headless`; OpenCode wires `hybrid` only. Pass the same value to every command
-    /// of a run (it selects the transcript source at `ingest`); the printed next-step
-    /// commands already carry it.
-    #[arg(long)]
-    pub run_mode: Option<RunMode>,
+    pub harness: Option<String>,
     /// Workspace directory (defaults to `<cwd>/.eval-magic`).
     ///
     /// The artifact root. Pass the same value to every command of a run, including
     /// `teardown`.
     #[arg(long)]
     pub workspace_dir: Option<String>,
-    /// Subagents transcript dir (Claude Code only), e.g.
-    /// `~/.claude/projects/<slug>/<session-id>/subagents/`.
-    ///
-    /// Where Claude Code persisted subagent transcripts. `ingest`/`record-runs`/
-    /// `fill-transcripts` read it to populate `tool_invocations`, tokens, and
-    /// duration. Optional: when omitted it is auto-resolved from `--session-id`
-    /// (or the `CLAUDE_CODE_SESSION_ID` env var); pass it explicitly only to
-    /// override. Not used for Codex, which reads `outputs/codex-events.jsonl`.
-    #[arg(long)]
-    pub subagents_dir: Option<String>,
-    /// Parent session id for auto-resolving `--subagents-dir` (Claude Code only).
-    ///
-    /// Defaults to the `CLAUDE_CODE_SESSION_ID` env var that Claude Code sets in
-    /// the orchestrating agent's shell. `ingest`/`record-runs`/`fill-transcripts`
-    /// use it to locate `<config>/projects/<cwd-slug>/<session-id>/subagents/`
-    /// (scanning `projects/*` if the cwd slug differs). Pass it only when running
-    /// outside that session; an explicit `--subagents-dir` overrides it.
-    #[arg(long)]
-    pub session_id: Option<String>,
     /// Restrict to these eval ids (comma-separated).
     ///
     /// Mutually exclusive with `--skip`; every named id must exist or the run
@@ -133,6 +110,92 @@ pub struct CommonArgs {
     /// Replace existing records rather than erroring.
     #[arg(long)]
     pub overwrite: bool,
+}
+
+/// `harness` groups the descriptor-inspection subcommands.
+#[derive(Debug, Args)]
+pub struct HarnessArgs {
+    #[command(subcommand)]
+    pub command: HarnessCommands,
+}
+
+#[derive(Debug, Subcommand)]
+pub(crate) enum HarnessCommands {
+    /// Scaffold a commented descriptor template and notes skeleton for a new
+    /// harness.
+    ///
+    /// Writes two files into the project-local descriptor layer:
+    /// `.eval-magic/harnesses/<name>.toml`, pre-filled with `label = "<name>"`
+    /// and every optional table present as a commented-out, inline-explained
+    /// example; and `.eval-magic/harnesses/<name>-notes.md`, the
+    /// verification-record skeleton where each filled-in value's source is
+    /// recorded. The scaffold is lint-clean exactly as written — `harness
+    /// lint` passes before a single field is filled in, and the file registers
+    /// `<name>` as a baseline harness immediately. Values must be verified
+    /// against the harness's own documentation or observed output, never
+    /// guessed. Scaffolding an already-registered name (e.g. the built-in
+    /// `claude-code`) is allowed with a note: descriptor layers merge
+    /// field-by-field, so the file overlays the registered harness instead of
+    /// defining a new one. The `[guard]` table is never scaffolded —
+    /// user-supplied descriptors may not declare it. The authoring guide is
+    /// docs/byoh.md; its "Upstreaming your descriptor" section covers
+    /// contributing the finished descriptor.
+    Init {
+        /// Label for the new harness (kebab-case, e.g. `cool-cli`); becomes
+        /// the descriptor's `label` and both file names.
+        name: String,
+        /// Print the rendered descriptor template to stdout instead of
+        /// writing files.
+        ///
+        /// Prints only the template (no notes skeleton, no next steps), so
+        /// the output is redirectable — e.g. into a user-global layer
+        /// (`~/.config/eval-magic/harnesses/`) or a one-off `--harness-file`.
+        #[arg(long)]
+        stdout: bool,
+        /// Overwrite existing scaffold files.
+        #[arg(long)]
+        force: bool,
+    },
+    /// List every registered harness: name, source layer(s), enhancements.
+    ///
+    /// One line per harness with the layers that contributed to it (built-in,
+    /// user, project, file — a merged descriptor shows all of them, e.g.
+    /// `built-in + project`) and the enhancements the resolved descriptor
+    /// declares (staging, skills-block, transcript, model-flag, guard,
+    /// shadow-preflight, dispatch-recipes; `baseline` when none). The session's
+    /// default harness — `claude-code`, or the `--harness-file` descriptor when
+    /// one is loaded — is marked `(default)`.
+    List,
+    /// Print one harness's resolved descriptor (after layer merging) as TOML.
+    ///
+    /// The output is authorable: the provenance header lists every contributing
+    /// file as `#` comments, and the body is valid descriptor TOML you can copy
+    /// into a layer file (`.eval-magic/harnesses/<name>.toml`) and edit. Fields
+    /// at their baseline defaults are omitted. When reusing a guarded built-in's
+    /// output as a user layer, drop its `[guard]` table and
+    /// `run.supports_guard` first — user-supplied descriptors may not declare
+    /// them.
+    Show {
+        /// Registered harness name (see `harness list`).
+        name: String,
+    },
+    /// Validate a descriptor file, or every layer of a registered harness.
+    ///
+    /// A file target runs the full load pipeline with one ✓/✗ line per check:
+    /// TOML syntax + schema (unknown fields, bad capability names), the
+    /// user-layer restrictions (`[guard]` and `run.supports_guard = true` stay
+    /// built-in-only; unguarded runs fall back to the detect-stray-writes
+    /// audit), and the cross-field invariants — merged onto the registered
+    /// harness with the same `label` when one exists, so a partial override is
+    /// checked against its real merge target. A name target re-lints every
+    /// discovered layer file strictly, surfacing descriptors that registry
+    /// initialization skipped with a warning. Exits non-zero when any check
+    /// fails. (A future `--probe` flag is reserved for a live dispatch probe
+    /// through the exec template.)
+    Lint {
+        /// Descriptor file path, or a registered harness name.
+        target: String,
+    },
 }
 
 /// `validate` only needs to know where to look.
@@ -204,31 +267,6 @@ pub struct GradeArgs {
     /// Merge judge responses instead of emitting judge tasks.
     #[arg(long)]
     pub finalize: bool,
-}
-
-/// `switch-condition` names the condition about to be dispatched (the one to keep)
-/// on top of the common set.
-#[derive(Debug, Args)]
-pub struct SwitchConditionArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    /// The condition you are about to dispatch next (the one to KEEP). Its
-    /// counterpart's staged skill is removed from `env/.claude/skills/`.
-    #[arg(long)]
-    pub condition: String,
-}
-
-/// `reset-batch` names the isolation group about to be dispatched, on top of the
-/// common set.
-#[derive(Debug, Args)]
-pub struct ResetBatchArgs {
-    #[command(flatten)]
-    pub common: CommonArgs,
-    /// The isolation group you are about to dispatch next. The shared `env/`'s
-    /// working tree is wiped (keeping the staged skills + the outputs tree) and
-    /// re-seeded with this group's fixtures.
-    #[arg(long)]
-    pub group: String,
 }
 
 /// `snapshot` adds a label and an optional git ref on top of the common set.
@@ -309,13 +347,21 @@ pub struct RunArgs {
     /// asset files); use the staged (default) path when the measured behavior
     /// depends on sibling files. The isolated env (`env/`) is still built either
     /// way — `--no-stage` only skips populating the harness skills dir. Also
-    /// disables `--guard` — the write guard requires staging — so no-stage runs
-    /// are unguarded and rely on `detect-stray-writes` after the fact.
+    /// disables the write guard (auto-armed or explicit) — it requires staging —
+    /// so no-stage runs are unguarded and rely on `detect-stray-writes` after
+    /// the fact.
     #[arg(long)]
     pub no_stage: bool,
-    /// Arm the write guard (PreToolUse hook) for the dispatch window.
+    /// Arm the write guard explicitly (it auto-arms when the harness supports it).
     ///
-    /// Stages a harness-native `PreToolUse` hook that *blocks* subagent
+    /// The write guard arms automatically on guard-capable built-in harnesses
+    /// whenever staging is active, so this flag only makes the request explicit:
+    /// where auto-arm quietly stays off (no declared guard, or `--no-stage`), an
+    /// explicit `--guard` warns, and a harness defined only by user-supplied
+    /// descriptors rejects it in preflight (rerun without it;
+    /// `detect-stray-writes` audits after the fact). Opt out with `--no-guard`.
+    ///
+    /// The guard is a harness-native `PreToolUse` hook that *blocks* subagent
     /// writes/installs outside the isolated run env (the agent-under-test's cwd)
     /// while dispatches run. Its allowed roots are the env plus the OS temp dir, so
     /// the guard boundary matches the same env that isolates the agent's reads.
@@ -323,25 +369,34 @@ pub struct RunArgs {
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
     /// redirects to absolute paths — and acting as a backstop when the isolated
-    /// session runs with relaxed permissions. Arm it unless the user opts out. The
-    /// marker auto-expires after 6h and is torn down at the next run; while armed the
+    /// session runs with relaxed permissions. The marker auto-expires after 6h
+    /// and is torn down at the next run; while armed the
     /// hook fires on your own tool calls too. If it remains armed after `finalize`,
     /// `finalize` reminds you to run `teardown` before editing source (which disarms
     /// the cwd guard and every per-`(group, condition)` Cli env's guard). Requires
-    /// staging — incompatible with `--no-stage`, under which guard install is skipped
-    /// and the run is unguarded.
+    /// staging — with `--no-stage` the guard stays off and the run is unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
-    /// Works under Claude Code's CLI run modes (`hybrid`/`headless`) too: the
-    /// `PreToolUse` hook is staged in `env/.claude/settings.local.json`, and each
-    /// `claude -p` dispatch loads it from that cwd (`cd <eval-root>`), enforcing the
-    /// same boundary as an in-session run (the recipe never passes `--bare`).
+    /// Under Claude Code the `PreToolUse` hook is staged in each env's
+    /// `.claude/settings.local.json`, and each `claude -p` dispatch loads it from
+    /// that cwd (`cd <eval-root>`), enforcing the eval boundary (the recipe never
+    /// passes `--bare`).
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.
     #[arg(long)]
     pub guard: bool,
+    /// Opt out of the write guard for this run.
+    ///
+    /// The guard arms automatically on harnesses that declare one (see
+    /// `--guard`). Pass this to run unguarded — e.g. when the skill under test
+    /// legitimately writes outside the isolated run env — and to silence the
+    /// unguarded-harness preflight warning. Unguarded, out-of-bounds writes are
+    /// only *detected* after the fact by `detect-stray-writes` (folded into
+    /// `ingest`), never blocked.
+    #[arg(long, conflicts_with = "guard")]
+    pub no_guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the
     /// conspicuous `slow-powers-eval-…` slug.
     ///
@@ -349,13 +404,13 @@ pub struct RunArgs {
     /// to clobber an existing dir; registered for next-run cleanup.
     #[arg(long)]
     pub stage_name: Option<String>,
-    /// Inject the harness's plan-mode profile as an operating-context layer.
+    /// Inject the shared plan-mode profile as an operating-context layer.
     ///
-    /// Injects the harness's verbatim plan-mode procedure
-    /// (`profiles/<harness>/plan-mode.md`) as a `<system-reminder>` in every
-    /// dispatch, identical across arms. Opt-in, for plan-mode-relevant skills.
-    /// A harness with no profile aborts. It is text the subagent reads, not a
-    /// real injected mode.
+    /// Injects the shared, harness-agnostic plan-mode procedure
+    /// (`profiles/shared/plan-mode.md`) as a `<system-reminder>` in every
+    /// dispatch, identical across arms and harnesses. Opt-in, for
+    /// plan-mode-relevant skills. It is text the subagent reads, not a real
+    /// injected mode.
     #[arg(long)]
     pub plan_mode: bool,
     /// Runs per condition cell, for variance reduction (default: 1).
@@ -373,10 +428,9 @@ pub struct RunArgs {
     /// Agent-under-test model for CLI dispatches; otherwise recorded as
     /// provenance.
     ///
-    /// For `Cli`-mechanism harnesses such as Codex, the run's dispatch recipes
-    /// include the harness-native model flag when the adapter supports one. For
-    /// in-session dispatch, the runner cannot select the model, so the value is
-    /// persisted to `conditions.json` for `promote-baseline`.
+    /// The run's dispatch recipes include the harness-native model flag when the
+    /// adapter supports one (e.g. Codex's `-m`, Claude Code's `--model`); otherwise
+    /// the value is persisted to `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub agent_model: Option<String>,
     /// Default judge model for emitted judge tasks.
@@ -402,10 +456,9 @@ pub(crate) enum Commands {
     ///
     /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
-    /// (human-readable). Your agent then dispatches each task as a fresh subagent.
-    /// Also writes `RUNBOOK.md`, a followable handoff for an isolated run session
-    /// ("Read and follow RUNBOOK.md") — interactive (agent-followed) for Claude
-    /// Code, human-followed for Codex/OpenCode.
+    /// (human-readable). Dispatch each task through the harness CLI (`claude -p`,
+    /// `codex exec`). Also writes `RUNBOOK.md`, a human-followable handoff for the
+    /// run ("Read and follow RUNBOOK.md").
     Run(RunArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -430,10 +483,8 @@ pub(crate) enum Commands {
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
     /// writes, grades `transcript_check` assertions, then stops at the judge
     /// hand-off, listing a judge task per `llm_judge` assertion. Requires
-    /// `--iteration`; Claude Code auto-resolves the subagents dir from the session
-    /// id (override with `--subagents-dir`), while Codex reads each task's
-    /// `outputs/codex-events.jsonl`. Re-running after a fix is safe — every
-    /// sub-step skips work already done.
+    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl`.
+    /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///
@@ -442,39 +493,18 @@ pub(crate) enum Commands {
     /// any per-`(group, condition)` Cli env guard — prints a `teardown` reminder before
     /// source edits. Requires `--iteration`.
     Finalize(CommonArgs),
-    /// Switch the active condition batch in a single-session isolated run.
-    ///
-    /// Removes the *off-condition*'s staged skill from `env/.claude/skills/` so the
-    /// next batch you dispatch cannot read it — the per-condition read-isolation
-    /// barrier for an interactive isolated run (see `RUNBOOK.md`).
-    /// `--condition` names the condition you are about to
-    /// dispatch next (the one to keep); its counterpart's staged skill is removed.
-    /// Run it only after every Task subagent of the prior batch has returned — it is
-    /// a hard barrier. Idempotent; resolves the iteration from `--workspace-dir` so
-    /// it works invoked from `env/`. Requires `--iteration`.
-    SwitchCondition(SwitchConditionArgs),
-    /// Swap the active isolation batch in a single-session isolated run.
-    ///
-    /// Wipes the shared `env/` working tree (keeping `.claude/skills/` and the
-    /// `.eval-magic-outputs/` tree) and re-seeds it with `--group`'s fixtures — the
-    /// per-batch isolation barrier between eval groups in an interactive isolated run
-    /// (see `RUNBOOK.md`). `--group` names the group you are
-    /// about to dispatch next. Run it only after every Task subagent of the prior
-    /// batch has returned — it is a hard barrier. Resolves the iteration from
-    /// `--workspace-dir` so it works invoked from `env/`. Requires `--iteration`.
-    ResetBatch(ResetBatchArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
     /// Assembles a schema-valid `run.json` and backfills `timing.json` for every
     /// task in a runner-built iteration, from `dispatch.json` +
-    /// `outputs/final-message.md` + the persisted transcript. Never clobbers
-    /// existing records without `--overwrite`; transcript-derived timing carries
-    /// `"source": "transcript"`. Folded into `ingest`.
+    /// `outputs/final-message.md` + each task's `outputs/<harness>-events.jsonl`.
+    /// Never clobbers existing records without `--overwrite`; transcript-derived
+    /// timing carries `"source": "transcript"`. Folded into `ingest`.
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///
-    /// Matches each `(eval, condition)` to a subagent transcript by description and
-    /// populates `tool_invocations` in `run.json`. Subsumed by `record-runs` for
+    /// Reads each task's `outputs/<harness>-events.jsonl` and populates
+    /// `tool_invocations` in `run.json`. Subsumed by `record-runs` for
     /// runner-built iterations; still the tool for filling a pre-existing (hand- or
     /// agent-written) `run.json`.
     FillTranscripts(CommonArgs),
@@ -518,6 +548,18 @@ pub(crate) enum Commands {
     PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),
+    /// Inspect and validate harness descriptors (built-in and user-supplied).
+    ///
+    /// Harnesses are described by layered TOML descriptor files: embedded
+    /// built-ins → user-global (`$EVAL_MAGIC_CONFIG_DIR`,
+    /// `$XDG_CONFIG_HOME/eval-magic`, or `~/.config/eval-magic`, each under
+    /// `harnesses/*.toml`) → project-local (`.eval-magic/harnesses/*.toml`) →
+    /// a one-off `--harness-file <path>`. A later file whose `label` matches an
+    /// earlier descriptor overrides individual fields (field-level merge, not
+    /// whole-file shadowing); a new `label` defines a new harness usable with
+    /// `--harness`. `list` surveys the registry, `show` prints one resolved
+    /// descriptor, and `lint` validates a descriptor file or registered name.
+    Harness(HarnessArgs),
     /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
     /// hook as `eval-magic guard <marker>`, not by users; hidden from help.
     #[command(hide = true)]
@@ -533,6 +575,20 @@ pub(crate) enum Commands {
     GuardCodex {
         /// Path to the guard marker file. Defaults to
         /// `<cwd>/.agents/skills/.slow-powers-eval-guard.json`.
+        marker: Option<String>,
+    },
+    /// Internal generic PreToolUse hook entry point. Invoked by the installed
+    /// write-guard hook as `eval-magic guard-hook --harness <name> <marker>`,
+    /// not by users; hidden from help. `guard` / `guard-codex` are frozen
+    /// aliases of this for the claude-code and codex harnesses.
+    #[command(hide = true, name = "guard-hook")]
+    GuardHook {
+        /// Harness whose embedded descriptor supplies the verdict shape; an
+        /// unknown name fails open (allows the call).
+        #[arg(long)]
+        harness: String,
+        /// Path to the guard marker file. Defaults to the harness's
+        /// `<skills_dir>/.slow-powers-eval-guard.json` under the cwd.
         marker: Option<String>,
     },
 }

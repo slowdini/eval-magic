@@ -1,4 +1,4 @@
-//! The `run` orchestrator and its run-mode variants.
+//! The `run` orchestrator.
 //!
 //! Split into focused sub-orchestrators:
 //!
@@ -17,6 +17,8 @@ use serde::Serialize;
 
 pub mod dispatch;
 pub mod fixtures;
+#[cfg(test)]
+mod golden_tests;
 pub mod grouping;
 pub mod orchestrate;
 pub mod runbook;

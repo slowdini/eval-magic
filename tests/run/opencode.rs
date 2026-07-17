@@ -1,9 +1,10 @@
 //! OpenCode-harness behavior: `.opencode/skills` staging, slug sanitization,
 //! native `<available_skills>` dispatch rendering, plan-mode approximation, and
-//! the `--guard` rejection. Characterization tests pinning current behavior so
-//! the run-mode refactor stays behavior-preserving.
+//! the `--guard` warn-and-continue fallback. Characterization tests pinning
+//! current behavior so the run-mode refactor stays behavior-preserving.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 use std::path::Path;
@@ -141,15 +142,18 @@ fn opencode_plan_mode_injects_profile_and_records_flag() {
             assert!(prompt.contains("<available_skills>"));
         }
         assert!(prompt.contains("<system-reminder>"));
-        assert!(prompt.contains("OpenCode plan mode is active"));
+        // Shared, harness-agnostic profile: same text every harness sees.
+        assert!(prompt.contains("Plan mode is active"));
         assert!(!prompt.contains("ExitPlanMode"));
     }
 }
 
 #[test]
-fn opencode_rejects_guard() {
+fn opencode_guard_warns_and_continues_unguarded() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // The #126 model: an undeclared enhancement warns naming its fallback and
+    // the run proceeds — it never rejects.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -164,11 +168,82 @@ fn opencode_rejects_guard() {
             "--guard",
         ])
         .assert()
-        .failure()
-        .stderr(contains("Unsupported for --harness opencode: --guard"));
+        .success()
+        .stderr(
+            contains("declares no write guard")
+                .and(contains("detect-stray-writes"))
+                .and(contains("Unsupported for --harness").not()),
+        );
 
-    assert!(!cwd.join(".opencode/skills").exists());
-    assert!(!iteration_dir(&cwd).exists());
+    // The run was built (staged, dispatch written) — just without a guard.
+    assert!(iteration_dir(&cwd).exists());
+    let with_skill_env = cli_env_dir(&cwd, "g1", "with_skill");
+    assert!(
+        with_skill_env.join(".opencode/skills").exists(),
+        "staging proceeded"
+    );
+    assert!(
+        !with_skill_env
+            .join(".opencode/skills/.slow-powers-eval-guard.json")
+            .exists(),
+        "no guard marker was installed"
+    );
+}
+
+#[test]
+fn opencode_default_run_warns_unguarded_without_the_flag() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag: auto-arm can't apply (no declared guard), so the run
+    // proceeds unguarded with a warning naming the fallback and the opt-out.
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+        ])
+        .assert()
+        .success()
+        .stderr(
+            contains("declares no write guard")
+                .and(contains("detect-stray-writes"))
+                .and(contains("--no-guard")),
+        );
+
+    assert!(
+        !cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".opencode/skills/.slow-powers-eval-guard.json")
+            .exists(),
+        "no guard marker was installed"
+    );
+}
+
+#[test]
+fn opencode_run_warns_missing_dispatch_recipe() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("declares no dispatch exec recipe").and(contains("RUNBOOK.md")));
 }
 
 #[test]

@@ -1,26 +1,20 @@
 //! Env-layout planning: turn the computed isolation [`Group`]s into the concrete
-//! environment directories a run stages into, which differs by dispatch mechanism.
+//! environment directories a run stages into.
 //!
-//! - **InSession** keeps a single `iteration-N/env/` that hosts *both* conditions
-//!   (the off-condition skill is removed by `switch-condition`) and the first
-//!   group's fixtures (later groups are swapped in by `reset-batch`). One env, one
-//!   session — byte-identical to the pre-grouping layout in the single-group case.
-//! - **Cli** materializes one `iteration-N/env-<group>-<condition>/` per
-//!   `(group, condition)`: each subprocess `cd`s into its own env, which holds only
-//!   that condition's skill (or none) and that group's fixtures — real physical
-//!   isolation along both axes.
+//! A run materializes one `iteration-N/env-<group>-<condition>/` per
+//! `(group, condition)`: each subprocess `cd`s into its own env, which holds only
+//! that condition's skill (or none) and that group's fixtures — real physical
+//! isolation along both axes.
 
 use std::path::{Path, PathBuf};
-
-use crate::core::DispatchMechanism;
 
 use super::super::grouping::Group;
 
 /// One environment directory to stage for a run.
 pub(super) struct EnvTarget {
     pub root: PathBuf,
-    /// `(condition name, that condition's skill path)` staged into this env.
-    /// InSession stages both conditions here; Cli stages exactly one.
+    /// `(condition name, that condition's skill path)` staged into this env —
+    /// exactly one per env.
     pub conditions: Vec<(&'static str, Option<String>)>,
     /// Eval ids whose fixtures populate this env (its group's evals).
     pub eval_ids: Vec<String>,
@@ -29,7 +23,6 @@ pub(super) struct EnvTarget {
 /// Inputs to [`env_targets`].
 pub(super) struct EnvLayoutInput<'a> {
     pub iteration_dir: &'a Path,
-    pub mechanism: DispatchMechanism,
     pub groups: &'a [Group],
     pub cond_a: &'static str,
     pub cond_b: &'static str,
@@ -37,61 +30,31 @@ pub(super) struct EnvLayoutInput<'a> {
     pub skill_path_b: Option<&'a str>,
 }
 
-/// The env dir a `(group, condition)` task runs in: the shared `env/` for
-/// InSession, or the per-`(group, condition)` env for Cli.
-pub(super) fn task_env_root(
-    iteration_dir: &Path,
-    mechanism: DispatchMechanism,
-    group_id: &str,
-    condition: &str,
-) -> PathBuf {
-    match mechanism {
-        DispatchMechanism::InSession => iteration_dir.join("env"),
-        DispatchMechanism::Cli => iteration_dir.join(format!("env-{group_id}-{condition}")),
-    }
+/// The env dir a `(group, condition)` task runs in.
+pub(super) fn task_env_root(iteration_dir: &Path, group_id: &str, condition: &str) -> PathBuf {
+    iteration_dir.join(format!("env-{group_id}-{condition}"))
 }
 
-/// Plan the environments to stage. InSession returns a single env hosting both
-/// conditions and the *first* group's fixtures; Cli returns one env per
-/// `(group, condition)`.
+/// Plan the environments to stage: one env per `(group, condition)`.
 pub(super) fn env_targets(input: &EnvLayoutInput) -> Vec<EnvTarget> {
     let conds: [(&'static str, Option<String>); 2] = [
         (input.cond_a, input.skill_path_a.map(str::to_owned)),
         (input.cond_b, input.skill_path_b.map(str::to_owned)),
     ];
-    match input.mechanism {
-        DispatchMechanism::InSession => {
-            // One env, staged for the first group; reset-batch swaps later groups in.
-            let first = input
-                .groups
-                .first()
-                .expect("at least one group is always computed");
-            vec![EnvTarget {
-                root: task_env_root(
-                    input.iteration_dir,
-                    input.mechanism,
-                    &first.id,
-                    input.cond_a,
-                ),
-                conditions: conds.to_vec(),
-                eval_ids: first.eval_ids.clone(),
-            }]
-        }
-        DispatchMechanism::Cli => input
-            .groups
-            .iter()
-            .flat_map(|g| {
-                conds
-                    .clone()
-                    .into_iter()
-                    .map(move |(cond, skill)| EnvTarget {
-                        root: task_env_root(input.iteration_dir, input.mechanism, &g.id, cond),
-                        conditions: vec![(cond, skill)],
-                        eval_ids: g.eval_ids.clone(),
-                    })
-            })
-            .collect(),
-    }
+    input
+        .groups
+        .iter()
+        .flat_map(|g| {
+            conds
+                .clone()
+                .into_iter()
+                .map(move |(cond, skill)| EnvTarget {
+                    root: task_env_root(input.iteration_dir, &g.id, cond),
+                    conditions: vec![(cond, skill)],
+                    eval_ids: g.eval_ids.clone(),
+                })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -114,39 +77,11 @@ mod tests {
     }
 
     #[test]
-    fn insession_single_env_hosts_both_conditions_and_first_group() {
+    fn one_env_per_group_condition_with_only_that_conditions_skill() {
         let iter = Path::new("/w/iteration-1");
         let gs = groups();
         let targets = env_targets(&EnvLayoutInput {
             iteration_dir: iter,
-            mechanism: DispatchMechanism::InSession,
-            groups: &gs,
-            cond_a: "with_skill",
-            cond_b: "without_skill",
-            skill_path_a: Some("/s/SKILL.md"),
-            skill_path_b: None,
-        });
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].root, Path::new("/w/iteration-1/env"));
-        assert_eq!(
-            targets[0]
-                .conditions
-                .iter()
-                .map(|(c, _)| *c)
-                .collect::<Vec<_>>(),
-            vec!["with_skill", "without_skill"]
-        );
-        // Only the first group's fixtures populate the env up front.
-        assert_eq!(targets[0].eval_ids, vec!["e1"]);
-    }
-
-    #[test]
-    fn cli_one_env_per_group_condition_with_only_that_conditions_skill() {
-        let iter = Path::new("/w/iteration-1");
-        let gs = groups();
-        let targets = env_targets(&EnvLayoutInput {
-            iteration_dir: iter,
-            mechanism: DispatchMechanism::Cli,
             groups: &gs,
             cond_a: "with_skill",
             cond_b: "without_skill",
@@ -181,14 +116,10 @@ mod tests {
     }
 
     #[test]
-    fn task_env_root_is_bare_env_for_insession_and_suffixed_for_cli() {
+    fn task_env_root_is_suffixed_by_group_and_condition() {
         let iter = Path::new("/w/iteration-1");
         assert_eq!(
-            task_env_root(iter, DispatchMechanism::InSession, "g2", "without_skill"),
-            Path::new("/w/iteration-1/env")
-        );
-        assert_eq!(
-            task_env_root(iter, DispatchMechanism::Cli, "g2", "without_skill"),
+            task_env_root(iter, "g2", "without_skill"),
             Path::new("/w/iteration-1/env-g2-without_skill")
         );
     }

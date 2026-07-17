@@ -1,6 +1,7 @@
 //! Help output, `validate`, and parser-level dispatch (unknown subcommands).
 
 use crate::helpers::skill_eval;
+use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
 use tempfile::TempDir;
@@ -38,6 +39,26 @@ fn help_uses_published_binary_name() {
         .assert()
         .success()
         .stdout(contains("eval-magic"));
+}
+
+/// `--guard` and `--no-guard` are contradictory and rejected at parse time.
+#[test]
+fn run_rejects_guard_with_no_guard() {
+    skill_eval()
+        .args(["run", "--guard", "--no-guard"])
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with"));
+}
+
+/// The auto-arm opt-out is a documented part of the `run` surface.
+#[test]
+fn run_help_documents_no_guard() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--no-guard"));
 }
 
 /// `ingest` reaches its own context validation when invoked bare.
@@ -134,4 +155,36 @@ fn validate_requires_a_skill_context() {
 #[test]
 fn unknown_subcommand_is_rejected() {
     skill_eval().arg("does-not-exist").assert().failure();
+}
+
+/// An unknown `--harness` value is rejected by the registry resolver with an
+/// error naming the offending value and every known harness. (Resolution
+/// happens after parsing, not in clap, so runtime-loaded descriptors count.)
+#[test]
+fn unknown_harness_value_is_rejected_naming_known_harnesses() {
+    skill_eval()
+        .args(["aggregate", "--harness", "nonexistent"])
+        .assert()
+        .failure()
+        .stderr(
+            contains("unknown harness 'nonexistent'")
+                .and(contains("claude-code"))
+                .and(contains("codex"))
+                .and(contains("opencode")),
+        );
+}
+
+/// `run --help` names the built-in harnesses in the `--harness` doc text.
+#[test]
+fn run_help_names_builtin_harnesses() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            contains("--harness")
+                .and(contains("claude-code"))
+                .and(contains("codex"))
+                .and(contains("opencode")),
+        );
 }

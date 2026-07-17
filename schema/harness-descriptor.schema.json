@@ -1,0 +1,295 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/harness-descriptor.schema.json",
+  "title": "Harness Descriptor",
+  "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript parsers, slug generation, shadow preflight). The write guard is pure data (the [guard] block) rendered by one generic engine. Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage, guard template contracts) are enforced by the Rust loader on top of this schema.",
+  "type": "object",
+  "required": ["label"],
+  "additionalProperties": false,
+  "properties": {
+    "label": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
+      "description": "Kebab-case harness identifier, used in CLI flags, dispatch.json, and staged conditions.json."
+    },
+    "skills_dir": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Project-local staged-skills directory, `/`-separated relative to the repo root (e.g. \".claude/skills\"). Optional: a harness without one cannot stage skills natively, so runs fall back to --no-stage (each SKILL.md inlined into its dispatch prompt) with a preflight warning."
+    },
+    "config_dirs": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Harness-owned config directory names (e.g. \".claude\"). Feeds the staging sibling filter, guard tamper rules, and stray-write lookbehind."
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Run-option capabilities; absent fields take the baseline defaults (no guard, bootstrap and stage-name allowed without staging).",
+      "properties": {
+        "supports_guard": { "type": "boolean" },
+        "supports_bootstrap_with_no_stage": { "type": "boolean" },
+        "supports_stage_name_with_no_stage": { "type": "boolean" }
+      }
+    },
+    "tools": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Tool-name vocabulary by role, as the harness's transcripts and hook payloads spell them.",
+      "properties": {
+        "write": { "$ref": "#/definitions/tool_list" },
+        "patch": { "$ref": "#/definitions/tool_list" },
+        "shell": { "$ref": "#/definitions/tool_list" },
+        "read": { "$ref": "#/definitions/tool_list" }
+      }
+    },
+    "staging": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Native skill staging: slug shape (template or named capability), naming rules, and prompt phrasing.",
+      "properties": {
+        "slug_template": {
+          "type": "string",
+          "description": "Staged-slug format with {prefix}/{iteration}/{condition}/{skill_name} placeholders. Mutually exclusive with slug_capability."
+        },
+        "slug_capability": {
+          "enum": ["opencode"],
+          "description": "Named code capability generating the staged slug (sanitization/truncation beyond a format string)."
+        },
+        "stage_name_pattern": {
+          "type": "string",
+          "description": "Regex a stage name must fully match (declarative validate_stage_name)."
+        },
+        "stage_name_max_len": { "type": "integer", "minimum": 1 },
+        "stage_name_invalid_message": {
+          "type": "string",
+          "description": "Rejection message; {name} is substituted with the offending stage name."
+        },
+        "rewrites_frontmatter_name": { "type": "boolean" },
+        "advertises_staged_slug_name": { "type": "boolean" },
+        "surface_phrase": { "type": "string" },
+        "unresolved_phrase": { "type": "string" }
+      }
+    },
+    "skills_block": {
+      "type": "object",
+      "required": ["header", "item"],
+      "additionalProperties": false,
+      "description": "Harness-native available-skills block: header + one item per skill ({name}/{description}/{path} placeholders) + footer.",
+      "properties": {
+        "header": { "type": "string" },
+        "item": { "type": "string" },
+        "footer": { "type": "string" }
+      }
+    },
+    "transcript": {
+      "type": "object",
+      "required": ["events_filename"],
+      "additionalProperties": false,
+      "description": "Transcript ingest: the events file the CLI dispatch captures, read by exactly one of `parser` (a named code capability, for streams that need stitching) or `extract` (the declarative tier for flat event streams). The exactly-one rule is a Rust loader invariant.",
+      "properties": {
+        "events_filename": { "type": "string", "minLength": 1 },
+        "parser": { "enum": ["claude-stream-json", "codex-items"] },
+        "extract": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Declarative extractor for flat event streams — five fixed primitives, no more: an equality filter (`where`), a final-text field pick (last match wins), a flat tool-item mapping, a token sum, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
+          "properties": {
+            "tools": {
+              "type": "object",
+              "required": ["name_field"],
+              "additionalProperties": false,
+              "description": "Flat tool-item mapping: each matching record's item object becomes one tool invocation, in stream order.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "item": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Dotted path to the tool object within the record; omit when the record itself is the item. Records where the path resolves to nothing or a non-object are skipped."
+                },
+                "name_field": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Field of the item whose string value is the invocation name; records without it are skipped."
+                },
+                "skip_names": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Names that are not tools (message/reasoning items sharing the tool event shape)."
+                },
+                "args_omit": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Structural item keys excluded from args; whatever remains (key order preserved) is the args object, null when empty."
+                },
+                "result_coalesce": {
+                  "type": "array",
+                  "items": { "type": "string" },
+                  "description": "Result = first present of these item fields (present-but-null counts), strings verbatim and everything else compact JSON."
+                }
+              }
+            },
+            "final_text": {
+              "type": "object",
+              "required": ["field"],
+              "additionalProperties": false,
+              "description": "Final assistant text: dotted-path string pick over matching records; the last match wins.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "field": { "type": "string", "minLength": 1 }
+              }
+            },
+            "tokens": {
+              "type": "object",
+              "required": ["sum"],
+              "additionalProperties": false,
+              "description": "Token total: over matching records, sum the listed integer fields (missing or non-integer fields count 0; a record where no listed path resolves never turns an absent total into zero).",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "sum": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string", "minLength": 1 },
+                  "description": "Dotted paths to the token counts to add up."
+                }
+              }
+            },
+            "duration": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Wall-clock duration from exactly one of: `field` (a millisecond value; last match wins) or `timestamp_spread` (last minus first RFC 3339 timestamp; needs at least two parseable matches). The exactly-one rule is a Rust loader invariant.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "field": { "type": "string", "minLength": 1 },
+                "timestamp_spread": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        },
+        "surfaces_skill_invocation": {
+          "type": "boolean",
+          "description": "Whether the transcript deterministically surfaces a skill invocation (false routes the meta-check to the LLM-judge fallback). For extract descriptors, leave false unless the mapping verifiably yields invocations named `Skill` carrying an `args.skill` field."
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["flag"],
+      "additionalProperties": false,
+      "properties": {
+        "flag": { "type": "string", "minLength": 1 }
+      }
+    },
+    "guard": {
+      "type": "object",
+      "required": [
+        "hooks_file",
+        "matcher",
+        "command_template",
+        "hook_entry",
+        "verdict_template",
+        "armed_message"
+      ],
+      "additionalProperties": false,
+      "description": "Write guard: the data the generic guard engine renders into a PreToolUse hook and a deny verdict. Restricted to embedded built-in descriptors (the guard fails open, so a mistyped user descriptor would silently disarm it).",
+      "properties": {
+        "hooks_file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hook-config file the entry is merged into, `/`-separated relative to the staged env root (e.g. \".claude/settings.local.json\")."
+        },
+        "matcher": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool-name matcher the hook registers for; every hooked tool must be declared in [tools] write/patch/shell."
+        },
+        "command_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Shell command the armed hook runs, with {exe} and {marker} placeholders (e.g. '\"{exe}\" guard \"{marker}\"')."
+        },
+        "hook_entry": {
+          "type": "string",
+          "minLength": 1,
+          "description": "JSON template of the hook entry appended to the hook config's hooks.PreToolUse array, with {matcher} and {command} placeholders in its string values; authored key order is written verbatim."
+        },
+        "verdict_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "JSON template of the deny verdict printed on stdout, with a {reason} placeholder; authored key order is the harness's on-disk contract."
+        },
+        "armed_message": { "type": "string", "minLength": 1 }
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "required": ["preflight"],
+      "additionalProperties": false,
+      "properties": {
+        "preflight": { "enum": ["claude-plugins"] }
+      }
+    },
+    "dispatch": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args} slots) and the prose around them.",
+      "properties": {
+        "capture_prefix": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Prefix naming the judge recipe's per-task capture files ($response_base.<prefix>-events.jsonl)."
+        },
+        "guard_args": {
+          "type": "string",
+          "description": "Extra args spliced into command templates at {guard_args} when the run is guarded (leading space included)."
+        },
+        "model_note": {
+          "type": "string",
+          "description": "Sentence spliced into next_steps_template at {model_note} when an agent model was declared."
+        },
+        "next_steps_template": {
+          "type": "string",
+          "description": "Post-run handoff text; {exec_command}/{target_args}/{iteration}/{model_note} placeholders."
+        },
+        "exec_template": {
+          "type": "string",
+          "description": "Copy/pasteable single-dispatch command; <eval-root>-style angle placeholders are prose for the human."
+        },
+        "parallel_command_template": {
+          "type": "string",
+          "description": "Per-task command block spliced into the shared jq/xargs parallel scaffold."
+        },
+        "judge_command_template": {
+          "type": "string",
+          "description": "Judge command line spliced into the shared judge recipe; must reference $model_arg and {cwd} and end with a shell line continuation."
+        },
+        "manifest_template": {
+          "type": "string",
+          "description": "The dispatch-manifest harness section; {exec_command}/{parallel_recipe} placeholders; ends with exactly one newline."
+        }
+      }
+    }
+  },
+  "definitions": {
+    "tool_list": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

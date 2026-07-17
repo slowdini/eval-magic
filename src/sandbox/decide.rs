@@ -10,7 +10,10 @@ use chrono::DateTime;
 use serde::Deserialize;
 use serde_json::Value;
 
-use super::policy::{apply_patch_paths, classify_bash, is_under_any, is_write_tool, path_arg};
+use super::policy::{
+    apply_patch_paths, classify_bash, is_patch_tool, is_shell_tool, is_under_any, is_write_tool,
+    path_arg,
+};
 
 /// The staged marker file that arms the guard. The guard is a no-op unless this
 /// file exists, is active, and has not expired — so a crashed run that never tore
@@ -101,31 +104,30 @@ pub fn decide(
         return GuardDecision::allow();
     }
 
-    if tool_name == "apply_patch" {
+    if is_patch_tool(tool_name) {
         let paths = apply_patch_paths(tool_input);
         if paths.is_empty() {
-            return GuardDecision::deny(
-                "eval guard: blocked apply_patch because no patch target path could be determined"
-                    .to_string(),
-            );
+            return GuardDecision::deny(format!(
+                "eval guard: blocked {tool_name} because no patch target path could be determined"
+            ));
         }
         if let Some(path) = paths.iter().find(|p| !is_under_any(p, &roots, &repo_root)) {
             return GuardDecision::deny(format!(
-                "eval guard: apply_patch target {path} is outside the eval sandbox (allowed: {})",
+                "eval guard: {tool_name} target {path} is outside the eval sandbox (allowed: {})",
                 roots.join(", ")
             ));
         }
         return GuardDecision::allow();
     }
 
-    if tool_name == "Bash" {
+    if is_shell_tool(tool_name) {
         let command = tool_input
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or("");
         if let Some(reason) = classify_bash(command, &roots) {
             return GuardDecision::deny(format!(
-                "eval guard: blocked Bash ({reason}) — runs outside the eval sandbox"
+                "eval guard: blocked {tool_name} ({reason}) — runs outside the eval sandbox"
             ));
         }
     }
@@ -358,6 +360,81 @@ mod tests {
             "Bash",
             json!({ "command": "mkdir -p /work/.claude/skills/staged-x" }),
             Some(&marker()),
+        );
+        assert!(d.allow);
+    }
+
+    #[test]
+    fn denies_bash_that_creates_a_path_under_dot_codex_via_non_redirect_verb() {
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "mkdir -p .codex/foo" }),
+                Some(&marker())
+            )
+            .allow
+        );
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "cp evil.json .codex/hooks.json" }),
+                Some(&marker())
+            )
+            .allow
+        );
+    }
+
+    #[test]
+    fn denies_bash_that_creates_a_path_under_dot_agents_via_non_redirect_verb() {
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "mkdir -p .agents/foo" }),
+                Some(&marker())
+            )
+            .allow
+        );
+    }
+
+    #[test]
+    fn denies_bash_that_creates_a_path_under_dot_opencode_via_non_redirect_verb() {
+        assert!(
+            !decide_now(
+                "Bash",
+                json!({ "command": "touch .opencode/opencode.json" }),
+                Some(&marker())
+            )
+            .allow
+        );
+    }
+
+    #[test]
+    fn still_allows_reads_of_other_harness_config_dirs_with_no_create_verb() {
+        for command in [
+            "cat .codex/hooks.json",
+            "ls .agents",
+            "cat .opencode/skills/x/SKILL.md",
+        ] {
+            assert!(
+                decide_now("Bash", json!({ "command": command }), Some(&marker())).allow,
+                "{command} should stay allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn allows_a_create_scoped_to_a_codex_skills_staging_root() {
+        let codex_marker = GuardMarker {
+            allowed_roots: Some(vec![
+                "/work/.eval-magic".to_string(),
+                "/work/.agents/skills".to_string(),
+            ]),
+            ..marker()
+        };
+        let d = decide_now(
+            "Bash",
+            json!({ "command": "mkdir -p /work/.agents/skills/staged-x" }),
+            Some(&codex_marker),
         );
         assert!(d.allow);
     }

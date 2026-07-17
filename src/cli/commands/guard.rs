@@ -1,37 +1,53 @@
-//! Write-guard command handlers: the hidden `guard` PreToolUse hook entry point
-//! and the user-facing `teardown-guard`.
+//! Write-guard command handlers: the hidden PreToolUse hook entry points and
+//! the user-facing `teardown-guard`.
+//!
+//! The `guard` / `guard-codex` subcommand names are a **stable on-disk
+//! contract**: armed hooks staged into harness config reference them by name,
+//! so renaming either would break every already-armed guard. Both are aliases
+//! of the generic `guard-hook` entry point, which future guard-capable
+//! harnesses use directly (`eval-magic guard-hook --harness <name>`).
 
 use std::io;
 use std::path::PathBuf;
 
+use crate::adapters::{HarnessAdapter, adapter_for};
+use crate::core::Harness;
 use crate::sandbox;
 
-/// The hidden PreToolUse hook entry point. Reads the hook payload from stdin and
-/// the marker path from argv, then prints a deny verdict for out-of-bounds calls.
-/// It **fails open** — every error path allows the call and exits 0, so the
-/// guard can never brick a session.
+/// The hidden Claude Code PreToolUse hook entry point — a frozen alias for
+/// `guard-hook --harness claude-code`.
 pub(crate) fn run_guard(marker: Option<String>) -> anyhow::Result<()> {
-    let marker_path = marker
-        .map(PathBuf::from)
-        .unwrap_or_else(default_marker_path);
-    let payload = io::read_to_string(io::stdin()).unwrap_or_default();
-    if let Some(verdict) = sandbox::guard_decision(&payload, sandbox::read_marker(&marker_path)) {
-        print!("{verdict}");
-    }
-    Ok(())
+    run_guard_hook("claude-code", marker)
 }
 
-/// The hidden Codex PreToolUse hook entry point. Same policy as `guard`, but
-/// Codex blocks by reading `{ "decision": "block", "reason": "..." }` from the
-/// hook's stdout.
+/// The hidden Codex PreToolUse hook entry point — a frozen alias for
+/// `guard-hook --harness codex`.
 pub(crate) fn run_guard_codex(marker: Option<String>) -> anyhow::Result<()> {
-    let marker_path = marker
-        .map(PathBuf::from)
-        .unwrap_or_else(default_codex_marker_path);
+    run_guard_hook("codex", marker)
+}
+
+/// The generic PreToolUse hook entry point. Reads the hook payload from stdin
+/// and the marker path from argv, resolves the harness's guard from the
+/// embedded descriptors (hook invocations skip layered discovery — see
+/// `cli::run`'s `is_guard_hook` gate), and prints a deny verdict for
+/// out-of-bounds calls. It **fails open** — an unknown harness, a guard-less
+/// descriptor, or any error path allows the call and exits 0, so the guard can
+/// never brick a session.
+pub(crate) fn run_guard_hook(harness_name: &str, marker: Option<String>) -> anyhow::Result<()> {
+    // Drain stdin before any early return so the harness writing the payload
+    // never sees a broken pipe, whatever the verdict.
     let payload = io::read_to_string(io::stdin()).unwrap_or_default();
-    if let Some(verdict) =
-        sandbox::codex_guard_decision(&payload, sandbox::read_marker(&marker_path))
-    {
+    let Ok(harness) = Harness::resolve(harness_name) else {
+        return Ok(());
+    };
+    let adapter = adapter_for(harness);
+    let Some(marker_path) = marker
+        .map(PathBuf::from)
+        .or_else(|| default_marker_path(adapter))
+    else {
+        return Ok(());
+    };
+    if let Some(verdict) = adapter.guard_verdict(&payload, sandbox::read_marker(&marker_path)) {
         print!("{verdict}");
     }
     Ok(())
@@ -53,22 +69,13 @@ pub(crate) fn run_teardown_guard() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The marker path the guard reads when argv carries none:
-/// `<cwd>/.claude/skills/.slow-powers-eval-guard.json`.
-fn default_marker_path() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_default()
-        .join(".claude")
-        .join("skills")
-        .join(sandbox::GUARD_MARKER)
-}
-
-/// The marker path the Codex guard reads when argv carries none:
-/// `<cwd>/.agents/skills/.slow-powers-eval-guard.json`.
-fn default_codex_marker_path() -> PathBuf {
-    std::env::current_dir()
-        .unwrap_or_default()
-        .join(".agents")
-        .join("skills")
-        .join(sandbox::GUARD_MARKER)
+/// The marker path a guard hook reads when argv carries none: the harness's
+/// skills dir under the cwd, e.g. `<cwd>/.claude/skills/.slow-powers-eval-guard.json`.
+/// `None` (fail open) for a harness that declares no skills dir.
+fn default_marker_path(adapter: &dyn HarnessAdapter) -> Option<PathBuf> {
+    Some(
+        adapter
+            .skills_dir(&std::env::current_dir().unwrap_or_default())?
+            .join(sandbox::GUARD_MARKER),
+    )
 }

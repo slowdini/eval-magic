@@ -154,8 +154,10 @@ fn codex_plan_mode_injects_profile_and_records_flag() {
             assert!(prompt.contains("## Skills"));
         }
         assert!(prompt.contains("<system-reminder>"));
-        assert!(prompt.contains("Codex plan mode is active"));
-        assert!(prompt.contains("<proposed_plan>"));
+        // Shared, harness-agnostic profile: same text every harness sees, with no
+        // Codex-specific <proposed_plan> block or Claude-specific ExitPlanMode rail.
+        assert!(prompt.contains("Plan mode is active"));
+        assert!(!prompt.contains("<proposed_plan>"));
         assert!(!prompt.contains("ExitPlanMode"));
     }
 }
@@ -281,6 +283,35 @@ fn codex_dispatch_guidance_includes_agent_model_when_provided() {
 fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // The guard auto-arms on codex, so an unguarded run takes --no-guard.
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--no-guard",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
+    assert!(stdout.contains("</dev/null"));
+    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+}
+
+#[test]
+fn codex_default_run_auto_arms_guard() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag: codex declares guard support, so the bare run arms it and
+    // the dispatch recipe carries the hook-trust bypass the staged hook needs.
     let assert = skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -296,48 +327,38 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
         .assert()
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("--dangerously-bypass-hook-trust"));
 
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+    assert!(
+        cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".codex/hooks.json")
+            .exists(),
+        "codex guard hook staged in the env"
+    );
 }
 
 #[test]
-fn codex_headless_records_mode_and_human_runbook() {
+fn codex_run_writes_human_followed_runbook() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "codex",
-            "--run-mode",
-            "headless",
-            "--dry-run",
-        ])
+        .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
         .assert()
         .success();
 
-    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
-    assert_eq!(conditions["run_mode"], "headless");
-
-    // Cli has no single env/, so the human-followed runbook lives in the iteration dir.
+    // Each task dispatches from its own per-(group, condition) env, so the
+    // human-followed runbook lives in the iteration dir, above those envs.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
-        "headless uses the human-followed template: {runbook}"
+        "uses the human-followed template: {runbook}"
     );
     assert!(
         runbook.contains("codex --ask-for-approval never exec"),
         "carries the Codex CLI dispatch recipe: {runbook}"
-    );
-    assert!(
-        runbook.contains("--run-mode headless"),
-        "pipeline commands carry the headless run mode: {runbook}"
     );
 }
 

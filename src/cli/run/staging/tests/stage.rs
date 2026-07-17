@@ -170,7 +170,7 @@ fn codex_stages_under_agents_skills_and_rewrites_frontmatter_name() {
         condition: "with_skill",
         skill_name: "mr-review",
         repo_root: tmp.path(),
-        harness: Harness::Codex,
+        harness: Harness::resolve("codex").unwrap(),
         ..Default::default()
     })
     .unwrap();
@@ -198,7 +198,7 @@ fn codex_stage_name_override_is_dir_and_frontmatter_name() {
         condition: "with_skill",
         skill_name: "mr-review",
         repo_root: tmp.path(),
-        harness: Harness::Codex,
+        harness: Harness::resolve("codex").unwrap(),
         stage_name_override: Some("mr-review"),
         ..Default::default()
     })
@@ -211,27 +211,6 @@ fn codex_stage_name_override_is_dir_and_frontmatter_name() {
 // ── stage_skill_for_harness (opencode) ────────────────────────────────
 
 #[test]
-fn opencode_slug_sanitizes_underscores_and_special_characters() {
-    assert_eq!(
-        opencode_slug(1, "with_skill", "My_Skill!"),
-        "slow-powers-eval-1-with-skill-my-skill"
-    );
-    assert_eq!(
-        opencode_slug(2, "without_skill", "snake_case"),
-        "slow-powers-eval-2-without-skill-snake-case"
-    );
-}
-
-#[test]
-fn opencode_slug_truncates_to_valid_max_length() {
-    let very_long = "a".repeat(200);
-    let slug = opencode_slug(1, "with_skill", &very_long);
-    assert!(slug.len() <= 64);
-    assert!(is_valid_opencode_name(&slug));
-    assert!(slug.starts_with("slow-powers-eval-1-with-skill-"));
-}
-
-#[test]
 fn opencode_stages_under_opencode_skills_and_rewrites_frontmatter_name() {
     let tmp = TempDir::new().unwrap();
     let content = "---\nname: my-skill\ndescription: my skill\n---\n\nbody\n";
@@ -241,7 +220,7 @@ fn opencode_stages_under_opencode_skills_and_rewrites_frontmatter_name() {
         condition: "with_skill",
         skill_name: "my-skill",
         repo_root: tmp.path(),
-        harness: Harness::OpenCode,
+        harness: Harness::resolve("opencode").unwrap(),
         ..Default::default()
     })
     .unwrap();
@@ -270,7 +249,7 @@ fn opencode_rejects_invalid_stage_name_override() {
         condition: "with_skill",
         skill_name: "my-skill",
         repo_root: tmp.path(),
-        harness: Harness::OpenCode,
+        harness: Harness::resolve("opencode").unwrap(),
         stage_name_override: Some("invalid_name"),
         ..Default::default()
     })
@@ -302,7 +281,7 @@ fn register_appends_custom_dir_so_cleanup_removes_it() {
     register_staged_skill_for_cleanup(
         tmp.path(),
         "verification-before-completion",
-        Harness::ClaudeCode,
+        Harness::resolve("claude-code").unwrap(),
     )
     .unwrap();
 
@@ -314,7 +293,7 @@ fn register_appends_custom_dir_so_cleanup_removes_it() {
     names.sort();
     assert_eq!(names, vec!["sibling-a", "verification-before-completion"]);
 
-    cleanup_staged_skills(tmp.path(), Harness::ClaudeCode).unwrap();
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
     assert!(!custom_dir.exists());
 }
 
@@ -332,8 +311,18 @@ fn register_is_idempotent() {
         .unwrap(),
     );
 
-    register_staged_skill_for_cleanup(tmp.path(), "foo-staged", Harness::ClaudeCode).unwrap();
-    register_staged_skill_for_cleanup(tmp.path(), "foo-staged", Harness::ClaudeCode).unwrap();
+    register_staged_skill_for_cleanup(
+        tmp.path(),
+        "foo-staged",
+        Harness::resolve("claude-code").unwrap(),
+    )
+    .unwrap();
+    register_staged_skill_for_cleanup(
+        tmp.path(),
+        "foo-staged",
+        Harness::resolve("claude-code").unwrap(),
+    )
+    .unwrap();
 
     let count = read_manifest(&skills_dir)
         .created_entries

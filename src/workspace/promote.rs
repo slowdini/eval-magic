@@ -341,7 +341,7 @@ mod tests {
             skill_name: "mr-review",
             skill_subdir: &f.skill_subdir,
             iteration,
-            harness: Harness::ClaudeCode,
+            harness: Harness::resolve("claude-code").unwrap(),
             label: None,
             agent_model: None,
             judge_model: None,

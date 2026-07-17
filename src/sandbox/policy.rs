@@ -3,7 +3,8 @@
 //! Stateless classifiers shared by the armed guard ([`super::decide`]) and
 //! `pipeline::detect-stray-writes`: which tools write, which Bash commands
 //! mutate state outside a sandbox, and whether a path falls under an allowed
-//! root.
+//! root. Tool names come from the adapters' cross-harness vocabulary union
+//! ([`all_tool_vocabulary`]), so no harness's tool naming is hardcoded here.
 
 use std::path::Path;
 use std::sync::LazyLock;
@@ -11,12 +12,33 @@ use std::sync::LazyLock;
 use regex::Regex;
 use serde_json::Value;
 
-/// Tools that mutate the filesystem and carry a target path argument.
-pub const WRITE_TOOLS: [&str; 4] = ["Write", "Edit", "MultiEdit", "NotebookEdit"];
+use crate::adapters::all_tool_vocabulary;
 
-/// True for a tool name that writes the filesystem with a path argument.
+/// True for a tool name that writes the filesystem with a single target path
+/// argument, in any harness's vocabulary.
 pub fn is_write_tool(tool_name: &str) -> bool {
-    WRITE_TOOLS.contains(&tool_name)
+    all_tool_vocabulary()
+        .write_tools
+        .iter()
+        .any(|t| t == tool_name)
+}
+
+/// True for an apply_patch-style tool whose payload carries patch targets
+/// (extracted with [`apply_patch_paths`]), in any harness's vocabulary.
+pub fn is_patch_tool(tool_name: &str) -> bool {
+    all_tool_vocabulary()
+        .patch_tools
+        .iter()
+        .any(|t| t == tool_name)
+}
+
+/// True for a shell-execution tool carrying a `command` argument, in any
+/// harness's vocabulary.
+pub fn is_shell_tool(tool_name: &str) -> bool {
+    all_tool_vocabulary()
+        .shell_tools
+        .iter()
+        .any(|t| t == tool_name)
 }
 
 /// Bash command patterns that mutate state outside an eval's sandbox. Heuristics
@@ -27,43 +49,53 @@ pub fn is_write_tool(tool_name: &str) -> bool {
 /// Compiled once. The patterns are known-valid, so a compile failure here is a
 /// programmer error and panics.
 static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+    let config_dirs = crate::adapters::all_config_dir_names()
+        .iter()
+        .map(|d| regex::escape(d))
+        .collect::<Vec<_>>()
+        .join("|");
     [
         (
-            r"\b(npm|pnpm|yarn|bun)\s+(install|add|ci|i)\b",
+            r"\b(npm|pnpm|yarn|bun)\s+(install|add|ci|i)\b".to_string(),
             "package install/add",
         ),
-        (r"\bpip3?\s+install\b", "pip install"),
-        (r"\bsed\s+-i\b", "in-place file edit (sed -i)"),
+        (r"\bpip3?\s+install\b".to_string(), "pip install"),
+        (r"\bsed\s+-i\b".to_string(), "in-place file edit (sed -i)"),
         (
-            r"\bgit\s+(commit|add|push|checkout|reset|restore|merge|rebase)\b",
+            r"\bgit\s+(commit|add|push|checkout|reset|restore|merge|rebase)\b".to_string(),
             "git mutation",
         ),
         (
-            r"\bgit\s+worktree\s+add\b",
+            r"\bgit\s+worktree\s+add\b".to_string(),
             "git worktree add (working tree outside the sandbox)",
         ),
-        // A create/copy/move/link verb whose operand is a path under `.claude` —
-        // catches stray writes to the harness config dir that aren't a `>`
-        // redirect (caught below). Read-only verbs (`cat`, `ls`) aren't listed,
-        // so inspecting `.claude` stays allowed.
+        // A create/copy/move/link verb whose operand is a path under any
+        // harness config dir (`adapters::all_config_dir_names`) — catches
+        // stray writes to a config dir that aren't a `>` redirect (caught
+        // below). Read-only verbs (`cat`, `ls`) aren't listed, so inspecting
+        // the dirs stays allowed.
         (
-            r"\b(cp|mv|mkdir|touch|ln|rsync|install)\b[^|;&\n]*\.claude(/|\b)",
-            "path under .claude",
+            format!(r"\b(cp|mv|mkdir|touch|ln|rsync|install)\b[^|;&\n]*({config_dirs})(/|\b)"),
+            "path under a harness config dir",
         ),
         // The same create verbs whose operand is a top-level `skills/` directory —
         // catches a bare `skills/` left in the cwd. `skills-data` and other
         // `skills`-prefixed names are excluded by the trailing `/`, whitespace, or
         // end-of-string boundary.
         (
-            r#"\b(cp|mv|mkdir|touch|ln|rsync)\b[^|;&\n]*[\s'"=/]\.{0,2}/?skills(/|\s|$)"#,
+            r#"\b(cp|mv|mkdir|touch|ln|rsync)\b[^|;&\n]*[\s'"=/]\.{0,2}/?skills(/|\s|$)"#
+                .to_string(),
             "creates a bare skills/ dir",
         ),
-        (r"(^|\s)(>>?|tee)\s", "output redirection to a file"),
+        (
+            r"(^|\s)(>>?|tee)\s".to_string(),
+            "output redirection to a file",
+        ),
     ]
     .into_iter()
     .map(|(re, reason)| {
         (
-            Regex::new(re)
+            Regex::new(&re)
                 .unwrap_or_else(|e| panic!("bundled bash pattern {re:?} is invalid: {e}")),
             reason,
         )
@@ -196,12 +228,30 @@ mod tests {
     }
 
     #[test]
-    fn is_write_tool_matches_the_four_write_tools() {
-        for t in ["Write", "Edit", "MultiEdit", "NotebookEdit"] {
+    fn is_write_tool_matches_every_harness_write_tool() {
+        for t in ["Write", "Edit", "MultiEdit", "NotebookEdit", "file_change"] {
             assert!(is_write_tool(t), "{t} should be a write tool");
         }
-        for t in ["Read", "Bash", "Grep", ""] {
+        for t in ["Read", "Bash", "Grep", "apply_patch", ""] {
             assert!(!is_write_tool(t), "{t} should not be a write tool");
+        }
+    }
+
+    #[test]
+    fn is_patch_tool_matches_apply_patch_style_tools_only() {
+        assert!(is_patch_tool("apply_patch"));
+        for t in ["Write", "Bash", "file_change", ""] {
+            assert!(!is_patch_tool(t), "{t} should not be a patch tool");
+        }
+    }
+
+    #[test]
+    fn is_shell_tool_matches_every_harness_shell_tool() {
+        for t in ["Bash", "command_execution"] {
+            assert!(is_shell_tool(t), "{t} should be a shell tool");
+        }
+        for t in ["Write", "apply_patch", ""] {
+            assert!(!is_shell_tool(t), "{t} should not be a shell tool");
         }
     }
 
@@ -281,6 +331,28 @@ mod tests {
             classify_bash("echo hi > out.log", &roots()),
             Some("output redirection to a file")
         );
+    }
+
+    #[test]
+    fn classify_bash_flags_creates_under_every_harness_config_dir_but_allows_reads() {
+        for dir in crate::adapters::all_config_dir_names() {
+            assert_eq!(
+                classify_bash(&format!("mkdir -p {dir}/x"), &[]),
+                Some("path under a harness config dir"),
+                "mkdir under {dir} should be flagged"
+            );
+            assert_eq!(
+                classify_bash(&format!("cp evil.json {dir}/hooks.json"), &[]),
+                Some("path under a harness config dir"),
+                "cp into {dir} should be flagged"
+            );
+            assert_eq!(
+                classify_bash(&format!("cat {dir}/settings.json"), &[]),
+                None,
+                "read of {dir} should stay allowed"
+            );
+            assert_eq!(classify_bash(&format!("ls {dir}"), &[]), None);
+        }
     }
 
     #[test]

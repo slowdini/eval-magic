@@ -11,8 +11,8 @@ use std::path::Path;
 fn guard_installs_pretooluse_hook_under_env() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // The guard arms inside the isolated env — the agent-under-test's cwd.
-    let settings = env_dir(&cwd).join(".claude/settings.local.json");
+    // The guard arms inside each per-(group, condition) env — the agent-under-test's cwd.
+    let settings = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/settings.local.json");
 
     skill_eval()
         .current_dir(&cwd)
@@ -48,13 +48,16 @@ fn guard_installs_pretooluse_hook_under_env() {
 }
 
 #[test]
-fn finalize_does_not_warn_about_env_scoped_guard_from_cwd() {
+fn finalize_warns_about_armed_per_env_guard_for_default_run() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // The guard arms inside the env; `finalize` checks the invocation cwd, where no
-    // guard lives, so it does not warn. The env-scoped guard is harmless to the operator's
-    // cwd (it only loads when cwd = env); the in-env loop handles it within the session.
-    let marker = env_dir(&cwd).join(".claude/skills/.slow-powers-eval-guard.json");
+    // The bare default run is hybrid: `--guard` arms a marker in each per-(group,
+    // condition) env. `finalize` runs from the invocation cwd, not inside any env, but
+    // the reworked finalize walks the per-env markers, so it reminds the operator the
+    // guard is still armed. (finalize only warns; `teardown` disarms — the marker
+    // survives finalize.)
+    let marker =
+        cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/.slow-powers-eval-guard.json");
 
     skill_eval()
         .current_dir(&cwd)
@@ -72,7 +75,7 @@ fn finalize_does_not_warn_about_env_scoped_guard_from_cwd() {
         .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success()
-        .stdout(contains("Guard still armed").not());
+        .stdout(contains("Guard still armed"));
 
     assert!(marker.exists());
 }
@@ -82,11 +85,13 @@ fn finalize_does_not_warn_when_guard_is_not_armed() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
 
+    // The guard auto-arms on a bare claude-code run, so opting out takes
+    // --no-guard.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--no-guard"])
         .assert()
         .success();
 
@@ -105,8 +110,8 @@ fn finalize_does_not_warn_when_guard_is_not_armed() {
 fn teardown_reclaims_workspace_and_env_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    let settings = env_dir(&cwd).join(".claude/settings.local.json");
-    let staged = env_dir(&cwd).join(".claude/skills");
+    let settings = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/settings.local.json");
+    let staged = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills");
 
     skill_eval()
         .current_dir(&cwd)
@@ -168,7 +173,7 @@ fn teardown_preserves_iteration_with_uncommitted_results() {
 }
 
 #[test]
-fn normal_run_does_not_install_guard() {
+fn dry_run_skips_guard_install() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -178,7 +183,64 @@ fn normal_run_does_not_install_guard() {
         .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
         .assert()
         .success();
+    // Auto-arm applies, but --dry-run skips the install itself.
     assert!(!cwd.join(".claude/settings.local.json").exists());
+    assert!(
+        !cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".claude/settings.local.json")
+            .exists()
+    );
+}
+
+#[test]
+fn default_run_auto_arms_guard_in_each_env() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag at all: the harness declares guard support, so the run
+    // arms it automatically (#126 — enhancements are provided, not opted into).
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("guard: armed"),
+        "the run plan reports the armed guard: {stdout}"
+    );
+    for condition in ["with_skill", "without_skill"] {
+        let env = cli_env_dir(&cwd, "g1", condition);
+        assert!(
+            env.join(".claude/settings.local.json").exists(),
+            "guard hook staged in env-g1-{condition}"
+        );
+        assert!(
+            env.join(".claude/skills/.slow-powers-eval-guard.json")
+                .exists(),
+            "guard marker armed in env-g1-{condition}"
+        );
+    }
+}
+
+#[test]
+fn no_guard_run_installs_no_guard() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--no-guard"])
+        .assert()
+        .success();
+    let env = cli_env_dir(&cwd, "g1", "with_skill");
+    assert!(!env.join(".claude/settings.local.json").exists());
+    assert!(
+        !env.join(".claude/skills/.slow-powers-eval-guard.json")
+            .exists()
+    );
 }
 
 #[test]
@@ -355,8 +417,8 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
                     .join(cond)
                     .join(format!("run-{k}"));
                 assert!(run_dir.is_dir(), "missing meta run dir {run_dir:?}");
-                // Per-run outputs dir inside the env.
-                let out_dir = env_dir(&cwd)
+                // Per-run outputs dir inside the condition's env.
+                let out_dir = cli_env_dir(&cwd, "g1", cond)
                     .join(".eval-magic-outputs")
                     .join(format!("eval-{eval}"))
                     .join(cond)
@@ -396,8 +458,10 @@ fn runs_one_keeps_flat_single_run_layout() {
     let cond_dir = iteration_dir(&cwd).join("eval-e1").join("with_skill");
     assert!(cond_dir.is_dir());
     assert!(!cond_dir.join("run-1").exists());
-    // Outputs live inside the env, flat (no run-1/ segment) for a single-run cell.
-    let out_dir = env_dir(&cwd).join(".eval-magic-outputs/eval-e1/with_skill");
+    // Outputs live inside the condition's env, flat (no run-1/ segment) for a
+    // single-run cell.
+    let out_dir =
+        cli_env_dir(&cwd, "g1", "with_skill").join(".eval-magic-outputs/eval-e1/with_skill");
     assert!(out_dir.is_dir());
     assert!(!out_dir.join("run-1").exists());
 }
@@ -514,7 +578,7 @@ fn teardown_disarms_per_group_condition_cli_guards() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
 
-    // Cli (hybrid) materializes one env per (group, condition); `--guard` arms a marker
+    // CLI dispatch materializes one env per (group, condition); `--guard` arms a marker
     // in each. The human runs teardown from the iteration dir, not from inside any env,
     // so the cwd-only disarm never reaches these per-env markers.
     skill_eval()
@@ -526,8 +590,6 @@ fn teardown_disarms_per_group_condition_cli_guards() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--guard",
         ])
         .assert()
@@ -552,7 +614,7 @@ fn teardown_disarms_per_group_condition_cli_guards() {
         .current_dir(&cwd)
         .args(["teardown", "--skill-dir"])
         .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--run-mode", "hybrid"])
+        .args(["--skill", "mr-review"])
         .assert()
         .success()
         .stdout(contains("write guard disarmed"));
@@ -570,7 +632,7 @@ fn finalize_warns_about_armed_cli_per_env_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
 
-    // Cli (hybrid) arms a guard in each per-(group, condition) env. finalize runs from
+    // CLI dispatch arms a guard in each per-(group, condition) env. finalize runs from
     // the iteration dir, not an env, so the cwd-only check misses them; it must walk the
     // per-env markers and remind the operator.
     skill_eval()
@@ -582,8 +644,6 @@ fn finalize_warns_about_armed_cli_per_env_guard() {
             "mr-review",
             "--harness",
             "claude-code",
-            "--run-mode",
-            "hybrid",
             "--guard",
         ])
         .assert()
@@ -593,14 +653,7 @@ fn finalize_warns_about_armed_cli_per_env_guard() {
         .current_dir(&cwd)
         .args(["finalize", "--skill-dir"])
         .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--run-mode",
-            "hybrid",
-            "--iteration",
-            "1",
-        ])
+        .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success()
         .stdout(contains("Guard still armed"));

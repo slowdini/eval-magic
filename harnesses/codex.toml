@@ -1,0 +1,130 @@
+# Codex harness descriptor.
+#
+# Command templates and banners use TOML *literal* strings ('...' / '''...''')
+# so shell line-continuation backslashes survive verbatim. The banner starts
+# with a blank line (a leading newline in the rendered message) and every
+# template's exact whitespace is pinned by the golden tests under tests/golden/.
+
+label = "codex"
+skills_dir = ".agents/skills"
+config_dirs = [".agents", ".codex"]
+
+[run]
+supports_guard = true
+supports_bootstrap_with_no_stage = false
+supports_stage_name_with_no_stage = false
+
+# Hook payloads carry Claude-style names (Edit/Write/Bash) while transcripts
+# carry Codex item types (file_change/command_execution); the vocabulary
+# declares both spellings.
+[tools]
+write = ["Edit", "Write", "file_change"]
+patch = ["apply_patch"]
+shell = ["Bash", "command_execution"]
+read = []
+
+[staging]
+slug_template = "{prefix}{iteration}-{condition}__{skill_name}"
+rewrites_frontmatter_name = true
+advertises_staged_slug_name = true
+surface_phrase = "as a Codex skill"
+unresolved_phrase = "If it does not load as a Codex skill"
+
+[skills_block]
+header = "## Skills\n"
+item = "\n- {name}: {description} (file: {path})"
+
+# Codex's JSONL exposes no deterministic skill-tool event, so the
+# `__skill_invoked` meta-check uses the LLM-judge fallback.
+#
+# The stream is flat (every tool event self-contained), so ingest is the
+# declarative extract tier; `parser = "codex-items"` is the equivalent code
+# capability, kept as the reference implementation the extract engine's
+# differential test compares against (src/adapters/extract.rs).
+[transcript]
+events_filename = "codex-events.jsonl"
+surfaces_skill_invocation = false
+
+[transcript.extract.tools]
+where = { type = "item.completed" }
+item = "item"
+name_field = "type"
+skip_names = ["agent_message", "reasoning", "plan_update"]
+args_omit = ["id", "type", "status", "output", "result", "error"]
+result_coalesce = ["output", "result", "error"]
+
+[transcript.extract.final_text]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.tokens]
+where = { type = "turn.completed" }
+sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_tokens"]
+
+[transcript.extract.duration]
+timestamp_spread = "timestamp"
+
+[model]
+flag = "-m"
+
+# Guard data rendered by the generic engine (src/adapters/guard.rs). The JSON
+# templates' key order is written/serialized verbatim and is an on-disk
+# contract with armed hooks from earlier releases — do not reorder keys. The
+# `guard-codex` subcommand in command_template is a frozen alias for the same
+# reason.
+[guard]
+hooks_file = ".codex/hooks.json"
+matcher = "^Bash$|^apply_patch$|^Edit$|^Write$"
+command_template = '"{exe}" guard-codex "{marker}"'
+hook_entry = '{"matcher":"{matcher}","hooks":[{"type":"command","command":"{command}","timeout":30,"statusMessage":"Checking eval write boundary"}]}'
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = '''
+
+🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json
+   and will block writes/installs outside the eval sandbox during Codex dispatches.
+   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard'''
+
+[dispatch]
+capture_prefix = "codex"
+guard_args = " --dangerously-bypass-hook-trust"
+next_steps_template = '''
+
+Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
+{exec_command}
+Then run `ingest{target_args} --iteration {iteration} --harness codex`.'''
+# Stdin is detached so a surrounding `xargs`/pipe cannot be treated as extra
+# prompt context.
+exec_template = '''
+codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write{guard_args}{model_arg} --json \
+  --output-last-message <outputs_dir>/final-message.md \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
+  </dev/null \
+  > <outputs_dir>/codex-events.jsonl \
+  2> <outputs_dir>/codex-stderr.log'''
+parallel_command_template = '''
+    codex --ask-for-approval never exec --cd "$eval_root" --sandbox workspace-write{guard_args}{model_arg} --json \
+      --output-last-message "$outputs_dir/final-message.md" \
+      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to $outputs_dir/final-message.md." \
+      </dev/null \
+      > "$outputs_dir/codex-events.jsonl" \
+      2> "$outputs_dir/codex-stderr.log"'''
+judge_command_template = '    codex --ask-for-approval never exec --cd "{cwd}" --sandbox workspace-write{guard_args} $model_arg --json \'
+manifest_template = '''
+After all dispatches (Codex):
+
+Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.
+
+```bash
+{exec_command}
+```
+
+Parallel dispatch from this iteration directory:
+
+```bash
+{parallel_recipe}
+```
+
+Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.
+'''

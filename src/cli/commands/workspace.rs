@@ -8,7 +8,6 @@ use crate::cli::run;
 use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
 };
-use crate::core::DispatchMechanism;
 use crate::sandbox;
 use crate::workspace;
 
@@ -91,15 +90,12 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
 /// any iteration with uncommitted results.
 pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    // Disarm the guard at the invocation cwd — the in-session flow runs teardown from
-    // inside `env/`. Under Cli there is one env per (group, condition) and the human
-    // runs teardown from the iteration dir, so additionally walk each per-env marker
-    // (before `cleanup_workspace` reclaims the tree). Best-effort: a missing iteration
-    // just skips the walk; `teardown_guard` is a no-op without a marker.
+    // Disarm the guard at the invocation cwd, then walk each per-(group, condition)
+    // env marker (the human runs teardown from the iteration dir) before
+    // `cleanup_workspace` reclaims the tree. Best-effort: a missing iteration just
+    // skips the walk; `teardown_guard` is a no-op without a marker.
     let mut torn = sandbox::teardown_guard(&std::env::current_dir()?);
-    if ctx.run_mode.mechanism() == DispatchMechanism::Cli
-        && let Ok(dir) = iteration_dir(&ctx, args.iteration)
-    {
+    if let Ok(dir) = iteration_dir(&ctx, args.iteration) {
         for env in staged_env_roots(&dir) {
             torn |= sandbox::teardown_guard(&env);
         }

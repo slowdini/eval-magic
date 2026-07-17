@@ -15,7 +15,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::adapter_for;
+use crate::adapters::{adapter_for, all_config_dir_names};
 use crate::core::Harness;
 use crate::pipeline::io::now_iso8601;
 use crate::workspace::SNAPSHOT_META;
@@ -81,7 +81,7 @@ impl Default for StageSkillOpts<'_> {
             repo_root: Path::new(""),
             assets_dir: None,
             stage_name_override: None,
-            harness: Harness::ClaudeCode,
+            harness: Harness::default(),
         }
     }
 }
@@ -101,14 +101,24 @@ impl Default for StageSiblingOpts<'_> {
             skill_under_test: "",
             skills_source_dir: Path::new(""),
             repo_root: Path::new(""),
-            harness: Harness::ClaudeCode,
+            harness: Harness::default(),
         }
     }
 }
 
 /// `<repo_root>/.agents/skills` (Codex) or `<repo_root>/.claude/skills`.
 pub(crate) fn skills_dir_for_harness(repo_root: &Path, harness: Harness) -> PathBuf {
-    adapter_for(harness).skills_dir(repo_root)
+    adapter_for(harness)
+        .skills_dir(repo_root)
+        .expect("staging requires skills_dir; the run preflight forces --no-stage otherwise")
+}
+
+/// True when `name` is any harness's project-local config dir (`.claude`,
+/// `.agents`, …). Staging excludes every harness's config dirs when copying a
+/// skill's sibling assets — regardless of the active harness — so a checked-in
+/// config dir never rides into a staged env.
+fn is_harness_config_dir(name: &str) -> bool {
+    all_config_dir_names().iter().any(|d| d == name)
 }
 
 /// Rewrite (or insert) the `name:` frontmatter field so a Codex-staged skill's
@@ -142,104 +152,25 @@ fn prune_if_empty(dir: &Path) -> Result<(), RunError> {
     Ok(())
 }
 
-/// True when `name` satisfies OpenCode's skill-name rules:
-/// - 1–64 characters
-/// - lowercase alphanumeric with single-hyphen separators
-/// - no leading/trailing/consecutive hyphens
-fn is_valid_opencode_name(name: &str) -> bool {
-    if name.is_empty() || name.len() > 64 {
-        return false;
-    }
-    let mut prev = '-';
-    for ch in name.chars() {
-        if ch == '-' {
-            if prev == '-' {
-                return false;
-            }
-        } else if !ch.is_ascii_lowercase() && !ch.is_ascii_digit() {
-            return false;
-        }
-        prev = ch;
-    }
-    !name.starts_with('-') && !name.ends_with('-')
-}
-
-/// Sanitize an arbitrary identifier so it is a valid OpenCode skill name.
-fn sanitize_opencode_name(name: &str) -> String {
-    let mut out = String::new();
-    let mut prev_hyphen = false;
-    for ch in name.to_ascii_lowercase().chars() {
-        if ch.is_ascii_lowercase() || ch.is_ascii_digit() {
-            out.push(ch);
-            prev_hyphen = false;
-        } else if !prev_hyphen {
-            out.push('-');
-            prev_hyphen = true;
-        }
-    }
-    while out.ends_with('-') {
-        out.pop();
-    }
-    while out.starts_with('-') {
-        out.remove(0);
-    }
-    if out.is_empty() {
-        out.push_str("skill");
-    }
-    if out.len() > 64 {
-        out.truncate(64);
-        while out.ends_with('-') {
-            out.pop();
-        }
-    }
-    out
-}
-
-/// Build a slug that is valid for OpenCode's skill directory + frontmatter name
-/// constraints. The prefix is preserved so cleanup prefix-scans still find it.
-fn opencode_slug(iteration: u32, condition: &str, skill_name: &str) -> String {
-    let condition = sanitize_opencode_name(condition);
-    let skill = sanitize_opencode_name(skill_name);
-    let base = format!("{STAGED_SKILL_PREFIX}{iteration}-{condition}-{skill}");
-    if base.len() <= 64 && is_valid_opencode_name(&base) {
-        return base;
-    }
-    // If the combined slug is too long, truncate the skill portion.
-    let prefix = format!("{STAGED_SKILL_PREFIX}{iteration}-{condition}-");
-    let budget = 64usize.saturating_sub(prefix.len());
-    let mut truncated = skill.clone();
-    truncated.truncate(budget);
-    while truncated.ends_with('-') {
-        truncated.pop();
-    }
-    if truncated.is_empty() {
-        truncated.push_str("skill");
-    }
-    format!("{prefix}{truncated}")
-}
-
-/// Stage one skill under the harness's skills dir and return its slug. For Codex
-/// and OpenCode the frontmatter `name:` is rewritten to the slug.
+/// Stage one skill under the harness's skills dir and return its slug. For
+/// harnesses whose adapter opts in, the frontmatter `name:` is rewritten to the
+/// slug.
 pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError> {
+    let adapter = adapter_for(opts.harness);
     let slug = match opts.stage_name_override {
         Some(name) => name.to_string(),
-        None => match opts.harness {
-            Harness::OpenCode => opencode_slug(opts.iteration, opts.condition, opts.skill_name),
-            _ => format!(
-                "{STAGED_SKILL_PREFIX}{}-{}__{}",
-                opts.iteration, opts.condition, opts.skill_name
-            ),
-        },
+        None => adapter.staged_slug(
+            STAGED_SKILL_PREFIX,
+            opts.iteration,
+            opts.condition,
+            opts.skill_name,
+        ),
     };
-    if opts.harness == Harness::OpenCode && !is_valid_opencode_name(&slug) {
-        return Err(RunError::msg(format!(
-            "OpenCode skill name \"{slug}\" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens"
-        )));
-    }
+    adapter.validate_stage_name(&slug).map_err(RunError::msg)?;
     let skill_dir = skills_dir_for_harness(opts.repo_root, opts.harness).join(&slug);
     fs::create_dir_all(&skill_dir)?;
 
-    let content = if adapter_for(opts.harness).rewrites_frontmatter_name() {
+    let content = if adapter.rewrites_frontmatter_name() {
         rewrite_frontmatter_name(opts.content, &slug)
     } else {
         opts.content.to_string()
@@ -252,17 +183,12 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
         for entry in fs::read_dir(assets_dir)? {
             let entry = entry?;
             let name = entry.file_name();
+            let name_str = name.to_string_lossy();
             if matches!(
-                name.to_string_lossy().as_ref(),
-                "SKILL.md"
-                    | "evals"
-                    | SNAPSHOT_META
-                    | ".eval-magic"
-                    | ".claude"
-                    | ".agents"
-                    | ".codex"
-                    | ".opencode"
-            ) {
+                name_str.as_ref(),
+                "SKILL.md" | "evals" | SNAPSHOT_META | ".eval-magic"
+            ) || is_harness_config_dir(name_str.as_ref())
+            {
                 continue;
             }
             copy_entry(&assets_dir.join(&name), &skill_dir.join(&name))?;
@@ -277,7 +203,7 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
 #[cfg(test)]
 pub fn stage_skill_for_cc(opts: &StageSkillOpts) -> Result<String, RunError> {
     stage_skill_for_harness(&StageSkillOpts {
-        harness: Harness::ClaudeCode,
+        harness: Harness::resolve("claude-code").unwrap(),
         ..opts.clone()
     })
 }
