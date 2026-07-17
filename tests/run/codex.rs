@@ -1,5 +1,5 @@
 //! Codex-harness behavior: `.agents/skills` staging, inline fallback, guard
-//! wiring, and remaining parity-feature rejections.
+//! wiring, bootstrap injection, and live-skill shadow detection.
 
 use crate::helpers::*;
 use predicates::str::contains;
@@ -363,7 +363,7 @@ fn codex_run_writes_human_followed_runbook() {
 }
 
 #[test]
-fn codex_rejects_unsupported_parity_features() {
+fn codex_rejects_stage_name_with_no_stage() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(&tmp.path().join("c-stage-name"), DEFAULT_EVALS);
     skill_eval()
@@ -385,8 +385,12 @@ fn codex_rejects_unsupported_parity_features() {
         .assert()
         .failure()
         .stderr(contains("--stage-name"));
+}
 
-    let (skill_dir, cwd) = setup(&tmp.path().join("c-bootstrap"), DEFAULT_EVALS);
+#[test]
+fn codex_no_stage_supports_bootstrap() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     let bootstrap = cwd.join("bootstrap.md");
     fs::write(&bootstrap, "BOOT").unwrap();
     skill_eval()
@@ -406,7 +410,51 @@ fn codex_rejects_unsupported_parity_features() {
         .arg(&bootstrap)
         .arg("--dry-run")
         .assert()
-        .failure()
-        .stderr(contains("Unsupported for --harness codex"))
-        .stderr(contains("--bootstrap with --no-stage"));
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    for task in dispatch["tasks"].as_array().unwrap() {
+        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+        assert!(prompt.contains("<session-start-context>"));
+        assert!(prompt.contains("BOOT"));
+        if task["condition"] == "with_skill" {
+            assert!(prompt.contains("<skill name=\"mr-review\">"));
+        }
+    }
+    assert!(!cwd.join(".agents/skills").exists());
+}
+
+#[test]
+fn codex_warns_when_user_skill_shadows_staged_skill() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let fake_home = tmp.path().join("home");
+    let live_skill = fake_home.join(".agents/skills/different-folder");
+    fs::create_dir_all(&live_skill).unwrap();
+    fs::write(
+        live_skill.join("SKILL.md"),
+        "---\nname: mr-review\ndescription: installed copy\n---\n\nlive\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .env("HOME", &fake_home)
+        .env("CODEX_HOME", tmp.path().join("codex-home"))
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("Codex skill-shadow warning"))
+        .stderr(contains("codex exec"))
+        .stderr(contains("docs/codex-notes.md"));
+
+    let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
+    assert_eq!(report["shadowed"][0]["kind"], "global-skill");
+    assert_eq!(report["shadowed"][0]["skill_name"], "mr-review");
+    assert_eq!(
+        report["shadowed"][0]["path"],
+        live_skill.to_string_lossy().as_ref()
+    );
 }

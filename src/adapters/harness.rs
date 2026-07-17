@@ -299,6 +299,20 @@ pub trait HarnessAdapter {
         None
     }
 
+    /// **Enhancement: shadow preflight.** Format the runner banner for a
+    /// report. The default preserves the original Claude-oriented rendering
+    /// for third-party adapters and older artifacts.
+    fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
+        super::skill_shadow::format_shadow_banner(report)
+    }
+
+    /// **Enhancement: shadow preflight.** Format aggregate validity warnings
+    /// for a report. The default preserves the original Claude-oriented
+    /// rendering for third-party adapters and older artifacts.
+    fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
+        super::skill_shadow::shadow_validity_warnings(report)
+    }
+
     // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
 
     /// **Enhancement: plan-mode context.** Wrap a plan-mode profile as an
@@ -388,15 +402,11 @@ mod tests {
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
-        for h in [
-            Harness::resolve("codex").unwrap(),
-            Harness::resolve("opencode").unwrap(),
-        ] {
-            assert_eq!(
-                adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
-                None
-            );
-        }
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap())
+                .detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
+            None
+        );
     }
 
     #[test]
@@ -452,7 +462,7 @@ mod tests {
 
         let codex = adapter_for(Harness::resolve("codex").unwrap()).run_capabilities();
         assert!(codex.supports_guard);
-        assert!(!codex.supports_bootstrap_with_no_stage);
+        assert!(codex.supports_bootstrap_with_no_stage);
         assert!(!codex.supports_stage_name_with_no_stage);
 
         let opencode = adapter_for(Harness::resolve("opencode").unwrap()).run_capabilities();

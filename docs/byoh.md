@@ -137,6 +137,7 @@ you get the full feature from configuration alone:
 - `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL.
 - `staging.slug_capability = "opencode"` — OpenCode's sanitizing slug rules.
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.
+- `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.
 
 For example, a harness that logs Codex-compatible item JSONL gets full transcript ingest — parsed
 tool invocations, `transcript_check` grading, the works — with:
@@ -267,7 +268,7 @@ beyond a mechanical registration. What counts as data vs code:
   `config_dirs`, the `[dispatch]` templates, `[model]`, `[staging]` + `[skills_block]`,
   `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (the declarative tier is pure
   data), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
-  (`claude-stream-json`, `codex-items`, `opencode`, `claude-plugins`).
+  (`claude-stream-json`, `codex-items`, `opencode`, `claude-plugins`, `codex-skills`).
 - **Code — one capability per PR, separate from the descriptor PR:** a new transcript parser,
   slug capability, or shadow preflight (each is `src/adapters/capabilities.rs` + a
   `src/adapters/<harness>/` module + a schema enum entry), and guard support (`[guard]` data is

@@ -274,6 +274,20 @@ impl HarnessAdapter for DescriptorAdapter {
             .and_then(|s| s.preflight.detect(scan_root, staged_skill_names))
     }
 
+    fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
+        self.descriptor.shadow.as_ref().map_or_else(
+            || super::skill_shadow::format_shadow_banner(report),
+            |shadow| shadow.preflight.format_banner(report),
+        )
+    }
+
+    fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
+        self.descriptor.shadow.as_ref().map_or_else(
+            || super::skill_shadow::shadow_validity_warnings(report),
+            |shadow| shadow.preflight.validity_warnings(report),
+        )
+    }
+
     fn has_dispatch_recipes(&self) -> bool {
         self.descriptor.dispatch.exec_template.is_some()
     }
