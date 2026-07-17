@@ -69,8 +69,8 @@ flag combinations stay errors.
   by kebab-case name for everything that is real code (transcript parsers, slug generation,
   shadow preflight). The write guard needs no named capability: it is pure `[guard]` data
   rendered by the one generic engine in `src/adapters/guard.rs`.
-- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, the
-  plugin-shadow scan, the OpenCode slug sanitizer.
+- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers,
+  harness-native shadow scans, the OpenCode slug sanitizer.
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
   (`src/cli/run/util.rs`) — the `run` preflight: it resolves the guard tri-state (auto-arm when
   the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
@@ -190,21 +190,23 @@ run the user asked to guard must not continue silently unguarded.
 
 ### Shadow preflight
 
-*Why harness-specific:* what "discoverable from the live environment" means is harness-native —
-Claude Code dispatches load the operator's enabled plugins and global skills dir, so a staged
-skill name colliding with one of those contaminates the with/without comparison. Other harnesses
-load nothing global today.
+*Why harness-specific:* what "discoverable from the live environment" means is harness-native.
+Claude Code loads enabled plugins and its global skills dir. Codex loads repository-ancestor,
+user, and admin skill directories plus enabled installed plugins. A logical eval skill present in
+any such source contaminates the with/without comparison even when the staged copy uses a unique
+slug.
 
 *What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
 iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
 
-*Fallback:* no preflight — the run proceeds with no shadow report, exactly right for a harness
-whose dispatches load nothing beyond the staged env.
+*Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
+environment is clean; the operator must check any harness-native global discovery sources.
 
 *Descriptor fields:* the `[shadow]` table — `preflight`.
-*Capability:* `shadow.preflight` names the scan (`claude-plugins`); it returns the harness-neutral
-`PluginShadowReport` from `src/adapters/skill_shadow.rs`, and detection itself stays in the
-harness's module tree.
+*Capability:* `shadow.preflight` names the scan (`claude-plugins` or `codex-skills`). It returns
+the harness-neutral `PluginShadowReport` from `src/adapters/skill_shadow.rs`; detection and
+remediation rendering stay in the harness's module tree. Codex's scan is best-effort: it does not
+currently enumerate bundled system skills because Codex exposes no stable listing for them.
 
 ### Plan-mode context
 

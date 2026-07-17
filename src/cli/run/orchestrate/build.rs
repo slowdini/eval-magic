@@ -9,7 +9,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use crate::adapters::{adapter_for, format_shadow_banner};
+use crate::adapters::adapter_for;
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
@@ -361,9 +361,10 @@ pub(super) fn post_build(
         .first()
         .map(|t| t.root.as_path())
         .unwrap_or(ctx.stage_root.as_path());
-    if let Some(report) = adapter_for(ctx.harness).detect_shadowed_skills(scan_root, &names) {
+    let adapter = adapter_for(ctx.harness);
+    if let Some(report) = adapter.detect_shadowed_skills(scan_root, &names) {
         write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
-        eprintln!("{}", format_shadow_banner(&report));
+        eprintln!("{}", adapter.format_shadow_banner(&report));
     }
     Ok(())
 }

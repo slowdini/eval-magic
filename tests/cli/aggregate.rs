@@ -389,6 +389,15 @@ fn aggregate_surfaces_plugin_shadow_findings() {
     let (_tmp, root) = canonical_root();
     let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
     new_skill_conditions(&iteration_dir, &skill_md);
+    let conditions_path = iteration_dir.join("conditions.json");
+    let mut conditions: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&conditions_path).unwrap()).unwrap();
+    conditions.as_object_mut().unwrap().remove("harness");
+    fs::write(
+        &conditions_path,
+        serde_json::to_string(&conditions).unwrap(),
+    )
+    .unwrap();
     for cond in ["with_skill", "without_skill"] {
         write_grading(&iteration_dir, cond, 1.0);
         write_timing(
@@ -414,6 +423,54 @@ fn aggregate_surfaces_plugin_shadow_findings() {
     let warns = b["validity_warnings"].as_array().unwrap();
     assert!(warns.iter().any(|w| {
         let s = w.as_str().unwrap();
-        s.contains("mr-review") && s.to_lowercase().contains("contaminat")
+        s.contains("mr-review")
+            && s.to_lowercase().contains("contaminat")
+            && s.contains("claude -p")
+            && s.contains("docs/claude-notes.md")
+    }));
+}
+
+/// `aggregate`: shadow warnings use the recorded harness's remediation.
+#[test]
+fn aggregate_uses_codex_shadow_remediation() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    let mut conditions: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(iteration_dir.join("conditions.json")).unwrap())
+            .unwrap();
+    conditions["harness"] = json!("codex");
+    fs::write(
+        iteration_dir.join("conditions.json"),
+        serde_json::to_string(&conditions).unwrap(),
+    )
+    .unwrap();
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+        write_timing(
+            &iteration_dir,
+            cond,
+            json!({"total_tokens": 100, "duration_ms": 1}),
+        );
+    }
+    fs::write(
+        iteration_dir.join("plugin-shadow.json"),
+        serde_json::to_string(&json!({
+            "config_dir": "/home/u/.codex",
+            "shadowed": [{"kind": "global-skill", "skill_name": "mr-review",
+                "path": "/home/u/.agents/skills/mr-review"}],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    assert!(warns.iter().any(|w| {
+        let s = w.as_str().unwrap();
+        s.contains("mr-review") && s.contains("codex exec") && s.contains("Codex")
     }));
 }

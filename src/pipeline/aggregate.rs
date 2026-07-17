@@ -14,7 +14,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::adapters::{PluginShadowReport, shadow_validity_warnings};
+use crate::adapters::{PluginShadowReport, adapter_for, shadow_validity_warnings};
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
@@ -295,7 +295,7 @@ pub fn aggregate(
     }
 
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
-    collect_shadow_warnings(iteration_dir, &mut validity_warnings);
+    collect_shadow_warnings(iteration_dir, conditions, &mut validity_warnings);
 
     let benchmark = Benchmark {
         generated: now_iso8601(),
@@ -358,14 +358,22 @@ fn collect_stray_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
 }
 
 /// Add plugin-shadow validity warnings. A malformed report is ignored.
-fn collect_shadow_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
+fn collect_shadow_warnings(
+    iteration_dir: &Path,
+    conditions: &ConditionsRecord,
+    warnings: &mut Vec<String>,
+) {
     let Ok(raw) = fs::read_to_string(iteration_dir.join("plugin-shadow.json")) else {
         return;
     };
     let Ok(report) = serde_json::from_str::<PluginShadowReport>(&raw) else {
         return;
     };
-    warnings.extend(shadow_validity_warnings(&report));
+    let rendered = conditions.harness.map_or_else(
+        || shadow_validity_warnings(&report),
+        |harness| adapter_for(harness).shadow_validity_warnings(&report),
+    );
+    warnings.extend(rendered);
 }
 
 #[cfg(test)]

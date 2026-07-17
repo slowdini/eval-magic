@@ -3,9 +3,10 @@
 //! The declarative half of this harness lives in `harnesses/codex.toml`
 //! (including the write-guard data rendered by the generic engine in
 //! [`crate::adapters::guard`]); this module tree keeps only the code-backed
-//! capability the descriptor references: `item.completed` event-stream
-//! parsing ([`transcript`]).
+//! capabilities the descriptor references: `item.completed` event-stream
+//! parsing ([`transcript`]) and live-skill shadow detection ([`skill_shadow`]).
 
+pub mod skill_shadow;
 pub mod transcript;
 
 #[cfg(test)]

@@ -242,7 +242,10 @@
       "required": ["preflight"],
       "additionalProperties": false,
       "properties": {
-        "preflight": { "enum": ["claude-plugins"] }
+        "preflight": {
+          "description": "Named live-skill collision scanner: claude-plugins or codex-skills.",
+          "enum": ["claude-plugins", "codex-skills"]
+        }
       }
     },
     "dispatch": {
