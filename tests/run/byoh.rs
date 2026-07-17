@@ -72,7 +72,7 @@ fn descriptor_alone_carries_a_complete_run() {
             contains("declares no skills_dir")
                 .and(contains("--no-stage"))
                 .and(contains("declares no transcript parser"))
-                .and(contains("llm_judge"))
+                .and(contains("tokens/duration"))
                 .and(contains("declares no model flag"))
                 .and(contains("provenance")),
         );
@@ -167,6 +167,70 @@ fn guard_with_a_user_only_harness_is_rejected_in_preflight() {
         !iteration_dir(&cwd).join("dispatch.json").exists(),
         "the run must stop in preflight, before building anything"
     );
+}
+
+/// Auto-arm never turns the user-only-descriptor restriction into an error:
+/// without an explicit `--guard`, the run proceeds unguarded with a warning
+/// naming the fallback.
+#[test]
+fn auto_guard_stays_off_without_error_on_user_only_harness() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("declares no write guard").and(contains("detect-stray-writes")));
+
+    assert!(
+        iteration_dir(&cwd).join("dispatch.json").exists(),
+        "the run builds; only explicit --guard is rejected"
+    );
+}
+
+/// The transcript_check clause of the no-transcript-parser warning is scoped
+/// to eval configs that actually use the assertion type.
+#[test]
+fn transcript_check_warning_fires_only_when_evals_use_it() {
+    let evals = r#"{ "skill_name": "mr-review", "evals": [ {
+        "id": "e1", "prompt": "review this MR", "expected_output": "a review",
+        "assertions": [ { "id": "a1", "type": "transcript_check",
+                          "check": "ran tests", "pattern": "cargo test" } ] } ] }"#;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+        ])
+        .assert()
+        .success()
+        .stderr(
+            contains("declares no transcript parser")
+                .and(contains("unverifiable"))
+                .and(contains("llm_judge")),
+        );
 }
 
 /// A `--harness-file` descriptor becomes the invocation's default harness

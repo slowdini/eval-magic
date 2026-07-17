@@ -56,7 +56,8 @@ uses the LLM-judge fallback. Token accounting excludes cached input tokens.
 
 ## Write guard
 
-`--guard` merges a `PreToolUse` hook into `.codex/hooks.json` (matcher:
+A guarded run (the guard auto-arms; `--guard`/`--no-guard` make it explicit) merges a
+`PreToolUse` hook into `.codex/hooks.json` (matcher:
 `^Bash$|^apply_patch$|^Edit$|^Write$`, with a 30s timeout and status message). Dispatches must pass
 `--dangerously-bypass-hook-trust` so the vetted project-local hook actually runs — the generated
 recipes add it whenever the run was armed. The hook invokes the hidden `guard-codex` subcommand
@@ -66,8 +67,8 @@ recipes add it whenever the run was armed. The hook invokes the hidden `guard-co
 
 ## Running inside Codex itself
 
-`eval-magic run --harness codex` from a Codex session writes `.agents/skills` (and, with
-`--guard`, `.codex/hooks.json`). Those project-local Codex config paths are protected by Codex's
+`eval-magic run --harness codex` from a Codex session writes `.agents/skills` (and, when the
+guard is armed, `.codex/hooks.json`). Those project-local Codex config paths are protected by Codex's
 default workspace-write sandbox, so the runner may need approval/escalation or an external
 terminal invocation. That approval is Codex's own permission boundary, not something eval-magic
 bypasses.

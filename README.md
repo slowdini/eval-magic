@@ -85,13 +85,13 @@ environment.
 ### Mode A — new skill (with vs. without)
 
 ```bash
-# 1. Build the iteration's isolated envs (arm --guard — see Cost & confirmation).
-#    run stages skills into one env per (group, condition) under
-#    .eval-magic/my-skill/iteration-1/, copies fixtures in, and writes RUNBOOK.md.
-#    It does NOT dispatch — it prints a handoff. Add --runs <N> to dispatch every
-#    eval N times per condition for variance reduction (a per-eval "runs" field in
-#    evals.json overrides the flag).
-eval-magic run --guard
+# 1. Build the iteration's isolated envs (the write guard arms automatically —
+#    see Cost & confirmation). run stages skills into one env per (group,
+#    condition) under .eval-magic/my-skill/iteration-1/, copies fixtures in, and
+#    writes RUNBOOK.md. It does NOT dispatch — it prints a handoff. Add
+#    --runs <N> to dispatch every eval N times per condition for variance
+#    reduction (a per-eval "runs" field in evals.json overrides the flag).
+eval-magic run
 
 # 2. Follow the runbook. From the iteration dir, read RUNBOOK.md end to end. It
 #    drives the whole loop below — dispatch → ingest → dispatch judges → finalize —
@@ -106,7 +106,7 @@ eval-magic run --guard
 #    judge hand-off. It reads each task's events file (outputs/<harness>-events.jsonl).
 eval-magic ingest
 
-# 4. Dispatch the judge tasks ingest lists, then finalize. If --guard is still
+# 4. Dispatch the judge tasks ingest lists, then finalize. If the guard is still
 #    armed, finalize reminds you to run teardown-guard before editing source.
 eval-magic finalize
 
@@ -120,7 +120,7 @@ You've already edited the skill; snapshot the old version straight from git (`--
 
 ```bash
 eval-magic snapshot --ref HEAD
-eval-magic run --mode revision --guard
+eval-magic run --mode revision
 # …then steps 2–5 as above.
 ```
 
@@ -142,7 +142,7 @@ teardown
 3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. For each task, run the harness CLI recipe from its `eval_root`, pointing the dispatched subagent at `dispatch_prompt_path` to read and follow exactly, and capture the events transcript into `outputs/`. Conditions are physically isolated — the `with_skill` env holds the staged skill, the control arm's env holds none — so there is no runtime "switch" step to get wrong.
 4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json` from `dispatch.json` + the subagent's `outputs/final-message.md` + each task's events transcript, scans for stray writes, and grades the `transcript_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion.
 5. **Dispatch judges.** Same pattern as step 3: run the CLI recipe for each judge task to read its prompt file and write its verdict back.
-6. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json` into `iteration-N/`, *above* the envs. Read it. If a `--guard` marker is still live, it also reminds you to run `teardown-guard` before editing source.
+6. **`finalize`** (grade `--finalize` → aggregate) merges the judge verdicts and writes `benchmark.json` into `iteration-N/`, *above* the envs. Read it. If a guard marker is still live, it also reminds you to run `teardown-guard` before editing source.
 7. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
 
 The chains run in-process and stop at the first failure; re-running after a fix is safe — every sub-step skips work that's already done. The individual steps (`record-runs`, `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`) remain callable for inspection or recovery. The per-task dispatch recipe lives in `RUNBOOK.md` and `dispatch-manifest.md`, and `ingest` reads each task's events file (`outputs/<harness>-events.jsonl`); harnesses without transcript ingest still write records by hand until their adapters land.
@@ -157,7 +157,7 @@ Each `(group, condition)` gets its own env — `iteration-N/env-<group>-<conditi
 
 An eval run is not free: an N-case suite is **2N full agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A subagent under test runs the real skill, and some skills write to disk, so it can write outside its sandbox.
 
-If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. Pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection (see the [Harnesses](#harnesses) table); otherwise they are recorded as provenance. Arm `--guard` unless the user actively opts out; unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
+If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. Pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection (see the [Harnesses](#harnesses) table); otherwise they are recorded as provenance. The write guard arms automatically on harnesses that support it (see the same table); pass `--no-guard` only when the user actively opts out. Unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
 
 The judgment of *whether* a change needs an eval, and how to design cases that actually measure it, lives in the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill.
 
@@ -274,7 +274,7 @@ This table is the source of truth for per-harness enhancement support:
 
 ¹ `run --harness opencode` stages skills and emits native dispatch prompts, but prints manual `opencode run` guidance instead of a copy-pasteable recipe.
 
-A missing enhancement degrades fidelity, never correctness — every column has a fallback, and the `run` preflight warns naming it: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, `--guard` continues unguarded and `detect-stray-writes` audits after the fact.
+A missing enhancement degrades fidelity, never correctness — every column has a fallback, and the `run` preflight warns naming it: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, the run continues unguarded (auto-arm quietly stays off; an explicit `--guard` warns) and `detect-stray-writes` audits after the fact; without dispatch recipes, `RUNBOOK.md` / `dispatch-manifest.md` carry handoff guidance without a copy-pasteable per-task command. Supported enhancements are provided automatically — the write guard arms on every staged run of a guard-capable harness unless `--no-guard` opts out.
 
 Per-harness implementation notes for developers wiring features live in [docs/claude-notes.md](docs/claude-notes.md), [docs/codex-notes.md](docs/codex-notes.md), and [docs/opencode-notes.md](docs/opencode-notes.md).
 

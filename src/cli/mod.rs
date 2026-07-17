@@ -59,6 +59,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         dry_run: false,
         no_stage: false,
         guard: false,
+        no_guard: false,
         stage_name: None,
         plan_mode: false,
         runs: 1,

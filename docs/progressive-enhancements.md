@@ -39,9 +39,11 @@ run records exist. Run records without transcript ingest are assembled by hand p
 In descriptor terms the baseline is one required field: `label`. Everything else in a harness
 descriptor is optional — an absent field or table gets a working generic fallback, and the `run`
 preflight *warns* naming that fallback rather than rejecting (a harness without `skills_dir`
-forces `--no-stage`; `--guard` without a declared guard continues unguarded behind the
+forces `--no-stage`; without a declared guard the run continues unguarded behind the
 `detect-stray-writes` audit; requested models without a model flag are recorded as provenance
-only). Only genuinely contradictory flag combinations stay errors.
+only). Supported enhancements are provided automatically — the write guard auto-arms wherever a
+harness declares one and staging is active (`--no-guard` opts out). Only genuinely contradictory
+flag combinations stay errors.
 
 ## Where this lives in code
 
@@ -70,10 +72,14 @@ only). Only genuinely contradictory flag combinations stay errors.
 - `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, the
   plugin-shadow scan, the OpenCode slug sanitizer.
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
-  (`src/cli/run/util.rs`) — the `run` preflight: undeclared enhancements warn naming their
-  fallback and adjust the options (`--guard` forced off, missing `skills_dir` forces
-  `--no-stage`); only contradictory flag combinations (`--bootstrap`/`--stage-name` where the
-  descriptor declares them incompatible with `--no-stage`) reject.
+  (`src/cli/run/util.rs`) — the `run` preflight: it resolves the guard tri-state (auto-arm when
+  the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
+  and undeclared enhancements warn naming their fallback and adjust the options (guard forced
+  off, missing `skills_dir` forces `--no-stage`, the no-transcript-parser warning scoped to eval
+  configs that actually use `transcript_check`, missing dispatch recipes noted); only
+  contradictory flag combinations (`--bootstrap`/`--stage-name` where the descriptor declares
+  them incompatible with `--no-stage`) and an explicit `--guard` on a user-descriptor-only
+  harness reject.
 
 ## The enhancements
 
@@ -154,7 +160,9 @@ syntax, trust model, and deny-verdict shape are all harness-native (Claude Code'
 `settings.local.json` + `hookSpecificOutput`, Codex's `hooks.json` + `{"decision": "block"}`).
 
 *What it unlocks:* out-of-bounds writes are *blocked before they happen* instead of detected
-afterwards.
+afterwards. The guard is provided automatically: every staged run of a guard-declaring built-in
+arms it unless `--no-guard` opts out (`--guard` makes the request explicit, turning silent
+can't-arm cases into a warning or error).
 
 *Fallback:* `detect-stray-writes` audits after the fact. (It also flags **live-source reads** — an
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
@@ -176,8 +184,9 @@ future guard-capable built-in uses the generic `guard-hook --harness <label>` en
 descriptor `[guard]` block is all it takes, no bespoke install/verdict code. Shared
 marker/manifest/teardown machinery lives in `src/sandbox/`. **User-supplied descriptors may not
 declare `[guard]`** — the guard fails open, so a mistyped user guard block would silently disarm
-it; `--guard` with a harness defined only by user descriptors is rejected in preflight, naming
-the `detect-stray-writes` fallback.
+it. On such a harness auto-arm quietly stays off (the preflight warns naming the
+`detect-stray-writes` fallback); only an *explicit* `--guard` is rejected in preflight, since a
+run the user asked to guard must not continue silently unguarded.
 
 ### Shadow preflight
 
@@ -215,7 +224,9 @@ descriptor surface; a harness with a real native plan mode would grow one.
 *What it unlocks:* `RUNBOOK.md`, `dispatch-manifest.md`, and the post-`run`/post-`ingest` handoffs
 carry exact per-task commands (including parallel and judge variants).
 
-*Fallback:* the generic handoff text; the operator constructs dispatch commands themselves.
+*Fallback:* the generic handoff text; the operator constructs dispatch commands themselves. The
+`run` preflight warns naming this limitation when the descriptor declares no `exec_template`
+(`has_dispatch_recipes()`).
 
 *Descriptor fields:* the `[dispatch]` table — `exec_template`, `parallel_command_template`,
 `judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,

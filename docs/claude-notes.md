@@ -71,7 +71,8 @@ meta-check still resolves the slug under all three options.
 
 ## Write guard
 
-`--guard` merges a `PreToolUse` hook into each env's `.claude/settings.local.json` (matcher:
+A guarded run (the guard auto-arms; `--guard`/`--no-guard` make it explicit) merges a
+`PreToolUse` hook into each env's `.claude/settings.local.json` (matcher:
 `Write|Edit|MultiEdit|NotebookEdit|Bash`). Every dispatch runs from its env, so it loads and
 enforces the hook — the recipe never passes `--bare`, which would skip hook discovery. The hook
 invokes the hidden `guard` subcommand (**stable on-disk contract — never rename**), which denies

@@ -168,9 +168,10 @@ label = "{label}"
 ## -------------------------------------------------------------------------------------------
 ## [guard] is deliberately NOT scaffolded: user-supplied descriptors may not declare it (or set
 ## run.supports_guard = true) because the write guard fails open — a mistyped block would
-## silently disarm it. Unguarded runs fall back to the detect-stray-writes audit. Guard support
-## is a built-in, one-capability-per-PR contribution: see docs/byoh.md "The guard restriction"
-## and docs/progressive-enhancements.md.
+## silently disarm it. Unguarded runs fall back to the detect-stray-writes audit (guarded
+## built-ins arm the guard automatically; --no-guard opts out). Guard support is a built-in,
+## one-capability-per-PR contribution: see docs/byoh.md "The guard restriction" and
+## docs/progressive-enhancements.md.
 
 ## -------------------------------------------------------------------------------------------
 ## Before opening a PR (docs/byoh.md "Upstreaming your descriptor"):

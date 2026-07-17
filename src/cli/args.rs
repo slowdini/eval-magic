@@ -83,12 +83,12 @@ pub struct CommonArgs {
     /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
     /// Claude Code and Codex both support staged skills, transcript ingest, and
-    /// `--guard`. Each reads its own per-task events file (`claude-events.jsonl`,
-    /// `codex-events.jsonl`); Codex stages skills under `.agents/skills`.
-    /// OpenCode stages skills under `.opencode/skills`; transcript ingest and
-    /// `--guard` are not yet wired for OpenCode. The name is resolved against
-    /// the harness descriptor registry after parsing; an unknown name errors
-    /// listing every registered harness.
+    /// the write guard (armed automatically). Each reads its own per-task events
+    /// file (`claude-events.jsonl`, `codex-events.jsonl`); Codex stages skills
+    /// under `.agents/skills`. OpenCode stages skills under `.opencode/skills`;
+    /// transcript ingest and the write guard are not yet wired for OpenCode.
+    /// The name is resolved against the harness descriptor registry after
+    /// parsing; an unknown name errors listing every registered harness.
     #[arg(long)]
     pub harness: Option<String>,
     /// Workspace directory (defaults to `<cwd>/.eval-magic`).
@@ -347,13 +347,21 @@ pub struct RunArgs {
     /// asset files); use the staged (default) path when the measured behavior
     /// depends on sibling files. The isolated env (`env/`) is still built either
     /// way — `--no-stage` only skips populating the harness skills dir. Also
-    /// disables `--guard` — the write guard requires staging — so no-stage runs
-    /// are unguarded and rely on `detect-stray-writes` after the fact.
+    /// disables the write guard (auto-armed or explicit) — it requires staging —
+    /// so no-stage runs are unguarded and rely on `detect-stray-writes` after
+    /// the fact.
     #[arg(long)]
     pub no_stage: bool,
-    /// Arm the write guard (PreToolUse hook) for the dispatch window.
+    /// Arm the write guard explicitly (it auto-arms when the harness supports it).
     ///
-    /// Stages a harness-native `PreToolUse` hook that *blocks* subagent
+    /// The write guard arms automatically on guard-capable built-in harnesses
+    /// whenever staging is active, so this flag only makes the request explicit:
+    /// where auto-arm quietly stays off (no declared guard, or `--no-stage`), an
+    /// explicit `--guard` warns, and a harness defined only by user-supplied
+    /// descriptors rejects it in preflight (rerun without it;
+    /// `detect-stray-writes` audits after the fact). Opt out with `--no-guard`.
+    ///
+    /// The guard is a harness-native `PreToolUse` hook that *blocks* subagent
     /// writes/installs outside the isolated run env (the agent-under-test's cwd)
     /// while dispatches run. Its allowed roots are the env plus the OS temp dir, so
     /// the guard boundary matches the same env that isolates the agent's reads.
@@ -361,13 +369,12 @@ pub struct RunArgs {
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
     /// redirects to absolute paths — and acting as a backstop when the isolated
-    /// session runs with relaxed permissions. Arm it unless the user opts out. The
-    /// marker auto-expires after 6h and is torn down at the next run; while armed the
+    /// session runs with relaxed permissions. The marker auto-expires after 6h
+    /// and is torn down at the next run; while armed the
     /// hook fires on your own tool calls too. If it remains armed after `finalize`,
     /// `finalize` reminds you to run `teardown` before editing source (which disarms
     /// the cwd guard and every per-`(group, condition)` Cli env's guard). Requires
-    /// staging — incompatible with `--no-stage`, under which guard install is skipped
-    /// and the run is unguarded.
+    /// staging — with `--no-stage` the guard stays off and the run is unguarded.
     /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
     /// vetted project-local eval hook runs. Unguarded, stray writes are only
     /// *detected* after the fact by `detect-stray-writes`, never blocked.
@@ -378,11 +385,18 @@ pub struct RunArgs {
     /// When invoking this from inside Codex, staging writes `.agents/skills` and
     /// guarded runs also write `.codex/hooks.json`; Codex protects those paths in
     /// its default workspace-write sandbox, so approval/escalation may be needed.
-    /// The guard is restricted to built-in harnesses: with a harness defined only
-    /// by user-supplied descriptors this flag is rejected in preflight (rerun
-    /// without it; `detect-stray-writes` audits after the fact).
     #[arg(long)]
     pub guard: bool,
+    /// Opt out of the write guard for this run.
+    ///
+    /// The guard arms automatically on harnesses that declare one (see
+    /// `--guard`). Pass this to run unguarded — e.g. when the skill under test
+    /// legitimately writes outside the isolated run env — and to silence the
+    /// unguarded-harness preflight warning. Unguarded, out-of-bounds writes are
+    /// only *detected* after the fact by `detect-stray-writes` (folded into
+    /// `ingest`), never blocked.
+    #[arg(long, conflicts_with = "guard")]
+    pub no_guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the
     /// conspicuous `slow-powers-eval-…` slug.
     ///

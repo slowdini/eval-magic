@@ -12,8 +12,9 @@ EXAMPLES:
   eval-magic init
 
   # Mode A — evaluate a new skill (with vs. without)
-  eval-magic run --guard
-  # run builds per-(group, condition) envs + RUNBOOK.md (a human-followed recipe).
+  eval-magic run
+  # run builds per-(group, condition) envs + RUNBOOK.md (a human-followed recipe),
+  # arming the write guard automatically when the harness supports it.
   # Follow it to dispatch each task in dispatch.json via `claude -p`, capturing each
   # task's outputs/claude-events.jsonl, then:
   #   eval-magic ingest      # reads each task's outputs/claude-events.jsonl
@@ -24,7 +25,7 @@ EXAMPLES:
 
   # Mode B — evaluate a language change (edit-first)
   eval-magic snapshot --ref HEAD
-  eval-magic run --mode revision --guard
+  eval-magic run --mode revision
   # …then the same ingest → finalize → teardown steps as Mode A.
 
   # Reduced-set / dry runs
@@ -32,11 +33,14 @@ EXAMPLES:
   eval-magic run --only case-a,case-b
   eval-magic run --skip slow-case
 
+  # Opt out of the auto-armed write guard
+  eval-magic run --no-guard
+
   # Evaluate one skill from elsewhere, without staging sibling skills
-  eval-magic run --skill ./skills/my-skill --guard
+  eval-magic run --skill ./skills/my-skill
 
   # Opt in to seeded environment parity: stage sibling skills from a skills dir
-  eval-magic run --skill-dir ./skills --skill my-skill --guard
+  eval-magic run --skill-dir ./skills --skill my-skill
 
   # Codex harness: dispatch with stdin detached; ingest reads each task's codex-events.jsonl
   eval-magic run --harness codex

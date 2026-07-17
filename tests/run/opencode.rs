@@ -191,6 +191,62 @@ fn opencode_guard_warns_and_continues_unguarded() {
 }
 
 #[test]
+fn opencode_default_run_warns_unguarded_without_the_flag() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag: auto-arm can't apply (no declared guard), so the run
+    // proceeds unguarded with a warning naming the fallback and the opt-out.
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+        ])
+        .assert()
+        .success()
+        .stderr(
+            contains("declares no write guard")
+                .and(contains("detect-stray-writes"))
+                .and(contains("--no-guard")),
+        );
+
+    assert!(
+        !cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".opencode/skills/.slow-powers-eval-guard.json")
+            .exists(),
+        "no guard marker was installed"
+    );
+}
+
+#[test]
+fn opencode_run_warns_missing_dispatch_recipe() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("declares no dispatch exec recipe").and(contains("RUNBOOK.md")));
+}
+
+#[test]
 fn opencode_rejects_invalid_stage_name() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
