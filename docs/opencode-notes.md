@@ -27,8 +27,9 @@ XML block in dispatch prompts. Everything else rides the trait's enhancement def
   the (defaulted, erroring) parsers; `transcript_check` grades as unverifiable and the
   `__skill_invoked` meta-check uses the LLM-judge fallback.
 - **No model flag** — `--agent-model` / `--judge-model` are recorded as provenance only.
-- **No write guard** — `--guard` is rejected in the `run` preflight
-  (`run_capabilities().supports_guard` is false); `detect-stray-writes` is the audit fallback.
+- **No write guard** — auto-arm stays off (`run_capabilities().supports_guard` is false) and the
+  `run` preflight warns naming the fallback; an explicit `--guard` warns and continues unguarded.
+  `detect-stray-writes` is the audit fallback.
 
 ## Naming rules
 

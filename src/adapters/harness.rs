@@ -317,6 +317,15 @@ pub trait HarnessAdapter {
     // Fallback without them: `run` prints the generic handoff and the runbook
     // carries no copy-pasteable per-task command.
 
+    /// **Enhancement: dispatch recipes.** Whether a copy-pasteable per-task
+    /// exec command is wired (the descriptor's `[dispatch] exec_template`).
+    /// `false` means `RUNBOOK.md` / `dispatch-manifest.md` carry handoff
+    /// guidance without a per-task command recipe, and the `run` preflight
+    /// warns naming that limitation.
+    fn has_dispatch_recipes(&self) -> bool {
+        false
+    }
+
     /// **Enhancement: dispatch recipes.** The `Next:` guidance printed after
     /// `run`: how to dispatch each task through this harness's one-shot CLI
     /// and then ingest. Empty when no dispatch recipe is wired.
@@ -388,6 +397,13 @@ mod tests {
                 None
             );
         }
+    }
+
+    #[test]
+    fn has_dispatch_recipes_matches_the_readme_support_table() {
+        assert!(adapter_for(Harness::resolve("claude-code").unwrap()).has_dispatch_recipes());
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).has_dispatch_recipes());
+        assert!(!adapter_for(Harness::resolve("opencode").unwrap()).has_dispatch_recipes());
     }
 
     #[test]

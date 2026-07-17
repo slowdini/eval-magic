@@ -41,6 +41,26 @@ fn help_uses_published_binary_name() {
         .stdout(contains("eval-magic"));
 }
 
+/// `--guard` and `--no-guard` are contradictory and rejected at parse time.
+#[test]
+fn run_rejects_guard_with_no_guard() {
+    skill_eval()
+        .args(["run", "--guard", "--no-guard"])
+        .assert()
+        .failure()
+        .stderr(contains("cannot be used with"));
+}
+
+/// The auto-arm opt-out is a documented part of the `run` surface.
+#[test]
+fn run_help_documents_no_guard() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--no-guard"));
+}
+
 /// `ingest` reaches its own context validation when invoked bare.
 #[test]
 fn ingest_is_wired_and_validates_context() {

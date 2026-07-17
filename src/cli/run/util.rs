@@ -9,7 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::adapters::adapter_for;
 use crate::adapters::registry::has_embedded_layer;
-use crate::core::{Harness, Mode, RunContext};
+use crate::core::{Assertion, Eval, Harness, Mode, RunContext};
 
 use super::RunError;
 use super::orchestrate::RunOptions;
@@ -72,19 +72,21 @@ pub(crate) struct HarnessPreflight<'a> {
 }
 
 /// Check the run options against the selected harness's declared enhancements
-/// — the #126 model: a missing enhancement *warns* naming its fallback and the
-/// run continues degraded; only genuinely contradictory flag combinations
-/// (options the harness declares incompatible with `--no-stage`) and `--guard`
-/// on a harness defined by user-supplied descriptors alone (guards are
-/// embedded-only) stay errors.
+/// — the #126 model: each supported enhancement is provided automatically
+/// (the write guard auto-arms when the harness declares one and staging is
+/// active), a missing enhancement *warns* naming its fallback, and the run
+/// continues degraded. Only genuinely contradictory flag combinations
+/// (options the harness declares incompatible with `--no-stage`) and an
+/// explicit `--guard` on a harness defined by user-supplied descriptors alone
+/// (guards are embedded-only) stay errors.
 ///
-/// Adjustments: `--guard` on a guard-less harness is forced off (the
-/// detect-stray-writes audit is the fallback), and a harness without a
-/// `skills_dir` forces `--no-stage` (each SKILL.md is inlined into its
-/// dispatch prompt).
+/// Adjustments: `opts.guard` arrives tri-state (`None` = auto) and leaves
+/// resolved to `Some`; a harness without a `skills_dir` forces `--no-stage`
+/// (each SKILL.md is inlined into its dispatch prompt).
 pub(crate) fn harness_run_preflight<'a>(
     opts: &RunOptions<'a>,
     ctx: &RunContext,
+    uses_transcript_check: bool,
 ) -> Result<HarnessPreflight<'a>, RunError> {
     let adapter = adapter_for(ctx.harness);
     let capabilities = adapter.run_capabilities();
@@ -111,12 +113,14 @@ pub(crate) fn harness_run_preflight<'a>(
         )));
     }
 
-    // `--guard` on a harness defined only by user-supplied descriptors is a
-    // hard error, not a downgrade: the write guard stays restricted to
-    // built-in descriptors (it fails open, so a mistyped user descriptor
-    // would silently disarm it), and a run the user asked to guard must not
-    // continue silently unguarded.
-    if opts.guard && !capabilities.supports_guard && !has_embedded_layer(ctx.harness) {
+    // An explicit `--guard` on a harness defined only by user-supplied
+    // descriptors is a hard error, not a downgrade: the write guard stays
+    // restricted to built-in descriptors (it fails open, so a mistyped user
+    // descriptor would silently disarm it), and a run the user asked to guard
+    // must not continue silently unguarded. Auto-arm never errors here — it
+    // quietly stays off (warning below).
+    if opts.guard == Some(true) && !capabilities.supports_guard && !has_embedded_layer(ctx.harness)
+    {
         return Err(RunError::msg(format!(
             "--guard: --harness {label} comes from user-supplied descriptors only, and the \
              write guard stays restricted to built-in harnesses (it fails open, so a mistyped \
@@ -128,14 +132,9 @@ pub(crate) fn harness_run_preflight<'a>(
 
     let mut opts = opts.clone();
     let mut warnings = Vec::new();
-    if opts.guard && !capabilities.supports_guard {
-        opts.guard = false;
-        warnings.push(format!(
-            "--guard: --harness {label} declares no write guard — continuing unguarded; \
-             out-of-bounds writes are detected after the fact by the detect-stray-writes \
-             audit (folded into `ingest`), never blocked."
-        ));
-    }
+
+    // Missing native staging forces --no-stage before the guard resolves, so
+    // the guard sees the *effective* staging state.
     if !opts.no_stage && adapter.skills_dir(Path::new(".")).is_none() {
         opts.no_stage = true;
         warnings.push(format!(
@@ -143,13 +142,59 @@ pub(crate) fn harness_run_preflight<'a>(
              falling back to --no-stage (each SKILL.md is inlined into its dispatch prompt)."
         ));
     }
+
+    // Resolve the guard tri-state. The guard requires staging and a declared
+    // (embedded built-in) guard block; auto mode arms it whenever both hold.
+    let can_arm = capabilities.supports_guard && has_embedded_layer(ctx.harness) && !opts.no_stage;
+    match opts.guard {
+        Some(true) if !capabilities.supports_guard => {
+            opts.guard = Some(false);
+            warnings.push(format!(
+                "--guard: --harness {label} declares no write guard — continuing unguarded; \
+                 out-of-bounds writes are detected after the fact by the detect-stray-writes \
+                 audit (folded into `ingest`), never blocked."
+            ));
+        }
+        Some(true) if opts.no_stage => {
+            opts.guard = Some(false);
+            warnings.push(
+                "--guard: --no-stage disables the write guard (it requires staging) — \
+                 continuing unguarded; out-of-bounds writes are detected after the fact by \
+                 the detect-stray-writes audit (folded into `ingest`), never blocked."
+                    .to_string(),
+            );
+        }
+        Some(_) => {}
+        None => {
+            opts.guard = Some(can_arm);
+            if !capabilities.supports_guard {
+                warnings.push(format!(
+                    "--harness {label} declares no write guard — the run continues unguarded; \
+                     out-of-bounds writes are detected after the fact by the \
+                     detect-stray-writes audit (folded into `ingest`), never blocked. Pass \
+                     --no-guard to acknowledge and silence this."
+                ));
+            }
+            // A supported guard on a no-stage run stays off without a warning:
+            // the run-summary unguarded notice already covers it.
+        }
+    }
+
     if adapter.cli_events_filename().is_none() {
-        warnings.push(format!(
-            "--harness {label} declares no transcript parser — transcript_check assertions \
-             will grade as unverifiable and llm_judge carries the grading; tokens/duration \
-             go unrecorded. Recover each final message into outputs/final-message.md \
-             (see RUNBOOK.md)."
-        ));
+        warnings.push(if uses_transcript_check {
+            format!(
+                "--harness {label} declares no transcript parser — transcript_check assertions \
+                 will grade as unverifiable and llm_judge carries the grading; tokens/duration \
+                 go unrecorded. Recover each final message into outputs/final-message.md \
+                 (see RUNBOOK.md)."
+            )
+        } else {
+            format!(
+                "--harness {label} declares no transcript parser — tokens/duration go \
+                 unrecorded and run records are assembled from each task's \
+                 outputs/final-message.md (see RUNBOOK.md)."
+            )
+        });
     }
     if (opts.agent_model.is_some() || opts.judge_model.is_some())
         && adapter.cli_model_flag().is_none()
@@ -160,7 +205,26 @@ pub(crate) fn harness_run_preflight<'a>(
              default model."
         ));
     }
+    if !adapter.has_dispatch_recipes() {
+        warnings.push(format!(
+            "--harness {label} declares no dispatch exec recipe — RUNBOOK.md and \
+             dispatch-manifest.md carry handoff guidance without a copy-pasteable per-task \
+             command; construct each dispatch through the harness's one-shot CLI yourself."
+        ));
+    }
     Ok(HarnessPreflight { opts, warnings })
+}
+
+/// Whether any selected eval declares a `transcript_check` assertion — scopes
+/// the no-transcript-parser preflight warning to the eval configs it actually
+/// affects.
+pub(crate) fn evals_use_transcript_check(evals: &[Eval]) -> bool {
+    evals.iter().any(|e| {
+        e.assertions
+            .iter()
+            .flatten()
+            .any(|a| matches!(a, Assertion::TranscriptCheck(_)))
+    })
 }
 
 /// A per-run nonce (`<millis-base36>-<6 hex>`) that namespaces dispatch
@@ -236,23 +300,115 @@ mod tests {
         // fully-enhanced harness produces no fallback warnings.
         let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
         let opts = RunOptions {
-            guard: true,
+            guard: Some(true),
             ..Default::default()
         };
-        let preflight = harness_run_preflight(&opts, &ctx).unwrap();
-        assert!(preflight.opts.guard);
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(true));
         assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
+    }
+
+    #[test]
+    fn guard_auto_arms_on_a_supported_staged_run() {
+        // No guard flag at all: the enhancement is detected and provided
+        // automatically (#126), with no warning to acknowledge.
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(true), "auto-arm resolves to on");
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
+    }
+
+    #[test]
+    fn guard_auto_stays_off_quietly_with_no_stage() {
+        // Auto-arm never nags: an unstageable run stays unguarded without a
+        // preflight warning (the run-summary unguarded notice covers it).
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let opts = RunOptions {
+            no_stage: true,
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(false));
+        assert!(preflight.warnings.is_empty(), "{:?}", preflight.warnings);
+    }
+
+    #[test]
+    fn guard_auto_stays_off_and_warns_on_a_guardless_harness() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(false));
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("declares no write guard"))
+            .expect("a guard warning fires");
+        assert!(
+            !warning.starts_with("--guard:"),
+            "auto-arm, not the explicit flag, stayed off: {warning}"
+        );
+        assert!(
+            warning.contains("detect-stray-writes"),
+            "names the fallback: {warning}"
+        );
+        assert!(
+            warning.contains("--no-guard"),
+            "names the opt-out that silences it: {warning}"
+        );
+    }
+
+    #[test]
+    fn no_guard_opts_out_without_warnings() {
+        for name in ["claude-code", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let opts = RunOptions {
+                guard: Some(false),
+                ..Default::default()
+            };
+            let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+            assert_eq!(preflight.opts.guard, Some(false));
+            assert!(
+                !preflight.warnings.iter().any(|w| w.contains("write guard")),
+                "--no-guard acknowledges the state, no warning: {:?}",
+                preflight.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_guard_with_no_stage_warns_and_continues_unguarded() {
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let opts = RunOptions {
+            guard: Some(true),
+            no_stage: true,
+            ..Default::default()
+        };
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(preflight.opts.guard, Some(false));
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.starts_with("--guard:"))
+            .expect("an explicit --guard request that can't be honored warns");
+        assert!(warning.contains("--no-stage"), "{warning}");
+        assert!(
+            warning.contains("detect-stray-writes"),
+            "names the fallback: {warning}"
+        );
     }
 
     #[test]
     fn guard_on_a_guardless_harness_warns_and_continues_unguarded() {
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
         let opts = RunOptions {
-            guard: true,
+            guard: Some(true),
             ..Default::default()
         };
-        let preflight = harness_run_preflight(&opts, &ctx).unwrap();
-        assert!(!preflight.opts.guard, "guard is forced off, not rejected");
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
+        assert_eq!(
+            preflight.opts.guard,
+            Some(false),
+            "guard is forced off, not rejected"
+        );
         let warning = preflight
             .warnings
             .iter()
@@ -268,7 +424,7 @@ mod tests {
     #[test]
     fn transcriptless_harness_warns_naming_the_llm_judge_fallback() {
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx).unwrap();
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, true).unwrap();
         let warning = preflight
             .warnings
             .iter()
@@ -283,13 +439,93 @@ mod tests {
     }
 
     #[test]
+    fn transcript_warning_omits_transcript_check_sentence_when_unused() {
+        // The eval config declares no transcript_check assertions, so the
+        // warning covers only the limitations that actually apply.
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("transcript parser"))
+            .expect("a transcript warning fires");
+        assert!(!warning.contains("unverifiable"), "{warning}");
+        assert!(!warning.contains("llm_judge"), "{warning}");
+        assert!(warning.contains("tokens/duration"), "{warning}");
+        assert!(warning.contains("final-message.md"), "{warning}");
+    }
+
+    #[test]
+    fn evals_use_transcript_check_detects_the_assertion_type() {
+        use crate::core::{Assertion, AssertionLlmJudge, AssertionTranscriptCheck, Eval};
+
+        fn eval_with(assertions: Option<Vec<Assertion>>) -> Eval {
+            Eval {
+                id: "e1".into(),
+                prompt: "p".into(),
+                expected_output: "o".into(),
+                files: None,
+                assertions,
+                skill_should_trigger: None,
+                runs: None,
+                isolation: None,
+            }
+        }
+
+        let transcript = Assertion::TranscriptCheck(AssertionTranscriptCheck {
+            id: "a1".into(),
+            check: "ran tests".into(),
+            pattern: None,
+            must_precede: None,
+        });
+        let judge = Assertion::LlmJudge(AssertionLlmJudge {
+            id: "a2".into(),
+            rubric: "r".into(),
+            model: None,
+        });
+
+        assert!(evals_use_transcript_check(&[eval_with(Some(vec![
+            judge.clone(),
+            transcript
+        ]))]));
+        assert!(!evals_use_transcript_check(&[
+            eval_with(Some(vec![judge])),
+            eval_with(None)
+        ]));
+        assert!(!evals_use_transcript_check(&[]));
+    }
+
+    #[test]
+    fn dispatchless_harness_warns_naming_the_generic_handoff() {
+        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("dispatch exec recipe"))
+            .expect("a dispatch-recipe warning fires");
+        assert!(warning.contains("RUNBOOK.md"), "{warning}");
+
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert!(
+            !preflight
+                .warnings
+                .iter()
+                .any(|w| w.contains("dispatch exec recipe")),
+            "{:?}",
+            preflight.warnings
+        );
+    }
+
+    #[test]
     fn model_flags_without_a_descriptor_model_flag_warn_provenance_only() {
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
         let opts = RunOptions {
             agent_model: Some("some-model"),
             ..Default::default()
         };
-        let preflight = harness_run_preflight(&opts, &ctx).unwrap();
+        let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
         let warning = preflight
             .warnings
             .iter()
@@ -304,7 +540,7 @@ mod tests {
     #[test]
     fn no_model_warning_when_no_models_are_requested() {
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx).unwrap();
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
         assert!(
             !preflight.warnings.iter().any(|w| w.contains("model flag")),
             "{:?}",

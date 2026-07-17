@@ -36,7 +36,10 @@ pub struct RunOptions<'a> {
     pub iteration: Option<u32>,
     pub dry_run: bool,
     pub no_stage: bool,
-    pub guard: bool,
+    /// Tri-state write guard: `None` = auto (the preflight resolves it to
+    /// `Some` — armed when the harness declares a guard and staging is
+    /// active), `Some` = explicit `--guard` / `--no-guard`.
+    pub guard: Option<bool>,
     pub stage_name: Option<&'a str>,
     pub plan_mode: bool,
     /// Runs per condition cell; per-eval `runs` overrides take precedence.
@@ -46,6 +49,14 @@ pub struct RunOptions<'a> {
     pub agent_model: Option<&'a str>,
     pub judge_model: Option<&'a str>,
     pub label: Option<&'a str>,
+}
+
+impl RunOptions<'_> {
+    /// Whether the preflight-resolved guard is armed. (`None` only occurs
+    /// before the preflight runs; it reads as unarmed.)
+    pub(crate) fn guard_armed(&self) -> bool {
+        self.guard == Some(true)
+    }
 }
 
 /// Everything [`resolve::resolve_request`] works out before any filesystem
@@ -85,16 +96,23 @@ struct Staged {
 
 /// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
-    // The harness preflight warns about undeclared enhancements (naming each
-    // fallback) and adjusts the options — it only rejects genuinely
+    // Resolve first (read-only): the preflight scopes its transcript warning
+    // to the eval config actually selected for the run.
+    let resolved = resolve::resolve_request(ctx, opts)?;
+
+    // The harness preflight provides supported enhancements automatically (the
+    // write guard auto-arms), warns about undeclared ones (naming each
+    // fallback), and adjusts the options — it only rejects genuinely
     // contradictory flag combinations.
-    let preflight = super::util::harness_run_preflight(opts, ctx)?;
+    let preflight = super::util::harness_run_preflight(
+        opts,
+        ctx,
+        super::util::evals_use_transcript_check(&resolved.selected_evals),
+    )?;
     for warning in &preflight.warnings {
         eprintln!("⚠ {warning}");
     }
     let opts = &preflight.opts;
-
-    let resolved = resolve::resolve_request(ctx, opts)?;
 
     // Redirect staging into the isolated env dir. `resolve_request` has now
     // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
@@ -147,6 +165,11 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
     if opts.no_stage {
         println!(
             "  staging: disabled (--no-stage) — skills will be inlined into dispatch_prompt for harnesses without project-local skill discovery"
+        );
+    }
+    if opts.guard_armed() {
+        println!(
+            "  guard: armed — the write guard blocks out-of-env writes during dispatch (--no-guard to opt out)"
         );
     }
 }
@@ -204,7 +227,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
     println!(
         "{}",
         adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {
-            guard: opts.guard,
+            guard: opts.guard_armed(),
             target_args: &target_args,
             iteration,
             agent_model: opts.agent_model,

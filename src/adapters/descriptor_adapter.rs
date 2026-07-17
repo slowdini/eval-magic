@@ -274,6 +274,10 @@ impl HarnessAdapter for DescriptorAdapter {
             .and_then(|s| s.preflight.detect(scan_root, staged_skill_names))
     }
 
+    fn has_dispatch_recipes(&self) -> bool {
+        self.descriptor.dispatch.exec_template.is_some()
+    }
+
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         let ingest_line = format!(
             "ingest{} --iteration {} --harness {}",

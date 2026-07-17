@@ -1,7 +1,7 @@
 //! Phases 3 & 4 — build every `(eval, condition)` dispatch task and write
 //! `conditions.json` / `dispatch-manifest.md` / per-task prompts / `dispatch.json`
-//! ([`write_dispatch`]), then arm the opt-in write guard and run the harness's
-//! shadow preflight ([`post_build`]).
+//! ([`write_dispatch`]), then arm the write guard (auto-armed; `--no-guard`
+//! opts out) and run the harness's shadow preflight ([`post_build`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -226,7 +226,7 @@ pub(super) fn write_dispatch(
             &tasks,
             ManifestContext {
                 harness: ctx.harness,
-                guard: opts.guard,
+                guard: opts.guard_armed(),
                 agent_model: opts.agent_model,
             },
         ),
@@ -299,7 +299,7 @@ pub(super) fn write_dispatch(
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
         target_args: &target_args,
-        guard: opts.guard,
+        guard: opts.guard_armed(),
         agent_model: opts.agent_model,
     });
     fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
@@ -307,8 +307,9 @@ pub(super) fn write_dispatch(
     Ok(tasks.len())
 }
 
-/// Post-build side effects: arm the opt-in write guard and run the harness's
-/// shadow preflight.
+/// Post-build side effects: arm the write guard (auto-armed when the harness
+/// declares one; `--no-guard` opts out) and run the harness's shadow
+/// preflight.
 pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
@@ -326,21 +327,19 @@ pub(super) fn post_build(
         skill_path_b: r.skill_path_b.as_deref(),
     });
 
-    // Opt-in hard guard: a PreToolUse hook blocking subagent writes/installs
-    // outside the eval sandbox while dispatches run. Armed in *every* env the run
-    // staged — since each subprocess loads its hook from its own cwd.
-    if opts.guard && !opts.dry_run {
-        if opts.no_stage {
-            eprintln!("\n⚠ --guard requires staging enabled; skipping guard install.");
-        } else {
-            let adapter = adapter_for(ctx.harness);
-            let exe = std::env::current_exe()?;
-            for target in &targets {
-                adapter.install_guard(&target.root, &exe, None)?;
-            }
-            if let Some(msg) = adapter.guard_armed_message() {
-                println!("{msg}");
-            }
+    // Hard guard: a PreToolUse hook blocking subagent writes/installs outside
+    // the eval sandbox while dispatches run. Armed in *every* env the run
+    // staged — since each subprocess loads its hook from its own cwd. The
+    // preflight resolved the guard state (no-stage and guardless-harness runs
+    // arrive with it off), so only --dry-run gates the install here.
+    if opts.guard_armed() && !opts.dry_run {
+        let adapter = adapter_for(ctx.harness);
+        let exe = std::env::current_exe()?;
+        for target in &targets {
+            adapter.install_guard(&target.root, &exe, None)?;
+        }
+        if let Some(msg) = adapter.guard_armed_message() {
+            println!("{msg}");
         }
     }
 

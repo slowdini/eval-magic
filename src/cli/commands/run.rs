@@ -19,7 +19,11 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
             iteration: args.common.iteration,
             dry_run: args.dry_run,
             no_stage: args.no_stage,
-            guard: args.guard,
+            guard: match (args.guard, args.no_guard) {
+                (true, _) => Some(true),
+                (_, true) => Some(false),
+                _ => None,
+            },
             stage_name: args.stage_name.as_deref(),
             plan_mode: args.plan_mode,
             runs: args.runs,

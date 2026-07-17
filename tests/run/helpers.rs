@@ -64,13 +64,13 @@ pub fn read_str(path: &Path) -> String {
     fs::read_to_string(path).unwrap()
 }
 
-/// Names directly under `.claude/skills` (or `.agents/skills`), excluding the
-/// staging manifest, sorted.
+/// Names directly under `.claude/skills` (or `.agents/skills`), excluding
+/// dotfiles (the staging manifest and the guard marker), sorted.
 pub fn staged_entries(skills_dir: &Path) -> Vec<String> {
     let mut names: Vec<String> = fs::read_dir(skills_dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
-        .filter(|n| n != STAGED_MANIFEST)
+        .filter(|n| !n.starts_with('.'))
         .collect();
     names.sort();
     names

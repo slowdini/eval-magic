@@ -283,6 +283,35 @@ fn codex_dispatch_guidance_includes_agent_model_when_provided() {
 fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // The guard auto-arms on codex, so an unguarded run takes --no-guard.
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--no-guard",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
+    assert!(stdout.contains("</dev/null"));
+    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+}
+
+#[test]
+fn codex_default_run_auto_arms_guard() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag: codex declares guard support, so the bare run arms it and
+    // the dispatch recipe carries the hook-trust bypass the staged hook needs.
     let assert = skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -298,10 +327,14 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
         .assert()
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(stdout.contains("--dangerously-bypass-hook-trust"));
 
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+    assert!(
+        cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".codex/hooks.json")
+            .exists(),
+        "codex guard hook staged in the env"
+    );
 }
 
 #[test]

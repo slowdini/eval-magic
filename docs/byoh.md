@@ -224,10 +224,11 @@ coercion, is what named parsers are for — that's `claude-stream-json`, and it 
 User-supplied descriptors may **not** declare `[guard]` or set `run.supports_guard = true`: the
 write guard **fails open** — a mistyped guard block would silently disarm it — so guard data
 stays restricted to the embedded built-in descriptors. Unguarded runs fall back to the
-`detect-stray-writes` audit, and `run --guard` with a harness defined only by user descriptors is
-rejected in preflight (the run stops rather than continuing silently unguarded). A project-local
-overlay of a guarded built-in is fine — the restriction applies to the user file's own content,
-and the embedded guard merges through underneath it.
+`detect-stray-writes` audit: on a harness defined only by user descriptors the guard's auto-arm
+quietly stays off (the `run` preflight warns naming the fallback), and only an explicit
+`run --guard` is rejected in preflight (the run stops rather than continuing silently unguarded).
+A project-local overlay of a guarded built-in is fine — the restriction applies to the user
+file's own content, and the embedded guard merges through underneath it.
 
 ## Verify, don't guess
 

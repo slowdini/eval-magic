@@ -85,11 +85,13 @@ fn finalize_does_not_warn_when_guard_is_not_armed() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
 
+    // The guard auto-arms on a bare claude-code run, so opting out takes
+    // --no-guard.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--no-guard"])
         .assert()
         .success();
 
@@ -171,7 +173,7 @@ fn teardown_preserves_iteration_with_uncommitted_results() {
 }
 
 #[test]
-fn normal_run_does_not_install_guard() {
+fn dry_run_skips_guard_install() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -181,7 +183,64 @@ fn normal_run_does_not_install_guard() {
         .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
         .assert()
         .success();
+    // Auto-arm applies, but --dry-run skips the install itself.
     assert!(!cwd.join(".claude/settings.local.json").exists());
+    assert!(
+        !cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".claude/settings.local.json")
+            .exists()
+    );
+}
+
+#[test]
+fn default_run_auto_arms_guard_in_each_env() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag at all: the harness declares guard support, so the run
+    // arms it automatically (#126 — enhancements are provided, not opted into).
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("guard: armed"),
+        "the run plan reports the armed guard: {stdout}"
+    );
+    for condition in ["with_skill", "without_skill"] {
+        let env = cli_env_dir(&cwd, "g1", condition);
+        assert!(
+            env.join(".claude/settings.local.json").exists(),
+            "guard hook staged in env-g1-{condition}"
+        );
+        assert!(
+            env.join(".claude/skills/.slow-powers-eval-guard.json")
+                .exists(),
+            "guard marker armed in env-g1-{condition}"
+        );
+    }
+}
+
+#[test]
+fn no_guard_run_installs_no_guard() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--no-guard"])
+        .assert()
+        .success();
+    let env = cli_env_dir(&cwd, "g1", "with_skill");
+    assert!(!env.join(".claude/settings.local.json").exists());
+    assert!(
+        !env.join(".claude/skills/.slow-powers-eval-guard.json")
+            .exists()
+    );
 }
 
 #[test]
