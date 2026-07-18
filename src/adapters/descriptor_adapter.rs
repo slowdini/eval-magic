@@ -214,11 +214,17 @@ impl HarnessAdapter for DescriptorAdapter {
         }
     }
 
-    fn transcript_surfaces_skill_invocation(&self) -> bool {
-        self.descriptor
-            .transcript
-            .as_ref()
-            .is_none_or(|t| t.surfaces_skill_invocation)
+    fn transcript_skill_invocation(&self) -> Option<(String, String)> {
+        match &self.descriptor.transcript {
+            Some(t) if !t.surfaces_skill_invocation => None,
+            Some(t) => Some((
+                t.skill_tool.clone().unwrap_or_else(|| "Skill".to_string()),
+                t.skill_arg.clone().unwrap_or_else(|| "skill".to_string()),
+            )),
+            // No transcript table: the default signature (the meta-check only
+            // fires when a run record carries invocations anyway).
+            None => Some(("Skill".to_string(), "skill".to_string())),
+        }
     }
 
     fn cli_model_flag(&self) -> Option<String> {

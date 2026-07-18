@@ -188,6 +188,15 @@ pub struct TranscriptSection {
     pub extract: Option<ExtractSpec>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub surfaces_skill_invocation: bool,
+    /// Tool name of the deterministic skill-invocation event the
+    /// `__skill_invoked` meta-check matches (default `"Skill"` — Claude
+    /// Code's Skill tool).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_tool: Option<String>,
+    /// Argument of the skill-invocation tool that carries the staged slug
+    /// (default `"skill"`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_arg: Option<String>,
 }
 
 impl TranscriptSection {

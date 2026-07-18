@@ -213,12 +213,13 @@ pub trait HarnessAdapter {
         ))
     }
 
-    /// **Enhancement: transcript parser.** Whether the parsed transcript
-    /// exposes a deterministic skill-invocation event the `__skill_invoked`
-    /// meta-check can match. False for Codex (its JSONL has no skill-tool
-    /// event), which routes the meta-check to the LLM-judge fallback.
-    fn transcript_surfaces_skill_invocation(&self) -> bool {
-        true
+    /// **Enhancement: transcript parser.** The deterministic skill-invocation
+    /// signature the `__skill_invoked` meta-check matches: `(tool name, arg
+    /// carrying the staged slug)` — Claude Code's `Skill`/`skill`, OpenCode's
+    /// `skill`/`name`. `None` for Codex (its JSONL has no skill-tool event),
+    /// which routes the meta-check to the LLM-judge fallback.
+    fn transcript_skill_invocation(&self) -> Option<(String, String)> {
+        Some(("Skill".to_string(), "skill".to_string()))
     }
 
     // ── Enhancement: model flag (defaulted) ──────────────────────────────────
@@ -436,6 +437,24 @@ mod tests {
         assert!(!adapter_for(Harness::resolve("claude-code").unwrap()).rewrites_frontmatter_name());
         assert!(adapter_for(Harness::resolve("codex").unwrap()).rewrites_frontmatter_name());
         assert!(adapter_for(Harness::resolve("opencode").unwrap()).rewrites_frontmatter_name());
+    }
+
+    #[test]
+    fn skill_invocation_signatures_are_harness_native() {
+        // (tool name, slug-carrying arg) the `__skill_invoked` meta-check
+        // matches; None routes the check to the LLM-judge fallback.
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).transcript_skill_invocation(),
+            Some(("Skill".to_string(), "skill".to_string()))
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).transcript_skill_invocation(),
+            None
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).transcript_skill_invocation(),
+            Some(("skill".to_string(), "name".to_string()))
+        );
     }
 
     #[test]

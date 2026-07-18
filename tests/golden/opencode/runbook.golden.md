@@ -10,7 +10,7 @@ repo.
 
 ## 1. Dispatch the eval agents, then ingest
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`. Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet. OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness opencode`.
+Next: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run --format json`, saving stdout as the task's outputs/opencode-events.jsonl (copy-pasteable recipes are not yet wired). Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet. Then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness opencode`.
 
 `ingest` records each run, backfills transcripts, scans for stray writes, and grades every
 mechanical assertion. It then prints any `llm_judge` tasks it could not grade itself.

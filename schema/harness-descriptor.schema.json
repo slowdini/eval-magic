@@ -89,7 +89,7 @@
       "description": "Transcript ingest: the events file the CLI dispatch captures, read by exactly one of `parser` (a named code capability, for streams that need stitching) or `extract` (the declarative tier for flat event streams). The exactly-one rule is a Rust loader invariant.",
       "properties": {
         "events_filename": { "type": "string", "minLength": 1 },
-        "parser": { "enum": ["claude-stream-json", "codex-items"] },
+        "parser": { "enum": ["claude-stream-json", "codex-items", "opencode-events"] },
         "extract": {
           "type": "object",
           "additionalProperties": false,
@@ -185,6 +185,16 @@
         "surfaces_skill_invocation": {
           "type": "boolean",
           "description": "Whether the transcript deterministically surfaces a skill invocation (false routes the meta-check to the LLM-judge fallback). For extract descriptors, leave false unless the mapping verifiably yields invocations named `Skill` carrying an `args.skill` field."
+        },
+        "skill_tool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tool name of the deterministic skill-invocation event the `__skill_invoked` meta-check matches (default \"Skill\" — Claude Code's Skill tool; OpenCode declares \"skill\")."
+        },
+        "skill_arg": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Argument of the skill-invocation tool that carries the staged slug (default \"skill\"; OpenCode declares \"name\")."
         }
       }
     },

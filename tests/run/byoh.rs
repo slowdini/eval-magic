@@ -73,6 +73,8 @@ fn descriptor_alone_carries_a_complete_run() {
                 .and(contains("--no-stage"))
                 .and(contains("declares no transcript parser"))
                 .and(contains("tokens/duration"))
+                .and(contains("unverifiable").not())
+                .and(contains("final-message.md"))
                 .and(contains("declares no model flag"))
                 .and(contains("provenance")),
         );
@@ -229,7 +231,8 @@ fn transcript_check_warning_fires_only_when_evals_use_it() {
         .stderr(
             contains("declares no transcript parser")
                 .and(contains("unverifiable"))
-                .and(contains("llm_judge")),
+                .and(contains("llm_judge"))
+                .and(contains("final-message.md")),
         );
 }
 
