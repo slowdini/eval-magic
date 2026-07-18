@@ -31,6 +31,8 @@ pub enum TranscriptParser {
     ClaudeStreamJson,
     /// `codex exec --json` `item.completed` events.
     CodexItems,
+    /// `opencode run --format json` `tool_use`/`text`/`step_finish` events.
+    OpencodeEvents,
 }
 
 impl TranscriptParser {
@@ -41,6 +43,9 @@ impl TranscriptParser {
                 super::claude_code::stream_json::parse_claude_stream_json(path)
             }
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events(path),
+            TranscriptParser::OpencodeEvents => {
+                super::opencode::transcript::parse_opencode_events(path)
+            }
         }
     }
 
@@ -51,6 +56,9 @@ impl TranscriptParser {
                 super::claude_code::stream_json::parse_claude_stream_json_full(path)
             }
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events_full(path),
+            TranscriptParser::OpencodeEvents => {
+                super::opencode::transcript::parse_opencode_events_full(path)
+            }
         }
     }
 }

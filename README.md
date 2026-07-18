@@ -4,7 +4,7 @@
 
 An eval dispatches a fresh subagent twice per test case — once with the skill loaded, once without (or old version vs. new) — and grades both outputs against assertions. The pass-rate delta tells you whether the skill is worth shipping or the change is worth landing. The runner builds the workspace, stages skills for discovery, generates dispatch prompts, assembles run records from transcripts, grades, and aggregates; your agent harness supplies the one thing the runner never does itself: dispatching the subagents.
 
-`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are fully wired harnesses today**; OpenCode has native staging support; see [Harnesses](#harnesses) for per-harness enhancement support. From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
+`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are fully wired harnesses today**; OpenCode has native staging and transcript-ingest support; see [Harnesses](#harnesses) for per-harness enhancement support. From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
 This README is the complete operating guide: install, author cases, run the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `eval-magic --help` (and `eval-magic <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
@@ -270,7 +270,7 @@ This table is the source of truth for per-harness enhancement support:
 |---------|:--------------:|:----------------:|:-----------------:|:----------:|:-----------:|:----------------:|
 | **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **OpenCode** | ✅ | ❌¹ | ❌ | ❌ | ❌ | ❌ |
+| **OpenCode** | ✅ | ❌¹ | ✅ | ❌ | ❌ | ❌ |
 
 ¹ `run --harness opencode` stages skills and emits native dispatch prompts, but prints manual `opencode run` guidance instead of a copy-pasteable recipe.
 

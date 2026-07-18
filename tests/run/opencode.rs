@@ -95,13 +95,14 @@ fn opencode_stages_repo_local_skills_under_opencode() {
         .find(|t| t["condition"] == "with_skill")
         .unwrap();
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-    // OpenCode's native skill surface: an <available_skills> XML block. Current
-    // behavior advertises the skill-under-test under its NATURAL name (only Codex
-    // advertises the slug — see build.rs available_skills_for), even though the
-    // OpenCode-staged frontmatter name: is rewritten to the slug. Pinning that as-is.
+    // OpenCode's native skill surface: an <available_skills> XML block. The
+    // skill-under-test is advertised under its staged slug — OpenCode's skill
+    // tool lists frontmatter names, and staging rewrites the frontmatter `name:`
+    // to the slug (siblings keep their natural names).
     assert!(prompt.contains("<available_skills>"));
     assert!(prompt.contains("</available_skills>"));
-    assert!(prompt.contains("<name>mr-review</name>"));
+    assert!(prompt.contains(&format!("<name>{OPENCODE_SLUG}</name>")));
+    assert!(!prompt.contains("<name>mr-review</name>"));
     assert!(prompt.contains("<description>review merge requests</description>"));
     assert!(prompt.contains("<name>release-notes</name>"));
     assert!(prompt.contains("<description>draft release notes</description>"));
@@ -268,4 +269,120 @@ fn opencode_rejects_invalid_stage_name() {
         .assert()
         .failure()
         .stderr(contains("OpenCode skill name \"Bad_Name\" is invalid"));
+}
+
+/// Resolve a dispatch.json path field (absolute, or relative to the run cwd).
+fn resolve(cwd: &Path, path: &str) -> std::path::PathBuf {
+    let path = Path::new(path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        cwd.join(path)
+    }
+}
+
+/// The tasks[] array from the iteration's dispatch.json.
+fn dispatch_tasks(cwd: &Path) -> Vec<serde_json::Value> {
+    read_json(&iteration_dir(cwd).join("dispatch.json"))["tasks"]
+        .as_array()
+        .expect("dispatch.json carries tasks[]")
+        .clone()
+}
+
+#[test]
+fn opencode_ingest_parses_events_and_code_checks_the_skill_invocation() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+        ])
+        .assert()
+        .success();
+
+    // Simulate `opencode run --format json` dispatches: a bash call, the staged
+    // skill loaded through the native `skill` tool, two text parts, and a
+    // step_finish token report. No final-message.md — the transcript's last
+    // text is the final-message fallback.
+    for task in dispatch_tasks(&cwd) {
+        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
+        fs::create_dir_all(&outputs).unwrap();
+        let slug_line = format!(
+            r#"{{"type":"tool_use","timestamp":3000,"sessionID":"ses_1","part":{{"id":"p3","type":"tool","tool":"skill","state":{{"status":"completed","input":{{"name":"{OPENCODE_SLUG}"}},"output":"<skill/>","title":"skill","metadata":{{}},"time":{{"start":2900,"end":3000}}}}}}}}"#
+        );
+        fs::write(
+            outputs.join("opencode-events.jsonl"),
+            [
+                r#"{"type":"step_start","timestamp":1000,"sessionID":"ses_1","part":{"id":"p1","type":"step-start"}}"#.to_string(),
+                r#"{"type":"tool_use","timestamp":2000,"sessionID":"ses_1","part":{"id":"p2","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"ls"},"output":"ok","title":"ls","metadata":{},"time":{"start":1900,"end":2000}}}}"#.to_string(),
+                slug_line,
+                r#"{"type":"text","timestamp":4000,"sessionID":"ses_1","part":{"id":"p4","type":"text","text":"First."}}"#.to_string(),
+                r#"{"type":"text","timestamp":5000,"sessionID":"ses_1","part":{"id":"p5","type":"text","text":"Final."}}"#.to_string(),
+                r#"{"type":"step_finish","timestamp":6000,"sessionID":"ses_1","part":{"id":"p6","type":"step-finish","reason":"stop","cost":0.002,"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":75,"write":0}}}}"#.to_string(),
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+    }
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["ingest", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "opencode",
+            "--iteration",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("no transcript parser").not());
+
+    for task in dispatch_tasks(&cwd) {
+        let record = read_json(&resolve(&cwd, task["run_record_path"].as_str().unwrap()));
+        let invocations = record["tool_invocations"].as_array().unwrap();
+        assert_eq!(
+            invocations
+                .iter()
+                .map(|i| i["name"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["bash", "skill"],
+            "{record}"
+        );
+        assert_eq!(
+            invocations[1]["args"],
+            serde_json::json!({"name": OPENCODE_SLUG})
+        );
+        assert_eq!(
+            record["final_message"], "Final.",
+            "the transcript's last text is the final-message fallback: {record}"
+        );
+
+        let timing = read_json(&resolve(&cwd, task["timing_path"].as_str().unwrap()));
+        assert_eq!(timing["total_tokens"], 125, "{timing}");
+        assert_eq!(timing["duration_ms"], 5_000, "{timing}");
+
+        if task["condition"] == "with_skill" {
+            let meta = read_json(
+                &resolve(&cwd, task["run_record_path"].as_str().unwrap())
+                    .parent()
+                    .unwrap()
+                    .join("judge-responses/__skill_invoked.json"),
+            );
+            assert_eq!(meta["passed"], true, "{meta}");
+            assert_eq!(meta["grader"], "transcript_check", "{meta}");
+        }
+    }
 }

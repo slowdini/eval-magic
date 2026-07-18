@@ -92,6 +92,7 @@ label = "{label}"
 ## parser is a NAMED CAPABILITY — real parsing code reused from configuration alone:
 ##   parser = "claude-stream-json"   Claude Code `-p --output-format stream-json` events
 ##   parser = "codex-items"          Codex `item.started`/`item.completed` JSONL
+##   parser = "opencode-events"      OpenCode `run --format json` tool_use/text/step_finish events
 ## extract is the DECLARATIVE tier for flat event streams (each tool event self-contained):
 ##   [transcript.extract.tools]       where / item / name_field / skip_names / args_omit /
 ##                                    result_coalesce — each matching item becomes an invocation
@@ -106,11 +107,16 @@ label = "{label}"
 ## VERIFY: capture a real events file and check its line shapes against the reader you declare —
 ## an unknown parser name fails the schema gate listing the allowed values. Leave
 ## surfaces_skill_invocation false unless you verified the stream yields a deterministic
-## skill-invocation event (false routes the __skill_invoked meta-check to the LLM judge).
+## skill-invocation event (false routes the __skill_invoked meta-check to the LLM judge). When
+## true, skill_tool / skill_arg name the skill tool and the argument carrying the skill
+## identifier (defaults: "Skill" / "skill" — Claude Code's spellings; OpenCode uses
+## "skill" / "name").
 # [transcript]
 # events_filename = "{label}-events.jsonl"
 # parser = "codex-items"
 # surfaces_skill_invocation = false
+# skill_tool = "Skill"
+# skill_arg = "skill"
 
 ## -------------------------------------------------------------------------------------------
 ## [model] — the CLI flag that selects a model. Without it, --agent-model / --judge-model are

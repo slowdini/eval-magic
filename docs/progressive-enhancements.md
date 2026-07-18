@@ -113,9 +113,9 @@ five fixed primitives (equality `where` filter, final-text pick, flat tool-item 
 sum, duration rule), documented with a worked example in [byoh.md](byoh.md) — the built-in `codex`
 descriptor ingests through it.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
-(`claude-stream-json`; `codex-items` is the reference implementation the extract engine's
-differential test compares against) — a new harness emitting a compatible event stream reuses one
-with zero code.
+(`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
+extract engine's differential test compares against) — a new harness emitting a compatible event
+stream reuses one with zero code.
 The tool names the transcript yields must be declared in `[tools]` (see the write-guard
 enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
 combination.

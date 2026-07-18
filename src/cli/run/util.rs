@@ -422,37 +422,25 @@ mod tests {
     }
 
     #[test]
-    fn transcriptless_harness_warns_naming_the_llm_judge_fallback() {
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, true).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("transcript"))
-            .expect("a transcript warning fires");
-        assert!(warning.contains("unverifiable"), "{warning}");
-        assert!(
-            warning.contains("llm_judge"),
-            "names the fallback: {warning}"
-        );
-        assert!(warning.contains("final-message.md"), "{warning}");
-    }
-
-    #[test]
-    fn transcript_warning_omits_transcript_check_sentence_when_unused() {
-        // The eval config declares no transcript_check assertions, so the
-        // warning covers only the limitations that actually apply.
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("transcript parser"))
-            .expect("a transcript warning fires");
-        assert!(!warning.contains("unverifiable"), "{warning}");
-        assert!(!warning.contains("llm_judge"), "{warning}");
-        assert!(warning.contains("tokens/duration"), "{warning}");
-        assert!(warning.contains("final-message.md"), "{warning}");
+    fn opencode_declares_a_transcript_parser_so_no_transcript_warning_fires() {
+        // The transcript-less warning's content and transcript_check scoping
+        // are pinned by the byoh integration tests (a user descriptor without
+        // a parser); at the unit level every built-in is transcript-wired, so
+        // this pins that wiring: no transcript warning for opencode, whatever
+        // the eval config uses.
+        for uses_transcript_check in [true, false] {
+            let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+            let preflight =
+                harness_run_preflight(&RunOptions::default(), &ctx, uses_transcript_check).unwrap();
+            assert!(
+                !preflight
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("transcript parser")),
+                "no transcript-parser warning: {:?}",
+                preflight.warnings
+            );
+        }
     }
 
     #[test]
