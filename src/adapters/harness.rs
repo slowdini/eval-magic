@@ -140,10 +140,8 @@ pub trait HarnessAdapter {
 
     /// **Enhancement: native staging.** Whether the skill-under-test is
     /// advertised in the available-skills block under its staged slug (vs. its
-    /// natural name). True for Codex, whose repo-local discovery keys on the
-    /// rewritten frontmatter name. (OpenCode also rewrites the frontmatter to
-    /// the slug yet still advertises the natural name — a known inconsistency
-    /// tracked for a separate fix.)
+    /// natural name). True for Codex and OpenCode, whose repo-local discovery
+    /// keys on the rewritten frontmatter name.
     fn advertises_staged_slug_name(&self) -> bool {
         false
     }

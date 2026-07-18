@@ -95,13 +95,14 @@ fn opencode_stages_repo_local_skills_under_opencode() {
         .find(|t| t["condition"] == "with_skill")
         .unwrap();
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-    // OpenCode's native skill surface: an <available_skills> XML block. Current
-    // behavior advertises the skill-under-test under its NATURAL name (only Codex
-    // advertises the slug — see build.rs available_skills_for), even though the
-    // OpenCode-staged frontmatter name: is rewritten to the slug. Pinning that as-is.
+    // OpenCode's native skill surface: an <available_skills> XML block. The
+    // skill-under-test is advertised under its staged slug — OpenCode's skill
+    // tool lists frontmatter names, and staging rewrites the frontmatter `name:`
+    // to the slug (siblings keep their natural names).
     assert!(prompt.contains("<available_skills>"));
     assert!(prompt.contains("</available_skills>"));
-    assert!(prompt.contains("<name>mr-review</name>"));
+    assert!(prompt.contains(&format!("<name>{OPENCODE_SLUG}</name>")));
+    assert!(!prompt.contains("<name>mr-review</name>"));
     assert!(prompt.contains("<description>review merge requests</description>"));
     assert!(prompt.contains("<name>release-notes</name>"));
     assert!(prompt.contains("<description>draft release notes</description>"));

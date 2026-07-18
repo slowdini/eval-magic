@@ -19,7 +19,9 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 
 Native staging only: `--harness opencode` stages under `.opencode/skills/`, rewrites the staged
 skill-under-test's frontmatter `name:` to a sanitized slug, and renders the `<available_skills>`
-XML block in dispatch prompts. Everything else rides the trait's enhancement defaults:
+XML block in dispatch prompts, advertising the skill-under-test under its staged slug (matching
+what OpenCode's skill tool lists, since it keys on the frontmatter name). Everything else rides
+the trait's enhancement defaults:
 
 - **No dispatch recipes** — `cli_next_steps` prints manual `opencode run` guidance instead of a
   copy-pasteable template.
@@ -39,12 +41,6 @@ sanitizes the generated slug while preserving the `slow-powers-eval-` cleanup pr
 the skill portion if the combination exceeds 64 chars); `validate_stage_name` applies the same
 rules to `--stage-name` overrides. Sibling skills stage at their natural names and must already
 satisfy the rules.
-
-## Known inconsistency
-
-The staged skill's frontmatter is rewritten to the slug (`rewrites_frontmatter_name` true) yet the
-available-skills block advertises the *natural* name (`advertises_staged_slug_name` false) —
-tracked for a separate fix.
 
 ## Wiring the next enhancements
 

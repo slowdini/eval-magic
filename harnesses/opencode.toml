@@ -17,6 +17,7 @@ stage_name_pattern = "^[a-z0-9]+(-[a-z0-9]+)*$"
 stage_name_max_len = 64
 stage_name_invalid_message = 'OpenCode skill name "{name}" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens'
 rewrites_frontmatter_name = true
+advertises_staged_slug_name = true
 surface_phrase = "as an OpenCode skill"
 unresolved_phrase = "If it does not load as an OpenCode skill"
 
