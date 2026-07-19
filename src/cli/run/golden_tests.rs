@@ -184,7 +184,7 @@ fn golden_skills_block_per_harness() {
 }
 
 #[test]
-fn golden_judge_recipe_claude_and_codex() {
+fn golden_judge_recipe_per_harness() {
     for (harness, guard, rel) in [
         (
             Harness::resolve("claude-code").unwrap(),
@@ -201,6 +201,12 @@ fn golden_judge_recipe_claude_and_codex() {
             Harness::resolve("codex").unwrap(),
             false,
             "codex/judge-recipe-noguard.golden.md",
+        ),
+        // OpenCode has no guard args, so one variant covers both guard states.
+        (
+            Harness::resolve("opencode").unwrap(),
+            false,
+            "opencode/judge-recipe.golden.md",
         ),
     ] {
         let recipe = adapter_for(harness)

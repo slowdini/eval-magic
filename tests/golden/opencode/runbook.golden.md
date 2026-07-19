@@ -10,13 +10,37 @@ repo.
 
 ## 1. Dispatch the eval agents, then ingest
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run --format json`, saving stdout as the task's outputs/opencode-events.jsonl (copy-pasteable recipes are not yet wired). Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet. Then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness opencode`.
+Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
+opencode run --dir <eval-root> --format json --auto -m model-x \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
+  </dev/null \
+  > <outputs_dir>/opencode-events.jsonl \
+  2> <outputs_dir>/opencode-stderr.log
+Then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness opencode`.
 
 `ingest` records each run, backfills transcripts, scans for stray writes, and grades every
 mechanical assertion. It then prints any `llm_judge` tasks it could not grade itself.
 
 ## 2. Dispatch the judge agents, then finalize
-Dispatch each judge task `ingest` listed through the same harness CLI, capturing its transcript output, then finalize.
+Dispatch each judge task from judge-tasks.json with:
+
+```bash
+JOBS=${JOBS:-4}
+jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv + "\u0000"' judge-tasks.json | \
+  xargs -0 -P "$JOBS" -I{} sh -c '
+    prompt_path="$(printf "%s" "$1" | cut -f1)"
+    response_path="$(printf "%s" "$1" | cut -f2)"
+    model="$(printf "%s" "$1" | cut -f3)"
+    response_base="${response_path%.json}"
+    mkdir -p "$(dirname "$response_path")"
+    model_arg=""; [ -n "$model" ] && model_arg="-m $model"
+    opencode run --dir "/work/.eval-magic/widget-skill/iteration-2" --format json --auto $model_arg \
+      "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
+      </dev/null \
+      > "$response_base.opencode-events.jsonl" \
+      2> "$response_base.opencode-stderr.log"
+  ' sh {}
+```
 
 Then merge the verdicts and aggregate:
 

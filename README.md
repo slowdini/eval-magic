@@ -270,9 +270,7 @@ This table is the source of truth for per-harness enhancement support:
 |---------|:--------------:|:----------------:|:-----------------:|:----------:|:-----------:|:----------------:|
 | **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **OpenCode** | ✅ | ❌¹ | ✅ | ❌ | ❌ | ❌ |
-
-¹ `run --harness opencode` stages skills and emits native dispatch prompts, but prints manual `opencode run` guidance instead of a copy-pasteable recipe.
+| **OpenCode** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 
 A missing enhancement degrades fidelity, never correctness — every column has a fallback: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, the run continues unguarded (auto-arm quietly stays off; an explicit `--guard` warns) and `detect-stray-writes` audits after the fact; without shadow preflight, no automatic live-skill collision scan runs; without dispatch recipes, `RUNBOOK.md` / `dispatch-manifest.md` carry handoff guidance without a copy-pasteable per-task command. Supported enhancements are provided automatically — the write guard arms on every staged run of a guard-capable harness unless `--no-guard` opts out, and the `run` preflight names actionable fallbacks where it can.
 

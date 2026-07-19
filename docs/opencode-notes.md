@@ -34,14 +34,30 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   `__skill_invoked` meta-check grades from the transcript. `[tools]` declares the verified tool
   ids (`bash` = the shell tool id; `edit`/`write` take `filePath`; `apply_patch` takes
   `patchText` — the shared boundary policy reads all three spellings).
+- **Dispatch recipes + model flag:** the `[dispatch]` templates run `opencode run --dir
+  <eval-root> --format json --auto` (plus `[model] flag = "-m"`; they landed together because
+  descriptor validation ties the judge template's `$model_arg` to a declared model flag).
+  Verified against opencode v1.18.3 (`opencode run --help` and
+  `packages/opencode/src/cli/cmd/run.ts`):
+  - `--dir <dir>` resolves the project instance against `<dir>` and `chdir`s there, so the
+    staged `.opencode/skills` in the env are discovered.
+  - Piped stdin is **appended to the message** (`Bun.stdin.text()` when stdin is not a TTY), so
+    every recipe detaches with `</dev/null>`, same as codex.
+  - Headless permission asks are auto-**rejected** unless `--auto` is passed; explicit `deny`
+    rules are still enforced under `--auto` (relevant once the write guard lands, #155).
+  - `--format json` streams raw JSON events (`tool_use` / `text` / `step_finish` / `error`) to
+    stdout; there is no `--output-last-message`, so the final message comes from the `text`
+    events via transcript ingest (the dispatch prompt still asks for `outputs/final-message.md`,
+    which wins when the agent writes it).
+  - `-m` takes models in `provider/model` format; the value passes through verbatim.
+  - Live-verified on v1.18.3 (one `opencode run` per the recipe + `ingest`, #153): the staged
+    skill is discovered and invoked under its slug via the `skill` tool, and the events file
+    ingests to a full run record. An operator config with an explicit `edit: deny` rule blocks
+    the `final-message.md` write even under `--auto` (deny rules stay enforced) — record-runs
+    then falls back to the transcript's last `text` part, so the run still records cleanly.
 
 Everything else rides the trait's enhancement defaults:
 
-- **No dispatch recipes** — `cli_next_steps` prints manual `opencode run --format json` guidance
-  instead of a copy-pasteable template (tracked in
-  [#153](https://github.com/slowdini/eval-magic/issues/153)).
-- **No model flag** — `--agent-model` / `--judge-model` are recorded as provenance only
-  (lands with the recipes: OpenCode's `-m` takes `provider/model`).
 - **No write guard** — auto-arm stays off (`run_capabilities().supports_guard` is false) and the
   `run` preflight warns naming the fallback; an explicit `--guard` warns and continues unguarded.
   `detect-stray-writes` is the audit fallback (tracked in
@@ -61,11 +77,6 @@ satisfy the rules.
 
 ## Wiring the next enhancements
 
-- **Dispatch recipes + model flag (#153):** an `opencode run --dir <eval-root> --format json
-  --auto` command template in the descriptor's `[dispatch]` table (`exec_template` /
-  `parallel_command_template` / `judge_command_template` + `next_steps_template` /
-  `manifest_template`), with `[model] flag = "-m"` in the same PR (validation ties the judge
-  template's `$model_arg` to a declared model flag). Verified CLI facts are in the issue.
 - **Shadow preflight (#154):** a new `opencode-skills` capability scanning the six discovery
   roots (project + global `.opencode/skills`, `.claude/skills`, `.agents/skills`).
 - **Write guard (#155):** an OpenCode pre-tool hook surface — a project plugin at

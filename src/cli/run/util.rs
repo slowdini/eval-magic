@@ -484,44 +484,38 @@ mod tests {
     }
 
     #[test]
-    fn dispatchless_harness_warns_naming_the_generic_handoff() {
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("dispatch exec recipe"))
-            .expect("a dispatch-recipe warning fires");
-        assert!(warning.contains("RUNBOOK.md"), "{warning}");
-
-        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        assert!(
-            !preflight
-                .warnings
-                .iter()
-                .any(|w| w.contains("dispatch exec recipe")),
-            "{:?}",
-            preflight.warnings
-        );
+    fn wired_built_ins_do_not_warn_about_dispatch_recipes() {
+        // The dispatch-recipe warning for a dispatchless harness is pinned on
+        // a user descriptor in tests/run/byoh.rs; every built-in wires recipes.
+        for name in ["claude-code", "codex", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+            assert!(
+                !preflight
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("dispatch exec recipe")),
+                "{name}: {:?}",
+                preflight.warnings
+            );
+        }
     }
 
     #[test]
-    fn model_flags_without_a_descriptor_model_flag_warn_provenance_only() {
+    fn model_flags_with_a_wired_model_flag_do_not_warn() {
+        // The provenance-only warning for a harness *without* a model flag is
+        // pinned on a user descriptor in tests/run/byoh.rs; every built-in
+        // declares one.
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
         let opts = RunOptions {
             agent_model: Some("some-model"),
             ..Default::default()
         };
         let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("model flag"))
-            .expect("a model warning fires");
         assert!(
-            warning.contains("provenance"),
-            "names the fallback: {warning}"
+            !preflight.warnings.iter().any(|w| w.contains("model flag")),
+            "{:?}",
+            preflight.warnings
         );
     }
 
