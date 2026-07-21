@@ -412,7 +412,7 @@ mod tests {
     fn has_dispatch_recipes_matches_the_readme_support_table() {
         assert!(adapter_for(Harness::resolve("claude-code").unwrap()).has_dispatch_recipes());
         assert!(adapter_for(Harness::resolve("codex").unwrap()).has_dispatch_recipes());
-        assert!(!adapter_for(Harness::resolve("opencode").unwrap()).has_dispatch_recipes());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).has_dispatch_recipes());
     }
 
     #[test]

@@ -524,6 +524,26 @@ mod tests {
     }
 
     #[test]
+    fn opencode_exec_recipe_carries_dir_auto_and_the_model_flag() {
+        let with = next_steps(
+            Harness::resolve("opencode").unwrap(),
+            Some("opencode/gpt-5-nano"),
+        );
+        assert!(
+            with.contains(
+                "opencode run --dir <eval-root> --format json --auto -m opencode/gpt-5-nano \\"
+            ),
+            "{with}"
+        );
+        let without = next_steps(Harness::resolve("opencode").unwrap(), None);
+        assert!(
+            without.contains("opencode run --dir <eval-root> --format json --auto \\"),
+            "{without}"
+        );
+        assert!(!without.contains(" -m "), "{without}");
+    }
+
+    #[test]
     fn codex_judge_recipe_splices_model_arg_in_one_command_shape() {
         let recipe = adapter_for(Harness::resolve("codex").unwrap())
             .cli_judge_next_steps(CliJudgeContext {

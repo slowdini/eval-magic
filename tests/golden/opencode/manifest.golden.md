@@ -8,6 +8,38 @@ Total dispatches: 2
 
 In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short "read this file and follow it" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.
 
+After all dispatches (OpenCode):
+
+Run one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/opencode-events.jsonl` and stderr as `outputs/opencode-stderr.log`.
+
+```bash
+opencode run --dir <eval-root> --format json --auto -m model-x \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
+  </dev/null \
+  > <outputs_dir>/opencode-events.jsonl \
+  2> <outputs_dir>/opencode-stderr.log
+```
+
+Parallel dispatch from this iteration directory:
+
+```bash
+JOBS=${JOBS:-4}
+jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + "\u0000"' dispatch.json | \
+  xargs -0 -P "$JOBS" -I{} sh -c '
+    eval_root="$(printf "%s" "$1" | cut -f1)"
+    prompt_path="$(printf "%s" "$1" | cut -f2)"
+    outputs_dir="$(printf "%s" "$1" | cut -f3)"
+    mkdir -p "$outputs_dir"
+    opencode run --dir "$eval_root" --format json --auto -m model-x \
+      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
+      </dev/null \
+      > "$outputs_dir/opencode-events.jsonl" \
+      2> "$outputs_dir/opencode-stderr.log"
+  ' sh {}
+```
+
+Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/opencode-events.jsonl`.
+
 After all dispatches:
 
 1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ "total_tokens": <n>, "duration_ms": <n>, "source": "completion-event" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.

@@ -2,6 +2,8 @@
 //! artifact, and the post-run pointer at it.
 
 use crate::helpers::*;
+use predicates::prelude::PredicateBooleanExt;
+use predicates::str::contains;
 
 #[test]
 fn run_writes_headless_runbook_for_codex() {
@@ -73,4 +75,39 @@ fn run_writes_headless_runbook_for_claude() {
         "headless does not use the in-session batch loop: {book}"
     );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
+}
+
+#[test]
+fn run_writes_headless_runbook_for_opencode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "opencode", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("declares no dispatch exec recipe").not());
+
+    let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    assert!(
+        book.contains("opencode run --dir"),
+        "carries the opencode CLI dispatch recipe: {book}"
+    );
+    assert!(
+        book.contains("--harness opencode"),
+        "pipeline commands carry --harness opencode: {book}"
+    );
+    assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
+
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(
+        manifest.contains("opencode run --dir"),
+        "the manifest carries the same recipe: {manifest}"
+    );
+    assert!(
+        !manifest.contains("{{"),
+        "no unsubstituted tokens: {manifest}"
+    );
 }

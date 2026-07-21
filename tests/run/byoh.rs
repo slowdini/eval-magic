@@ -134,6 +134,33 @@ fn descriptor_alone_carries_a_complete_run() {
     }
 }
 
+/// A descriptor without an exec_template warns naming the generic handoff:
+/// RUNBOOK.md and dispatch-manifest.md carry guidance, not a copy-pasteable
+/// per-task command. (The built-in-harness half of this pin — wired harnesses
+/// stay quiet — lives in src/cli/run/util.rs.)
+#[test]
+fn dispatchless_descriptor_warns_naming_the_generic_handoff() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    write_project_descriptor(&cwd, "label = \"cool-custom-harness\"\n");
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("declares no dispatch exec recipe").and(contains("RUNBOOK.md")));
+}
+
 /// `--guard` with a harness that exists only in user-supplied descriptors is
 /// a hard preflight error: guards are restricted to embedded built-ins (fail-
 /// open safety), and a run the user asked to guard must not continue silently
