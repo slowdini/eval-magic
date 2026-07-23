@@ -1,0 +1,6 @@
+
+🛡 Write guard armed: a project plugin is staged in .opencode/plugins/slow-powers-eval-guard.js
+   and will block writes/installs outside the eval sandbox during OpenCode dispatches.
+   Each `opencode run` dispatch auto-loads the plugin from the env cwd it runs in.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard

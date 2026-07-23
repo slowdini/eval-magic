@@ -333,27 +333,20 @@ mod tests {
     }
 
     #[test]
-    fn guard_auto_stays_off_and_warns_on_a_guardless_harness() {
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        assert_eq!(preflight.opts.guard, Some(false));
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("declares no write guard"))
-            .expect("a guard warning fires");
-        assert!(
-            !warning.starts_with("--guard:"),
-            "auto-arm, not the explicit flag, stayed off: {warning}"
-        );
-        assert!(
-            warning.contains("detect-stray-writes"),
-            "names the fallback: {warning}"
-        );
-        assert!(
-            warning.contains("--no-guard"),
-            "names the opt-out that silences it: {warning}"
-        );
+    fn guard_auto_arms_on_every_guarded_builtin() {
+        // Every built-in declares a write guard since #155, so auto mode arms
+        // without any guard warning. The guardless-auto warning is only
+        // reachable on user-only harnesses now — pinned in tests/run/byoh.rs.
+        for name in ["claude-code", "codex", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+            assert_eq!(preflight.opts.guard, Some(true), "{name} auto-arms");
+            assert!(
+                !preflight.warnings.iter().any(|w| w.contains("write guard")),
+                "{name}: no guard warning when armed: {:?}",
+                preflight.warnings
+            );
+        }
     }
 
     #[test]
@@ -397,28 +390,22 @@ mod tests {
     }
 
     #[test]
-    fn guard_on_a_guardless_harness_warns_and_continues_unguarded() {
+    fn explicit_guard_arms_on_opencode() {
+        // An honored explicit --guard warns about nothing. (A --guard request
+        // a harness cannot honor is only reachable on user-only harnesses —
+        // a hard preflight error pinned in tests/run/byoh.rs.)
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
         let opts = RunOptions {
             guard: Some(true),
             ..Default::default()
         };
         let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
-        assert_eq!(
-            preflight.opts.guard,
-            Some(false),
-            "guard is forced off, not rejected"
-        );
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("--guard"))
-            .expect("a guard warning fires");
+        assert_eq!(preflight.opts.guard, Some(true));
         assert!(
-            warning.contains("detect-stray-writes"),
-            "names the fallback: {warning}"
+            !preflight.warnings.iter().any(|w| w.contains("--guard")),
+            "{:?}",
+            preflight.warnings
         );
-        assert!(warning.contains("never blocked"), "{warning}");
     }
 
     #[test]

@@ -1,0 +1,6 @@
+
+🛡 Write guard armed: a PreToolUse hook is staged in .claude/settings.local.json
+   and will block writes/installs outside the eval sandbox during dispatches.
+   Each `claude -p` dispatch loads the hook from the env cwd it runs in.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard

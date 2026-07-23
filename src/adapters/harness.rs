@@ -491,13 +491,13 @@ mod tests {
         assert!(!codex.supports_stage_name_with_no_stage);
 
         let opencode = adapter_for(Harness::resolve("opencode").unwrap()).run_capabilities();
-        assert!(!opencode.supports_guard);
+        assert!(opencode.supports_guard);
         assert!(opencode.supports_bootstrap_with_no_stage);
         assert!(opencode.supports_stage_name_with_no_stage);
     }
 
     #[test]
-    fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
+    fn guard_armed_message_is_harness_specific() {
         // The post-arm `--guard` banner names the harness's native hook surface,
         // so it lives behind the adapter rather than in generic run code.
         let claude = adapter_for(Harness::resolve("claude-code").unwrap())
@@ -516,11 +516,12 @@ mod tests {
             "codex banner names its hook file: {codex}"
         );
 
-        // OpenCode has no write guard (its install_guard errors), so there is no
-        // banner to print.
-        assert_eq!(
-            adapter_for(Harness::resolve("opencode").unwrap()).guard_armed_message(),
-            None
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap())
+            .guard_armed_message()
+            .expect("opencode has a write guard");
+        assert!(
+            opencode.contains(".opencode/plugins/slow-powers-eval-guard.js"),
+            "opencode banner names its plugin file: {opencode}"
         );
     }
 

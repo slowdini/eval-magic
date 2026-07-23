@@ -13,6 +13,7 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 | File | What's in it |
 |------|--------------|
 | `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug, `opencode-events` parser, and `opencode-skills` shadow-preflight references |
+| `harnesses/opencode-guard-plugin.js` | the embedded write-guard project plugin staged by the `opencode-plugin` guard engine (`{exe}`/`{marker}` substituted; byte-pinned in `src/adapters/guard.rs`) |
 | `mod.rs` | slug sanitization/truncation (the `opencode` slug capability) |
 | `transcript.rs` | `opencode run --format json` event-stream parsing (the `opencode-events` transcript capability) |
 | `skill_shadow.rs` | project/global skill collision scan (`opencode-skills`) + reporting |
@@ -45,7 +46,7 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   - Piped stdin is **appended to the message** (`Bun.stdin.text()` when stdin is not a TTY), so
     every recipe detaches with `</dev/null>`, same as codex.
   - Headless permission asks are auto-**rejected** unless `--auto` is passed; explicit `deny`
-    rules are still enforced under `--auto` (relevant once the write guard lands, #155).
+    rules are still enforced under `--auto`.
   - `--format json` streams raw JSON events (`tool_use` / `text` / `step_finish` / `error`) to
     stdout; there is no `--output-last-message`, so the final message comes from the `text`
     events via transcript ingest (the dispatch prompt still asks for `outputs/final-message.md`,
@@ -59,13 +60,52 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 - **Shadow preflight:** the `opencode-skills` capability scans every root OpenCode discovers
   skills from and warns at build time when a staged logical skill is also live there — see
   "Isolating from live skills" below.
+- **Write guard:** a project plugin staged at `.opencode/plugins/slow-powers-eval-guard.js` —
+  see "Write guard" below.
 
-Everything else rides the trait's enhancement defaults:
+## Write guard
 
-- **No write guard** — auto-arm stays off (`run_capabilities().supports_guard` is false) and the
-  `run` preflight warns naming the fallback; an explicit `--guard` warns and continues unguarded.
-  `detect-stray-writes` is the audit fallback (tracked in
-  [#155](https://github.com/slowdini/eval-magic/issues/155)).
+A guarded run (the guard auto-arms; `--guard`/`--no-guard` make it explicit) stages a project
+plugin at `.opencode/plugins/slow-powers-eval-guard.js` from the embedded template
+`harnesses/opencode-guard-plugin.js` (`{exe}`/`{marker}` substituted as JSON string literals).
+OpenCode auto-loads project plugins by directory convention — no trust prompt, no dispatch flag
+(in contrast to codex's `--dangerously-bypass-hook-trust`). The plugin's `tool.execute.before`
+hook forwards every tool call as `{"tool_name", "tool_input"}` on stdin to the generic
+`eval-magic guard-hook --harness opencode <marker>` entry point and throws the verdict's
+`reason` to block; the shared arbiter stays the single classification point (the plugin is
+deliberately dumb). The deny verdict rides the shared renderer with the codex-style
+`{"decision":"block","reason":"..."}` shape. Teardown deletes the plugin it created (restoring a
+pre-existing file verbatim) and prunes `.opencode/plugins/` when restoring leaves it empty
+(`guard_hook_cleanup_dir`).
+
+Live-verified on v1.18.4 (#155):
+
+- A staged `.opencode/plugins/*.js` auto-loads under headless `opencode run --dir <env>
+  --format json --auto` with no trust prompt (a debug plugin logged `plugin initialized`).
+- `tool.execute.before` fires under `--auto` — i.e., after permission auto-approval (every tool
+  call logged, including `read` and `skill`).
+- A thrown `Error` aborts the tool call and surfaces in the events stream as a tool part with
+  `"status":"error"` carrying the message (`"error":"eval guard: canary deny"`); the blocked
+  file was never created.
+- In an armed env: an in-bounds `write` completed; an out-of-bounds `write` to `/tmp/...` was
+  blocked with `"error":"eval guard: write to /tmp/... is outside the eval sandbox (allowed:
+  ...)"`; an out-of-bounds bash redirect (`echo hi > /tmp/...`) was blocked with
+  `"error":"eval guard: blocked bash (output redirection to a file) — runs outside the eval
+  sandbox"`; and `eval-magic teardown-guard` printed `🛡 Write guard removed.`, deleted the
+  plugin, pruned `.opencode/plugins/`, and swept the marker.
+
+Two boundary notes, shared with the other harnesses' guards:
+
+- The marker's allowed roots are the env root and the **OS temp dir** — a write under `$TMPDIR`
+  is in-bounds by design.
+- Bash coverage is the shared heuristic denylist (installs, git mutations, redirects, config-dir
+  tampering): a bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
+  detection of those is `detect-stray-writes`' job, same as claude/codex.
+
+One hook-shape caveat: `tool.execute.before` fires for *every* tool (OpenCode has no matcher
+surface), so each tool call spawns one `eval-magic guard-hook`. Classification stays in the
+arbiter, and tools outside the write/patch/shell vocabulary fall through to allow in
+milliseconds — the same fail-open-per-call posture as the other engines.
 
 ## Isolating from live skills
 
@@ -109,11 +149,3 @@ sanitizes the generated slug while preserving the `slow-powers-eval-` cleanup pr
 the skill portion if the combination exceeds 64 chars); `validate_stage_name` applies the same
 rules to `--stage-name` overrides. Sibling skills stage at their natural names and must already
 satisfy the rules.
-
-## Wiring the next enhancements
-
-- **Write guard (#155):** an OpenCode pre-tool hook surface — a project plugin at
-  `.opencode/plugins/` whose `tool.execute.before` hook forwards to `eval-magic guard-hook
-  --harness opencode` (a new guard engine variant; the shared arbiter and verdict path are
-  reused). Declare `[guard]` and `run.supports_guard` together — load-time descriptor validation
-  enforces the lockstep.

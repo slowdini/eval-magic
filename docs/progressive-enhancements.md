@@ -155,9 +155,10 @@ templates).
 
 ### Write guard
 
-*Why harness-specific:* the guard arms a *native pre-tool hook* — hook config location, matcher
-syntax, trust model, and deny-verdict shape are all harness-native (Claude Code's
-`settings.local.json` + `hookSpecificOutput`, Codex's `hooks.json` + `{"decision": "block"}`).
+*Why harness-specific:* the guard arms a *native pre-tool hook* — hook surface, blocking
+mechanism, trust model, and deny-verdict shape are all harness-native (Claude Code's
+`settings.local.json` + `hookSpecificOutput`, Codex's `hooks.json` + `{"decision": "block"}`,
+OpenCode's auto-loaded project plugin that blocks by throwing the reason).
 
 *What it unlocks:* out-of-bounds writes are *blocked before they happen* instead of detected
 afterwards. The guard is provided automatically: every staged run of a guard-declaring built-in
@@ -168,25 +169,34 @@ can't-arm cases into a warning or error).
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
 arm; fatal in revision mode, where the `old_skill` arm then sees new-skill content.)
 
-*Descriptor fields:* the `[guard]` table — `hooks_file`, `matcher`, `command_template`,
-`hook_entry`, `verdict_template`, `armed_message` — plus `[tools]` (the write/patch/shell/read
-vocabulary) and `run.supports_guard` (validated to stay in lockstep with the `[guard]` table).
-There is no guard code capability: one generic engine (`src/adapters/guard.rs`) renders the
-install (hook entry merged into `hooks_file`) and the deny verdict from these templates, whose
-authored JSON key order is serialized verbatim — the verdict bytes are the harness's on-disk
-contract. Validation proves every hooked `matcher` tool is declared in `[tools]`, that the
-templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit in
-string values. The guard arbiter and `detect-stray-writes` classify tool names against the
+*Descriptor fields:* the `[guard]` table — `verdict_template` and `armed_message` for every
+engine, `engine` (the install-mechanism discriminator, default `json-hooks`), and the per-engine
+fields: `json-hooks` (Claude Code, Codex) declares `hooks_file`, `matcher`, `command_template`,
+and `hook_entry`; `opencode-plugin` declares `plugin_file` instead — plus `[tools]` (the
+write/patch/shell/read vocabulary) and `run.supports_guard` (validated to stay in lockstep with
+the `[guard]` table). There is no guard code capability: one engine module
+(`src/adapters/guard.rs`) holds two install arms selected by `engine` and a single shared verdict
+path. `json-hooks` merges the rendered hook entry into `hooks_file`; `opencode-plugin` stages an
+embedded JS project plugin (`harnesses/opencode-guard-plugin.js`, `{exe}`/`{marker}` substituted
+as JSON string literals) whose `tool.execute.before` hook forwards every tool call to the generic
+entry point and throws the verdict's reason to block — OpenCode auto-loads project plugins by
+directory convention, so no dispatch flag is needed. The templates' authored JSON key order is
+serialized verbatim — the verdict bytes are the harness's on-disk contract. Validation proves the
+per-engine shape (the schema's conditional requiredness, plus load-time checks barring the other
+engine's fields), that every hooked `matcher` tool is declared in `[tools]` (json-hooks), that
+the templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit
+in string values. The guard arbiter and `detect-stray-writes` classify tool names against the
 cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript ingest
 without declaring the harness's tool names is rejected at descriptor load. The hidden `guard` /
-`guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a
-future guard-capable built-in uses the generic `guard-hook --harness <label>` entry point — a
-descriptor `[guard]` block is all it takes, no bespoke install/verdict code. Shared
-marker/manifest/teardown machinery lives in `src/sandbox/`. **User-supplied descriptors may not
-declare `[guard]`** — the guard fails open, so a mistyped user guard block would silently disarm
-it. On such a harness auto-arm quietly stays off (the preflight warns naming the
-`detect-stray-writes` fallback); only an *explicit* `--guard` is rejected in preflight, since a
-run the user asked to guard must not continue silently unguarded.
+`guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a new
+guard-capable built-in uses the generic `guard-hook --harness <label>` entry point (OpenCode's
+plugin spawns exactly that) — a descriptor `[guard]` block is all it takes, no bespoke
+install/verdict code beyond the engine arms. Shared marker/manifest/teardown machinery lives in
+`src/sandbox/`. **User-supplied descriptors may not declare `[guard]`** — the guard fails open,
+so a mistyped user guard block would silently disarm it. On such a harness auto-arm quietly
+stays off (the preflight warns naming the `detect-stray-writes` fallback); only an *explicit*
+`--guard` is rejected in preflight, since a run the user asked to guard must not continue
+silently unguarded.
 
 ### Shadow preflight
 

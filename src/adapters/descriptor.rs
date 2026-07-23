@@ -234,25 +234,63 @@ pub struct ModelSection {
     pub flag: String,
 }
 
-/// The write-guard data block: everything the generic guard engine
-/// ([`super::guard`]) needs to arm a hook and render a deny verdict. Embedded
-/// built-in descriptors only — the guard fails open, so
-/// [`layers::check_user_layer_restrictions`] bars user layers from declaring
-/// it.
+/// Which install mechanism the guard engine uses: `json-hooks` (the default)
+/// merges a rendered hook entry into the harness's hook-config file (Claude
+/// Code, Codex); `opencode-plugin` stages an embedded JS plugin whose
+/// `tool.execute.before` hook blocks a tool call by throwing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GuardEngine {
+    #[default]
+    JsonHooks,
+    OpencodePlugin,
+}
+
+impl GuardEngine {
+    /// True at the default — `skip_serializing_if` keeps the discriminator
+    /// out of authorable output for the engine every pre-#155 descriptor uses.
+    fn is_default(&self) -> bool {
+        *self == GuardEngine::default()
+    }
+}
+
+/// The write-guard data block: everything the guard engine ([`super::guard`])
+/// needs to arm the hook surface and render a deny verdict. Which fields apply
+/// depends on `engine`: the JSON-hooks four (`hooks_file`, `matcher`,
+/// `command_template`, `hook_entry`) are required for `json-hooks` and barred
+/// for `opencode-plugin`, which declares `plugin_file` instead — the schema's
+/// conditional-required gate plus load-time validation prove the shape, so the
+/// engine unwraps with "proven at load". Embedded built-in descriptors only —
+/// the guard fails open, so [`layers::check_user_layer_restrictions`] bars user
+/// layers from declaring it.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct GuardSection {
-    /// Hook-config file the entry is merged into, `/`-separated relative to
-    /// the staged env root (e.g. `.claude/settings.local.json`).
-    pub hooks_file: String,
-    /// Tool-name matcher the hook registers for; also the source of the
-    /// matcher⊆vocabulary invariant.
-    pub matcher: String,
-    /// Shell command the hook runs, with `{exe}` and `{marker}` placeholders.
-    pub command_template: String,
-    /// JSON template of the hook entry appended to the hook config's
-    /// `hooks.PreToolUse` array, with `{matcher}` and `{command}` placeholders
-    /// in its string values. Authored key order is serialized verbatim.
-    pub hook_entry: String,
+    /// Install mechanism; absent means `json-hooks`.
+    #[serde(default, skip_serializing_if = "GuardEngine::is_default")]
+    pub engine: GuardEngine,
+    /// (json-hooks) Hook-config file the entry is merged into, `/`-separated
+    /// relative to the staged env root (e.g. `.claude/settings.local.json`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hooks_file: Option<String>,
+    /// (json-hooks) Tool-name matcher the hook registers for; also the source
+    /// of the matcher⊆vocabulary invariant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    /// (json-hooks) Shell command the hook runs, with `{exe}` and `{marker}`
+    /// placeholders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_template: Option<String>,
+    /// (json-hooks) JSON template of the hook entry appended to the hook
+    /// config's `hooks.PreToolUse` array, with `{matcher}` and `{command}`
+    /// placeholders in its string values. Authored key order is serialized
+    /// verbatim.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hook_entry: Option<String>,
+    /// (opencode-plugin) Plugin file staged from the embedded JS template
+    /// (`{exe}`/`{marker}` substituted), `/`-separated relative to the staged
+    /// env root (e.g. `.opencode/plugins/slow-powers-eval-guard.js`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_file: Option<String>,
     /// JSON template of the deny verdict printed on stdout, with a `{reason}`
     /// placeholder. Authored key order is the harness's on-disk contract.
     pub verdict_template: String,
@@ -611,12 +649,17 @@ timestamp_spread = "timestamp"
         let d = load(GUARDED).unwrap();
         assert!(d.run.supports_guard);
         let guard = d.guard.expect("guard section loads");
-        assert_eq!(guard.hooks_file, ".demo/hooks.json");
-        assert_eq!(guard.matcher, "Write|Edit|MultiEdit|NotebookEdit|Bash");
+        assert_eq!(guard.engine, GuardEngine::JsonHooks);
+        assert_eq!(guard.hooks_file.as_deref(), Some(".demo/hooks.json"));
         assert_eq!(
-            guard.command_template,
-            r#""{exe}" guard-hook --harness demo "{marker}""#
+            guard.matcher.as_deref(),
+            Some("Write|Edit|MultiEdit|NotebookEdit|Bash")
         );
+        assert_eq!(
+            guard.command_template.as_deref(),
+            Some(r#""{exe}" guard-hook --harness demo "{marker}""#)
+        );
+        assert_eq!(guard.plugin_file, None);
         assert_eq!(guard.armed_message, "guard armed");
     }
 
@@ -673,8 +716,10 @@ timestamp_spread = "timestamp"
     }
 
     /// Migration canary: the pre-#137 named-engine shape must fail the schema
-    /// gate, so a stale `engine = "..."` line is caught with a schema message
-    /// instead of silently ignored.
+    /// gate. #155 reintroduced `engine` as a two-variant discriminator
+    /// (`json-hooks`/`opencode-plugin`), so the retired `claude-hooks` name
+    /// now fails the enum — a stale `engine = "..."` line is still caught
+    /// with a schema message instead of silently ignored.
     #[test]
     fn rejects_the_retired_guard_engine_field() {
         let err = err_of(&GUARDED.replace(

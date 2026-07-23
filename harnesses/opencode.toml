@@ -1,15 +1,18 @@
 # OpenCode harness descriptor.
 #
-# Native staging, transcript ingest, dispatch command recipes, the model flag,
-# and the shadow preflight are wired; the write guard is not, so that table is
-# absent and the enhancement default (the unguarded-run warning) applies.
-# Command templates and banners use TOML *literal* strings ('...' / '''...''')
+# Every enhancement is wired: native staging, transcript ingest, dispatch
+# command recipes, the model flag, the shadow preflight, and the write guard
+# (the opencode-plugin engine — see the [guard] comment below). Command
+# templates and banners use TOML *literal* strings ('...' / '''...''')
 # so shell line-continuation backslashes survive verbatim; every template's
 # exact whitespace is pinned by the golden tests under tests/golden/.
 
 label = "opencode"
 skills_dir = ".opencode/skills"
 config_dirs = [".opencode"]
+
+[run]
+supports_guard = true
 
 # Slug *generation* is the named `opencode` capability (sanitization +
 # truncation beyond a format string); the declarative rules below are the
@@ -53,6 +56,25 @@ skill_arg = "name"
 # `-m` takes a `provider/model` id and passes it through verbatim.
 [model]
 flag = "-m"
+
+# Guard data rendered by the engine (src/adapters/guard.rs). The
+# opencode-plugin engine stages an embedded JS project plugin
+# (harnesses/opencode-guard-plugin.js, {exe}/{marker} substituted as JSON
+# string literals) whose tool.execute.before hook forwards every tool call to
+# `eval-magic guard-hook --harness opencode` on stdin and throws the verdict's
+# reason to block; project plugins auto-load from the env root with no trust
+# prompt, so no dispatch flag is needed (verified: docs/opencode-notes.md).
+[guard]
+engine = "opencode-plugin"
+plugin_file = ".opencode/plugins/slow-powers-eval-guard.js"
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = '''
+
+🛡 Write guard armed: a project plugin is staged in .opencode/plugins/slow-powers-eval-guard.js
+   and will block writes/installs outside the eval sandbox during OpenCode dispatches.
+   Each `opencode run` dispatch auto-loads the plugin from the env cwd it runs in.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard'''
 
 # OpenCode discovers skills from six roots — project .opencode/.claude/.agents
 # skill dirs walked up to the git worktree, plus their global counterparts —

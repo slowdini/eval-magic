@@ -1,0 +1,6 @@
+
+🛡 Write guard armed: a PreToolUse hook is staged in .codex/hooks.json
+   and will block writes/installs outside the eval sandbox during Codex dispatches.
+   Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard
