@@ -31,6 +31,8 @@ pub enum TranscriptParser {
     ClaudeStreamJson,
     /// `codex exec --json` `item.completed` events.
     CodexItems,
+    /// `opencode run --format json` `tool_use`/`text`/`step_finish` events.
+    OpencodeEvents,
 }
 
 impl TranscriptParser {
@@ -41,6 +43,9 @@ impl TranscriptParser {
                 super::claude_code::stream_json::parse_claude_stream_json(path)
             }
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events(path),
+            TranscriptParser::OpencodeEvents => {
+                super::opencode::transcript::parse_opencode_events(path)
+            }
         }
     }
 
@@ -51,6 +56,9 @@ impl TranscriptParser {
                 super::claude_code::stream_json::parse_claude_stream_json_full(path)
             }
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events_full(path),
+            TranscriptParser::OpencodeEvents => {
+                super::opencode::transcript::parse_opencode_events_full(path)
+            }
         }
     }
 }
@@ -81,12 +89,16 @@ impl SlugCapability {
     }
 }
 
-/// Shadow preflights: detect installed skills that shadow a staged slug.
+/// Shadow preflights: detect live skills that shadow a logical staged skill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ShadowPreflight {
     /// Claude Code plugin/skill scan rooted at the user config dir.
     ClaudePlugins,
+    /// Codex repo/user/admin/plugin skill scan.
+    CodexSkills,
+    /// OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
+    OpencodeSkills,
 }
 
 impl ShadowPreflight {
@@ -103,6 +115,38 @@ impl ShadowPreflight {
                 scan_root,
                 staged_skill_names,
             ),
+            ShadowPreflight::CodexSkills => {
+                super::codex::skill_shadow::shadow_preflight(scan_root, staged_skill_names)
+            }
+            ShadowPreflight::OpencodeSkills => {
+                super::opencode::skill_shadow::shadow_preflight(scan_root, staged_skill_names)
+            }
+        }
+    }
+
+    /// Render the harness-specific build-time warning for a shadow report.
+    pub(crate) fn format_banner(self, report: &PluginShadowReport) -> String {
+        match self {
+            ShadowPreflight::ClaudePlugins => super::skill_shadow::format_shadow_banner(report),
+            ShadowPreflight::CodexSkills => {
+                super::codex::skill_shadow::format_shadow_banner(report)
+            }
+            ShadowPreflight::OpencodeSkills => {
+                super::opencode::skill_shadow::format_shadow_banner(report)
+            }
+        }
+    }
+
+    /// Render harness-specific aggregate validity warnings for a report.
+    pub(crate) fn validity_warnings(self, report: &PluginShadowReport) -> Vec<String> {
+        match self {
+            ShadowPreflight::ClaudePlugins => super::skill_shadow::shadow_validity_warnings(report),
+            ShadowPreflight::CodexSkills => {
+                super::codex::skill_shadow::shadow_validity_warnings(report)
+            }
+            ShadowPreflight::OpencodeSkills => {
+                super::opencode::skill_shadow::shadow_validity_warnings(report)
+            }
         }
     }
 }

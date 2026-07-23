@@ -4,10 +4,10 @@
 //! operator's live environment, contaminating the with/without comparison.
 //! Detection is harness-specific (each adapter's
 //! [`detect_shadowed_skills`](crate::adapters::HarnessAdapter::detect_shadowed_skills)
-//! decides what "discoverable" means); the report shape and its renderings are
-//! shared. The remediation text is Claude-flavored because only the Claude Code
-//! adapter produces reports today — promote the formatters to adapter methods
-//! when a second harness wires this preflight.
+//! decides what "discoverable" means); the report shape is shared. These
+//! default renderers retain the original Claude wording for backward
+//! compatibility; built-in adapters select harness-specific renderers through
+//! [`HarnessAdapter`](crate::adapters::HarnessAdapter).
 
 use serde::{Deserialize, Serialize};
 

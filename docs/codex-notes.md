@@ -14,6 +14,7 @@ references:
 |------|--------------|
 | `harnesses/codex.toml` | the descriptor — every declarative value + capability references |
 | `transcript.rs` | `item.completed` event-stream parsing (`codex-items`) |
+| `skill_shadow.rs` | repo/user/admin/plugin skill collision scan (`codex-skills`) + reporting |
 
 The write guard has no per-harness code: the descriptor's `[guard]` block (hook file, matcher,
 hook-entry and `{"decision": "block"}` verdict templates) is rendered by the generic engine in
@@ -45,6 +46,37 @@ Skills stage under repo-local `.agents/skills/`. Codex keys discovery on the fro
 so the staged skill-under-test's frontmatter is rewritten to the eval slug
 (`rewrites_frontmatter_name` true) and the available-skills block advertises the slug
 (`advertises_staged_slug_name` true).
+
+Codex can also inject `--bootstrap` content into a no-stage dispatch: the bootstrap remains in
+`<session-start-context>`, while the skill-under-test is inlined separately for the treatment arm.
+`--stage-name` still requires staging because it names an on-disk staged copy.
+
+## Isolating from live skills and plugins
+
+Every `codex exec` can discover skills beyond the eval env. Before dispatch, the `codex-skills`
+preflight compares each logical eval skill name with:
+
+- `.agents/skills` at each repository ancestor of the dispatch cwd;
+- `$HOME/.agents/skills`;
+- `/etc/codex/skills`; and
+- skills in enabled installed plugins reported by `codex plugin list --json`, under
+  `$CODEX_HOME/plugins/cache/<marketplace>/<plugin>/<version>/skills`.
+
+Direct skill directories are matched by the `name:` in `SKILL.md` frontmatter, not the folder
+name. Missing directories, malformed skills, and unavailable or invalid plugin-list output are
+ignored; a plugin-list failure does not suppress findings from the direct directories. Findings
+produce a build-time Codex banner and the backward-compatible `plugin-shadow.json` artifact;
+`aggregate` turns the same report into Codex-specific `benchmark.json` validity warnings.
+
+eval-magic detects but cannot unload these sources. Disable a conflicting installed plugin from
+Codex's `/plugins` UI, or move/rename a conflicting repo, user, or admin skill before dispatch.
+For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve `CODEX_HOME` if
+the dispatch still needs the existing Codex configuration. That does not isolate plugins stored
+under `CODEX_HOME` or repository/admin skills.
+
+**Known limit:** Codex also ships bundled system skills, but currently exposes no stable
+enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled
+system skill; verify that case manually when relevant.
 
 ## Transcript (`item.completed`)
 

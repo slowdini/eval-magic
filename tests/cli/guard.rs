@@ -219,6 +219,139 @@ fn guard_hook_fails_open_for_an_unknown_harness() {
         .stdout("");
 }
 
+fn write_opencode_armed_marker(
+    root: &std::path::Path,
+    allowed: &std::path::Path,
+) -> std::path::PathBuf {
+    let skills = root.join(".opencode").join("skills");
+    fs::create_dir_all(&skills).unwrap();
+    let marker = skills.join(".slow-powers-eval-guard.json");
+    fs::write(
+        &marker,
+        format!(
+            r#"{{ "active": true, "allowedRoots": ["{}"], "expiresAt": "2999-01-01T00:00:00.000Z" }}"#,
+            allowed.display()
+        ),
+    )
+    .unwrap();
+    marker
+}
+
+/// `guard-hook --harness opencode` round-trip, fed the exact payload shape
+/// the staged plugin forwards: OpenCode's lowercase tool ids with camelCase
+/// args. An out-of-bounds `write` blocks; an in-bounds one allows (empty
+/// stdout).
+#[test]
+fn guard_hook_opencode_round_trips_write_verdicts() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join(".eval-magic");
+    let marker = write_opencode_armed_marker(tmp.path(), &workspace);
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "opencode"])
+        .arg(&marker)
+        .write_stdin(r#"{ "tool_name": "write", "tool_input": { "filePath": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout(contains(r#""decision":"block""#));
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "opencode"])
+        .arg(&marker)
+        .write_stdin(format!(
+            r#"{{ "tool_name": "write", "tool_input": {{ "filePath": "{}/out.md" }} }}"#,
+            workspace.display()
+        ))
+        .assert()
+        .success()
+        .stdout("");
+}
+
+/// The plugin file itself is protected: a bash call mutating anything under
+/// `.opencode` trips the config-dir tamper rule.
+#[test]
+fn guard_hook_opencode_blocks_bash_tampering_with_the_plugin() {
+    let tmp = TempDir::new().unwrap();
+    let marker = write_opencode_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "opencode"])
+        .arg(&marker)
+        .write_stdin(
+            r#"{ "tool_name": "bash", "tool_input": { "command": "touch .opencode/plugins/slow-powers-eval-guard.js" } }"#,
+        )
+        .assert()
+        .success()
+        .stdout(contains(r#""decision":"block""#));
+}
+
+/// Byte-pin of the OpenCode block verdict — same compatibility contract as
+/// the Claude/Codex pins above: the staged plugin parses `decision`/`reason`
+/// out of these exact bytes.
+#[test]
+fn guard_hook_opencode_block_verdict_bytes_are_stable() {
+    let tmp = TempDir::new().unwrap();
+    let marker = tmp.path().join("marker.json");
+    fs::write(
+        &marker,
+        r#"{"active":true,"allowedRoots":["/work/env"],"expiresAt":"2999-01-01T00:00:00.000Z"}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .args(["guard-hook", "--harness", "opencode"])
+        .arg(&marker)
+        .write_stdin(r#"{ "tool_name": "write", "tool_input": { "filePath": "/etc/passwd" } }"#)
+        .assert()
+        .success()
+        .stdout(
+            "{\"decision\":\"block\",\"reason\":\"eval guard: write to /etc/passwd is \
+             outside the eval sandbox (allowed: /work/env)\"}",
+        );
+}
+
+/// `teardown-guard` removes the staged plugin, sweeps the marker/manifest,
+/// and prunes the plugins dir the install created.
+#[test]
+fn teardown_guard_removes_an_installed_opencode_plugin() {
+    let tmp = TempDir::new().unwrap();
+    let skills = tmp.path().join(".opencode").join("skills");
+    fs::create_dir_all(&skills).unwrap();
+    let marker = skills.join(".slow-powers-eval-guard.json");
+    fs::write(
+        &marker,
+        r#"{ "active": true, "allowedRoots": [], "expiresAt": "2999-01-01T00:00:00.000Z" }"#,
+    )
+    .unwrap();
+    let plugins = tmp.path().join(".opencode").join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    let plugin = plugins.join("slow-powers-eval-guard.js");
+    fs::write(&plugin, "// staged plugin\n").unwrap();
+    fs::write(
+        skills.join(".slow-powers-eval-guard-manifest.json"),
+        format!(
+            r#"{{ "created_at": "2026-07-23T00:00:00.000Z", "settings_path": "{}", "settings_existed": false, "settings_backup": null, "marker_path": "{}" }}"#,
+            plugin.display(),
+            marker.display()
+        ),
+    )
+    .unwrap();
+
+    skill_eval()
+        .arg("teardown-guard")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(contains("Write guard removed"));
+
+    assert!(!plugin.exists(), "the staged plugin is removed");
+    assert!(!marker.exists(), "the marker is swept");
+    assert!(
+        !plugins.exists(),
+        "the plugins dir created for the plugin alone is pruned"
+    );
+}
+
 /// Like `guard`, the generic entry point must stay off layered descriptor
 /// discovery: it fires per tool call and reads embedded descriptors only.
 #[test]

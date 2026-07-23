@@ -135,8 +135,11 @@ you get the full feature from configuration alone:
 
 - `transcript.parser = "claude-stream-json"` — Claude Code `-p --output-format stream-json` events.
 - `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL.
+- `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish` events.
 - `staging.slug_capability = "opencode"` — OpenCode's sanitizing slug rules.
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.
+- `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.
+- `shadow.preflight = "opencode-skills"` — the OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
 
 For example, a harness that logs Codex-compatible item JSONL gets full transcript ingest — parsed
 tool invocations, `transcript_check` grading, the works — with:
@@ -211,8 +214,10 @@ Dotted paths (`"usage.input_tokens"`, `"item.text"`) descend nested objects only
 array indexing, and keys containing literal dots are unaddressable. Malformed JSONL lines are
 silently skipped, as with every parser. `[transcript]` requires the `[tools]` write/shell
 vocabulary alongside it (the stray-writes audit classifies by it). Leave
-`surfaces_skill_invocation` false unless the mapping verifiably yields invocations named `Skill`
-carrying an `args.skill` field.
+`surfaces_skill_invocation` false unless the mapping verifiably yields a deterministic
+skill-invocation event; when true, the `__skill_invoked` meta-check matches the tool named by
+`skill_tool` whose `skill_arg` argument equals the staged slug (defaults `"Skill"` / `"skill"` —
+Claude Code's spellings; OpenCode declares `"skill"` / `"name"`).
 
 **If a stream needs more than these primitives, it's a code capability, not a bigger DSL.** The
 line is cross-event state: a stream whose tool results arrive in *separate* records joined by id
@@ -267,7 +272,8 @@ beyond a mechanical registration. What counts as data vs code:
   `config_dirs`, the `[dispatch]` templates, `[model]`, `[staging]` + `[skills_block]`,
   `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (the declarative tier is pure
   data), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
-  (`claude-stream-json`, `codex-items`, `opencode`, `claude-plugins`).
+  (`claude-stream-json`, `codex-items`, `opencode-events`, `opencode`, `claude-plugins`,
+  `codex-skills`, `opencode-skills`).
 - **Code — one capability per PR, separate from the descriptor PR:** a new transcript parser,
   slug capability, or shadow preflight (each is `src/adapters/capabilities.rs` + a
   `src/adapters/<harness>/` module + a schema enum entry), and guard support (`[guard]` data is

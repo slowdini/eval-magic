@@ -2,8 +2,13 @@
 //!
 //! The declarative half of this harness lives in `harnesses/opencode.toml`
 //! (including the stage-name rules, expressed as a regex + length cap); this
-//! file keeps only the code-backed `opencode` slug capability — sanitization
-//! and truncation the descriptor's format-string template cannot express.
+//! module tree keeps only the code-backed capabilities the descriptor
+//! references: slug sanitization/truncation (the `opencode` slug capability),
+//! `--format json` event-stream parsing ([`transcript`]), and live-skill
+//! shadow detection ([`skill_shadow`]).
+
+pub mod skill_shadow;
+pub mod transcript;
 
 /// True when `name` satisfies OpenCode's skill-name rules:
 /// - 1–64 characters
@@ -113,5 +118,25 @@ mod tests {
         assert!(slug.len() <= 64);
         assert!(is_valid_opencode_name(&slug));
         assert!(slug.starts_with("slow-powers-eval-1-with-skill-"));
+    }
+
+    #[test]
+    fn opencode_parse_cli_events_delegates_to_events_parser() {
+        use serde_json::json;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("opencode-events.jsonl");
+        let line = json!({"type": "tool_use", "timestamp": 1_000, "sessionID": "ses_1", "part": {"id": "p1", "type": "tool", "tool": "bash", "state": {"status": "completed", "input": {"command": "bun test"}, "output": "ok", "title": "bash", "metadata": {}, "time": {"start": 900, "end": 1_000}}}});
+        std::fs::write(&path, format!("{line}\n")).unwrap();
+
+        let inv = crate::adapters::adapter_for(crate::core::Harness::resolve("opencode").unwrap())
+            .parse_cli_events(&path)
+            .unwrap();
+        assert_eq!(inv.len(), 1);
+        assert_eq!(inv[0].name, "bash");
+        assert_eq!(
+            inv[0].args,
+            Some(json!({"command": "bun test"})),
+            "args are the tool part's state.input"
+        );
     }
 }

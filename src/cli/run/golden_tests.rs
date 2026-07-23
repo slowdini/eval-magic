@@ -184,7 +184,22 @@ fn golden_skills_block_per_harness() {
 }
 
 #[test]
-fn golden_judge_recipe_claude_and_codex() {
+fn golden_guard_armed_message_per_harness() {
+    // The post-arm banner printed for every guard-capable harness — the
+    // operator-facing contract of the armed guard. Guardless harnesses have
+    // no banner to pin.
+    for harness in Harness::known() {
+        let adapter = adapter_for(harness);
+        let label = adapter.label();
+        let Some(message) = adapter.guard_armed_message() else {
+            continue;
+        };
+        assert_golden(&format!("{label}/guard-armed.golden.txt"), &message);
+    }
+}
+
+#[test]
+fn golden_judge_recipe_per_harness() {
     for (harness, guard, rel) in [
         (
             Harness::resolve("claude-code").unwrap(),
@@ -201,6 +216,12 @@ fn golden_judge_recipe_claude_and_codex() {
             Harness::resolve("codex").unwrap(),
             false,
             "codex/judge-recipe-noguard.golden.md",
+        ),
+        // OpenCode has no guard args, so one variant covers both guard states.
+        (
+            Harness::resolve("opencode").unwrap(),
+            false,
+            "opencode/judge-recipe.golden.md",
         ),
     ] {
         let recipe = adapter_for(harness)

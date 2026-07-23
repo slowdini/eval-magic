@@ -73,6 +73,8 @@ fn descriptor_alone_carries_a_complete_run() {
                 .and(contains("--no-stage"))
                 .and(contains("declares no transcript parser"))
                 .and(contains("tokens/duration"))
+                .and(contains("unverifiable").not())
+                .and(contains("final-message.md"))
                 .and(contains("declares no model flag"))
                 .and(contains("provenance")),
         );
@@ -130,6 +132,33 @@ fn descriptor_alone_carries_a_complete_run() {
         let record = read_json(&resolve(&cwd, task["run_record_path"].as_str().unwrap()));
         assert_eq!(record["final_message"], "I reviewed the MR.");
     }
+}
+
+/// A descriptor without an exec_template warns naming the generic handoff:
+/// RUNBOOK.md and dispatch-manifest.md carry guidance, not a copy-pasteable
+/// per-task command. (The built-in-harness half of this pin — wired harnesses
+/// stay quiet — lives in src/cli/run/util.rs.)
+#[test]
+fn dispatchless_descriptor_warns_naming_the_generic_handoff() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    write_project_descriptor(&cwd, "label = \"cool-custom-harness\"\n");
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("declares no dispatch exec recipe").and(contains("RUNBOOK.md")));
 }
 
 /// `--guard` with a harness that exists only in user-supplied descriptors is
@@ -229,7 +258,8 @@ fn transcript_check_warning_fires_only_when_evals_use_it() {
         .stderr(
             contains("declares no transcript parser")
                 .and(contains("unverifiable"))
-                .and(contains("llm_judge")),
+                .and(contains("llm_judge"))
+                .and(contains("final-message.md")),
         );
 }
 

@@ -64,21 +64,25 @@ pub struct EmitSummary {
     pub skipped_missing: usize,
 }
 
-/// True when the transcript shows the `Skill` tool invoked with `input.skill`
-/// equal to the staged slug.
+/// True when the transcript shows the harness's skill tool invoked with the
+/// staged slug: the invocation named `skill_tool` whose `skill_arg` argument
+/// equals the slug (Claude Code's `Skill`/`skill`, OpenCode's
+/// `skill`/`name`).
 pub fn check_skill_invoked_from_transcript(
     invocations: &[ToolInvocation],
     staged_slug: Option<&str>,
+    skill_tool: &str,
+    skill_arg: &str,
 ) -> bool {
     let Some(slug) = staged_slug else {
         return false;
     };
     invocations.iter().any(|inv| {
-        inv.name == "Skill"
+        inv.name == skill_tool
             && inv
                 .args
                 .as_ref()
-                .and_then(|a| a.get("skill"))
+                .and_then(|a| a.get(skill_arg))
                 .and_then(|v| v.as_str())
                 == Some(slug)
     })
@@ -226,10 +230,11 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
     // The deterministic `__skill_invoked` code check needs a transcript that
     // exposes a skill-invocation event; harnesses without one (per their
     // adapter) fall back to the LLM judge.
-    let code_check_available = ctx
+    let skill_signature = ctx
         .conditions
         .harness
-        .is_none_or(|h| crate::adapters::adapter_for(h).transcript_surfaces_skill_invocation());
+        .and_then(|h| crate::adapters::adapter_for(h).transcript_skill_invocation());
+    let code_check_available = ctx.conditions.harness.is_none() || skill_signature.is_some();
     let default_judge_model = ctx.conditions.judge_model.clone();
 
     let mut tasks: Vec<JudgeTask> = Vec::new();
@@ -306,9 +311,14 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                     let transcript_filled = !run_record.tool_invocations.is_empty();
 
                     if staged_slug.is_some() && transcript_filled && code_check_available {
+                        let (skill_tool, skill_arg) = skill_signature
+                            .clone()
+                            .unwrap_or_else(|| ("Skill".to_string(), "skill".to_string()));
                         let invoked = check_skill_invoked_from_transcript(
                             &run_record.tool_invocations,
                             staged_slug.as_deref(),
+                            &skill_tool,
+                            &skill_arg,
                         );
                         let evidence = if invoked {
                             "Skill invocation verified from transcript.".to_string()
@@ -402,7 +412,36 @@ mod tests {
             inv("Skill", Some(json!({"skill": slug})), 1),
             inv("Read", Some(json!({"file_path": "/tmp/x"})), 2),
         ];
-        assert!(check_skill_invoked_from_transcript(&invs, Some(slug)));
+        assert!(check_skill_invoked_from_transcript(
+            &invs,
+            Some(slug),
+            "Skill",
+            "skill"
+        ));
+    }
+
+    #[test]
+    fn true_for_opencode_skill_tool_signature() {
+        // OpenCode loads skills via its native `skill` tool, whose input
+        // carries the skill identifier as `name` (not claude's Skill/skill).
+        let slug = "slow-powers-eval-1-with-skill-mr-review";
+        let invs = [
+            inv("bash", Some(json!({"command": "ls"})), 0),
+            inv("skill", Some(json!({"name": slug})), 1),
+        ];
+        assert!(check_skill_invoked_from_transcript(
+            &invs,
+            Some(slug),
+            "skill",
+            "name"
+        ));
+        // The same invocations do not match claude's signature.
+        assert!(!check_skill_invoked_from_transcript(
+            &invs,
+            Some(slug),
+            "Skill",
+            "skill"
+        ));
     }
 
     #[test]
@@ -413,7 +452,9 @@ mod tests {
         ];
         assert!(!check_skill_invoked_from_transcript(
             &invs,
-            Some("slow-powers-eval-1-with_skill__foo")
+            Some("slow-powers-eval-1-with_skill__foo"),
+            "Skill",
+            "skill"
         ));
     }
 
@@ -432,12 +473,22 @@ mod tests {
                 1,
             ),
         ];
-        assert!(!check_skill_invoked_from_transcript(&invs, Some(slug)));
+        assert!(!check_skill_invoked_from_transcript(
+            &invs,
+            Some(slug),
+            "Skill",
+            "skill"
+        ));
     }
 
     #[test]
     fn false_on_empty_invocations() {
-        assert!(!check_skill_invoked_from_transcript(&[], Some("anything")));
+        assert!(!check_skill_invoked_from_transcript(
+            &[],
+            Some("anything"),
+            "Skill",
+            "skill"
+        ));
     }
 
     #[test]
@@ -448,6 +499,11 @@ mod tests {
             inv("Skill", Some(json!("not-an-object")), 1),
             inv("Skill", Some(json!({"other": "field"})), 2),
         ];
-        assert!(!check_skill_invoked_from_transcript(&invs, Some(slug)));
+        assert!(!check_skill_invoked_from_transcript(
+            &invs,
+            Some(slug),
+            "Skill",
+            "skill"
+        ));
     }
 }

@@ -214,11 +214,17 @@ impl HarnessAdapter for DescriptorAdapter {
         }
     }
 
-    fn transcript_surfaces_skill_invocation(&self) -> bool {
-        self.descriptor
-            .transcript
-            .as_ref()
-            .is_none_or(|t| t.surfaces_skill_invocation)
+    fn transcript_skill_invocation(&self) -> Option<(String, String)> {
+        match &self.descriptor.transcript {
+            Some(t) if !t.surfaces_skill_invocation => None,
+            Some(t) => Some((
+                t.skill_tool.clone().unwrap_or_else(|| "Skill".to_string()),
+                t.skill_arg.clone().unwrap_or_else(|| "skill".to_string()),
+            )),
+            // No transcript table: the default signature (the meta-check only
+            // fires when a run record carries invocations anyway).
+            None => Some(("Skill".to_string(), "skill".to_string())),
+        }
     }
 
     fn cli_model_flag(&self) -> Option<String> {
@@ -272,6 +278,20 @@ impl HarnessAdapter for DescriptorAdapter {
             .shadow
             .as_ref()
             .and_then(|s| s.preflight.detect(scan_root, staged_skill_names))
+    }
+
+    fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
+        self.descriptor.shadow.as_ref().map_or_else(
+            || super::skill_shadow::format_shadow_banner(report),
+            |shadow| shadow.preflight.format_banner(report),
+        )
+    }
+
+    fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
+        self.descriptor.shadow.as_ref().map_or_else(
+            || super::skill_shadow::shadow_validity_warnings(report),
+            |shadow| shadow.preflight.validity_warnings(report),
+        )
     }
 
     fn has_dispatch_recipes(&self) -> bool {
@@ -501,6 +521,26 @@ mod tests {
             !unguarded.contains("--dangerously-bypass-hook-trust"),
             "{unguarded}"
         );
+    }
+
+    #[test]
+    fn opencode_exec_recipe_carries_dir_auto_and_the_model_flag() {
+        let with = next_steps(
+            Harness::resolve("opencode").unwrap(),
+            Some("opencode/gpt-5-nano"),
+        );
+        assert!(
+            with.contains(
+                "opencode run --dir <eval-root> --format json --auto -m opencode/gpt-5-nano \\"
+            ),
+            "{with}"
+        );
+        let without = next_steps(Harness::resolve("opencode").unwrap(), None);
+        assert!(
+            without.contains("opencode run --dir <eval-root> --format json --auto \\"),
+            "{without}"
+        );
+        assert!(!without.contains(" -m "), "{without}");
     }
 
     #[test]

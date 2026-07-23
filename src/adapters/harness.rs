@@ -140,10 +140,8 @@ pub trait HarnessAdapter {
 
     /// **Enhancement: native staging.** Whether the skill-under-test is
     /// advertised in the available-skills block under its staged slug (vs. its
-    /// natural name). True for Codex, whose repo-local discovery keys on the
-    /// rewritten frontmatter name. (OpenCode also rewrites the frontmatter to
-    /// the slug yet still advertises the natural name — a known inconsistency
-    /// tracked for a separate fix.)
+    /// natural name). True for Codex and OpenCode, whose repo-local discovery
+    /// keys on the rewritten frontmatter name.
     fn advertises_staged_slug_name(&self) -> bool {
         false
     }
@@ -215,12 +213,13 @@ pub trait HarnessAdapter {
         ))
     }
 
-    /// **Enhancement: transcript parser.** Whether the parsed transcript
-    /// exposes a deterministic skill-invocation event the `__skill_invoked`
-    /// meta-check can match. False for Codex (its JSONL has no skill-tool
-    /// event), which routes the meta-check to the LLM-judge fallback.
-    fn transcript_surfaces_skill_invocation(&self) -> bool {
-        true
+    /// **Enhancement: transcript parser.** The deterministic skill-invocation
+    /// signature the `__skill_invoked` meta-check matches: `(tool name, arg
+    /// carrying the staged slug)` — Claude Code's `Skill`/`skill`, OpenCode's
+    /// `skill`/`name`. `None` for Codex (its JSONL has no skill-tool event),
+    /// which routes the meta-check to the LLM-judge fallback.
+    fn transcript_skill_invocation(&self) -> Option<(String, String)> {
+        Some(("Skill".to_string(), "skill".to_string()))
     }
 
     // ── Enhancement: model flag (defaulted) ──────────────────────────────────
@@ -297,6 +296,20 @@ pub trait HarnessAdapter {
         _staged_skill_names: &[&str],
     ) -> Option<PluginShadowReport> {
         None
+    }
+
+    /// **Enhancement: shadow preflight.** Format the runner banner for a
+    /// report. The default preserves the original Claude-oriented rendering
+    /// for third-party adapters and older artifacts.
+    fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
+        super::skill_shadow::format_shadow_banner(report)
+    }
+
+    /// **Enhancement: shadow preflight.** Format aggregate validity warnings
+    /// for a report. The default preserves the original Claude-oriented
+    /// rendering for third-party adapters and older artifacts.
+    fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
+        super::skill_shadow::shadow_validity_warnings(report)
     }
 
     // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
@@ -388,22 +401,26 @@ mod tests {
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
-        for h in [
-            Harness::resolve("codex").unwrap(),
-            Harness::resolve("opencode").unwrap(),
-        ] {
-            assert_eq!(
-                adapter_for(h).detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
-                None
-            );
-        }
+        // Every built-in harness declares a shadow preflight today; a
+        // descriptor without [shadow] (the baseline BYOH shape) gets none.
+        let descriptor = crate::adapters::descriptor::load_descriptor(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\nconfig_dirs = [\".demo\"]\n",
+            "test.toml",
+        )
+        .unwrap();
+        let adapter =
+            crate::adapters::descriptor_adapter::DescriptorAdapter::from_descriptor(descriptor);
+        assert_eq!(
+            adapter.detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
+            None
+        );
     }
 
     #[test]
     fn has_dispatch_recipes_matches_the_readme_support_table() {
         assert!(adapter_for(Harness::resolve("claude-code").unwrap()).has_dispatch_recipes());
         assert!(adapter_for(Harness::resolve("codex").unwrap()).has_dispatch_recipes());
-        assert!(!adapter_for(Harness::resolve("opencode").unwrap()).has_dispatch_recipes());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).has_dispatch_recipes());
     }
 
     #[test]
@@ -431,6 +448,24 @@ mod tests {
     }
 
     #[test]
+    fn skill_invocation_signatures_are_harness_native() {
+        // (tool name, slug-carrying arg) the `__skill_invoked` meta-check
+        // matches; None routes the check to the LLM-judge fallback.
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).transcript_skill_invocation(),
+            Some(("Skill".to_string(), "skill".to_string()))
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).transcript_skill_invocation(),
+            None
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).transcript_skill_invocation(),
+            Some(("skill".to_string(), "name".to_string()))
+        );
+    }
+
+    #[test]
     fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
         for h in Harness::known() {
             let out = adapter_for(h).render_plan_mode_context("BODY");
@@ -452,17 +487,17 @@ mod tests {
 
         let codex = adapter_for(Harness::resolve("codex").unwrap()).run_capabilities();
         assert!(codex.supports_guard);
-        assert!(!codex.supports_bootstrap_with_no_stage);
+        assert!(codex.supports_bootstrap_with_no_stage);
         assert!(!codex.supports_stage_name_with_no_stage);
 
         let opencode = adapter_for(Harness::resolve("opencode").unwrap()).run_capabilities();
-        assert!(!opencode.supports_guard);
+        assert!(opencode.supports_guard);
         assert!(opencode.supports_bootstrap_with_no_stage);
         assert!(opencode.supports_stage_name_with_no_stage);
     }
 
     #[test]
-    fn guard_armed_message_is_harness_specific_and_absent_for_opencode() {
+    fn guard_armed_message_is_harness_specific() {
         // The post-arm `--guard` banner names the harness's native hook surface,
         // so it lives behind the adapter rather than in generic run code.
         let claude = adapter_for(Harness::resolve("claude-code").unwrap())
@@ -481,11 +516,12 @@ mod tests {
             "codex banner names its hook file: {codex}"
         );
 
-        // OpenCode has no write guard (its install_guard errors), so there is no
-        // banner to print.
-        assert_eq!(
-            adapter_for(Harness::resolve("opencode").unwrap()).guard_armed_message(),
-            None
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap())
+            .guard_armed_message()
+            .expect("opencode has a write guard");
+        assert!(
+            opencode.contains(".opencode/plugins/slow-powers-eval-guard.js"),
+            "opencode banner names its plugin file: {opencode}"
         );
     }
 

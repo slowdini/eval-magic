@@ -11,7 +11,7 @@ config_dirs = [".agents", ".codex"]
 
 [run]
 supports_guard = true
-supports_bootstrap_with_no_stage = false
+supports_bootstrap_with_no_stage = true
 supports_stage_name_with_no_stage = false
 
 # Hook payloads carry Claude-style names (Edit/Write/Bash) while transcripts
@@ -85,6 +85,9 @@ armed_message = '''
    Dispatch with codex --ask-for-approval never exec --dangerously-bypass-hook-trust so the vetted eval hook runs.
    It auto-expires in 6h and is removed on the next run; to remove it now:
      eval-magic teardown-guard'''
+
+[shadow]
+preflight = "codex-skills"
 
 [dispatch]
 capture_prefix = "codex"

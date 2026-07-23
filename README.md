@@ -4,7 +4,7 @@
 
 An eval dispatches a fresh subagent twice per test case — once with the skill loaded, once without (or old version vs. new) — and grades both outputs against assertions. The pass-rate delta tells you whether the skill is worth shipping or the change is worth landing. The runner builds the workspace, stages skills for discovery, generates dispatch prompts, assembles run records from transcripts, grades, and aggregates; your agent harness supplies the one thing the runner never does itself: dispatching the subagents.
 
-`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are fully wired harnesses today**; OpenCode has native staging support; see [Harnesses](#harnesses) for per-harness enhancement support. From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
+`eval-magic` ships as a dependency-less prebuilt binary under the command name `eval-magic`. Every artifact follows a documented JSON Schema, so records grade the same way regardless of where they were authored. **Claude Code and Codex CLI are fully wired harnesses today**; OpenCode has native staging and transcript-ingest support; see [Harnesses](#harnesses) for per-harness enhancement support. From inside an agent session, running an eval is as simple as: *"Install eval-magic and help me run an eval on my-skill."*
 
 This README is the complete operating guide: install, author cases, run the loop, read results, and keep a baseline. For the full flag-by-flag reference, run `eval-magic --help` (and `eval-magic <subcommand> --help`). For *when and why* to write an eval at all — the methodology, the decision to test, designing cases under pressure — see the [`slow-powers`](https://github.com/slowdini/slow-powers) plugin's `evaluating-skills` skill, which owns that craft.
 
@@ -250,7 +250,7 @@ A subagent that runs an eval should start in an environment that mirrors a real 
 
 For the `without_skill` / baseline condition, the dispatch reflects "this skill is unavailable, others remain" when siblings were opted in with `--skill-dir`; otherwise it measures the skill against a clean no-skill baseline. `--bootstrap` is separate from parity: it injects product-specific framing inside the `<session-start-context>` block and does not enumerate skills.
 
-**Parity is only as clean as your session.** Staging controls what the runner *adds*, not what your session already *loaded*. Subagents dispatched in-process share the parent session's plugins, so an installed plugin exposing a same-named skill is still discoverable and contaminates both arms — the staging slug stops an on-disk collision, not runtime discovery. The runner can't unload a live plugin; on Claude Code it emits a build-time *plugin-shadow* warning (also surfaced in `benchmark.json`'s `validity_warnings`) that lists the per-dispatch isolation options inline. Closing it is a launch-time step for whoever dispatches.
+**Parity is only as clean as each dispatch's live environment.** Staging controls what the runner *adds*, not the user, repository, admin, or plugin skills the harness's one-shot CLI also discovers. A live copy of the logical eval skill can therefore contaminate both arms — the staging slug stops an on-disk collision, not runtime discovery. The runner can't unload a live skill; Claude Code, Codex, and OpenCode emit a build-time *skill-shadow* warning (recorded in the legacy `plugin-shadow.json` artifact and surfaced in `benchmark.json`'s `validity_warnings`) with harness-specific isolation guidance. Closing it is a launch-time step for whoever dispatches.
 
 ## Harnesses
 
@@ -266,15 +266,13 @@ Every eval test and judge is dispatched the same way: through the harness's one-
 
 This table is the source of truth for per-harness enhancement support:
 
-| Harness | Native staging | Dispatch recipes | Transcript ingest | Model flag | Write guard |
-|---------|:--------------:|:----------------:|:-----------------:|:----------:|:-----------:|
-| **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **OpenCode** | ✅ | ❌¹ | ❌ | ❌ | ❌ |
+| Harness | Native staging | Dispatch recipes | Transcript ingest | Model flag | Write guard | Shadow preflight |
+|---------|:--------------:|:----------------:|:-----------------:|:----------:|:-----------:|:----------------:|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **OpenCode** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-¹ `run --harness opencode` stages skills and emits native dispatch prompts, but prints manual `opencode run` guidance instead of a copy-pasteable recipe.
-
-A missing enhancement degrades fidelity, never correctness — every column has a fallback, and the `run` preflight warns naming it: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, the run continues unguarded (auto-arm quietly stays off; an explicit `--guard` warns) and `detect-stray-writes` audits after the fact; without dispatch recipes, `RUNBOOK.md` / `dispatch-manifest.md` carry handoff guidance without a copy-pasteable per-task command. Supported enhancements are provided automatically — the write guard arms on every staged run of a guard-capable harness unless `--no-guard` opts out.
+A missing enhancement degrades fidelity, never correctness — every column has a fallback: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, the run continues unguarded (auto-arm quietly stays off; an explicit `--guard` warns) and `detect-stray-writes` audits after the fact; without shadow preflight, no automatic live-skill collision scan runs; without dispatch recipes, `RUNBOOK.md` / `dispatch-manifest.md` carry handoff guidance without a copy-pasteable per-task command. Supported enhancements are provided automatically — the write guard arms on every staged run of a guard-capable harness unless `--no-guard` opts out, and the `run` preflight names actionable fallbacks where it can.
 
 Per-harness implementation notes for developers wiring features live in [docs/claude-notes.md](docs/claude-notes.md), [docs/codex-notes.md](docs/codex-notes.md), and [docs/opencode-notes.md](docs/opencode-notes.md).
 

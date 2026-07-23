@@ -1,10 +1,15 @@
-//! The generic write-guard engine: one install + verdict implementation
-//! rendered from a descriptor's `[guard]` data block.
+//! The write-guard engine: install + verdict rendered from a descriptor's
+//! `[guard]` data block, with the install side selected by the block's
+//! `engine` discriminator.
 //!
-//! Arming merges one PreToolUse hook entry (the descriptor's `hook_entry` JSON
-//! template) into the harness's hook-config file (`hooks_file`) and stages the
-//! marker/manifest via [`crate::sandbox::install`]. The verdict side feeds a
-//! hook payload through the shared arbiter ([`crate::sandbox::decide`]) and
+//! `json-hooks` (Claude Code, Codex) merges one PreToolUse hook entry (the
+//! descriptor's `hook_entry` JSON template) into the harness's hook-config
+//! file (`hooks_file`). `opencode-plugin` stages an embedded JS project
+//! plugin whole at `plugin_file` — OpenCode auto-loads project plugins by
+//! directory convention, and the plugin blocks a tool call by throwing the
+//! deny verdict's reason. Both arms stage the marker/manifest via
+//! [`crate::sandbox::install`]. The verdict side is shared: it feeds a hook
+//! payload through the shared arbiter ([`crate::sandbox::decide`]) and
 //! serializes the descriptor's `verdict_template` on deny. Template key order
 //! is authored in the descriptor and serialized verbatim (`serde_json` keeps
 //! insertion order), so verdict bytes and hook-file shape are pinned by data,
@@ -27,11 +32,11 @@ use crate::sandbox::install::{
 };
 use crate::sandbox::{now_ms, parse_tool_call};
 
-use super::descriptor::{GuardSection, subst};
+use super::descriptor::{GuardEngine, GuardSection, subst};
 
 /// Arm the write guard: marker + manifest under `skills_dir` (absolute,
-/// resolved by the caller), one hook entry merged into the descriptor's
-/// `hooks_file`. Returns the staged marker path.
+/// resolved by the caller), then the engine-specific hook surface. Returns
+/// the staged marker path.
 ///
 /// Template parse failures panic (`expect`): descriptor validation proved the
 /// templates at load time, and arming runs in the orchestrator where a loud
@@ -48,7 +53,89 @@ pub(crate) fn install_guard(
     let marker_path = skills_dir.join(GUARD_MARKER);
     write_marker(&marker_path, stage_root, ttl)?;
 
-    let hooks_path = resolve_rel(stage_root, &guard.hooks_file);
+    match guard.engine {
+        GuardEngine::JsonHooks => {
+            install_json_hooks(guard, skills_dir, stage_root, guard_exe, &marker_path)
+        }
+        GuardEngine::OpencodePlugin => {
+            install_opencode_plugin(guard, skills_dir, stage_root, guard_exe, &marker_path)
+        }
+    }
+}
+
+/// The embedded OpenCode project plugin. The `{exe}`/`{marker}` placeholders
+/// substitute as JSON string literals (a JSON string is a valid JS string
+/// literal), so any exe/marker path characters survive without hand-escaping.
+/// The file's exact bytes are pinned in this module's tests — the staged
+/// plugin is an on-disk contract.
+const OPENCODE_GUARD_PLUGIN_TEMPLATE: &str =
+    include_str!("../../harnesses/opencode-guard-plugin.js");
+
+/// The opencode-plugin arm: the embedded JS template with `{exe}`/`{marker}`
+/// substituted, staged whole at the descriptor's `plugin_file`. No merge —
+/// OpenCode auto-loads project plugins by directory convention, and the
+/// plugin blocks by throwing, so the file *is* the hook surface.
+fn install_opencode_plugin(
+    guard: &GuardSection,
+    skills_dir: &Path,
+    stage_root: &Path,
+    guard_exe: &Path,
+    marker_path: &Path,
+) -> io::Result<PathBuf> {
+    let plugin_path = resolve_rel(
+        stage_root,
+        guard
+            .plugin_file
+            .as_deref()
+            .expect("guard.plugin_file is declared (proven at descriptor load)"),
+    );
+    if let Some(parent) = plugin_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let plugin_existed = plugin_path.exists();
+    let backup = if plugin_existed {
+        Some(fs::read_to_string(&plugin_path)?)
+    } else {
+        None
+    };
+
+    let exe = serde_json::to_string(&guard_exe.display().to_string())
+        .expect("a path string serializes as JSON");
+    let marker = serde_json::to_string(&marker_path.display().to_string())
+        .expect("a path string serializes as JSON");
+    let plugin = subst(
+        OPENCODE_GUARD_PLUGIN_TEMPLATE,
+        &[("exe", &exe), ("marker", &marker)],
+    );
+    fs::write(&plugin_path, plugin)?;
+
+    write_manifest(
+        &skills_dir.join(GUARD_MANIFEST),
+        &plugin_path,
+        plugin_existed,
+        backup,
+        marker_path,
+    )?;
+
+    Ok(marker_path.to_path_buf())
+}
+
+/// The json-hooks arm: one hook entry merged into the descriptor's
+/// `hooks_file`.
+fn install_json_hooks(
+    guard: &GuardSection,
+    skills_dir: &Path,
+    stage_root: &Path,
+    guard_exe: &Path,
+    marker_path: &Path,
+) -> io::Result<PathBuf> {
+    let hooks_path = resolve_rel(
+        stage_root,
+        guard
+            .hooks_file
+            .as_deref()
+            .expect("guard.hooks_file is declared (proven at descriptor load)"),
+    );
     if let Some(parent) = hooks_path.parent() {
         fs::create_dir_all(parent)?;
     }
@@ -68,14 +155,31 @@ pub(crate) fn install_guard(
     let exe = guard_exe.display().to_string();
     let marker = marker_path.display().to_string();
     let command = subst(
-        &guard.command_template,
+        guard
+            .command_template
+            .as_deref()
+            .expect("guard.command_template is declared (proven at descriptor load)"),
         &[("exe", &exe), ("marker", &marker)],
     );
-    let mut entry: Value = serde_json::from_str(&guard.hook_entry)
-        .expect("guard.hook_entry parses as JSON (proven at descriptor load)");
+    let mut entry: Value = serde_json::from_str(
+        guard
+            .hook_entry
+            .as_deref()
+            .expect("guard.hook_entry is declared (proven at descriptor load)"),
+    )
+    .expect("guard.hook_entry parses as JSON (proven at descriptor load)");
     substitute_strings(
         &mut entry,
-        &[("matcher", &guard.matcher), ("command", &command)],
+        &[
+            (
+                "matcher",
+                guard
+                    .matcher
+                    .as_deref()
+                    .expect("guard.matcher is declared (proven at descriptor load)"),
+            ),
+            ("command", &command),
+        ],
     );
 
     let hooks = config
@@ -98,10 +202,10 @@ pub(crate) fn install_guard(
         &hooks_path,
         hooks_existed,
         backup,
-        &marker_path,
+        marker_path,
     )?;
 
-    Ok(marker_path)
+    Ok(marker_path.to_path_buf())
 }
 
 /// Evaluate a PreToolUse hook `payload` against `marker`. Returns the deny
@@ -127,17 +231,22 @@ pub(crate) fn guard_verdict(
     serde_json::to_string(&verdict).ok()
 }
 
-/// The hook-config dir the install created outside the skills dir, which
-/// teardown prunes when restoring the original config leaves it empty.
-/// Derived from the data: `hooks_file`'s parent dir, unless the hook file is
-/// at the env root (nothing to prune) or the parent is the skills dir or an
-/// ancestor of it (staging already owns that tree).
+/// The hook-surface dir the install created outside the skills dir, which
+/// teardown prunes when restoring the original file leaves it empty. Derived
+/// from the data: the engine's staged file's parent dir (`hooks_file` for
+/// json-hooks, `plugin_file` for opencode-plugin), unless the file is at the
+/// env root (nothing to prune) or the parent is the skills dir or an ancestor
+/// of it (staging already owns that tree).
 pub(crate) fn hook_cleanup_dir(
     guard: &GuardSection,
     skills_dir_rel: Option<&str>,
     stage_root: &Path,
 ) -> Option<PathBuf> {
-    let (parent, _) = guard.hooks_file.rsplit_once('/')?;
+    let hook_file = match guard.engine {
+        GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
+        GuardEngine::OpencodePlugin => guard.plugin_file.as_deref(),
+    }?;
+    let (parent, _) = hook_file.rsplit_once('/')?;
     if let Some(skills) = skills_dir_rel {
         // Component-wise ancestry: `.a` owns `.a/b/skills` but not `.ab/skills`.
         let is_ancestor = skills == parent
@@ -593,15 +702,20 @@ mod tests {
         assert_eq!(verdict("codex", payload, Some(marker())), None);
     }
 
-    /// The cleanup dir is derived from the guard data: the hooks file's parent,
-    /// unless the hook file sits at the env root or inside the skills dir's
+    /// The cleanup dir is derived from the guard data: the hook surface file's
+    /// parent, unless the file sits at the env root or inside the skills dir's
     /// ancestry (staging already owns that tree).
     #[test]
     fn hook_cleanup_dir_derivation_table() {
         let root = Path::new("/env");
         let with = |hooks_file: &str| {
             let mut guard = descriptor("codex").guard.unwrap();
-            guard.hooks_file = hooks_file.to_string();
+            guard.hooks_file = Some(hooks_file.to_string());
+            guard
+        };
+        let with_plugin = |plugin_file: &str| {
+            let mut guard = descriptor("opencode").guard.unwrap();
+            guard.plugin_file = Some(plugin_file.to_string());
             guard
         };
 
@@ -634,5 +748,196 @@ mod tests {
             hook_cleanup_dir(&with(".a/hooks.json"), Some(".ab/skills"), root),
             Some(PathBuf::from("/env/.a"))
         );
+
+        // OpenCode: `.opencode/plugins` is created for the plugin alone (the
+        // skills dir is its sibling, not inside it) — prune it.
+        assert_eq!(
+            hook_cleanup_dir(
+                &with_plugin(".opencode/plugins/slow-powers-eval-guard.js"),
+                Some(".opencode/skills"),
+                root
+            ),
+            Some(PathBuf::from("/env/.opencode/plugins"))
+        );
+        // A plugin file directly under the skills dir's ancestor stays.
+        assert_eq!(
+            hook_cleanup_dir(
+                &with_plugin(".opencode/guard.js"),
+                Some(".opencode/skills"),
+                root
+            ),
+            None
+        );
+        // Plugin file at the env root: never prune the env itself.
+        assert_eq!(
+            hook_cleanup_dir(&with_plugin("guard.js"), Some(".opencode/skills"), root),
+            None
+        );
+    }
+
+    // ── opencode-plugin engine ────────────────────────────────────────────
+
+    fn opencode_skills_dir(stage_root: &Path) -> PathBuf {
+        stage_root.join(".opencode").join("skills")
+    }
+
+    fn opencode_plugin_path(stage_root: &Path) -> PathBuf {
+        stage_root
+            .join(".opencode")
+            .join("plugins")
+            .join("slow-powers-eval-guard.js")
+    }
+
+    /// The staged plugin file, byte-for-byte: the embedded template with
+    /// `{exe}`/`{marker}` substituted as JSON string literals. Written out
+    /// here in full so any template edit forces a reviewed re-pin — the file
+    /// is the on-disk contract armed envs run.
+    const EXPECTED_PLUGIN_TEMPLATE: &str = r#"// slow-powers eval write guard — staged by `eval-magic` into this env's
+// project plugins; removed by `eval-magic teardown-guard` (or the next run).
+// Do not edit: re-staging overwrites, and teardown restores the original.
+//
+// Dumb forwarder by design: every tool call goes to
+// `eval-magic guard-hook --harness opencode <marker>` on stdin and the shared
+// arbiter inside the binary classifies it. Empty stdout allows; non-empty
+// stdout is the deny verdict JSON whose reason blocks the call.
+import { spawnSync } from "node:child_process";
+
+const EXE = {exe};
+const MARKER = {marker};
+
+export const SlowPowersEvalGuard = async () => {
+  return {
+    "tool.execute.before": async (input, output) => {
+      const payload = JSON.stringify({
+        tool_name: input.tool,
+        tool_input: output?.args ?? {},
+      });
+      const result = spawnSync(EXE, ["guard-hook", "--harness", "opencode", MARKER], {
+        input: payload,
+        encoding: "utf8",
+        timeout: 10000,
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      const stdout = (result.stdout ?? "").trim();
+      if (!stdout) {
+        return; // allow — also the fail-open path on spawn error or timeout
+      }
+      let reason = stdout;
+      try {
+        const verdict = JSON.parse(stdout);
+        if (typeof verdict?.reason === "string") {
+          reason = verdict.reason;
+        }
+      } catch {
+        // Not the verdict shape — surface the raw stdout as the reason.
+      }
+      throw new Error(reason);
+    },
+  };
+};
+"#;
+
+    fn expected_plugin(marker_path: &Path) -> String {
+        let exe = serde_json::to_string("/g/eval-magic").unwrap();
+        let marker = serde_json::to_string(&marker_path.display().to_string()).unwrap();
+        subst(
+            EXPECTED_PLUGIN_TEMPLATE,
+            &[("exe", &exe), ("marker", &marker)],
+        )
+    }
+
+    #[test]
+    fn opencode_install_stages_the_byte_exact_plugin_marker_and_manifest() {
+        let c = setup();
+        let marker_path = install("opencode", &c.stage_root);
+
+        let marker = read_json(&opencode_skills_dir(&c.stage_root).join(GUARD_MARKER));
+        assert_eq!(marker["active"], json!(true));
+        let env = absolutize(&c.stage_root).display().to_string();
+        assert!(
+            marker["allowedRoots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r.as_str().unwrap() == env)
+        );
+
+        let plugin = fs::read_to_string(opencode_plugin_path(&c.stage_root)).unwrap();
+        assert_eq!(plugin, expected_plugin(&marker_path));
+        // The substitution lands the generic guard-hook entry point with the
+        // opencode harness and the staged marker path.
+        assert!(plugin.contains("\"guard-hook\""), "{plugin}");
+        assert!(plugin.contains("\"opencode\""), "{plugin}");
+
+        assert!(
+            opencode_skills_dir(&c.stage_root)
+                .join(GUARD_MANIFEST)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn opencode_teardown_removes_the_plugin_and_prunes_the_plugins_dir() {
+        let c = setup();
+        install("opencode", &c.stage_root);
+        assert!(opencode_plugin_path(&c.stage_root).exists());
+
+        assert!(teardown_guard(&c.stage_root));
+        assert!(!opencode_plugin_path(&c.stage_root).exists());
+        assert!(
+            !c.stage_root.join(".opencode").join("plugins").exists(),
+            "the dir created for the plugin alone is pruned"
+        );
+        assert!(
+            !opencode_skills_dir(&c.stage_root)
+                .join(GUARD_MARKER)
+                .exists()
+        );
+        assert!(
+            !opencode_skills_dir(&c.stage_root)
+                .join(GUARD_MANIFEST)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn opencode_teardown_restores_a_pre_existing_plugin_verbatim() {
+        let c = setup();
+        fs::create_dir_all(c.stage_root.join(".opencode").join("plugins")).unwrap();
+        let original = "// the user's own plugin\nexport const Theirs = async () => ({});\n";
+        fs::write(opencode_plugin_path(&c.stage_root), original).unwrap();
+
+        install("opencode", &c.stage_root);
+        assert!(
+            fs::read_to_string(opencode_plugin_path(&c.stage_root))
+                .unwrap()
+                .contains("SlowPowersEvalGuard")
+        );
+
+        teardown_guard(&c.stage_root);
+        assert_eq!(
+            fs::read_to_string(opencode_plugin_path(&c.stage_root)).unwrap(),
+            original
+        );
+    }
+
+    /// Byte-pin of the opencode deny verdict: the verdict path is the shared
+    /// `guard-hook` rendering, so this characterizes the shape the staged
+    /// plugin parses (`decision`/`reason`) against the real descriptor data.
+    #[test]
+    fn opencode_deny_verdict_bytes_match_the_on_disk_contract() {
+        let payload = r#"{ "tool_name": "write", "tool_input": { "filePath": "/etc/passwd" } }"#;
+        assert_eq!(
+            verdict("opencode", payload, Some(marker())).expect("should block"),
+            "{\"decision\":\"block\",\"reason\":\"eval guard: write to /etc/passwd is \
+             outside the eval sandbox (allowed: /work/.eval-magic)\"}"
+        );
+    }
+
+    #[test]
+    fn opencode_allows_an_in_bounds_write() {
+        let payload =
+            r#"{ "tool_name": "write", "tool_input": { "filePath": "/work/.eval-magic/out.md" } }"#;
+        assert_eq!(verdict("opencode", payload, Some(marker())), None);
     }
 }

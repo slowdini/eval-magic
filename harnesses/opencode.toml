@@ -1,12 +1,18 @@
 # OpenCode harness descriptor.
 #
-# Native staging only: transcript ingest, the model flag, the write guard, and
-# dispatch command recipes are not wired, so those tables are absent and the
-# enhancement defaults (unsupported-errors and generic handoff text) apply.
+# Every enhancement is wired: native staging, transcript ingest, dispatch
+# command recipes, the model flag, the shadow preflight, and the write guard
+# (the opencode-plugin engine — see the [guard] comment below). Command
+# templates and banners use TOML *literal* strings ('...' / '''...''')
+# so shell line-continuation backslashes survive verbatim; every template's
+# exact whitespace is pinned by the golden tests under tests/golden/.
 
 label = "opencode"
 skills_dir = ".opencode/skills"
 config_dirs = [".opencode"]
+
+[run]
+supports_guard = true
 
 # Slug *generation* is the named `opencode` capability (sanitization +
 # truncation beyond a format string); the declarative rules below are the
@@ -17,6 +23,7 @@ stage_name_pattern = "^[a-z0-9]+(-[a-z0-9]+)*$"
 stage_name_max_len = 64
 stage_name_invalid_message = 'OpenCode skill name "{name}" is invalid; names must be 1-64 lowercase alphanumeric characters separated by single hyphens'
 rewrites_frontmatter_name = true
+advertises_staged_slug_name = true
 surface_phrase = "as an OpenCode skill"
 unresolved_phrase = "If it does not load as an OpenCode skill"
 
@@ -25,8 +32,95 @@ header = "<available_skills>"
 item = "\n  <skill>\n    <name>{name}</name>\n    <description>{description}</description>\n  </skill>"
 footer = "\n</available_skills>"
 
+# OpenCode's tool ids, verified against the tool registry in
+# packages/opencode/src/tool (edit/write take `filePath`, bash takes
+# `command`, apply_patch takes `patchText`).
+[tools]
+write = ["edit", "write"]
+patch = ["apply_patch"]
+shell = ["bash"]
+read = ["read", "glob", "grep"]
+
+# `opencode run --format json` envelopes are self-contained, but tool args
+# live at part.state.input and timestamps are epoch-ms numbers — beyond the
+# extract tier's primitives, so the `opencode-events` code parser does the
+# normalization. The native `skill` tool gives a deterministic
+# skill-invocation event (`skill` / input `name`).
+[transcript]
+events_filename = "opencode-events.jsonl"
+parser = "opencode-events"
+surfaces_skill_invocation = true
+skill_tool = "skill"
+skill_arg = "name"
+
+# `-m` takes a `provider/model` id and passes it through verbatim.
+[model]
+flag = "-m"
+
+# Guard data rendered by the engine (src/adapters/guard.rs). The
+# opencode-plugin engine stages an embedded JS project plugin
+# (harnesses/opencode-guard-plugin.js, {exe}/{marker} substituted as JSON
+# string literals) whose tool.execute.before hook forwards every tool call to
+# `eval-magic guard-hook --harness opencode` on stdin and throws the verdict's
+# reason to block; project plugins auto-load from the env root with no trust
+# prompt, so no dispatch flag is needed (verified: docs/opencode-notes.md).
+[guard]
+engine = "opencode-plugin"
+plugin_file = ".opencode/plugins/slow-powers-eval-guard.js"
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = '''
+
+🛡 Write guard armed: a project plugin is staged in .opencode/plugins/slow-powers-eval-guard.js
+   and will block writes/installs outside the eval sandbox during OpenCode dispatches.
+   Each `opencode run` dispatch auto-loads the plugin from the env cwd it runs in.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard'''
+
+# OpenCode discovers skills from six roots — project .opencode/.claude/.agents
+# skill dirs walked up to the git worktree, plus their global counterparts —
+# so a skill installed for another harness can shadow the eval skill.
+[shadow]
+preflight = "opencode-skills"
+
+# Headless permission asks are auto-rejected unless `--auto` is passed
+# (explicit deny rules are still enforced), and piped stdin is *appended* to
+# the message, so every recipe detaches stdin with </dev/null, same as codex.
+# There is no `--output-last-message`: transcript ingest recovers the final
+# message from the `text` events.
 [dispatch]
-model_note = " Model selection was recorded as provenance, but the OpenCode adapter has no CLI model flag wired yet."
+capture_prefix = "opencode"
 next_steps_template = '''
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task with `opencode run`.{model_note} OpenCode transcript ingest is not yet wired, so assemble each task's `run.json`/`timing.json` manually (or capture `opencode run --format json` / `opencode export` output), then run `ingest{target_args} --iteration {iteration} --harness opencode`.'''
+Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
+{exec_command}
+Then run `ingest{target_args} --iteration {iteration} --harness opencode`.'''
+exec_template = '''
+opencode run --dir <eval-root> --format json --auto{model_arg} \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
+  </dev/null \
+  > <outputs_dir>/opencode-events.jsonl \
+  2> <outputs_dir>/opencode-stderr.log'''
+parallel_command_template = '''
+    opencode run --dir "$eval_root" --format json --auto{model_arg} \
+      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
+      </dev/null \
+      > "$outputs_dir/opencode-events.jsonl" \
+      2> "$outputs_dir/opencode-stderr.log"'''
+judge_command_template = '    opencode run --dir "{cwd}" --format json --auto $model_arg \'
+manifest_template = '''
+After all dispatches (OpenCode):
+
+Run one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/opencode-events.jsonl` and stderr as `outputs/opencode-stderr.log`.
+
+```bash
+{exec_command}
+```
+
+Parallel dispatch from this iteration directory:
+
+```bash
+{parallel_recipe}
+```
+
+Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/opencode-events.jsonl`.
+'''

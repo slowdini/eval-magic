@@ -333,27 +333,20 @@ mod tests {
     }
 
     #[test]
-    fn guard_auto_stays_off_and_warns_on_a_guardless_harness() {
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        assert_eq!(preflight.opts.guard, Some(false));
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("declares no write guard"))
-            .expect("a guard warning fires");
-        assert!(
-            !warning.starts_with("--guard:"),
-            "auto-arm, not the explicit flag, stayed off: {warning}"
-        );
-        assert!(
-            warning.contains("detect-stray-writes"),
-            "names the fallback: {warning}"
-        );
-        assert!(
-            warning.contains("--no-guard"),
-            "names the opt-out that silences it: {warning}"
-        );
+    fn guard_auto_arms_on_every_guarded_builtin() {
+        // Every built-in declares a write guard since #155, so auto mode arms
+        // without any guard warning. The guardless-auto warning is only
+        // reachable on user-only harnesses now — pinned in tests/run/byoh.rs.
+        for name in ["claude-code", "codex", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+            assert_eq!(preflight.opts.guard, Some(true), "{name} auto-arms");
+            assert!(
+                !preflight.warnings.iter().any(|w| w.contains("write guard")),
+                "{name}: no guard warning when armed: {:?}",
+                preflight.warnings
+            );
+        }
     }
 
     #[test]
@@ -397,62 +390,44 @@ mod tests {
     }
 
     #[test]
-    fn guard_on_a_guardless_harness_warns_and_continues_unguarded() {
+    fn explicit_guard_arms_on_opencode() {
+        // An honored explicit --guard warns about nothing. (A --guard request
+        // a harness cannot honor is only reachable on user-only harnesses —
+        // a hard preflight error pinned in tests/run/byoh.rs.)
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
         let opts = RunOptions {
             guard: Some(true),
             ..Default::default()
         };
         let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
-        assert_eq!(
-            preflight.opts.guard,
-            Some(false),
-            "guard is forced off, not rejected"
-        );
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("--guard"))
-            .expect("a guard warning fires");
+        assert_eq!(preflight.opts.guard, Some(true));
         assert!(
-            warning.contains("detect-stray-writes"),
-            "names the fallback: {warning}"
+            !preflight.warnings.iter().any(|w| w.contains("--guard")),
+            "{:?}",
+            preflight.warnings
         );
-        assert!(warning.contains("never blocked"), "{warning}");
     }
 
     #[test]
-    fn transcriptless_harness_warns_naming_the_llm_judge_fallback() {
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, true).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("transcript"))
-            .expect("a transcript warning fires");
-        assert!(warning.contains("unverifiable"), "{warning}");
-        assert!(
-            warning.contains("llm_judge"),
-            "names the fallback: {warning}"
-        );
-        assert!(warning.contains("final-message.md"), "{warning}");
-    }
-
-    #[test]
-    fn transcript_warning_omits_transcript_check_sentence_when_unused() {
-        // The eval config declares no transcript_check assertions, so the
-        // warning covers only the limitations that actually apply.
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("transcript parser"))
-            .expect("a transcript warning fires");
-        assert!(!warning.contains("unverifiable"), "{warning}");
-        assert!(!warning.contains("llm_judge"), "{warning}");
-        assert!(warning.contains("tokens/duration"), "{warning}");
-        assert!(warning.contains("final-message.md"), "{warning}");
+    fn opencode_declares_a_transcript_parser_so_no_transcript_warning_fires() {
+        // The transcript-less warning's content and transcript_check scoping
+        // are pinned by the byoh integration tests (a user descriptor without
+        // a parser); at the unit level every built-in is transcript-wired, so
+        // this pins that wiring: no transcript warning for opencode, whatever
+        // the eval config uses.
+        for uses_transcript_check in [true, false] {
+            let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
+            let preflight =
+                harness_run_preflight(&RunOptions::default(), &ctx, uses_transcript_check).unwrap();
+            assert!(
+                !preflight
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("transcript parser")),
+                "no transcript-parser warning: {:?}",
+                preflight.warnings
+            );
+        }
     }
 
     #[test]
@@ -496,44 +471,38 @@ mod tests {
     }
 
     #[test]
-    fn dispatchless_harness_warns_naming_the_generic_handoff() {
-        let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("dispatch exec recipe"))
-            .expect("a dispatch-recipe warning fires");
-        assert!(warning.contains("RUNBOOK.md"), "{warning}");
-
-        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        assert!(
-            !preflight
-                .warnings
-                .iter()
-                .any(|w| w.contains("dispatch exec recipe")),
-            "{:?}",
-            preflight.warnings
-        );
+    fn wired_built_ins_do_not_warn_about_dispatch_recipes() {
+        // The dispatch-recipe warning for a dispatchless harness is pinned on
+        // a user descriptor in tests/run/byoh.rs; every built-in wires recipes.
+        for name in ["claude-code", "codex", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+            assert!(
+                !preflight
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("dispatch exec recipe")),
+                "{name}: {:?}",
+                preflight.warnings
+            );
+        }
     }
 
     #[test]
-    fn model_flags_without_a_descriptor_model_flag_warn_provenance_only() {
+    fn model_flags_with_a_wired_model_flag_do_not_warn() {
+        // The provenance-only warning for a harness *without* a model flag is
+        // pinned on a user descriptor in tests/run/byoh.rs; every built-in
+        // declares one.
         let (_t, ctx) = ctx_for(Harness::resolve("opencode").unwrap());
         let opts = RunOptions {
             agent_model: Some("some-model"),
             ..Default::default()
         };
         let preflight = harness_run_preflight(&opts, &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("model flag"))
-            .expect("a model warning fires");
         assert!(
-            warning.contains("provenance"),
-            "names the fallback: {warning}"
+            !preflight.warnings.iter().any(|w| w.contains("model flag")),
+            "{:?}",
+            preflight.warnings
         );
     }
 

@@ -104,18 +104,20 @@ static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::
 });
 
 /// Pull the target path from a write tool's arguments (`file_path` →
-/// `notebook_path` → `path`). Returns `None` when the input is not an object or
-/// carries no string path.
+/// `notebook_path` → `path` → `filePath`, the last being OpenCode's camelCase
+/// spelling). Returns `None` when the input is not an object or carries no
+/// string path.
 pub fn path_arg(args: &Value) -> Option<&str> {
     let obj = args.as_object()?;
-    ["file_path", "notebook_path", "path"]
+    ["file_path", "notebook_path", "path", "filePath"]
         .iter()
         .find_map(|k| obj.get(*k).and_then(Value::as_str))
 }
 
-/// Extract file paths from a Codex `apply_patch` hook payload. Codex can expose
-/// patch targets as a structured `files` list or as freeform patch text; collect
-/// both so the guard can deny unknown or out-of-bounds patches before they run.
+/// Extract file paths from an `apply_patch`-style tool payload. Codex exposes
+/// patch targets as a structured `files` list or as freeform patch text
+/// (`patch`/`input`/`content`), OpenCode as `patchText`; collect all of them
+/// so the guard can deny unknown or out-of-bounds patches before they run.
 pub fn apply_patch_paths(args: &Value) -> Vec<String> {
     let mut out = Vec::new();
     let Some(obj) = args.as_object() else {
@@ -126,7 +128,7 @@ pub fn apply_patch_paths(args: &Value) -> Vec<String> {
         collect_file_values(files, &mut out);
     }
 
-    for key in ["patch", "input", "content"] {
+    for key in ["patch", "input", "content", "patchText"] {
         if let Some(text) = obj.get(key).and_then(Value::as_str) {
             collect_patch_header_paths(text, &mut out);
         }
@@ -266,6 +268,26 @@ mod tests {
         );
         assert_eq!(path_arg(&json!({ "command": "ls" })), None);
         assert_eq!(path_arg(&json!("not an object")), None);
+    }
+
+    #[test]
+    fn path_arg_recognizes_opencode_camel_case_file_path() {
+        // OpenCode's edit/write tools take `filePath` (camelCase).
+        assert_eq!(path_arg(&json!({ "filePath": "/op" })), Some("/op"));
+        // snake_case still wins when both are present (claude/codex payloads).
+        assert_eq!(
+            path_arg(&json!({ "file_path": "/a", "filePath": "/op" })),
+            Some("/a")
+        );
+    }
+
+    #[test]
+    fn apply_patch_paths_reads_opencode_patch_text() {
+        // OpenCode's apply_patch tool takes the patch body as `patchText`.
+        let paths = apply_patch_paths(&json!({
+            "patchText": "*** Begin Patch\n*** Add File: docs/new.md\n*** End Patch\n"
+        }));
+        assert_eq!(paths, vec!["docs/new.md".to_string()]);
     }
 
     #[test]

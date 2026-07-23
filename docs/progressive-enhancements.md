@@ -69,8 +69,8 @@ flag combinations stay errors.
   by kebab-case name for everything that is real code (transcript parsers, slug generation,
   shadow preflight). The write guard needs no named capability: it is pure `[guard]` data
   rendered by the one generic engine in `src/adapters/guard.rs`.
-- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers, the
-  plugin-shadow scan, the OpenCode slug sanitizer.
+- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers,
+  harness-native shadow scans, the OpenCode slug sanitizer.
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
   (`src/cli/run/util.rs`) — the `run` preflight: it resolves the guard tri-state (auto-arm when
   the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
@@ -113,9 +113,9 @@ five fixed primitives (equality `where` filter, final-text pick, flat tool-item 
 sum, duration rule), documented with a worked example in [byoh.md](byoh.md) — the built-in `codex`
 descriptor ingests through it.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
-(`claude-stream-json`; `codex-items` is the reference implementation the extract engine's
-differential test compares against) — a new harness emitting a compatible event stream reuses one
-with zero code.
+(`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
+extract engine's differential test compares against) — a new harness emitting a compatible event
+stream reuses one with zero code.
 The tool names the transcript yields must be declared in `[tools]` (see the write-guard
 enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
 combination.
@@ -155,9 +155,10 @@ templates).
 
 ### Write guard
 
-*Why harness-specific:* the guard arms a *native pre-tool hook* — hook config location, matcher
-syntax, trust model, and deny-verdict shape are all harness-native (Claude Code's
-`settings.local.json` + `hookSpecificOutput`, Codex's `hooks.json` + `{"decision": "block"}`).
+*Why harness-specific:* the guard arms a *native pre-tool hook* — hook surface, blocking
+mechanism, trust model, and deny-verdict shape are all harness-native (Claude Code's
+`settings.local.json` + `hookSpecificOutput`, Codex's `hooks.json` + `{"decision": "block"}`,
+OpenCode's auto-loaded project plugin that blocks by throwing the reason).
 
 *What it unlocks:* out-of-bounds writes are *blocked before they happen* instead of detected
 afterwards. The guard is provided automatically: every staged run of a guard-declaring built-in
@@ -168,43 +169,57 @@ can't-arm cases into a warning or error).
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
 arm; fatal in revision mode, where the `old_skill` arm then sees new-skill content.)
 
-*Descriptor fields:* the `[guard]` table — `hooks_file`, `matcher`, `command_template`,
-`hook_entry`, `verdict_template`, `armed_message` — plus `[tools]` (the write/patch/shell/read
-vocabulary) and `run.supports_guard` (validated to stay in lockstep with the `[guard]` table).
-There is no guard code capability: one generic engine (`src/adapters/guard.rs`) renders the
-install (hook entry merged into `hooks_file`) and the deny verdict from these templates, whose
-authored JSON key order is serialized verbatim — the verdict bytes are the harness's on-disk
-contract. Validation proves every hooked `matcher` tool is declared in `[tools]`, that the
-templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit in
-string values. The guard arbiter and `detect-stray-writes` classify tool names against the
+*Descriptor fields:* the `[guard]` table — `verdict_template` and `armed_message` for every
+engine, `engine` (the install-mechanism discriminator, default `json-hooks`), and the per-engine
+fields: `json-hooks` (Claude Code, Codex) declares `hooks_file`, `matcher`, `command_template`,
+and `hook_entry`; `opencode-plugin` declares `plugin_file` instead — plus `[tools]` (the
+write/patch/shell/read vocabulary) and `run.supports_guard` (validated to stay in lockstep with
+the `[guard]` table). There is no guard code capability: one engine module
+(`src/adapters/guard.rs`) holds two install arms selected by `engine` and a single shared verdict
+path. `json-hooks` merges the rendered hook entry into `hooks_file`; `opencode-plugin` stages an
+embedded JS project plugin (`harnesses/opencode-guard-plugin.js`, `{exe}`/`{marker}` substituted
+as JSON string literals) whose `tool.execute.before` hook forwards every tool call to the generic
+entry point and throws the verdict's reason to block — OpenCode auto-loads project plugins by
+directory convention, so no dispatch flag is needed. The templates' authored JSON key order is
+serialized verbatim — the verdict bytes are the harness's on-disk contract. Validation proves the
+per-engine shape (the schema's conditional requiredness, plus load-time checks barring the other
+engine's fields), that every hooked `matcher` tool is declared in `[tools]` (json-hooks), that
+the templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit
+in string values. The guard arbiter and `detect-stray-writes` classify tool names against the
 cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript ingest
 without declaring the harness's tool names is rejected at descriptor load. The hidden `guard` /
-`guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a
-future guard-capable built-in uses the generic `guard-hook --harness <label>` entry point — a
-descriptor `[guard]` block is all it takes, no bespoke install/verdict code. Shared
-marker/manifest/teardown machinery lives in `src/sandbox/`. **User-supplied descriptors may not
-declare `[guard]`** — the guard fails open, so a mistyped user guard block would silently disarm
-it. On such a harness auto-arm quietly stays off (the preflight warns naming the
-`detect-stray-writes` fallback); only an *explicit* `--guard` is rejected in preflight, since a
-run the user asked to guard must not continue silently unguarded.
+`guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a new
+guard-capable built-in uses the generic `guard-hook --harness <label>` entry point (OpenCode's
+plugin spawns exactly that) — a descriptor `[guard]` block is all it takes, no bespoke
+install/verdict code beyond the engine arms. Shared marker/manifest/teardown machinery lives in
+`src/sandbox/`. **User-supplied descriptors may not declare `[guard]`** — the guard fails open,
+so a mistyped user guard block would silently disarm it. On such a harness auto-arm quietly
+stays off (the preflight warns naming the `detect-stray-writes` fallback); only an *explicit*
+`--guard` is rejected in preflight, since a run the user asked to guard must not continue
+silently unguarded.
 
 ### Shadow preflight
 
-*Why harness-specific:* what "discoverable from the live environment" means is harness-native —
-Claude Code dispatches load the operator's enabled plugins and global skills dir, so a staged
-skill name colliding with one of those contaminates the with/without comparison. Other harnesses
-load nothing global today.
+*Why harness-specific:* what "discoverable from the live environment" means is harness-native.
+Claude Code loads enabled plugins and its global skills dir. Codex loads repository-ancestor,
+user, and admin skill directories plus enabled installed plugins. OpenCode loads project and
+global `.opencode`, `.claude`, and `.agents` skill dirs — including skills installed for other
+harnesses. A logical eval skill present in any such source contaminates the with/without
+comparison even when the staged copy uses a unique slug.
 
 *What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
 iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
 
-*Fallback:* no preflight — the run proceeds with no shadow report, exactly right for a harness
-whose dispatches load nothing beyond the staged env.
+*Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
+environment is clean; the operator must check any harness-native global discovery sources.
 
 *Descriptor fields:* the `[shadow]` table — `preflight`.
-*Capability:* `shadow.preflight` names the scan (`claude-plugins`); it returns the harness-neutral
-`PluginShadowReport` from `src/adapters/skill_shadow.rs`, and detection itself stays in the
-harness's module tree.
+*Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
+`opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
+`src/adapters/skill_shadow.rs`; detection and remediation rendering stay in the harness's
+module tree. Both scans are best-effort: Codex's does not enumerate bundled system skills (no
+stable listing exists), and OpenCode's does not scan config-declared `skills.paths`/`skills.urls`
+sources.
 
 ### Plan-mode context
 

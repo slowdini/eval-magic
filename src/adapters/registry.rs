@@ -430,11 +430,22 @@ mod tests {
         let vocab = all_tool_vocabulary();
         assert_eq!(
             vocab.write_tools,
-            ["Edit", "MultiEdit", "NotebookEdit", "Write", "file_change"]
+            [
+                "Edit",
+                "MultiEdit",
+                "NotebookEdit",
+                "Write",
+                "edit",
+                "file_change",
+                "write"
+            ]
         );
         assert_eq!(vocab.patch_tools, ["apply_patch"]);
-        assert_eq!(vocab.shell_tools, ["Bash", "command_execution"]);
-        assert_eq!(vocab.read_tools, ["Glob", "Grep", "Read"]);
+        assert_eq!(vocab.shell_tools, ["Bash", "bash", "command_execution"]);
+        assert_eq!(
+            vocab.read_tools,
+            ["Glob", "Grep", "Read", "glob", "grep", "read"]
+        );
     }
 
     fn src(layer: Layer, path: &str, toml_src: &str) -> DescriptorSource {
