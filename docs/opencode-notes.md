@@ -12,9 +12,10 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 
 | File | What's in it |
 |------|--------------|
-| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug and `opencode-events` parser references |
+| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug, `opencode-events` parser, and `opencode-skills` shadow-preflight references |
 | `mod.rs` | slug sanitization/truncation (the `opencode` slug capability) |
 | `transcript.rs` | `opencode run --format json` event-stream parsing (the `opencode-events` transcript capability) |
+| `skill_shadow.rs` | project/global skill collision scan (`opencode-skills`) + reporting |
 
 ## What's wired
 
@@ -55,6 +56,9 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
     ingests to a full run record. An operator config with an explicit `edit: deny` rule blocks
     the `final-message.md` write even under `--auto` (deny rules stay enforced) — record-runs
     then falls back to the transcript's last `text` part, so the run still records cleanly.
+- **Shadow preflight:** the `opencode-skills` capability scans every root OpenCode discovers
+  skills from and warns at build time when a staged logical skill is also live there — see
+  "Isolating from live skills" below.
 
 Everything else rides the trait's enhancement defaults:
 
@@ -62,9 +66,40 @@ Everything else rides the trait's enhancement defaults:
   `run` preflight warns naming the fallback; an explicit `--guard` warns and continues unguarded.
   `detect-stray-writes` is the audit fallback (tracked in
   [#155](https://github.com/slowdini/eval-magic/issues/155)).
-- **No shadow preflight** — no automatic live-skill collision scan (tracked in
-  [#154](https://github.com/slowdini/eval-magic/issues/154)); note OpenCode also discovers
-  `.claude/skills` and `.agents/skills`, so skills installed for other harnesses can shadow.
+
+## Isolating from live skills
+
+Every `opencode run` discovers skills well beyond the eval env. Before dispatch, the
+`opencode-skills` preflight compares each logical eval skill name against every root OpenCode
+loads from (verified against the v1.18.3 skills doc and `packages/opencode/src/skill/index.ts`):
+
+- `.opencode/skills`, `.claude/skills`, and `.agents/skills` at each directory level walked up
+  from the dispatch cwd to the git worktree (the staged env's own dirs are excluded — they hold
+  the intentional staged copies);
+- `$XDG_CONFIG_HOME/opencode/skills` (default `~/.config/opencode/skills`);
+- `$OPENCODE_CONFIG_DIR/skills` when set — **additive**, not a replacement for the xdg default;
+- the legacy `~/.opencode/skills` (still scanned by OpenCode, though the docs omit it);
+- `~/.claude/skills` and `~/.agents/skills`.
+
+The `.claude`/`.agents` roots are a cross-harness contamination vector: a skill installed for
+Claude Code or Codex is visible to OpenCode sessions by default. Direct skill directories are
+matched by the `name:` in `SKILL.md` frontmatter, not the folder name. Missing directories and
+malformed skills are ignored; a failure in one root never suppresses findings from the others.
+Findings produce a build-time OpenCode banner and the backward-compatible `plugin-shadow.json`
+artifact; `aggregate` turns the same report into OpenCode-specific `benchmark.json` validity
+warnings.
+
+eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
+set the kill switches below on the operator's behalf — parity with a real user session matters.
+Before dispatch, move or rename the conflicting skill directory; or, for a cross-harness root,
+hide it with the session environment:
+
+- `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` hides the `.claude` roots only (global + project);
+- `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` hides both `.claude` and `.agents` roots.
+
+**Known limits:** OpenCode also loads skills from config-declared `skills.paths` directories
+and `skills.urls` (remote-pulled), and matches a singular `.opencode/skill/` directory; the
+preflight does not scan those sources. Verify those cases manually when relevant.
 
 ## Naming rules
 
@@ -77,8 +112,6 @@ satisfy the rules.
 
 ## Wiring the next enhancements
 
-- **Shadow preflight (#154):** a new `opencode-skills` capability scanning the six discovery
-  roots (project + global `.opencode/skills`, `.claude/skills`, `.agents/skills`).
 - **Write guard (#155):** an OpenCode pre-tool hook surface — a project plugin at
   `.opencode/plugins/` whose `tool.execute.before` hook forwards to `eval-magic guard-hook
   --harness opencode` (a new guard engine variant; the shared arbiter and verdict path are

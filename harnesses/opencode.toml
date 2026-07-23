@@ -1,12 +1,11 @@
 # OpenCode harness descriptor.
 #
-# Native staging, transcript ingest, dispatch command recipes, and the model
-# flag are wired; the write guard and shadow preflight are not, so those
-# tables are absent and the enhancement defaults (the unguarded-run warning
-# and no live-skill scan) apply. Command templates and banners use TOML
-# *literal* strings ('...' / '''...''') so shell line-continuation backslashes
-# survive verbatim; every template's exact whitespace is pinned by the golden
-# tests under tests/golden/.
+# Native staging, transcript ingest, dispatch command recipes, the model flag,
+# and the shadow preflight are wired; the write guard is not, so that table is
+# absent and the enhancement default (the unguarded-run warning) applies.
+# Command templates and banners use TOML *literal* strings ('...' / '''...''')
+# so shell line-continuation backslashes survive verbatim; every template's
+# exact whitespace is pinned by the golden tests under tests/golden/.
 
 label = "opencode"
 skills_dir = ".opencode/skills"
@@ -54,6 +53,12 @@ skill_arg = "name"
 # `-m` takes a `provider/model` id and passes it through verbatim.
 [model]
 flag = "-m"
+
+# OpenCode discovers skills from six roots — project .opencode/.claude/.agents
+# skill dirs walked up to the git worktree, plus their global counterparts —
+# so a skill installed for another harness can shadow the eval skill.
+[shadow]
+preflight = "opencode-skills"
 
 # Headless permission asks are auto-rejected unless `--auto` is passed
 # (explicit deny rules are still enforced), and piped stdin is *appended* to

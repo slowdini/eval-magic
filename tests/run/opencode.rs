@@ -249,6 +249,44 @@ fn opencode_rejects_invalid_stage_name() {
         .stderr(contains("OpenCode skill name \"Bad_Name\" is invalid"));
 }
 
+#[test]
+fn opencode_warns_when_live_skill_shadows_staged_skill() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let fake_home = tmp.path().join("home");
+    // The cross-harness vector: a skill installed for Claude Code is visible
+    // to OpenCode sessions by default.
+    let live_skill = fake_home.join(".claude/skills/different-folder");
+    fs::create_dir_all(&live_skill).unwrap();
+    fs::write(
+        live_skill.join("SKILL.md"),
+        "---\nname: mr-review\ndescription: installed copy\n---\n\nlive\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .env("HOME", &fake_home)
+        .env("XDG_CONFIG_HOME", fake_home.join("xdg"))
+        .env("OPENCODE_CONFIG_DIR", tmp.path().join("opencode-config"))
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "opencode", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("OpenCode skill-shadow warning"))
+        .stderr(contains("opencode run"))
+        .stderr(contains("docs/opencode-notes.md"));
+
+    let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
+    assert_eq!(report["shadowed"][0]["kind"], "global-skill");
+    assert_eq!(report["shadowed"][0]["skill_name"], "mr-review");
+    assert_eq!(
+        report["shadowed"][0]["path"],
+        live_skill.to_string_lossy().as_ref()
+    );
+}
+
 /// Resolve a dispatch.json path field (absolute, or relative to the run cwd).
 fn resolve(cwd: &Path, path: &str) -> std::path::PathBuf {
     let path = Path::new(path);

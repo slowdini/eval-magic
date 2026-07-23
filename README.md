@@ -250,7 +250,7 @@ A subagent that runs an eval should start in an environment that mirrors a real 
 
 For the `without_skill` / baseline condition, the dispatch reflects "this skill is unavailable, others remain" when siblings were opted in with `--skill-dir`; otherwise it measures the skill against a clean no-skill baseline. `--bootstrap` is separate from parity: it injects product-specific framing inside the `<session-start-context>` block and does not enumerate skills.
 
-**Parity is only as clean as each dispatch's live environment.** Staging controls what the runner *adds*, not the user, repository, admin, or plugin skills the harness's one-shot CLI also discovers. A live copy of the logical eval skill can therefore contaminate both arms — the staging slug stops an on-disk collision, not runtime discovery. The runner can't unload a live skill; Claude Code and Codex emit a build-time *skill-shadow* warning (recorded in the legacy `plugin-shadow.json` artifact and surfaced in `benchmark.json`'s `validity_warnings`) with harness-specific isolation guidance. Closing it is a launch-time step for whoever dispatches.
+**Parity is only as clean as each dispatch's live environment.** Staging controls what the runner *adds*, not the user, repository, admin, or plugin skills the harness's one-shot CLI also discovers. A live copy of the logical eval skill can therefore contaminate both arms — the staging slug stops an on-disk collision, not runtime discovery. The runner can't unload a live skill; Claude Code, Codex, and OpenCode emit a build-time *skill-shadow* warning (recorded in the legacy `plugin-shadow.json` artifact and surfaced in `benchmark.json`'s `validity_warnings`) with harness-specific isolation guidance. Closing it is a launch-time step for whoever dispatches.
 
 ## Harnesses
 
@@ -270,7 +270,7 @@ This table is the source of truth for per-harness enhancement support:
 |---------|:--------------:|:----------------:|:-----------------:|:----------:|:-----------:|:----------------:|
 | **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **OpenCode** | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
+| **OpenCode** | ✅ | ✅ | ✅ | ✅ | ❌ | ✅ |
 
 A missing enhancement degrades fidelity, never correctness — every column has a fallback: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded); without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, the run continues unguarded (auto-arm quietly stays off; an explicit `--guard` warns) and `detect-stray-writes` audits after the fact; without shadow preflight, no automatic live-skill collision scan runs; without dispatch recipes, `RUNBOOK.md` / `dispatch-manifest.md` carry handoff guidance without a copy-pasteable per-task command. Supported enhancements are provided automatically — the write guard arms on every staged run of a guard-capable harness unless `--no-guard` opts out, and the `run` preflight names actionable fallbacks where it can.
 
