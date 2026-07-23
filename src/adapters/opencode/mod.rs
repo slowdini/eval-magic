@@ -3,9 +3,11 @@
 //! The declarative half of this harness lives in `harnesses/opencode.toml`
 //! (including the stage-name rules, expressed as a regex + length cap); this
 //! module tree keeps only the code-backed capabilities the descriptor
-//! references: slug sanitization/truncation (the `opencode` slug capability)
-//! and `--format json` event-stream parsing ([`transcript`]).
+//! references: slug sanitization/truncation (the `opencode` slug capability),
+//! `--format json` event-stream parsing ([`transcript`]), and live-skill
+//! shadow detection ([`skill_shadow`]).
 
+pub mod skill_shadow;
 pub mod transcript;
 
 /// True when `name` satisfies OpenCode's skill-name rules:

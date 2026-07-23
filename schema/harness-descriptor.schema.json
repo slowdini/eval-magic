@@ -253,8 +253,8 @@
       "additionalProperties": false,
       "properties": {
         "preflight": {
-          "description": "Named live-skill collision scanner: claude-plugins or codex-skills.",
-          "enum": ["claude-plugins", "codex-skills"]
+          "description": "Named live-skill collision scanner: claude-plugins, codex-skills, or opencode-skills.",
+          "enum": ["claude-plugins", "codex-skills", "opencode-skills"]
         }
       }
     },

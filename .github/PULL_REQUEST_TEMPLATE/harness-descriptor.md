@@ -20,7 +20,7 @@ Title: feat(harness): add <label> descriptor
       or guard code (those are separate one-capability-per-PR contributions)
 - [ ] `[transcript]`/`[shadow]`/`[staging]` (if declared) reuse an existing named
       capability (`claude-stream-json` / `codex-items` / `opencode-events` / `opencode` /
-      `claude-plugins` / `codex-skills`)
+      `claude-plugins` / `codex-skills` / `opencode-skills`)
       or ingest through a `[transcript.extract]` block (declarative data)
 - [ ] No `[guard]` table and no `run.supports_guard = true` in this PR
 

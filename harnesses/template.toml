@@ -166,8 +166,10 @@ label = "{label}"
 ## -------------------------------------------------------------------------------------------
 ## [shadow] — preflight scan for globally-installed plugins/skills that could shadow the eval's
 ## staged skills. Named capabilities: preflight = "claude-plugins" (Claude plugin/global-skills
-## scan) and preflight = "codex-skills" (Codex repo/user/admin/plugin scan). Reuse one only when
-## the harness has compatible discovery semantics. Most harnesses leave this table out.
+## scan), preflight = "codex-skills" (Codex repo/user/admin/plugin scan), and
+## preflight = "opencode-skills" (OpenCode project/global .opencode/.claude/.agents scan).
+## Reuse one only when the harness has compatible discovery semantics. Most harnesses leave
+## this table out.
 # [shadow]
 # preflight = "claude-plugins"
 

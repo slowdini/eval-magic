@@ -97,6 +97,8 @@ pub enum ShadowPreflight {
     ClaudePlugins,
     /// Codex repo/user/admin/plugin skill scan.
     CodexSkills,
+    /// OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
+    OpencodeSkills,
 }
 
 impl ShadowPreflight {
@@ -116,6 +118,9 @@ impl ShadowPreflight {
             ShadowPreflight::CodexSkills => {
                 super::codex::skill_shadow::shadow_preflight(scan_root, staged_skill_names)
             }
+            ShadowPreflight::OpencodeSkills => {
+                super::opencode::skill_shadow::shadow_preflight(scan_root, staged_skill_names)
+            }
         }
     }
 
@@ -126,6 +131,9 @@ impl ShadowPreflight {
             ShadowPreflight::CodexSkills => {
                 super::codex::skill_shadow::format_shadow_banner(report)
             }
+            ShadowPreflight::OpencodeSkills => {
+                super::opencode::skill_shadow::format_shadow_banner(report)
+            }
         }
     }
 
@@ -135,6 +143,9 @@ impl ShadowPreflight {
             ShadowPreflight::ClaudePlugins => super::skill_shadow::shadow_validity_warnings(report),
             ShadowPreflight::CodexSkills => {
                 super::codex::skill_shadow::shadow_validity_warnings(report)
+            }
+            ShadowPreflight::OpencodeSkills => {
+                super::opencode::skill_shadow::shadow_validity_warnings(report)
             }
         }
     }

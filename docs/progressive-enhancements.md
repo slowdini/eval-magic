@@ -192,9 +192,10 @@ run the user asked to guard must not continue silently unguarded.
 
 *Why harness-specific:* what "discoverable from the live environment" means is harness-native.
 Claude Code loads enabled plugins and its global skills dir. Codex loads repository-ancestor,
-user, and admin skill directories plus enabled installed plugins. A logical eval skill present in
-any such source contaminates the with/without comparison even when the staged copy uses a unique
-slug.
+user, and admin skill directories plus enabled installed plugins. OpenCode loads project and
+global `.opencode`, `.claude`, and `.agents` skill dirs — including skills installed for other
+harnesses. A logical eval skill present in any such source contaminates the with/without
+comparison even when the staged copy uses a unique slug.
 
 *What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
 iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
@@ -203,10 +204,12 @@ iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
 environment is clean; the operator must check any harness-native global discovery sources.
 
 *Descriptor fields:* the `[shadow]` table — `preflight`.
-*Capability:* `shadow.preflight` names the scan (`claude-plugins` or `codex-skills`). It returns
-the harness-neutral `PluginShadowReport` from `src/adapters/skill_shadow.rs`; detection and
-remediation rendering stay in the harness's module tree. Codex's scan is best-effort: it does not
-currently enumerate bundled system skills because Codex exposes no stable listing for them.
+*Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
+`opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
+`src/adapters/skill_shadow.rs`; detection and remediation rendering stay in the harness's
+module tree. Both scans are best-effort: Codex's does not enumerate bundled system skills (no
+stable listing exists), and OpenCode's does not scan config-declared `skills.paths`/`skills.urls`
+sources.
 
 ### Plan-mode context
 

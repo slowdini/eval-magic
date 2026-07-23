@@ -401,9 +401,17 @@ mod tests {
 
     #[test]
     fn detect_shadowed_skills_defaults_to_none_for_harnesses_without_a_preflight() {
+        // Every built-in harness declares a shadow preflight today; a
+        // descriptor without [shadow] (the baseline BYOH shape) gets none.
+        let descriptor = crate::adapters::descriptor::load_descriptor(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\nconfig_dirs = [\".demo\"]\n",
+            "test.toml",
+        )
+        .unwrap();
+        let adapter =
+            crate::adapters::descriptor_adapter::DescriptorAdapter::from_descriptor(descriptor);
         assert_eq!(
-            adapter_for(Harness::resolve("opencode").unwrap())
-                .detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
+            adapter.detect_shadowed_skills(Path::new("/nonexistent"), &["any-skill"]),
             None
         );
     }
