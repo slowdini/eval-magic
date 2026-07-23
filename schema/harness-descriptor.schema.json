@@ -208,36 +208,37 @@
     },
     "guard": {
       "type": "object",
-      "required": [
-        "hooks_file",
-        "matcher",
-        "command_template",
-        "hook_entry",
-        "verdict_template",
-        "armed_message"
-      ],
       "additionalProperties": false,
-      "description": "Write guard: the data the generic guard engine renders into a PreToolUse hook and a deny verdict. Restricted to embedded built-in descriptors (the guard fails open, so a mistyped user descriptor would silently disarm it).",
+      "description": "Write guard: the data the guard engine renders into the harness's native pre-tool hook surface and a deny verdict. The engine selects the install mechanism: json-hooks (default) merges a hook entry into hooks_file (Claude Code, Codex); opencode-plugin stages an embedded JS plugin at plugin_file. Restricted to embedded built-in descriptors (the guard fails open, so a mistyped user descriptor would silently disarm it).",
       "properties": {
+        "engine": {
+          "enum": ["json-hooks", "opencode-plugin"],
+          "description": "Install mechanism: json-hooks (default when absent) merges hook_entry into hooks_file; opencode-plugin stages the embedded JS plugin at plugin_file."
+        },
         "hooks_file": {
           "type": "string",
           "minLength": 1,
-          "description": "Hook-config file the entry is merged into, `/`-separated relative to the staged env root (e.g. \".claude/settings.local.json\")."
+          "description": "(json-hooks) Hook-config file the entry is merged into, `/`-separated relative to the staged env root (e.g. \".claude/settings.local.json\")."
         },
         "matcher": {
           "type": "string",
           "minLength": 1,
-          "description": "Tool-name matcher the hook registers for; every hooked tool must be declared in [tools] write/patch/shell."
+          "description": "(json-hooks) Tool-name matcher the hook registers for; every hooked tool must be declared in [tools] write/patch/shell."
         },
         "command_template": {
           "type": "string",
           "minLength": 1,
-          "description": "Shell command the armed hook runs, with {exe} and {marker} placeholders (e.g. '\"{exe}\" guard \"{marker}\"')."
+          "description": "(json-hooks) Shell command the armed hook runs, with {exe} and {marker} placeholders (e.g. '\"{exe}\" guard \"{marker}\"')."
         },
         "hook_entry": {
           "type": "string",
           "minLength": 1,
-          "description": "JSON template of the hook entry appended to the hook config's hooks.PreToolUse array, with {matcher} and {command} placeholders in its string values; authored key order is written verbatim."
+          "description": "(json-hooks) JSON template of the hook entry appended to the hook config's hooks.PreToolUse array, with {matcher} and {command} placeholders in its string values; authored key order is written verbatim."
+        },
+        "plugin_file": {
+          "type": "string",
+          "minLength": 1,
+          "description": "(opencode-plugin) Plugin file staged from the embedded JS template ({exe}/{marker} substituted), `/`-separated relative to the staged env root (e.g. \".opencode/plugins/slow-powers-eval-guard.js\")."
         },
         "verdict_template": {
           "type": "string",
@@ -245,7 +246,26 @@
           "description": "JSON template of the deny verdict printed on stdout, with a {reason} placeholder; authored key order is the harness's on-disk contract."
         },
         "armed_message": { "type": "string", "minLength": 1 }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "engine": { "const": "opencode-plugin" } },
+            "required": ["engine"]
+          },
+          "then": { "required": ["plugin_file", "verdict_template", "armed_message"] },
+          "else": {
+            "required": [
+              "hooks_file",
+              "matcher",
+              "command_template",
+              "hook_entry",
+              "verdict_template",
+              "armed_message"
+            ]
+          }
+        }
+      ]
     },
     "shadow": {
       "type": "object",

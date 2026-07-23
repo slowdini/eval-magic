@@ -6,7 +6,9 @@ use regex::Regex;
 
 use crate::adapters::guard;
 
-use super::{DescriptorError, HarnessDescriptor, render_staged_slug, stage_name_error};
+use super::{
+    DescriptorError, GuardEngine, HarnessDescriptor, render_staged_slug, stage_name_error,
+};
 
 /// The placeholders a slug template must carry to keep cleanup prefix-scans
 /// and per-cell uniqueness working.
@@ -116,76 +118,136 @@ pub(super) fn validate_descriptor(
         }
     }
 
-    // The guard block is rendered by the generic engine at arm/verdict time,
-    // and the guard fails open — so every data contract is proven here, before
-    // any run arms the hook.
+    // The guard block is rendered by the engine at arm/verdict time, and the
+    // guard fails open — so every data contract is proven here, before any
+    // run arms the hook. Which fields apply depends on the engine: the schema
+    // proves per-engine requiredness, and the checks below prove per-engine
+    // applicability and content.
     if let Some(guard) = &d.guard {
-        // Every tool the guard hooks must be declared in the vocabulary, or
-        // the write-guard arbiter would silently wave it through.
-        let vocabulary: Vec<&str> = d
-            .tools
-            .write
-            .iter()
-            .chain(&d.tools.patch)
-            .chain(&d.tools.shell)
-            .map(String::as_str)
-            .collect();
-        for token in guard.matcher.split('|') {
-            let token = token.trim_matches(['^', '$']);
-            if !vocabulary.contains(&token) {
+        let relative_path = |field: &str, path: &str| -> Result<(), DescriptorError> {
+            if path.starts_with('/')
+                || path
+                    .split('/')
+                    .any(|seg| seg.is_empty() || seg == "." || seg == "..")
+            {
                 return fail(format!(
-                    "the guard matcher hooks tool \"{token}\" but [tools] does not declare it \
-                     in write/patch/shell — the write-guard arbiter would not recognize it"
+                    "guard.{field} must be a relative `/`-separated path without \".\" or \
+                     \"..\" segments (got \"{path}\") — it resolves under the staged env root"
                 ));
             }
-        }
+            Ok(())
+        };
 
-        if guard.hooks_file.starts_with('/')
-            || guard
-                .hooks_file
-                .split('/')
-                .any(|seg| seg.is_empty() || seg == "." || seg == "..")
-        {
-            return fail(format!(
-                "guard.hooks_file must be a relative `/`-separated path without \".\" or \
-                 \"..\" segments (got \"{}\") — it resolves under the staged env root",
-                guard.hooks_file
-            ));
-        }
-
-        for placeholder in ["{exe}", "{marker}"] {
-            if !guard.command_template.contains(placeholder) {
-                return fail(format!(
-                    "guard.command_template must reference {placeholder} — the armed hook \
-                     invokes this binary with the marker path"
-                ));
-            }
-        }
-
-        match serde_json::from_str::<serde_json::Value>(&guard.hook_entry) {
-            Err(e) => {
-                return fail(format!(
-                    "guard.hook_entry does not parse as JSON ({e}); it is the hook object \
-                     appended to the harness's hook config"
-                ));
-            }
-            Ok(entry) => {
-                if !entry.is_object() {
+        match guard.engine {
+            GuardEngine::JsonHooks => {
+                if guard.plugin_file.is_some() {
                     return fail(
-                        "guard.hook_entry must be a JSON object — it is appended to the hook \
-                         config's hooks.PreToolUse array"
+                        "guard.plugin_file is only valid with engine = \"opencode-plugin\"; \
+                         the json-hooks engine merges a hook entry into guard.hooks_file"
                             .into(),
                     );
                 }
-                for placeholder in ["{matcher}", "{command}"] {
-                    if !guard::any_string_value_contains(&entry, placeholder) {
+                let (hooks_file, matcher, command_template, hook_entry) = match (
+                    &guard.hooks_file,
+                    &guard.matcher,
+                    &guard.command_template,
+                    &guard.hook_entry,
+                ) {
+                    (Some(h), Some(m), Some(c), Some(e)) => (h, m, c, e),
+                    _ => {
+                        return fail(
+                            "the json-hooks engine requires hooks_file, matcher, \
+                             command_template, and hook_entry (proven by the schema gate)"
+                                .into(),
+                        );
+                    }
+                };
+
+                // Every tool the guard hooks must be declared in the vocabulary, or
+                // the write-guard arbiter would silently wave it through.
+                let vocabulary: Vec<&str> = d
+                    .tools
+                    .write
+                    .iter()
+                    .chain(&d.tools.patch)
+                    .chain(&d.tools.shell)
+                    .map(String::as_str)
+                    .collect();
+                for token in matcher.split('|') {
+                    let token = token.trim_matches(['^', '$']);
+                    if !vocabulary.contains(&token) {
                         return fail(format!(
-                            "guard.hook_entry must reference the {placeholder} placeholder in \
-                             a string value — placeholders substitute into string values only, \
-                             so anywhere else would render an inert hook"
+                            "the guard matcher hooks tool \"{token}\" but [tools] does not \
+                             declare it in write/patch/shell — the write-guard arbiter would \
+                             not recognize it"
                         ));
                     }
                 }
+
+                relative_path("hooks_file", hooks_file)?;
+
+                for placeholder in ["{exe}", "{marker}"] {
+                    if !command_template.contains(placeholder) {
+                        return fail(format!(
+                            "guard.command_template must reference {placeholder} — the armed \
+                             hook invokes this binary with the marker path"
+                        ));
+                    }
+                }
+
+                match serde_json::from_str::<serde_json::Value>(hook_entry) {
+                    Err(e) => {
+                        return fail(format!(
+                            "guard.hook_entry does not parse as JSON ({e}); it is the hook \
+                             object appended to the harness's hook config"
+                        ));
+                    }
+                    Ok(entry) => {
+                        if !entry.is_object() {
+                            return fail(
+                                "guard.hook_entry must be a JSON object — it is appended to \
+                                 the hook config's hooks.PreToolUse array"
+                                    .into(),
+                            );
+                        }
+                        for placeholder in ["{matcher}", "{command}"] {
+                            if !guard::any_string_value_contains(&entry, placeholder) {
+                                return fail(format!(
+                                    "guard.hook_entry must reference the {placeholder} \
+                                     placeholder in a string value — placeholders substitute \
+                                     into string values only, so anywhere else would render \
+                                     an inert hook"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            GuardEngine::OpencodePlugin => {
+                // The plugin engine stages the plugin file whole — there is no
+                // hook-config merge, tool matcher, or shell command to render.
+                for (field, present) in [
+                    ("hooks_file", guard.hooks_file.is_some()),
+                    ("matcher", guard.matcher.is_some()),
+                    ("command_template", guard.command_template.is_some()),
+                    ("hook_entry", guard.hook_entry.is_some()),
+                ] {
+                    if present {
+                        return fail(format!(
+                            "guard.{field} is only valid with the json-hooks engine; the \
+                             opencode-plugin engine stages the plugin file whole — declare \
+                             plugin_file instead"
+                        ));
+                    }
+                }
+                let Some(plugin_file) = &guard.plugin_file else {
+                    return fail(
+                        "engine = \"opencode-plugin\" requires plugin_file (proven by the \
+                         schema gate)"
+                            .into(),
+                    );
+                };
+                relative_path("plugin_file", plugin_file)?;
             }
         }
 
@@ -587,6 +649,97 @@ armed_message = "guard armed"
             assert!(err.contains("guard.hooks_file"), "{err}");
             assert!(err.contains("relative"), "{err}");
         }
+    }
+
+    /// A guard wired for the OpenCode plugin engine: the install stages an
+    /// embedded JS plugin at `plugin_file` instead of merging a hook entry
+    /// into a hook-config file, so the JSON-hooks fields do not apply.
+    const PLUGIN_GUARDED: &str = r#"
+label = "demo"
+skills_dir = ".demo/skills"
+config_dirs = [".demo"]
+
+[run]
+supports_guard = true
+
+[tools]
+write = ["edit", "write"]
+shell = ["bash"]
+
+[guard]
+engine = "opencode-plugin"
+plugin_file = ".demo/plugins/eval-guard.js"
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = "guard armed"
+"#;
+
+    #[test]
+    fn accepts_the_opencode_plugin_engine_shape() {
+        load_descriptor(PLUGIN_GUARDED, "test.toml").expect("the plugin engine shape should load");
+    }
+
+    #[test]
+    fn accepts_an_explicit_json_hooks_engine() {
+        let src = GUARDED.replace(
+            "hooks_file = \".demo/hooks.json\"",
+            "engine = \"json-hooks\"\nhooks_file = \".demo/hooks.json\"",
+        );
+        load_descriptor(&src, "test.toml").expect("an explicit json-hooks engine should load");
+    }
+
+    #[test]
+    fn rejects_the_plugin_engine_without_a_plugin_file() {
+        let err =
+            err_of(&PLUGIN_GUARDED.replace("plugin_file = \".demo/plugins/eval-guard.js\"\n", ""));
+        assert!(err.contains("plugin_file"), "{err}");
+    }
+
+    #[test]
+    fn rejects_a_plugin_file_that_escapes_the_env() {
+        for mutated in [
+            "plugin_file = \"/etc/eval-guard.js\"",
+            "plugin_file = \"../eval-guard.js\"",
+            "plugin_file = \"./eval-guard.js\"",
+        ] {
+            let err = err_of(
+                &PLUGIN_GUARDED.replace("plugin_file = \".demo/plugins/eval-guard.js\"", mutated),
+            );
+            assert!(err.contains("guard.plugin_file"), "{err}");
+            assert!(err.contains("relative"), "{err}");
+        }
+    }
+
+    #[test]
+    fn rejects_plugin_engine_with_json_hooks_fields() {
+        for (field_line, needle) in [
+            ("hooks_file = \".demo/hooks.json\"", "hooks_file"),
+            ("matcher = \"write|edit|bash\"", "matcher"),
+            (
+                "command_template = '\"{exe}\" guard \"{marker}\"'",
+                "command_template",
+            ),
+            ("hook_entry = '{\"matcher\":\"{matcher}\"}'", "hook_entry"),
+        ] {
+            let src = PLUGIN_GUARDED.replace(
+                "engine = \"opencode-plugin\"",
+                &format!("engine = \"opencode-plugin\"\n{field_line}"),
+            );
+            let err = err_of(&src);
+            assert!(err.contains(needle), "expected {needle} in: {err}");
+            assert!(err.contains("opencode-plugin"), "{err}");
+        }
+    }
+
+    #[test]
+    fn rejects_json_hooks_engine_with_a_plugin_file() {
+        // The default engine (no `engine` key) is json-hooks.
+        let src = GUARDED.replace(
+            "hooks_file = \".demo/hooks.json\"",
+            "hooks_file = \".demo/hooks.json\"\nplugin_file = \".demo/plugins/eval-guard.js\"",
+        );
+        let err = err_of(&src);
+        assert!(err.contains("plugin_file"), "{err}");
+        assert!(err.contains("json-hooks"), "{err}");
     }
 
     #[test]

@@ -184,6 +184,21 @@ fn golden_skills_block_per_harness() {
 }
 
 #[test]
+fn golden_guard_armed_message_per_harness() {
+    // The post-arm banner printed for every guard-capable harness — the
+    // operator-facing contract of the armed guard. Guardless harnesses have
+    // no banner to pin.
+    for harness in Harness::known() {
+        let adapter = adapter_for(harness);
+        let label = adapter.label();
+        let Some(message) = adapter.guard_armed_message() else {
+            continue;
+        };
+        assert_golden(&format!("{label}/guard-armed.golden.txt"), &message);
+    }
+}
+
+#[test]
 fn golden_judge_recipe_per_harness() {
     for (harness, guard, rel) in [
         (

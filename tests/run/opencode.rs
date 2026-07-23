@@ -1,6 +1,6 @@
 //! OpenCode-harness behavior: `.opencode/skills` staging, slug sanitization,
 //! native `<available_skills>` dispatch rendering, plan-mode approximation, and
-//! the `--guard` warn-and-continue fallback. Characterization tests pinning
+//! the write guard's project-plugin install. Characterization tests pinning
 //! current behavior so the run-mode refactor stays behavior-preserving.
 
 use crate::helpers::*;
@@ -150,11 +150,9 @@ fn opencode_plan_mode_injects_profile_and_records_flag() {
 }
 
 #[test]
-fn opencode_guard_warns_and_continues_unguarded() {
+fn opencode_guard_installs_project_plugin() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // The #126 model: an undeclared enhancement warns naming its fallback and
-    // the run proceeds — it never rejects.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -169,35 +167,43 @@ fn opencode_guard_warns_and_continues_unguarded() {
             "--guard",
         ])
         .assert()
-        .success()
-        .stderr(
-            contains("declares no write guard")
-                .and(contains("detect-stray-writes"))
-                .and(contains("Unsupported for --harness").not()),
-        );
+        .success();
 
-    // The run was built (staged, dispatch written) — just without a guard.
-    assert!(iteration_dir(&cwd).exists());
-    let with_skill_env = cli_env_dir(&cwd, "g1", "with_skill");
-    assert!(
-        with_skill_env.join(".opencode/skills").exists(),
-        "staging proceeded"
-    );
-    assert!(
-        !with_skill_env
-            .join(".opencode/skills/.slow-powers-eval-guard.json")
-            .exists(),
-        "no guard marker was installed"
-    );
+    // The guard installs into each per-(group, condition) env (the
+    // agent-under-test's cwd): the project plugin OpenCode auto-loads at
+    // startup, plus the marker that arms the arbiter.
+    for condition in ["with_skill", "without_skill"] {
+        let env = cli_env_dir(&cwd, "g1", condition);
+        let plugin = env.join(".opencode/plugins/slow-powers-eval-guard.js");
+        let content = read_str(&plugin);
+        assert!(
+            content.contains("guard-hook"),
+            "{condition}: the plugin forwards to the guard-hook entry point: {content}"
+        );
+        assert!(
+            content.contains(r#""opencode""#),
+            "{condition}: the plugin names the opencode harness: {content}"
+        );
+        assert!(
+            content.contains("tool.execute.before"),
+            "{condition}: the plugin hooks tool.execute.before: {content}"
+        );
+        assert!(
+            env.join(".opencode/skills/.slow-powers-eval-guard.json")
+                .exists(),
+            "{condition}: guard marker staged"
+        );
+    }
 }
 
 #[test]
-fn opencode_default_run_warns_unguarded_without_the_flag() {
+fn opencode_default_run_auto_arms_guard() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // No guard flag: auto-arm can't apply (no declared guard), so the run
-    // proceeds unguarded with a warning naming the fallback and the opt-out.
-    skill_eval()
+    // No guard flag: opencode declares guard support, so the bare run arms it
+    // (#126 — enhancements are provided, not opted into) and prints the armed
+    // banner naming the plugin file.
+    let assert = skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
@@ -210,18 +216,58 @@ fn opencode_default_run_warns_unguarded_without_the_flag() {
             "opencode",
         ])
         .assert()
-        .success()
-        .stderr(
-            contains("declares no write guard")
-                .and(contains("detect-stray-writes"))
-                .and(contains("--no-guard")),
-        );
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("guard: armed"),
+        "the run plan reports the armed guard: {stdout}"
+    );
+    assert!(
+        stdout.contains(".opencode/plugins/slow-powers-eval-guard.js"),
+        "the armed banner names the plugin file: {stdout}"
+    );
 
     assert!(
-        !cli_env_dir(&cwd, "g1", "with_skill")
-            .join(".opencode/skills/.slow-powers-eval-guard.json")
+        cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".opencode/plugins/slow-powers-eval-guard.js")
             .exists(),
-        "no guard marker was installed"
+        "opencode guard plugin staged in the env"
+    );
+}
+
+#[test]
+fn opencode_no_guard_installs_no_plugin() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+            "--no-guard",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        !stdout.contains("guard: armed"),
+        "opted out, so no armed guard in the run plan: {stdout}"
+    );
+
+    let env = cli_env_dir(&cwd, "g1", "with_skill");
+    assert!(
+        !env.join(".opencode/plugins/slow-powers-eval-guard.js")
+            .exists()
+    );
+    assert!(
+        !env.join(".opencode/skills/.slow-powers-eval-guard.json")
+            .exists()
     );
 }
 
