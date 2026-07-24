@@ -166,7 +166,7 @@ The judgment of *whether* a change needs an eval, and how to design cases that a
 After you've seen what iteration 1 produces, add **assertions** to `evals.json`. Transcript checks and LLM judges can re-grade an existing compatible iteration; a `command_check` must be present before `run` so the runner can give every task a private environment. Three types:
 
 - **`transcript_check` — mechanical.** Regex matched against a run's tool invocations. Fast, deterministic, cheap. Use for "did the agent run X" or "did file Y get written." Requires the harness's transcript-ingest enhancement (see the [Harnesses](#harnesses) table); without it these grade as unverifiable.
-- **`command_check` — runner-owned.** After the agent finishes, `ingest` copies optional held-out `setup_files` from `<skill>/evals/` into the same relative paths in that task's env, then runs a trusted command there through `sh -c` (Unix) or `cmd /C` (Windows). The exit code defaults to `0`; optional `expect_stdout` is a regex over complete stdout, and both expectations must pass. It works with every harness, needs no transcript or LLM judge, and still runs while the agent write guard is armed.
+- **`command_check` — runner-owned.** After the agent finishes, `ingest` copies optional held-out `setup_files` from `<skill>/evals/` into the same relative paths in that task's env, then runs a trusted command there through `sh -c` (Unix) or `cmd /C` (Windows). Optional `env` entries override the inherited runner environment; optional `matrix` entries run the command once per Cartesian-product cell. The exit code defaults to `0`; optional `expect_stdout` is a regex over complete stdout, and every expectation must pass in every cell. It works with every harness, needs no transcript or LLM judge, and still runs while the agent write guard is armed.
 - **`llm_judge` — judged.** Soft criteria a model evaluates. Use for "did the response quote actual evidence." Graded by a dispatched judge subagent. Harness-independent.
 
 ```json
@@ -175,12 +175,22 @@ After you've seen what iteration 1 produces, add **assertions** to `evals.json`.
   "type": "command_check",
   "setup_files": ["holdout/test.ts"],
   "command": "bun test ./holdout/test.ts",
+  "env": {
+    "CI": "1"
+  },
+  "matrix": {
+    "TZ": ["UTC", "America/Los_Angeles", "Pacific/Kiritimati", "Europe/Berlin"]
+  },
   "expect_exit_code": 0,
   "expect_stdout": "2 pass"
 }
 ```
 
-Setup paths must be relative, stay inside the task env, exist under `<skill>/evals/`, and be disjoint from the eval's visible `files`; parent/descendant overlaps are rejected so a visible directory cannot expose a held-out child. Setup paths never appear in staging, prompts, or dispatch fixture lists. Multiple command checks run in declaration order against the same task env; keep them deterministic and non-destructive. This version has no command timeout—a hung command remains operator-interruptible. Completed results under `command-checks/` are reused; `grade --overwrite` reruns them.
+Environment names and values are strings. Names must be non-empty and contain neither `=` nor NUL; values may be empty but cannot contain NUL. `matrix` is independent of `env`: it can introduce a variable, and a matrix cell overrides a same-named fixed value. Variable names are expanded in lexical order, each value array keeps declaration order, and all cells run even after one fails. The assertion passes only when every cell passes; structured per-cell environment, exit, stdout, and stderr results are written under `command-checks/`. Values such as `TZ` are passed through without semantic validation.
+
+`env` and `matrix` affect the runner-owned check only, not the earlier agent dispatch. Neither surface has an eval-magic UTC default: both the agent process and a command check inherit the operator's environment unless their invocation supplies an override. An agent-side reproduction should therefore set its timezone explicitly, for example `TZ=America/Los_Angeles bun repro.ts`. Environment variables also cannot intercept `Date.now()` or `new Date()` by themselves. Pin wall-clock-dependent tests with the test framework's fake-time support, or have the fixture consume a project-defined clock variable supplied through `env`.
+
+Setup paths must be relative, stay inside the task env, exist under `<skill>/evals/`, and be disjoint from the eval's visible `files`; parent/descendant overlaps are rejected so a visible directory cannot expose a held-out child. Setup paths never appear in staging, prompts, or dispatch fixture lists. Multiple command checks run in declaration order against the same task env, and matrix cells also share that env, so keep commands deterministic and non-destructive. Matrix cost multiplies with conditions and `--runs` (`conditions × runs × cells` local command executions), with no fixed cell cap. This version has no command timeout—a hung command remains operator-interruptible. Completed results under `command-checks/` are reused; `grade --overwrite` reruns the complete check or matrix.
 
 `command_check` requires an eval-magic binary that recognizes this assertion schema. Older binaries reject such `evals.json` files during validation; rebuild the iteration with the newer binary rather than grading an older shared-env dispatch.
 

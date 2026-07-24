@@ -130,6 +130,35 @@
           "minLength": 1,
           "description": "Trusted eval-author command executed by the runner in the task environment after agent dispatch."
         },
+        "env": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Optional environment-variable overrides applied to the command. Values are strings; an empty string is allowed."
+        },
+        "matrix": {
+          "type": "object",
+          "minProperties": 1,
+          "propertyNames": {
+            "type": "string",
+            "minLength": 1
+          },
+          "additionalProperties": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": "Optional environment matrix. The runner executes one command per Cartesian-product cell; matrix values override same-named env values."
+        },
         "expect_exit_code": {
           "type": "integer",
           "minimum": -2147483648,

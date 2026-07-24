@@ -70,7 +70,8 @@ fn grade_and_ingest_help_document_runner_owned_command_checks() {
             .success()
             .stdout(contains("command_check"))
             .stdout(contains("runner"))
-            .stdout(contains("held-out"));
+            .stdout(contains("held-out"))
+            .stdout(contains("environment matrix"));
     }
 }
 
