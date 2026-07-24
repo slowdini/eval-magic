@@ -107,7 +107,7 @@ pub struct CommonArgs {
     /// Skip these eval ids (comma-separated). Mutually exclusive with `--only`.
     #[arg(long)]
     pub skip: Option<String>,
-    /// Replace existing records rather than erroring.
+    /// Replace existing records and rerun completed command checks.
     #[arg(long)]
     pub overwrite: bool,
 }
@@ -481,16 +481,21 @@ pub(crate) enum Commands {
     ///
     /// Fixed-order chain: record-runs → fill-transcripts → detect-stray-writes →
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
-    /// writes, grades `transcript_check` assertions, then stops at the judge
-    /// hand-off, listing a judge task per `llm_judge` assertion. Requires
-    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl`.
+    /// writes, grades `transcript_check` assertions, injects held-out
+    /// `command_check.setup_files`, and executes each runner-owned command check
+    /// in its task environment. Command checks work with every harness and while
+    /// the agent write guard remains armed. Then stops at the judge hand-off,
+    /// listing a judge task per `llm_judge` assertion. Requires `--iteration`;
+    /// reads each task's `outputs/<harness>-events.jsonl` when the harness exposes
+    /// transcripts.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///
-    /// Fixed-order chain: grade `--finalize` → aggregate. Merges the judge verdicts
-    /// and writes `benchmark.json`. If a live guard remains armed — the cwd guard, or
-    /// any per-`(group, condition)` Cli env guard — prints a `teardown` reminder before
+    /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts
+    /// and runner-owned `command_check` results into normal `grading.json` files,
+    /// then writes `benchmark.json`. If a live guard remains armed — the cwd
+    /// guard, or any per-task Cli env guard — prints a `teardown` reminder before
     /// source edits. Requires `--iteration`.
     Finalize(CommonArgs),
     /// Assemble run records from a dispatch and its transcripts.
@@ -516,11 +521,16 @@ pub(crate) enum Commands {
     /// skill instead of its staged copy). `aggregate` lifts all three into
     /// `benchmark.json`'s `validity_warnings`.
     DetectStrayWrites(CommonArgs),
-    /// Grade run records (transcript checks + LLM-judge task emission).
+    /// Grade run records (runner checks + LLM-judge task emission).
     ///
     /// Evaluates `transcript_check` assertions directly (regex against
-    /// `tool_invocations`) and emits judge-task files for `llm_judge` assertions;
-    /// with `--finalize`, merges judge responses into per-run `grading.json`.
+    /// `tool_invocations`). It also injects held-out `command_check.setup_files`
+    /// after dispatch and executes each runner-owned command in its task
+    /// environment; completed command results are reused unless `--overwrite`
+    /// reruns them. Command checks work with every harness and while the agent
+    /// write guard remains armed. Emits judge-task files for `llm_judge`
+    /// assertions; with `--finalize`, merges every result into per-run
+    /// `grading.json`.
     ///
     /// Injects the `__skill_invoked` meta-check — did the skill actually influence
     /// behavior? It has two tiers, chosen automatically per run: code-based (where

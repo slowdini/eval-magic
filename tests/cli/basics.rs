@@ -61,6 +61,19 @@ fn run_help_documents_no_guard() {
         .stdout(contains("--no-guard"));
 }
 
+#[test]
+fn grade_and_ingest_help_document_runner_owned_command_checks() {
+    for command in ["grade", "ingest"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("command_check"))
+            .stdout(contains("runner"))
+            .stdout(contains("held-out"));
+    }
+}
+
 /// `ingest` reaches its own context validation when invoked bare.
 #[test]
 fn ingest_is_wired_and_validates_context() {

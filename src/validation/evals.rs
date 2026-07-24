@@ -2,10 +2,11 @@
 //! hand-rolled constraints draft-07 can't express.
 
 use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 
 use serde_json::Value;
 
-use crate::core::EvalsConfig;
+use crate::core::{Assertion, EvalsConfig};
 use crate::validation::error::ValidationError;
 use crate::validation::schema::{SchemaName, validate_against_schema};
 
@@ -24,9 +25,57 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
                 id: ev.id.clone(),
             });
         }
+
+        let visible = ev.files.as_deref().unwrap_or(&[]);
+        for assertion in ev.assertions.as_deref().unwrap_or(&[]) {
+            let Assertion::CommandCheck(check) = assertion else {
+                continue;
+            };
+            for setup in check.setup_files.as_deref().unwrap_or(&[]) {
+                let setup_path = normalize_relative(setup).map_err(|()| {
+                    ValidationError::InvalidConfig {
+                        path: source.to_string(),
+                        message: format!(
+                            "eval '{}', command_check '{}': setup_files path must be relative and stay within the task environment: {setup}",
+                            ev.id, check.id
+                        ),
+                    }
+                })?;
+                for fixture in visible {
+                    let Ok(fixture_path) = normalize_relative(fixture) else {
+                        continue;
+                    };
+                    if paths_overlap(&fixture_path, &setup_path) {
+                        return Err(ValidationError::InvalidConfig {
+                            path: source.to_string(),
+                            message: format!(
+                                "eval '{}', command_check '{}': visible fixture '{}' and setup_files path '{}' overlap; held-out setup paths must be disjoint from agent-visible files",
+                                ev.id, check.id, fixture, setup
+                            ),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     Ok(validated)
+}
+
+fn normalize_relative(value: &str) -> Result<PathBuf, ()> {
+    let mut normalized = PathBuf::new();
+    for component in Path::new(value).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Err(()),
+        }
+    }
+    Ok(normalized)
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 
 #[cfg(test)]
@@ -136,5 +185,101 @@ mod tests {
         let mut config = base();
         config["evals"] = json!([]);
         assert!(validate_evals_config(&config, "evals.json").is_err());
+    }
+
+    #[test]
+    fn accepts_command_check_with_optional_setup_stdout_and_exit_code() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([
+            {
+                "id": "default-exit",
+                "type": "command_check",
+                "command": "cargo test"
+            },
+            {
+                "id": "full",
+                "type": "command_check",
+                "setup_files": ["holdout/test.rs"],
+                "command": "cargo test --test holdout",
+                "expect_exit_code": 2,
+                "expect_stdout": "2 tests passed"
+            }
+        ]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let assertions = parsed.evals[0].assertions.as_ref().unwrap();
+        let crate::core::Assertion::CommandCheck(defaulted) = &assertions[0] else {
+            panic!("expected command_check");
+        };
+        assert_eq!(defaulted.expect_exit_code, 0);
+        let crate::core::Assertion::CommandCheck(full) = &assertions[1] else {
+            panic!("expected command_check");
+        };
+        assert_eq!(
+            full.setup_files.as_deref(),
+            Some(&["holdout/test.rs".into()][..])
+        );
+        assert_eq!(full.expect_exit_code, 2);
+        assert_eq!(full.expect_stdout.as_deref(), Some("2 tests passed"));
+    }
+
+    fn with_command_check(files: &[&str], setup_files: &[&str]) -> Value {
+        let mut config = base();
+        config["evals"][0]["files"] = json!(files);
+        config["evals"][0]["assertions"] = json!([{
+            "id": "held-out",
+            "type": "command_check",
+            "setup_files": setup_files,
+            "command": "test -f holdout/test.txt"
+        }]);
+        config
+    }
+
+    #[test]
+    fn rejects_exact_visible_and_setup_file_overlap() {
+        let config = with_command_check(&["holdout/test.txt"], &["holdout/test.txt"]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "error was: {err}");
+        assert!(err.contains("holdout/test.txt"), "error was: {err}");
+    }
+
+    #[test]
+    fn rejects_visible_directory_ancestor_of_setup_file() {
+        let config = with_command_check(&["holdout"], &["holdout/test.txt"]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "error was: {err}");
+        assert!(err.contains("holdout"), "error was: {err}");
+    }
+
+    #[test]
+    fn rejects_setup_directory_ancestor_of_visible_file() {
+        let config = with_command_check(&["src/main.rs"], &["src"]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "error was: {err}");
+        assert!(err.contains("src"), "error was: {err}");
+    }
+
+    #[test]
+    fn rejects_absolute_and_escaping_setup_paths() {
+        for setup in ["/tmp/holdout.txt", "../holdout.txt", "holdout/../../escape"] {
+            let config = with_command_check(&["src/main.rs"], &[setup]);
+            let err = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("setup_files"), "{setup}: {err}");
+            assert!(err.contains("relative"), "{setup}: {err}");
+        }
+    }
+
+    #[test]
+    fn accepts_disjoint_visible_and_setup_paths() {
+        let config = with_command_check(&["src/main.rs"], &["holdout/test.txt"]);
+        validate_evals_config(&config, "evals.json").unwrap();
     }
 }

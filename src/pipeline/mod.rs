@@ -22,6 +22,6 @@ pub use detect_stray_writes::{
 };
 pub use error::PipelineError;
 pub use fill_transcripts::{FillTranscriptsResult, fill_transcripts};
-pub use grade::{GradeContext, emit_judge_tasks, finalize};
+pub use grade::{GradeContext, emit_judge_tasks, finalize, grade_command_checks};
 pub use record_runs::{RecordRunsResult, record_runs};
 pub use slots::{RunSlot, run_slots};

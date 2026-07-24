@@ -35,6 +35,28 @@ pub(super) fn task_env_root(iteration_dir: &Path, group_id: &str, condition: &st
     iteration_dir.join(format!("env-{group_id}-{condition}"))
 }
 
+/// The env dir for a task-scoped run. Single-run tasks retain the historical
+/// group/condition name; multi-run tasks append `-run-<k>`.
+pub(super) fn task_env_root_for_run(
+    iteration_dir: &Path,
+    group_id: &str,
+    condition: &str,
+    run_index: Option<u32>,
+) -> PathBuf {
+    let base = task_env_root(iteration_dir, group_id, condition);
+    match run_index {
+        Some(k) => PathBuf::from(format!("{}-run-{k}", base.to_string_lossy())),
+        None => base,
+    }
+}
+
+pub(super) fn task_run_indices(group: &Group) -> Vec<Option<u32>> {
+    match group.task_runs {
+        Some(runs) if runs > 1 => (1..=runs).map(Some).collect(),
+        _ => vec![None],
+    }
+}
+
 /// Plan the environments to stage: one env per `(group, condition)`.
 pub(super) fn env_targets(input: &EnvLayoutInput) -> Vec<EnvTarget> {
     let conds: [(&'static str, Option<String>); 2] = [
@@ -45,14 +67,15 @@ pub(super) fn env_targets(input: &EnvLayoutInput) -> Vec<EnvTarget> {
         .groups
         .iter()
         .flat_map(|g| {
-            conds
-                .clone()
-                .into_iter()
-                .map(move |(cond, skill)| EnvTarget {
-                    root: task_env_root(input.iteration_dir, &g.id, cond),
-                    conditions: vec![(cond, skill)],
-                    eval_ids: g.eval_ids.clone(),
-                })
+            conds.clone().into_iter().flat_map(move |(cond, skill)| {
+                task_run_indices(g)
+                    .into_iter()
+                    .map(move |run_index| EnvTarget {
+                        root: task_env_root_for_run(input.iteration_dir, &g.id, cond, run_index),
+                        conditions: vec![(cond, skill.clone())],
+                        eval_ids: g.eval_ids.clone(),
+                    })
+            })
         })
         .collect()
 }
@@ -67,11 +90,13 @@ mod tests {
                 id: "g1".into(),
                 eval_ids: vec!["e1".into()],
                 rationale: "default".into(),
+                task_runs: None,
             },
             Group {
                 id: "g2".into(),
                 eval_ids: vec!["e2".into()],
                 rationale: "fixture-conflict: e2 vs e1 at c.json".into(),
+                task_runs: None,
             },
         ]
     }
@@ -121,6 +146,37 @@ mod tests {
         assert_eq!(
             task_env_root(iter, "g2", "without_skill"),
             Path::new("/w/iteration-1/env-g2-without_skill")
+        );
+    }
+
+    #[test]
+    fn command_check_multi_run_group_gets_one_env_per_condition_and_run() {
+        let iter = Path::new("/w/iteration-1");
+        let groups = vec![Group {
+            id: "g1".into(),
+            eval_ids: vec!["held-out".into()],
+            rationale: "assertion: command_check".into(),
+            task_runs: Some(2),
+        }];
+        let targets = env_targets(&EnvLayoutInput {
+            iteration_dir: iter,
+            groups: &groups,
+            cond_a: "with_skill",
+            cond_b: "without_skill",
+            skill_path_a: Some("/s/SKILL.md"),
+            skill_path_b: None,
+        });
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.root.to_string_lossy().into_owned())
+                .collect::<Vec<_>>(),
+            vec![
+                "/w/iteration-1/env-g1-with_skill-run-1",
+                "/w/iteration-1/env-g1-with_skill-run-2",
+                "/w/iteration-1/env-g1-without_skill-run-1",
+                "/w/iteration-1/env-g1-without_skill-run-2",
+            ]
         );
     }
 }

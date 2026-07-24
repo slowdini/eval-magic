@@ -14,7 +14,7 @@ degrades fidelity, never correctness: every enhancement has a documented fallbac
 ## One dispatch mechanism
 
 Every eval test and judge is dispatched the same way: through the harness's one-shot CLI, one
-subprocess per task, each `cd`'d into its `(group, condition)` env and writing its output to disk.
+subprocess per task, each `cd`'d into its recorded `eval_root` and writing its output to disk.
 There is no other mode. The **generated artifacts are the runtime source of truth** for how to
 dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` carrying the exact per-task recipe
 for the selected harness (rendered by the adapter's dispatch-recipe methods) — hand-maintained docs
@@ -31,10 +31,11 @@ A harness qualifies at baseline with no harness-specific code beyond naming itse
 3. **`--no-stage` when native staging isn't wired** — each `SKILL.md` is inlined into its dispatch
    prompt instead of staged for native discovery.
 
-That baseline already yields a working eval: `llm_judge` assertions grade every behavior, and the
-`detect-stray-writes` post-pass (folded into `ingest`) audits out-of-bounds writes from whatever
-run records exist. Run records without transcript ingest are assembled by hand per
-`schema/run-record.schema.json`.
+That baseline already yields a working eval: `llm_judge` assertions grade soft behavior,
+runner-owned `command_check` assertions can inject held-out files and execute deterministically,
+and the `detect-stray-writes` post-pass (folded into `ingest`) audits out-of-bounds writes from
+whatever run records exist. Run records without transcript ingest are assembled from
+`outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
 
 In descriptor terms the baseline is one required field: `label`. Everything else in a harness
 descriptor is optional — an absent field or table gets a working generic fallback, and the `run`
@@ -81,6 +82,20 @@ flag combinations stay errors.
   them incompatible with `--no-stage`) and an explicit `--guard` on a user-descriptor-only
   harness reject.
 
+## Runner-owned command checks are baseline
+
+`command_check` is intentionally not a harness enhancement. `run` detects the assertion before
+staging, places its eval in a singleton group, and gives each repeated `(eval, condition, run)` task
+a distinct `eval_root`. After dispatch, `ingest` copies the assertion's held-out `setup_files` from
+the skill's `evals/` directory into that root and executes the trusted command through the platform
+shell. The files are never staged or mentioned to the agent.
+
+This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
+the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed
+agent write guard can remain installed while the runner executes the command. `finalize` converts
+the schema-gated intermediate result into an ordinary grading result, leaving aggregation
+harness-agnostic.
+
 ## The enhancements
 
 Each enhancement is a group of descriptor fields — plus a named capability where code is involved —
@@ -102,9 +117,10 @@ extract primitives, it's a code capability, not a bigger DSL.
 `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
 event — a deterministic `__skill_invoked` meta-check.
 
-*Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` carries the grading (bias
-suites toward `llm_judge` for such a harness), tokens/duration go unrecorded, records are
-hand-assembled, and the meta-check uses the LLM-judge fallback.
+*Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
+`command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
+unrecorded, records are assembled from `outputs/final-message.md` or by hand, and the meta-check
+uses the LLM-judge fallback.
 
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
 ingest pipeline never calls a parser), exactly one of `parser`/`extract` (validation rejects both

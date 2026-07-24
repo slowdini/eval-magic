@@ -20,6 +20,7 @@ pub const SKILL_INVOKED_META_ID: &str = "__skill_invoked";
 pub enum Assertion {
     TranscriptCheck(AssertionTranscriptCheck),
     LlmJudge(AssertionLlmJudge),
+    CommandCheck(AssertionCommandCheck),
 }
 
 /// A check evaluated against the run transcript (substring/pattern match).
@@ -40,6 +41,23 @@ pub struct AssertionLlmJudge {
     pub rubric: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+}
+
+/// A runner-owned command assertion evaluated against the final task environment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertionCommandCheck {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_files: Option<Vec<String>>,
+    pub command: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub expect_exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expect_stdout: Option<String>,
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
 }
 
 /// Ordering constraint for a transcript check.
@@ -217,6 +235,7 @@ pub struct AssertionResult {
 pub enum Grader {
     TranscriptCheck,
     LlmJudge,
+    CommandCheck,
 }
 
 /// The full grading output for one run.
@@ -444,61 +463,6 @@ mod tests {
         assert!(out.get("run_nonce").is_none());
     }
 
-    /// Fixture artifacts captured from the pre-#135 binary (compile-time
-    /// `Harness` enum era). Parsing and re-serializing with the artifact
-    /// writer format (`to_string_pretty` + trailing newline, matching
-    /// `pipeline::io::write_json`) must reproduce every byte, so opening the
-    /// harness identifier can never reshape existing artifacts.
-    #[test]
-    fn conditions_json_fixtures_round_trip_byte_identically() {
-        for (name, fixture) in [
-            (
-                "claude-code",
-                include_str!("../../tests/fixtures/conditions/claude-code.json"),
-            ),
-            (
-                "codex",
-                include_str!("../../tests/fixtures/conditions/codex.json"),
-            ),
-            (
-                "opencode",
-                include_str!("../../tests/fixtures/conditions/opencode.json"),
-            ),
-            (
-                "no-harness",
-                include_str!("../../tests/fixtures/conditions/no-harness.json"),
-            ),
-        ] {
-            let record: ConditionsRecord = serde_json::from_str(fixture)
-                .unwrap_or_else(|e| panic!("fixture {name} no longer parses: {e}"));
-            let mut out = serde_json::to_string_pretty(&record).unwrap();
-            out.push('\n');
-            assert_eq!(
-                out, fixture,
-                "fixture {name} did not round-trip byte-identically"
-            );
-        }
-    }
-
-    /// A `conditions.json` naming a harness the registry doesn't know must
-    /// fail deserialization with the known harnesses listed, mirroring the
-    /// `--harness` CLI rejection.
-    #[test]
-    fn conditions_json_with_unknown_harness_errors_naming_known_harnesses() {
-        let err = serde_json::from_value::<ConditionsRecord>(json!({
-            "mode": "new-skill",
-            "conditions": [],
-            "timestamp": "2026-06-08T00:00:00Z",
-            "harness": "nonexistent"
-        }))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
-        for name in ["claude-code", "codex", "opencode"] {
-            assert!(err.contains(name), "error must name {name}: {err}");
-        }
-    }
-
     #[test]
     fn timing_source_kebab_roundtrips() {
         let v = serde_json::to_value(TimingSource::CompletionEvent).unwrap();
@@ -507,3 +471,7 @@ mod tests {
         assert_eq!(back, TimingSource::CompletionEvent);
     }
 }
+
+#[cfg(test)]
+#[path = "types/artifact_tests.rs"]
+mod artifact_tests;

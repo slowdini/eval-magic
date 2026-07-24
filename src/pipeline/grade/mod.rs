@@ -11,6 +11,7 @@
 //!
 //! Both modes operate over a shared [`GradeContext`] assembled by the CLI.
 
+pub mod command_check;
 pub mod finalize;
 pub mod judge_tasks;
 pub mod transcript_check;
@@ -19,6 +20,7 @@ use std::path::Path;
 
 use crate::core::{ConditionsRecord, EvalsConfig};
 
+pub use command_check::{CommandCheckSummary, grade_command_checks};
 pub use finalize::{FinalizeSummary, finalize};
 pub use judge_tasks::{EmitSummary, check_skill_invoked_from_transcript, emit_judge_tasks};
 pub use transcript_check::grade_transcript_check;
