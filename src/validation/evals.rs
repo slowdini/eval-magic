@@ -11,8 +11,8 @@ use crate::validation::error::ValidationError;
 use crate::validation::schema::{SchemaName, validate_against_schema};
 
 /// Validate a parsed `evals.json`. Runs the structural schema check, then the
-/// supplemental duplicate-`id` guard (uniqueness by a sub-field isn't
-/// expressible in JSON Schema draft-07), returning the typed config on success.
+/// supplemental duplicate-`id`, command environment, and held-out path guards,
+/// returning the typed config on success.
 pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig, ValidationError> {
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
@@ -31,6 +31,16 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
             let Assertion::CommandCheck(check) = assertion else {
                 continue;
             };
+            for (name, value) in check.env.as_ref().into_iter().flatten() {
+                validate_environment_name(source, &ev.id, &check.id, "env", name)?;
+                validate_environment_value(source, &ev.id, &check.id, "env", name, value)?;
+            }
+            for (name, values) in check.matrix.as_ref().into_iter().flatten() {
+                validate_environment_name(source, &ev.id, &check.id, "matrix", name)?;
+                for value in values {
+                    validate_environment_value(source, &ev.id, &check.id, "matrix", name, value)?;
+                }
+            }
             for setup in check.setup_files.as_deref().unwrap_or(&[]) {
                 let setup_path = normalize_relative(setup).map_err(|()| {
                     ValidationError::InvalidConfig {
@@ -60,6 +70,43 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     }
 
     Ok(validated)
+}
+
+fn validate_environment_name(
+    source: &str,
+    eval_id: &str,
+    check_id: &str,
+    field: &str,
+    name: &str,
+) -> Result<(), ValidationError> {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{eval_id}', command_check '{check_id}': {field} environment variable name must be non-empty and contain neither '=' nor NUL: {name:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_environment_value(
+    source: &str,
+    eval_id: &str,
+    check_id: &str,
+    field: &str,
+    name: &str,
+    value: &str,
+) -> Result<(), ValidationError> {
+    if value.contains('\0') {
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{eval_id}', command_check '{check_id}': {field} environment variable {name:?} value must not contain NUL"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn normalize_relative(value: &str) -> Result<PathBuf, ()> {
@@ -221,6 +268,110 @@ mod tests {
         );
         assert_eq!(full.expect_exit_code, 2);
         assert_eq!(full.expect_stdout.as_deref(), Some("2 tests passed"));
+    }
+
+    #[test]
+    fn accepts_command_check_environment_and_matrix() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "timezone-matrix",
+            "type": "command_check",
+            "command": "bun test",
+            "env": {
+                "CI": "1",
+                "EMPTY": "",
+                "TZ": "UTC"
+            },
+            "matrix": {
+                "LOCALE": ["en_US", "de_DE"],
+                "MODE": ["", "strict"],
+                "TZ": ["UTC", "America/Los_Angeles"]
+            }
+        }]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let crate::core::Assertion::CommandCheck(check) =
+            &parsed.evals[0].assertions.as_ref().unwrap()[0]
+        else {
+            panic!("expected command_check");
+        };
+        assert_eq!(check.env.as_ref().unwrap()["CI"], "1");
+        assert_eq!(check.env.as_ref().unwrap()["EMPTY"], "");
+        assert_eq!(check.matrix.as_ref().unwrap()["MODE"][0], "");
+        assert_eq!(
+            check.matrix.as_ref().unwrap()["TZ"],
+            ["UTC", "America/Los_Angeles"]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_command_check_environment_names_and_nul_values() {
+        for (field, value) in [
+            ("env", json!({ "BAD=NAME": "value" })),
+            ("env", json!({ "GOOD_NAME": "bad\u{0}value" })),
+            ("matrix", json!({ "BAD=NAME": ["value"] })),
+            ("matrix", json!({ "GOOD_NAME": ["bad\u{0}value"] })),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([{
+                "id": "environment",
+                "type": "command_check",
+                "command": "true",
+                field: value
+            }]);
+
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+            assert!(error.contains("environment"), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_or_duplicate_command_check_environment_collections() {
+        for (field, value) in [
+            ("env", json!({})),
+            ("matrix", json!({})),
+            ("matrix", json!({ "TZ": [] })),
+            ("matrix", json!({ "TZ": ["UTC", "UTC"] })),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([{
+                "id": "environment",
+                "type": "command_check",
+                "command": "true",
+                field: value
+            }]);
+
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_string_command_check_environment_values() {
+        for (field, value) in [
+            ("env", json!({ "CI": 1 })),
+            ("env", json!({ "CI": null })),
+            ("matrix", json!({ "TZ": ["UTC", 1] })),
+            ("matrix", json!({ "TZ": "UTC" })),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([{
+                "id": "environment",
+                "type": "command_check",
+                "command": "true",
+                field: value
+            }]);
+
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
     }
 
     fn with_command_check(files: &[&str], setup_files: &[&str]) -> Value {

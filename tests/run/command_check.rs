@@ -429,3 +429,6 @@ fn ingests_without_transcripts_while_guard_is_armed_and_aggregates() {
         0.0
     );
 }
+
+#[cfg(unix)]
+mod matrix;

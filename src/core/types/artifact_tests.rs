@@ -14,6 +14,8 @@ fn assertion_command_check_roundtrips_optional_fields_and_defaults_exit_zero() {
     };
     assert_eq!(minimal.expect_exit_code, 0);
     assert!(minimal.setup_files.is_none());
+    assert!(minimal.env.is_none());
+    assert!(minimal.matrix.is_none());
     assert!(minimal.expect_stdout.is_none());
 
     let full: Assertion = serde_json::from_value(json!({
@@ -21,6 +23,14 @@ fn assertion_command_check_roundtrips_optional_fields_and_defaults_exit_zero() {
         "type": "command_check",
         "setup_files": ["holdout/test.ts"],
         "command": "bun test ./holdout/test.ts",
+        "env": {
+            "CI": "1",
+            "TZ": "UTC"
+        },
+        "matrix": {
+            "LOCALE": ["en_US", "de_DE"],
+            "TZ": ["UTC", "America/Los_Angeles"]
+        },
         "expect_exit_code": 2,
         "expect_stdout": "2 pass"
     }))
@@ -28,6 +38,14 @@ fn assertion_command_check_roundtrips_optional_fields_and_defaults_exit_zero() {
     let out = serde_json::to_value(full).unwrap();
     assert_eq!(out["type"], "command_check");
     assert_eq!(out["setup_files"], json!(["holdout/test.ts"]));
+    assert_eq!(out["env"], json!({ "CI": "1", "TZ": "UTC" }));
+    assert_eq!(
+        out["matrix"],
+        json!({
+            "LOCALE": ["en_US", "de_DE"],
+            "TZ": ["UTC", "America/Los_Angeles"]
+        })
+    );
     assert_eq!(out["expect_exit_code"], 2);
     assert_eq!(out["expect_stdout"], "2 pass");
 }

@@ -88,7 +88,9 @@ flag combinations stay errors.
 staging, places its eval in a singleton group, and gives each repeated `(eval, condition, run)` task
 a distinct `eval_root`. After dispatch, `ingest` copies the assertion's held-out `setup_files` from
 the skill's `evals/` directory into that root and executes the trusted command through the platform
-shell. The files are never staged or mentioned to the agent.
+shell. Optional `env` values override the inherited runner environment; optional `matrix` values
+execute every Cartesian-product cell and persist per-cell results. The files are never staged or
+mentioned to the agent.
 
 This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
 the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed

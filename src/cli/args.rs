@@ -483,11 +483,12 @@ pub(crate) enum Commands {
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
     /// writes, grades `transcript_check` assertions, injects held-out
     /// `command_check.setup_files`, and executes each runner-owned command check
-    /// in its task environment. Command checks work with every harness and while
-    /// the agent write guard remains armed. Then stops at the judge hand-off,
-    /// listing a judge task per `llm_judge` assertion. Requires `--iteration`;
-    /// reads each task's `outputs/<harness>-events.jsonl` when the harness exposes
-    /// transcripts.
+    /// in its task environment, applying its environment overrides and running
+    /// every environment matrix cell. Command checks work with every harness and
+    /// while the agent write guard remains armed. Then stops at the judge
+    /// hand-off, listing a judge task per `llm_judge` assertion. Requires
+    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
+    /// harness exposes transcripts.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
@@ -526,11 +527,12 @@ pub(crate) enum Commands {
     /// Evaluates `transcript_check` assertions directly (regex against
     /// `tool_invocations`). It also injects held-out `command_check.setup_files`
     /// after dispatch and executes each runner-owned command in its task
-    /// environment; completed command results are reused unless `--overwrite`
-    /// reruns them. Command checks work with every harness and while the agent
-    /// write guard remains armed. Emits judge-task files for `llm_judge`
-    /// assertions; with `--finalize`, merges every result into per-run
-    /// `grading.json`.
+    /// environment, applying its environment overrides and running every
+    /// environment matrix cell; completed command results are reused unless
+    /// `--overwrite` reruns them. Command checks work with every harness and
+    /// while the agent write guard remains armed. Emits judge-task files for
+    /// `llm_judge` assertions; with `--finalize`, merges every result into
+    /// per-run `grading.json`.
     ///
     /// Injects the `__skill_invoked` meta-check — did the skill actually influence
     /// behavior? It has two tiers, chosen automatically per run: code-based (where

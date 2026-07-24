@@ -6,6 +6,8 @@
 //! Types are honest and strict about what each artifact contains, but tolerate
 //! unknown fields (no `deny_unknown_fields`) so older artifacts stay readable.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -50,6 +52,10 @@ pub struct AssertionCommandCheck {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub setup_files: Option<Vec<String>>,
     pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<BTreeMap<String, Vec<String>>>,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub expect_exit_code: i32,
     #[serde(skip_serializing_if = "Option::is_none")]

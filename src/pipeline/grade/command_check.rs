@@ -1,6 +1,6 @@
 //! Runner-owned command-check grading.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Component, Path};
 use std::process::{Command, ExitStatus};
@@ -23,6 +23,19 @@ pub struct CommandCheckResult {
     pub passed: bool,
     pub evidence: String,
     pub expected_exit_code: i32,
+    pub actual_exit_code: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cells: Option<Vec<CommandCheckCellResult>>,
+}
+
+/// The result of one environment-matrix cell.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CommandCheckCellResult {
+    pub env: BTreeMap<String, String>,
+    pub passed: bool,
+    pub evidence: String,
     pub actual_exit_code: Option<i32>,
     pub stdout: String,
     pub stderr: String,
@@ -229,18 +242,138 @@ pub(super) fn execute_command_check(
     assertion: &AssertionCommandCheck,
     eval_root: &Path,
 ) -> Result<CommandCheckResult, PipelineError> {
+    validate_command_environment(assertion)?;
+
+    let Some(matrix) = &assertion.matrix else {
+        let env = assertion.env.clone().unwrap_or_default();
+        let cell = execute_command_check_cell(assertion, eval_root, env)?;
+        return Ok(CommandCheckResult {
+            id: assertion.id.clone(),
+            passed: cell.passed,
+            evidence: cell.evidence,
+            expected_exit_code: assertion.expect_exit_code,
+            actual_exit_code: cell.actual_exit_code,
+            stdout: cell.stdout,
+            stderr: cell.stderr,
+            cells: None,
+        });
+    };
+
+    let cells = matrix_environments(assertion)
+        .into_iter()
+        .map(|env| execute_command_check_cell(assertion, eval_root, env))
+        .collect::<Result<Vec<_>, _>>()?;
+    let passed_count = cells.iter().filter(|cell| cell.passed).count();
+    let passed = passed_count == cells.len();
+    let mut evidence = format!("{passed_count}/{} matrix cells passed", cells.len());
+    if !passed {
+        let failed_cells = cells
+            .iter()
+            .filter(|cell| !cell.passed)
+            .map(|cell| {
+                let label = matrix
+                    .keys()
+                    .map(|name| format!("{name}={}", cell.env[name]))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!("{label} ({})", cell.evidence)
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        evidence.push_str("; failed cells: ");
+        evidence.push_str(&failed_cells);
+    }
+
+    Ok(CommandCheckResult {
+        id: assertion.id.clone(),
+        passed,
+        evidence,
+        expected_exit_code: assertion.expect_exit_code,
+        actual_exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        cells: Some(cells),
+    })
+}
+
+fn validate_command_environment(assertion: &AssertionCommandCheck) -> Result<(), PipelineError> {
+    for (name, value) in assertion.env.as_ref().into_iter().flatten() {
+        validate_command_environment_name(&assertion.id, "env", name)?;
+        validate_command_environment_value(&assertion.id, "env", name, value)?;
+    }
+    for (name, values) in assertion.matrix.as_ref().into_iter().flatten() {
+        validate_command_environment_name(&assertion.id, "matrix", name)?;
+        for value in values {
+            validate_command_environment_value(&assertion.id, "matrix", name, value)?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_command_environment_name(
+    assertion_id: &str,
+    field: &str,
+    name: &str,
+) -> Result<(), PipelineError> {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(PipelineError::Message(format!(
+            "command_check '{assertion_id}': {field} environment variable name must be non-empty and contain neither '=' nor NUL: {name:?}"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_command_environment_value(
+    assertion_id: &str,
+    field: &str,
+    name: &str,
+    value: &str,
+) -> Result<(), PipelineError> {
+    if value.contains('\0') {
+        return Err(PipelineError::Message(format!(
+            "command_check '{assertion_id}': {field} environment variable {name:?} value must not contain NUL"
+        )));
+    }
+    Ok(())
+}
+
+fn matrix_environments(assertion: &AssertionCommandCheck) -> Vec<BTreeMap<String, String>> {
+    let mut cells = vec![assertion.env.clone().unwrap_or_default()];
+    for (name, values) in assertion.matrix.as_ref().into_iter().flatten() {
+        let mut expanded = Vec::new();
+        for cell in cells {
+            for value in values {
+                let mut env = cell.clone();
+                env.insert(name.clone(), value.clone());
+                expanded.push(env);
+            }
+        }
+        cells = expanded;
+    }
+    cells
+}
+
+fn execute_command_check_cell(
+    assertion: &AssertionCommandCheck,
+    eval_root: &Path,
+    env: BTreeMap<String, String>,
+) -> Result<CommandCheckCellResult, PipelineError> {
     #[cfg(unix)]
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(&assertion.command)
-        .current_dir(eval_root)
-        .output();
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.arg("-c").arg(&assertion.command);
+        command
+    };
     #[cfg(windows)]
-    let output = Command::new("cmd")
-        .arg("/C")
-        .arg(&assertion.command)
-        .current_dir(eval_root)
-        .output();
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.arg("/C").arg(&assertion.command);
+        command
+    };
+
+    command.current_dir(eval_root);
+    command.envs(&env);
+    let output = command.output();
 
     let output = output.map_err(|error| {
         PipelineError::Message(format!(
@@ -289,11 +422,10 @@ pub(super) fn execute_command_check(
         failures.join("; ")
     };
 
-    Ok(CommandCheckResult {
-        id: assertion.id.clone(),
+    Ok(CommandCheckCellResult {
+        env,
         passed,
         evidence,
-        expected_exit_code: assertion.expect_exit_code,
         actual_exit_code,
         stdout: truncate_diagnostic(&complete_stdout),
         stderr: truncate_diagnostic(&complete_stderr),
