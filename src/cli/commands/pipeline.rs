@@ -294,6 +294,14 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
         let target_args = command_target_args(&ctx);
         println!("\nNext: eval-magic aggregate{target_args} --iteration {iteration}");
     } else {
+        let commands =
+            pipeline::grade_command_checks(&dir, &evals, &ctx.skill_subdir, common.overwrite)?;
+        if commands.executed + commands.reused > 0 {
+            println!(
+                "Command checks: {} executed, {} reused, {} failed",
+                commands.executed, commands.reused, commands.failed
+            );
+        }
         let s = pipeline::emit_judge_tasks(&gctx)?;
         println!("Wrote {}", dir.join("judge-tasks.json").display());
         println!(

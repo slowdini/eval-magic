@@ -24,18 +24,20 @@ pub enum SchemaName {
     StrayWrites,
     Benchmark,
     JudgeTasks,
+    CommandCheck,
     HarnessDescriptor,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 7] = [
+    const ALL: [SchemaName; 8] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
+        SchemaName::CommandCheck,
         SchemaName::HarnessDescriptor,
     ];
 
@@ -49,6 +51,7 @@ impl SchemaName {
             SchemaName::StrayWrites => "stray-writes",
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
+            SchemaName::CommandCheck => "command-check",
             SchemaName::HarnessDescriptor => "harness-descriptor",
         }
     }
@@ -62,6 +65,9 @@ impl SchemaName {
             SchemaName::StrayWrites => include_str!("../../schema/stray-writes.schema.json"),
             SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
             SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),
+            SchemaName::CommandCheck => {
+                include_str!("../../schema/command-check.schema.json")
+            }
             SchemaName::HarnessDescriptor => {
                 include_str!("../../schema/harness-descriptor.schema.json")
             }
@@ -208,6 +214,31 @@ mod tests {
         data["surprise"] = json!(true);
         let r: Result<Value, _> = validate_against_schema(SchemaName::RunRecord, &data, "run.json");
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn grading_schema_accepts_command_check_grader() {
+        let data = json!({
+            "assertion_results": [{
+                "id": "tests-pass",
+                "passed": true,
+                "evidence": "exit code matched",
+                "confidence": 1.0,
+                "grader": "command_check"
+            }],
+            "summary": {
+                "passed": 1,
+                "failed": 0,
+                "total": 1,
+                "pass_rate": 1.0
+            }
+        });
+        let result: Result<Value, _> =
+            validate_against_schema(SchemaName::Grading, &data, "grading.json");
+        assert!(
+            result.is_ok(),
+            "command_check grading should validate: {result:?}"
+        );
     }
 
     #[test]

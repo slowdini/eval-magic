@@ -25,6 +25,10 @@ pub enum ValidationError {
         id: String,
     },
 
+    /// The config matched the structural schema but violated a semantic rule.
+    #[error("{path}: {message}")]
+    InvalidConfig { path: String, message: String },
+
     /// The data matched the schema but could not be deserialized into the
     /// requested type — a contract drift between schema and Rust type.
     #[error("{path}: invalid value after schema validation: {message}")]

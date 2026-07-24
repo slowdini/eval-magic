@@ -277,10 +277,15 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                 )?;
 
                 for assertion in assertions {
-                    let Assertion::LlmJudge(j) = assertion else {
-                        // transcript_check is graded in finalize, not dispatched here.
-                        unverifiable += 1;
-                        continue;
+                    let j = match assertion {
+                        Assertion::LlmJudge(j) => j,
+                        Assertion::TranscriptCheck(_) => {
+                            unverifiable += 1;
+                            continue;
+                        }
+                        // command_check was executed by the runner before judge
+                        // task emission and is folded in during finalize.
+                        Assertion::CommandCheck(_) => continue,
                     };
                     let response_path = judge_responses_dir.join(format!("{}.json", j.id));
                     let dispatch_prompt =

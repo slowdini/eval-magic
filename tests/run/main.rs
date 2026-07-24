@@ -12,6 +12,7 @@ mod helpers;
 mod byoh;
 mod claude_cli;
 mod codex;
+mod command_check;
 mod env_layout;
 mod grouping;
 mod lifecycle;

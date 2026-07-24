@@ -36,7 +36,8 @@ cool-cli run --cd <eval-root>{model_arg} \
 That run is complete: `run` warns about each enhancement the descriptor doesn't declare (naming the
 fallback that carries it), builds `dispatch.json` / `RUNBOOK.md` / `dispatch-manifest.md` with your
 exec recipe, and after you dispatch the tasks, `ingest` assembles records from each task's
-`outputs/final-message.md`, runs the `detect-stray-writes` audit, and hands grading to `llm_judge`.
+`outputs/final-message.md`, runs the `detect-stray-writes` audit, executes any runner-owned
+`command_check` assertions, and hands soft grading to `llm_judge`.
 
 For a one-off descriptor that shouldn't live in the project, pass it directly — its label becomes
 the invocation's default harness, so `--harness` can be omitted:
@@ -120,7 +121,7 @@ map as inline comments in its scaffolded template. The short map:
 |-------|----------|----------------------|
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
 | `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
-| `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable, `llm_judge` carries grading, tokens/duration unrecorded |
+| `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |

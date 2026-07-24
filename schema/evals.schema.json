@@ -69,7 +69,8 @@
     "assertion": {
       "oneOf": [
         { "$ref": "#/definitions/transcriptCheck" },
-        { "$ref": "#/definitions/llmJudge" }
+        { "$ref": "#/definitions/llmJudge" },
+        { "$ref": "#/definitions/commandCheck" }
       ]
     },
     "transcriptCheck": {
@@ -109,6 +110,36 @@
         "model": {
           "type": "string",
           "description": "Optional judge model override. When absent, defaults to the run-level judge model recorded in conditions.json, or the harness default when no run-level model was selected."
+        }
+      }
+    },
+    "commandCheck": {
+      "type": "object",
+      "required": ["id", "type", "command"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "command_check" },
+        "setup_files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Optional held-out paths relative to the skill's evals/ directory. The runner injects them into the task environment only during ingest."
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Trusted eval-author command executed by the runner in the task environment after agent dispatch."
+        },
+        "expect_exit_code": {
+          "type": "integer",
+          "minimum": -2147483648,
+          "maximum": 2147483647,
+          "default": 0,
+          "description": "Expected process exit code. Defaults to 0."
+        },
+        "expect_stdout": {
+          "type": "string",
+          "description": "Optional regex matched against the command's complete stdout."
         }
       }
     }

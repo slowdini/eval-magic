@@ -6,7 +6,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::core::Eval;
+use crate::core::{AssertionCommandCheck, Eval};
 
 use super::{RunError, copy_entry};
 
@@ -73,6 +73,31 @@ pub fn fixture_pairs(ev: &Eval, skill_dir: &Path) -> Result<Vec<(String, String)
             )));
         }
         pairs.push((f.clone(), src.to_string_lossy().into_owned()));
+    }
+    Ok(pairs)
+}
+
+/// Resolve a command check's held-out setup paths without copying them. This is
+/// called during read-only run resolution so a missing source fails before any
+/// workspace or staged environment is created.
+pub fn setup_file_pairs(
+    check: &AssertionCommandCheck,
+    skill_dir: &Path,
+) -> Result<Vec<(String, String)>, RunError> {
+    let Some(files) = check.setup_files.as_ref().filter(|files| !files.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut pairs = Vec::with_capacity(files.len());
+    for file in files {
+        validate_fixture_rel(file)?;
+        let source = skill_dir.join("evals").join(file);
+        if !source.exists() {
+            return Err(RunError::msg(format!(
+                "command-check setup file not found: {}",
+                source.display()
+            )));
+        }
+        pairs.push((file.clone(), source.to_string_lossy().into_owned()));
     }
     Ok(pairs)
 }

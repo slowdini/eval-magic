@@ -21,7 +21,7 @@ use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
 use super::super::{RunError, write_json};
-use super::envs::{EnvLayoutInput, env_targets, task_env_root};
+use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_indices};
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
 
@@ -140,11 +140,6 @@ pub(super) fn write_dispatch(
         ),
     ] {
         for group in &r.groups {
-            let env_root = task_env_root(&r.iteration_dir, &group.id, cond_name);
-            let env_root_str = env_root.to_string_lossy().into_owned();
-            let staged_path = staged_skill_path_for(&env_root, cond_slug);
-            let available_skills = available_skills_for(&env_root, cond_skill_path, cond_slug);
-
             for eval_id in &group.eval_ids {
                 let ev = r
                     .selected_evals
@@ -165,6 +160,20 @@ pub(super) fn write_dispatch(
                     } else {
                         (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
                     };
+                    let env_run_index = group
+                        .task_runs
+                        .is_some_and(|task_runs| task_runs > 1)
+                        .then_some(run_idx);
+                    let env_root = task_env_root_for_run(
+                        &r.iteration_dir,
+                        &group.id,
+                        cond_name,
+                        env_run_index,
+                    );
+                    let env_root_str = env_root.to_string_lossy().into_owned();
+                    let staged_path = staged_skill_path_for(&env_root, cond_slug);
+                    let available_skills =
+                        available_skills_for(&env_root, cond_skill_path, cond_slug);
                     // Create the per-run meta dir (run.json / timing.json), which
                     // lives above the env.
                     fs::create_dir_all(&run_dir)?;
@@ -263,10 +272,24 @@ pub(super) fn write_dispatch(
         .map(|g| {
             let envs: Vec<Value> = [r.cond_a, r.cond_b]
                 .iter()
-                .map(|cond| {
-                    json!({
-                        "condition": cond,
-                        "dir": task_env_root(&r.iteration_dir, &g.id, cond).to_string_lossy(),
+                .flat_map(|cond| {
+                    task_run_indices(g).into_iter().map(move |run_index| {
+                        let mut env = json!({
+                            "condition": cond,
+                            "dir": task_env_root_for_run(
+                                &r.iteration_dir,
+                                &g.id,
+                                cond,
+                                run_index,
+                            )
+                            .to_string_lossy(),
+                        });
+                        if let Some(run_index) = run_index {
+                            env.as_object_mut()
+                                .expect("env summary is an object")
+                                .insert("run_index".to_string(), json!(run_index));
+                        }
+                        env
                     })
                 })
                 .collect();

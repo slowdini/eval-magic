@@ -2,9 +2,9 @@
 //!
 //! For each
 //! `(eval, condition)` it grades `transcript_check` assertions directly, folds in
-//! the `llm_judge` responses written by the orchestrator (missing → FAIL),
-//! assembles the skill-invocation meta result, and writes a schema-valid
-//! `grading.json` with pass/fail summaries.
+//! persisted `command_check` results, and the `llm_judge` responses written by
+//! the orchestrator (missing → FAIL), assembles the skill-invocation meta
+//! result, and writes a schema-valid `grading.json` with pass/fail summaries.
 
 use std::fs;
 
@@ -20,6 +20,7 @@ use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::GradeContext;
+use super::command_check::CommandCheckResult;
 use super::transcript_check::grade_transcript_check;
 
 /// What finalize graded, for the CLI summary.
@@ -45,7 +46,7 @@ struct JudgeResponse {
     grader: Option<Grader>,
 }
 
-/// Fold judge responses + transcript checks into a `grading.json` per
+/// Fold runner checks and judge responses into a `grading.json` per
 /// `(eval, condition)`. See the module docs for the per-assertion behavior.
 pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
     let conds: Vec<(String, Option<String>)> = ctx
@@ -125,6 +126,31 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     evidence: response.evidence.unwrap_or_default(),
                                     confidence: Some(response.confidence.unwrap_or(0.0)),
                                     grader: Some(Grader::LlmJudge),
+                                });
+                                summary.total_graded += 1;
+                            }
+                            Assertion::CommandCheck(check) => {
+                                let result_path = slot
+                                    .dir
+                                    .join("command-checks")
+                                    .join(format!("{}.json", check.id));
+                                if !result_path.exists() {
+                                    return Err(PipelineError::Message(format!(
+                                        "missing command_check result: {}. Run ingest (or grade without --finalize) before finalize.",
+                                        result_path.display()
+                                    )));
+                                }
+                                let result: CommandCheckResult = validate_against_schema(
+                                    SchemaName::CommandCheck,
+                                    &serde_json::from_str(&fs::read_to_string(&result_path)?)?,
+                                    &result_path.to_string_lossy(),
+                                )?;
+                                assertion_results.push(AssertionResult {
+                                    id: check.id.clone(),
+                                    passed: result.passed,
+                                    evidence: result.evidence,
+                                    confidence: Some(1.0),
+                                    grader: Some(Grader::CommandCheck),
                                 });
                                 summary.total_graded += 1;
                             }

@@ -10,6 +10,7 @@ mod helpers;
 
 mod aggregate;
 mod basics;
+mod command_check;
 mod grade;
 mod grade_models;
 mod guard;
