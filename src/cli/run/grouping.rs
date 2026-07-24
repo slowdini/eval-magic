@@ -1,12 +1,9 @@
-//! Setup-time isolation grouping: decide which evals can share one environment
-//! and which must be isolated, *before* a run dispatches anything.
+//! Setup-time task-environment planning, before a run dispatches anything.
 //!
-//! One env historically hosted every eval's fixtures, so two evals placing
-//! different content at the same path were a hard error. Grouping turns that into
-//! a decision: evals whose fixtures conflict (same env-relative dest from a
-//! *different* source) are routed into separate groups, and an eval may opt into
-//! its own singleton group via [`Isolation::Isolated`]. Each group is realized as
-//! one env per `(group, condition)`, but the grouping decision here is shared.
+//! Canonical runs task-scope every eval/run so final-environment diff metrics have
+//! an unambiguous baseline. The older fixture-compatibility and
+//! [`Isolation::Isolated`] paths remain available to the pure planner for artifact
+//! compatibility, while production inputs set `task_scoped`.
 //!
 //! The conflict rule is identical to the per-env fixture-claim rule in
 //! [`super::fixtures`]: same dest + same source is an idempotent share (evals may
@@ -22,8 +19,8 @@ pub struct GroupInput<'a> {
     pub isolation: Option<Isolation>,
     /// `(env-relative dest, source)` fixture pairs this eval declares.
     pub fixtures: &'a [(String, String)],
-    /// Runner-owned command checks require a task-scoped environment.
-    pub command_check: bool,
+    /// Always-on final-environment metrics require a task-scoped environment.
+    pub task_scoped: bool,
     /// Effective run count, retained for task-scoped per-run env planning.
     pub runs: u32,
 }
@@ -35,8 +32,8 @@ pub struct Group {
     pub id: String,
     pub eval_ids: Vec<String>,
     pub rationale: String,
-    /// Present only for a command-check singleton. Multi-run values fan the
-    /// group out into one environment per run.
+    /// Present for task-scoped groups. Multi-run values fan the group out into
+    /// one environment per run.
     pub task_runs: Option<u32>,
 }
 
@@ -69,14 +66,19 @@ pub fn compute_groups(evals: &[GroupInput]) -> Vec<Group> {
     let mut groups: Vec<Building> = Vec::new();
 
     for ev in evals {
-        if ev.command_check {
+        if ev.task_scoped {
             let id = format!("g{}", groups.len() + 1);
+            let rationale = if ev.isolation == Some(Isolation::Isolated) {
+                "isolation: isolated; metric: diff_scope"
+            } else {
+                "metric: diff_scope"
+            };
             groups.push(Building {
                 id,
                 eval_ids: vec![ev.eval_id.to_string()],
                 claims: claims_of(ev),
                 sealed: true,
-                rationale: "assertion: command_check".to_string(),
+                rationale: rationale.to_string(),
                 task_runs: Some(ev.runs),
             });
             continue;
@@ -171,7 +173,7 @@ mod tests {
             eval_id: id,
             isolation,
             fixtures,
-            command_check: false,
+            task_scoped: false,
             runs: 1,
         }
     }
@@ -289,27 +291,27 @@ mod tests {
     }
 
     #[test]
-    fn command_check_forces_a_task_scoped_singleton_group() {
+    fn task_scoped_eval_gets_a_singleton_group_and_per_run_environments() {
         let evals = [
             GroupInput {
                 eval_id: "ordinary-1",
                 isolation: None,
                 fixtures: &[],
-                command_check: false,
+                task_scoped: false,
                 runs: 1,
             },
             GroupInput {
                 eval_id: "held-out",
                 isolation: None,
                 fixtures: &[],
-                command_check: true,
+                task_scoped: true,
                 runs: 3,
             },
             GroupInput {
                 eval_id: "ordinary-2",
                 isolation: None,
                 fixtures: &[],
-                command_check: false,
+                task_scoped: false,
                 runs: 1,
             },
         ];
@@ -319,7 +321,35 @@ mod tests {
         assert_eq!(groups[0].eval_ids, vec!["ordinary-1", "ordinary-2"]);
         assert_eq!(groups[0].task_runs, None);
         assert_eq!(groups[1].eval_ids, vec!["held-out"]);
-        assert_eq!(groups[1].rationale, "assertion: command_check");
+        assert_eq!(groups[1].rationale, "metric: diff_scope");
         assert_eq!(groups[1].task_runs, Some(3));
+    }
+
+    #[test]
+    fn diff_metrics_force_every_eval_into_a_task_scoped_group() {
+        let evals = [
+            GroupInput {
+                eval_id: "first",
+                isolation: None,
+                fixtures: &[],
+                task_scoped: true,
+                runs: 1,
+            },
+            GroupInput {
+                eval_id: "second",
+                isolation: None,
+                fixtures: &[],
+                task_scoped: true,
+                runs: 2,
+            },
+        ];
+
+        let groups = compute_groups(&evals);
+        assert_eq!(groups.len(), 2);
+        assert_eq!(groups[0].eval_ids, vec!["first"]);
+        assert_eq!(groups[0].rationale, "metric: diff_scope");
+        assert_eq!(groups[0].task_runs, Some(1));
+        assert_eq!(groups[1].eval_ids, vec!["second"]);
+        assert_eq!(groups[1].task_runs, Some(2));
     }
 }

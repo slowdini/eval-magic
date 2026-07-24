@@ -1,7 +1,7 @@
-//! Copy an eval's fixtures into the isolated env (`iteration-N/env/`), laid out
-//! like a real repo so the agent-under-test reads them at natural project-relative
-//! paths. One shared env hosts every eval's fixtures, so [`FixtureClaims`] dedups
-//! idempotent re-declarations and rejects cross-eval clobbers.
+//! Copy an eval's fixtures into its isolated task env, laid out like a real repo
+//! so the agent-under-test reads them at natural project-relative paths.
+//! [`FixtureClaims`] retains the legacy shared-group collision checks used by the
+//! environment planner.
 
 use std::fs;
 use std::path::Path;
@@ -11,9 +11,8 @@ use crate::core::{AssertionCommandCheck, Eval};
 use super::{RunError, copy_entry};
 
 /// Cross-eval claims on env-relative fixture destinations: `dest → (eval_id, source)`.
-/// One shared `env/` hosts every eval's fixtures, so two evals targeting the same path
-/// from *different* sources is an ambiguous, order-dependent clobber — [`claim_fixture_dest`]
-/// rejects it. Same source is an idempotent re-declaration (the common shared-fixture case).
+/// Used when a planned group contains multiple evals; canonical diff-scope runs
+/// currently task-scope groups, but legacy plans remain readable.
 pub type FixtureClaims = std::collections::HashMap<String, (String, String)>;
 
 /// Record that `eval_id` provides the fixture at env-relative `dest` from `source`.

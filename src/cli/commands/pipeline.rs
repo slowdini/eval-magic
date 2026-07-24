@@ -191,7 +191,7 @@ pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Report writes outside the sandbox output boundary (and live-source reads) for
+/// Report writes outside each private task environment (and live-source reads) for
 /// every run in the iteration.
 pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
@@ -206,7 +206,7 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     for r in &report.runs {
         for v in &r.violations {
             eprintln!(
-                "✗ {}/{}: {} wrote outside outputs dir → {} (ordinal {})",
+                "✗ {}/{}: {} wrote outside task environment → {} (ordinal {})",
                 r.eval_id,
                 r.condition,
                 v.tool,
@@ -294,6 +294,11 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
         let target_args = command_target_args(&ctx);
         println!("\nNext: eval-magic aggregate{target_args} --iteration {iteration}");
     } else {
+        let diffs = pipeline::measure_iteration_diff_scopes(&dir)?;
+        println!(
+            "Diff scope: {} measured, {} reused, {} missing baseline, {} shared environment",
+            diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
+        );
         let commands =
             pipeline::grade_command_checks(&dir, &evals, &ctx.skill_subdir, common.overwrite)?;
         if commands.executed + commands.reused > 0 {

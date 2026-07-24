@@ -12,6 +12,7 @@
 //! Both modes operate over a shared [`GradeContext`] assembled by the CLI.
 
 pub mod command_check;
+pub mod diff_scope;
 pub mod finalize;
 pub mod judge_tasks;
 pub mod transcript_check;

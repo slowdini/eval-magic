@@ -33,9 +33,10 @@ A harness qualifies at baseline with no harness-specific code beyond naming itse
 
 That baseline already yields a working eval: `llm_judge` assertions grade soft behavior,
 runner-owned `command_check` assertions can inject held-out files and execute deterministically,
-and the `detect-stray-writes` post-pass (folded into `ingest`) audits out-of-bounds writes from
-whatever run records exist. Run records without transcript ingest are assembled from
-`outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
+runner-owned final-environment metrics land in `diff-scope.json`, `diff_scope` assertions gate
+files/lines deterministically, and the `detect-stray-writes` post-pass (folded into `ingest`) audits
+writes that leave the private task environment. Run records without transcript ingest are assembled
+from `outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
 
 In descriptor terms the baseline is one required field: `label`. Everything else in a harness
 descriptor is optional — an absent field or table gets a working generic fallback, and the `run`
@@ -82,15 +83,26 @@ flag combinations stay errors.
   them incompatible with `--no-stage`) and an explicit `--guard` on a user-descriptor-only
   harness reject.
 
-## Runner-owned command checks are baseline
+## Runner-owned environment checks are baseline
+
+Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging,
+guard installation, and shadow preflight, `run` snapshots the task environment. During `ingest`,
+before any held-out setup is injected, the runner compares that baseline with the final environment
+and writes raw `files_touched`, `lines_added`, `lines_removed`, and zero-context Myers `hunks` to
+`diff-scope.json`. Framework artifacts under `.eval-magic-outputs/` are excluded; all other new
+files count. `benchmark.json` preserves these metrics per run even without a `diff_scope` assertion.
+An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or both.
+
+This is deliberately a secondary signal: a smaller diff can be focused, but it can also be
+incomplete. Pair a scope gate with a correctness assertion.
 
 `command_check` is intentionally not a harness enhancement. `run` detects the assertion before
-staging, places its eval in a singleton group, and gives each repeated `(eval, condition, run)` task
-a distinct `eval_root`. After dispatch, `ingest` copies the assertion's held-out `setup_files` from
-the skill's `evals/` directory into that root and executes the trusted command through the platform
-shell. Optional `env` values override the inherited runner environment; optional `matrix` values
-execute every Cartesian-product cell and persist per-cell results. The files are never staged or
-mentioned to the agent.
+dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
+copies the assertion's held-out `setup_files` from the skill's `evals/` directory into that root and
+executes the trusted command through the platform shell. Optional `env` values override the
+inherited runner environment; optional `matrix` values execute every Cartesian-product cell and
+persist per-cell results. The files are never staged or mentioned to the agent, and therefore never
+inflate scope metrics.
 
 This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
 the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed

@@ -82,12 +82,9 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
             eval_id: &ev.id,
             isolation: ev.isolation,
             fixtures,
-            command_check: ev
-                .assertions
-                .as_deref()
-                .unwrap_or(&[])
-                .iter()
-                .any(|assertion| matches!(assertion, Assertion::CommandCheck(_))),
+            // Every canonical run publishes final-environment diff metrics, so
+            // each eval/run needs a private environment.
+            task_scoped: true,
             runs: ev.runs.unwrap_or(opts.runs),
         })
         .collect();

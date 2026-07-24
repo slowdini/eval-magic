@@ -70,8 +70,7 @@ pub(super) fn write_dispatch(
     };
 
     // availableSkills for a condition in a given env = siblings + the
-    // skill-under-test when that condition loads it. Paths are env-specific (Cli
-    // stages a separate env per (group, condition)). Empty when nothing was staged.
+    // skill-under-test when that condition loads it. Paths are task-env-specific.
     let available_skills_for = |env_root: &Path,
                                 cond_skill_path: Option<&str>,
                                 cond_slug: Option<&str>|
@@ -121,7 +120,7 @@ pub(super) fn write_dispatch(
     }
 
     // A single group keeps the `group` key off each task (>1 group tags them);
-    // `eval_root` (the per-task cwd) is always set, one env per (group, condition).
+    // `eval_root` (the private per-task cwd) is always set.
     let multi_group = r.groups.len() > 1;
 
     let mut tasks = Vec::new();
@@ -338,7 +337,7 @@ pub(super) fn post_build(
     opts: &RunOptions,
     r: &Resolved,
 ) -> Result<(), RunError> {
-    // Every env this run staged: one per (group, condition). Computed once and
+    // Every private task env this run staged. Computed once and
     // reused below to arm the guard in each env and to point the plugin-shadow
     // preflight at a real staged env.
     let targets = env_targets(&EnvLayoutInput {
@@ -376,8 +375,8 @@ pub(super) fn post_build(
 
     // Shadow preflight: a staged skill name also discoverable from the operator's
     // live environment contaminates the run. Scan the first staged env, not
-    // `ctx.stage_root` — only the per-`(group, condition)` envs are created, so
-    // the project-local settings the scan reads must come from a real staged env.
+    // `ctx.stage_root` — project-local settings must be read from a real staged
+    // task env.
     let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
     names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
     let scan_root = targets
@@ -389,5 +388,7 @@ pub(super) fn post_build(
         write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
         eprintln!("{}", adapter.format_shadow_banner(&report));
     }
+    crate::pipeline::capture_iteration_baselines(&r.iteration_dir)
+        .map_err(|error| RunError::msg(error.to_string()))?;
     Ok(())
 }

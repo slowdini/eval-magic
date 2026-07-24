@@ -23,6 +23,7 @@ pub enum Assertion {
     TranscriptCheck(AssertionTranscriptCheck),
     LlmJudge(AssertionLlmJudge),
     CommandCheck(AssertionCommandCheck),
+    DiffScope(AssertionDiffScope),
 }
 
 /// A check evaluated against the run transcript (substring/pattern match).
@@ -62,6 +63,16 @@ pub struct AssertionCommandCheck {
     pub expect_stdout: Option<String>,
 }
 
+/// A deterministic threshold over the final task environment's diff scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertionDiffScope {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_files_touched: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_lines_changed: Option<u64>,
+}
+
 fn is_zero(value: &i32) -> bool {
     *value == 0
 }
@@ -92,18 +103,14 @@ pub struct Eval {
     /// to the flag's value (1 unless raised).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u32>,
-    /// Explicit isolation hint for run batching. `shared` (default, omitted) lets
-    /// the eval batch with others; `isolated` forces it into its own singleton
-    /// group, for confounds the framework can't auto-detect (e.g. the agent
-    /// mutates a shared fixture another eval reads). Conflicting fixtures
-    /// auto-isolate into separate groups regardless of this hint.
+    /// Legacy isolation hint retained for config compatibility. Canonical runs
+    /// already give every dispatch a private environment for diff-scope capture,
+    /// so `shared` and `isolated` currently have the same effective isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<Isolation>,
 }
 
-/// Per-eval isolation hint controlling how an eval is grouped into run batches.
-/// `Shared` is the default (an eval may share an env with non-conflicting evals);
-/// `Isolated` forces the eval into its own singleton group.
+/// Legacy per-eval isolation hint. Every new run is task-scoped regardless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Isolation {
@@ -242,6 +249,7 @@ pub enum Grader {
     TranscriptCheck,
     LlmJudge,
     CommandCheck,
+    DiffScope,
 }
 
 /// The full grading output for one run.

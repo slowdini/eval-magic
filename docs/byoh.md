@@ -36,7 +36,8 @@ cool-cli run --cd <eval-root>{model_arg} \
 That run is complete: `run` warns about each enhancement the descriptor doesn't declare (naming the
 fallback that carries it), builds `dispatch.json` / `RUNBOOK.md` / `dispatch-manifest.md` with your
 exec recipe, and after you dispatch the tasks, `ingest` assembles records from each task's
-`outputs/final-message.md`, runs the `detect-stray-writes` audit, executes any runner-owned
+`outputs/final-message.md`, captures final-environment metrics in `diff-scope.json`, runs the
+`detect-stray-writes` audit against the task's `eval_root`, executes any runner-owned
 `command_check` assertions, and hands soft grading to `llm_judge`.
 
 For a one-off descriptor that shouldn't live in the project, pass it directly — its label becomes
@@ -67,8 +68,9 @@ and `{guard_args}` (guard-only arguments, built-ins only); the `<eval-root>`,
 `<dispatch_prompt_path>`, and `<outputs_dir>` placeholders are filled per task by whoever dispatches
 (the runbook explains this). Two hard requirements:
 
-1. **Run from the task's `eval_root`** — each task's per-`(group, condition)` env dir is the
-   subprocess cwd.
+1. **Run from the task's `eval_root`** — each `(eval, condition, run)` owns a private env and uses
+   it as the subprocess cwd. Task source edits belong there; framework artifacts belong under the
+   supplied `<outputs_dir>`.
 2. **Recover the final message** — the agent's final reply must land in
    `outputs/final-message.md`. If your CLI can't write it directly (like the example above
    redirecting stdout), capture it yourself before running `ingest`.

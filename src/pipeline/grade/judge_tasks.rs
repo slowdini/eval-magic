@@ -285,7 +285,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                         }
                         // command_check was executed by the runner before judge
                         // task emission and is folded in during finalize.
-                        Assertion::CommandCheck(_) => continue,
+                        Assertion::CommandCheck(_) | Assertion::DiffScope(_) => continue,
                     };
                     let response_path = judge_responses_dir.join(format!("{}.json", j.id));
                     let dispatch_prompt =

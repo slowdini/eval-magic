@@ -1,12 +1,12 @@
 //! Stage 3 — `detect-stray-writes`.
 //!
 //! Classifies a run's tool
-//! invocations against its allowed outputs dir:
+//! invocations against its allowed task environment:
 //!
 //! - **violations**: file-write tools (per the adapters' cross-harness
-//!   vocabulary union) whose target path resolves outside the outputs dir.
+//!   vocabulary union) whose target path resolves outside the task's eval root.
 //! - **warnings**: shell commands matching a mutating pattern that don't
-//!   reference the outputs dir (via the sandbox `classify_bash` policy).
+//!   reference the eval root (via the sandbox `classify_bash` policy).
 //! - **live_source_reads**: read tools / shell commands that touched the live
 //!   skill-under-test directory instead of its staged copy.
 
@@ -60,26 +60,26 @@ fn command_of(inv: &ToolInvocation) -> &str {
         .unwrap_or("")
 }
 
-/// Classify a run's tool invocations against its allowed outputs dir. See the
+/// Classify a run's tool invocations against its allowed task environment. See the
 /// module docs for what counts as a violation vs. a warning.
 pub fn detect_stray_writes(
     invocations: &[ToolInvocation],
-    outputs_dir: &str,
-    repo_root: &Path,
+    eval_root: &str,
+    invocation_cwd: &Path,
 ) -> RunFindings {
     let mut findings = RunFindings::default();
 
     for inv in invocations {
         if is_write_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
-                && !is_under(p, outputs_dir, repo_root)
+                && !is_under(p, eval_root, invocation_cwd)
             {
                 findings.violations.push(StrayFinding {
                     tool: inv.name.clone(),
                     path: Some(p.to_string()),
                     command: None,
                     ordinal: inv.ordinal,
-                    reason: "writes outside the run's outputs dir".to_string(),
+                    reason: "writes outside the run's task environment".to_string(),
                 });
             }
             continue;
@@ -88,7 +88,7 @@ pub fn detect_stray_writes(
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
             if let Some(reason) =
-                classify_bash(command, std::slice::from_ref(&outputs_dir.to_string()))
+                classify_bash(command, std::slice::from_ref(&eval_root.to_string()))
             {
                 findings.warnings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -257,7 +257,7 @@ pub struct StrayWritesReport {
     pub invocations_inspected: usize,
 }
 
-/// `dispatch.json` fields the report builder reads (outputs-dir override).
+/// `dispatch.json` fields the report builder reads (task-environment boundary).
 #[derive(Debug, Deserialize)]
 struct DispatchEnvelope {
     tasks: Option<Vec<DispatchRef>>,
@@ -270,7 +270,7 @@ struct DispatchRef {
     #[serde(default)]
     run_index: Option<u32>,
     #[serde(default)]
-    outputs_dir: Option<String>,
+    eval_root: Option<String>,
 }
 
 /// Build, validate, and write `<iteration_dir>/stray-writes.json` for every
@@ -297,7 +297,7 @@ pub fn detect_stray_writes_report(
         .map(|c| c.name.clone())
         .collect();
 
-    let outputs_by_key = outputs_dirs_by_key(iteration_dir);
+    let allowed_roots_by_key = eval_roots_by_key(iteration_dir);
 
     let mut runs = Vec::new();
     let mut totals = Totals {
@@ -332,26 +332,22 @@ pub fn detect_stray_writes_report(
                     &source,
                 )?;
 
-                let outputs_dir = outputs_by_key.get(&run_key(eval_id, cond, slot.run_index));
+                let eval_root = allowed_roots_by_key.get(&run_key(eval_id, cond, slot.run_index));
 
                 invocations_inspected += run.tool_invocations.len();
-                // `dispatch.json` is the authoritative source of the outputs
-                // boundary: an absolute path into the isolated env
-                // (`env/.eval-magic-outputs/...`). Without it we cannot honor the
-                // outputs-only contract, so we skip out-of-bounds *write*
-                // classification for that run rather than guess a boundary — the old
-                // `<slot>/outputs` convention no longer matches where agents write and
-                // would mis-flag every legitimate write. Live-source-read detection is
-                // independent of the boundary and still runs.
-                let findings = match outputs_dir {
-                    Some(dir) => detect_stray_writes(&run.tool_invocations, dir, repo_root),
+                // `dispatch.json` is the authoritative source of the private task
+                // environment boundary. Without it we skip out-of-bounds write
+                // classification rather than guess. Live-source-read detection is
+                // independent of this boundary and still runs.
+                let findings = match eval_root {
+                    Some(dir) => detect_stray_writes(&run.tool_invocations, dir, Path::new(dir)),
                     None => {
                         let run_label = slot
                             .run_index
                             .map(|k| format!(" run-{k}"))
                             .unwrap_or_default();
                         eprintln!(
-                            "⚠ {eval_id}/{cond}{run_label}: no outputs_dir in dispatch.json — \
+                            "⚠ {eval_id}/{cond}{run_label}: no eval_root in dispatch.json — \
                              skipping out-of-bounds write classification (boundary unknown)"
                         );
                         RunFindings::default()
@@ -400,16 +396,15 @@ pub fn detect_stray_writes_report(
     Ok(report)
 }
 
-/// Map `"<eval_id>:<condition>[:r<k>]"` → the task's `outputs_dir` from
-/// `dispatch.json`. Empty when the file is absent or malformed (callers fall
-/// back to convention).
-fn outputs_dirs_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, String> {
+/// Map `"<eval_id>:<condition>[:r<k>]"` → the task's `eval_root` from
+/// `dispatch.json`. Empty when the file is absent or malformed.
+fn eval_roots_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, String> {
     let mut out = std::collections::HashMap::new();
     if let Ok(raw) = std::fs::read_to_string(iteration_dir.join("dispatch.json"))
         && let Ok(env) = serde_json::from_str::<DispatchEnvelope>(&raw)
     {
         for t in env.tasks.unwrap_or_default() {
-            if let Some(dir) = t.outputs_dir {
+            if let Some(dir) = t.eval_root {
                 out.insert(run_key(&t.eval_id, &t.condition, t.run_index), dir);
             }
         }
@@ -422,7 +417,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const OUTPUTS: &str = "/work/iteration-1/eval-x/with_skill/outputs";
+    const ALLOWED_ROOT: &str = "/work/iteration-1/env-g1-with_skill";
     const REPO: &str = "/work/repo";
     const LIVE_SKILL: &str = "/work/repo/skills/mr-review";
 
@@ -447,14 +442,14 @@ mod tests {
     // --- detectStrayWrites ---
 
     #[test]
-    fn a_write_inside_outputs_is_clean() {
+    fn a_write_inside_the_task_environment_is_clean() {
         let f = detect_stray_writes(
             &[inv(
                 "Write",
-                json!({"file_path": format!("{OUTPUTS}/answer.md")}),
+                json!({"file_path": format!("{ALLOWED_ROOT}/answer.md")}),
                 0,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert!(f.violations.is_empty());
@@ -462,14 +457,24 @@ mod tests {
     }
 
     #[test]
-    fn a_write_outside_outputs_is_a_violation() {
+    fn a_relative_write_resolves_from_the_task_environment() {
+        let f = detect_stray_writes(
+            &[inv("Edit", json!({"file_path": "src/lib.rs"}), 0)],
+            ALLOWED_ROOT,
+            Path::new(ALLOWED_ROOT),
+        );
+        assert!(f.violations.is_empty());
+    }
+
+    #[test]
+    fn a_write_outside_the_task_environment_is_a_violation() {
         let f = detect_stray_writes(
             &[inv(
                 "Write",
                 json!({"file_path": format!("{REPO}/runner/run.ts")}),
                 2,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.violations.len(), 1);
@@ -482,13 +487,13 @@ mod tests {
     }
 
     #[test]
-    fn edit_multiedit_notebookedit_outside_outputs_is_a_violation() {
+    fn edit_multiedit_notebookedit_outside_the_task_environment_is_a_violation() {
         let f = detect_stray_writes(
             &[
                 inv("Edit", json!({"file_path": "/etc/hosts"}), 0),
                 inv("NotebookEdit", json!({"notebook_path": "/tmp/x.ipynb"}), 1),
             ],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         let mut tools: Vec<&str> = f.violations.iter().map(|v| v.tool.as_str()).collect();
@@ -500,7 +505,7 @@ mod tests {
     fn an_install_command_is_a_warning() {
         let f = detect_stray_writes(
             &[inv("Bash", json!({"command": "npm install left-pad"}), 0)],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.warnings.len(), 1);
@@ -516,7 +521,7 @@ mod tests {
                 json!({"command": "npm install left-pad"}),
                 0,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.warnings.len(), 1);
@@ -525,14 +530,14 @@ mod tests {
     }
 
     #[test]
-    fn a_codex_file_change_outside_outputs_is_a_violation() {
+    fn a_codex_file_change_outside_the_task_environment_is_a_violation() {
         let f = detect_stray_writes(
             &[inv(
                 "file_change",
                 json!({"path": format!("{REPO}/src/app.ts")}),
                 4,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.violations.len(), 1);
@@ -545,14 +550,14 @@ mod tests {
     }
 
     #[test]
-    fn a_mutating_bash_scoped_to_outputs_is_not_flagged() {
+    fn a_mutating_bash_scoped_to_the_task_environment_is_not_flagged() {
         let f = detect_stray_writes(
             &[inv(
                 "Bash",
-                json!({"command": format!("echo hi > {OUTPUTS}/log.txt")}),
+                json!({"command": format!("echo hi > {ALLOWED_ROOT}/log.txt")}),
                 0,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert!(f.warnings.is_empty());
@@ -566,7 +571,7 @@ mod tests {
                 json!({"command": "git worktree add ../wt -b scratch"}),
                 0,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.warnings.len(), 1);
@@ -577,7 +582,7 @@ mod tests {
     fn creating_a_path_under_dot_claude_is_a_warning() {
         let f = detect_stray_writes(
             &[inv("Bash", json!({"command": "mkdir -p .claude/foo"}), 0)],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.warnings.len(), 1);
@@ -592,7 +597,7 @@ mod tests {
                 json!({"command": "cp evil.json .codex/hooks.json"}),
                 0,
             )],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert_eq!(f.warnings.len(), 1);
@@ -607,7 +612,7 @@ mod tests {
                 inv("Grep", json!({"pattern": "x"}), 1),
                 inv("Bash", json!({"command": "ls -la /"}), 2),
             ],
-            OUTPUTS,
+            ALLOWED_ROOT,
             repo(),
         );
         assert!(f.violations.is_empty());
@@ -774,7 +779,11 @@ mod tests {
     fn unrelated_reads_and_commands_are_not_flagged() {
         let f = detect_live_source_reads(
             &[
-                inv("Read", json!({"file_path": format!("{OUTPUTS}/x.md")}), 0),
+                inv(
+                    "Read",
+                    json!({"file_path": format!("{ALLOWED_ROOT}/x.md")}),
+                    0,
+                ),
                 inv("Bash", json!({"command": "ls .eval-magic"}), 1),
                 // Write tools are detect_stray_writes' jurisdiction — reads only here.
                 inv(

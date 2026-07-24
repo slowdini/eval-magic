@@ -43,8 +43,8 @@ pub struct DispatchTask {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// The agent-under-test's cwd for this task — its per-`(group, condition)` env
-    /// dir, which the CLI dispatch recipe's `<eval-root>` placeholder resolves to.
+    /// The agent-under-test's private cwd for this task, which the CLI dispatch
+    /// recipe's `<eval-root>` placeholder resolves to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_root: Option<String>,
     #[serde(default, skip_serializing)]
@@ -80,8 +80,8 @@ pub struct DispatchTaskOpts<'a> {
     /// Isolation-group id this task belongs to; `None` in the single-group case
     /// (keeps the serialized task byte-identical to the pre-grouping shape).
     pub group: Option<&'a str>,
-    /// The task's env dir (the agent-under-test's cwd); `None` in the single-group
-    /// case (the shared `env/`).
+    /// The task's env dir (the agent-under-test's cwd); `None` only for legacy
+    /// callers that do not carry an environment manifest.
     pub eval_root: Option<&'a str>,
 }
 
@@ -208,15 +208,23 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     }
     task_lines.push(String::new());
     task_lines.push(fixtures_block);
-    task_lines.push(format!("Output directory: {}", opts.outputs_dir));
+    if let Some(eval_root) = opts.eval_root {
+        task_lines.push(format!("Task environment: {eval_root}"));
+    }
+    task_lines.push(format!("Framework output directory: {}", opts.outputs_dir));
     task_lines.push(String::new());
     task_lines.push("Instructions:".to_string());
-    task_lines.push("- Write any files you produce into the output directory.".to_string());
+    task_lines.push(
+        "- Work normally on the task: you may edit existing files and create new files inside the task environment."
+            .to_string(),
+    );
+    task_lines
+        .push("- Use the framework output directory only for framework artifacts.".to_string());
     task_lines.push(format!(
         "- After completing the task, write your final user-facing response to {}/final-message.md.",
         opts.outputs_dir
     ));
-    task_lines.push("- Do not write outside the output directory.".to_string());
+    task_lines.push("- Do not write outside the task environment.".to_string());
     task_lines.push(String::new());
     task_lines.push("User request:".to_string());
     task_lines.push(opts.user_prompt.to_string());
@@ -563,6 +571,23 @@ mod tests {
     }
 
     // ── build_dispatch_task: bootstrap injection ──────────────────────────
+
+    #[test]
+    fn prompt_allows_task_edits_but_reserves_outputs_for_framework_artifacts() {
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            eval_root: Some("/tmp/env"),
+            ..base_opts()
+        })
+        .unwrap();
+        let prompt = task.dispatch_prompt;
+
+        assert!(prompt.contains("Task environment: /tmp/env"));
+        assert!(prompt.contains("edit existing files and create new files inside"));
+        assert!(prompt.contains("framework artifacts"));
+        assert!(prompt.contains("Do not write outside the task environment."));
+        assert!(!prompt.contains("Write any files you produce into the output directory."));
+        assert!(!prompt.contains("Do not write outside the output directory."));
+    }
 
     #[test]
     fn prepends_session_start_context_for_claude_code() {

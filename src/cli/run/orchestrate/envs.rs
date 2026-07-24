@@ -1,10 +1,10 @@
 //! Env-layout planning: turn the computed isolation [`Group`]s into the concrete
 //! environment directories a run stages into.
 //!
-//! A run materializes one `iteration-N/env-<group>-<condition>/` per
-//! `(group, condition)`: each subprocess `cd`s into its own env, which holds only
-//! that condition's skill (or none) and that group's fixtures — real physical
-//! isolation along both axes.
+//! A canonical run gives every `(eval, condition, run)` dispatch a private
+//! `iteration-N/env-<group>-<condition>[-run-<k>]/`. Each subprocess `cd`s into
+//! its own env, which holds only that condition's skill (or none) and that eval's
+//! fixtures.
 
 use std::path::{Path, PathBuf};
 
@@ -30,7 +30,7 @@ pub(super) struct EnvLayoutInput<'a> {
     pub skill_path_b: Option<&'a str>,
 }
 
-/// The env dir a `(group, condition)` task runs in.
+/// The base env dir a task-scoped `(group, condition)` task runs in.
 pub(super) fn task_env_root(iteration_dir: &Path, group_id: &str, condition: &str) -> PathBuf {
     iteration_dir.join(format!("env-{group_id}-{condition}"))
 }
@@ -57,7 +57,7 @@ pub(super) fn task_run_indices(group: &Group) -> Vec<Option<u32>> {
     }
 }
 
-/// Plan the environments to stage: one env per `(group, condition)`.
+/// Plan the private environments to stage.
 pub(super) fn env_targets(input: &EnvLayoutInput) -> Vec<EnvTarget> {
     let conds: [(&'static str, Option<String>); 2] = [
         (input.cond_a, input.skill_path_a.map(str::to_owned)),
@@ -150,12 +150,12 @@ mod tests {
     }
 
     #[test]
-    fn command_check_multi_run_group_gets_one_env_per_condition_and_run() {
+    fn task_scoped_multi_run_group_gets_one_env_per_condition_and_run() {
         let iter = Path::new("/w/iteration-1");
         let groups = vec![Group {
             id: "g1".into(),
             eval_ids: vec!["held-out".into()],
-            rationale: "assertion: command_check".into(),
+            rationale: "metric: diff_scope".into(),
             task_runs: Some(2),
         }];
         let targets = env_targets(&EnvLayoutInput {
