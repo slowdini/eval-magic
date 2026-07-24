@@ -2,9 +2,10 @@
 //!
 //! For each
 //! `(eval, condition)` it grades `transcript_check` assertions directly, folds in
-//! persisted `command_check` results, and the `llm_judge` responses written by
-//! the orchestrator (missing → FAIL), assembles the skill-invocation meta
-//! result, and writes a schema-valid `grading.json` with pass/fail summaries.
+//! persisted `command_check` results, deterministic `diff_scope` thresholds,
+//! and the `llm_judge` responses written by the orchestrator (missing → FAIL),
+//! assembles the skill-invocation meta result, and writes a schema-valid
+//! `grading.json` with pass/fail summaries.
 
 use std::fs;
 
@@ -14,6 +15,7 @@ use crate::core::{
     Assertion, AssertionResult, Grader, GradingResult, GradingSummary, MetaSummary, RunRecord,
     SKILL_INVOKED_META_ID, ToolInvocation,
 };
+use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::pipeline::slots::run_slots;
@@ -21,6 +23,7 @@ use crate::validation::{SchemaName, validate_against_schema};
 
 use super::GradeContext;
 use super::command_check::CommandCheckResult;
+use super::diff_scope::grade_diff_scope;
 use super::transcript_check::grade_transcript_check;
 
 /// What finalize graded, for the CLI summary.
@@ -152,6 +155,22 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     confidence: Some(1.0),
                                     grader: Some(Grader::CommandCheck),
                                 });
+                                summary.total_graded += 1;
+                            }
+                            Assertion::DiffScope(check) => {
+                                let result_path = slot.dir.join("diff-scope.json");
+                                if !result_path.exists() {
+                                    return Err(PipelineError::Message(format!(
+                                        "missing diff_scope result: {}. Run ingest before finalize; if this iteration predates diff-scope baselines, rebuild it first.",
+                                        result_path.display()
+                                    )));
+                                }
+                                let metrics: DiffScopeMetrics = validate_against_schema(
+                                    SchemaName::DiffScope,
+                                    &serde_json::from_str(&fs::read_to_string(&result_path)?)?,
+                                    &result_path.to_string_lossy(),
+                                )?;
+                                assertion_results.push(grade_diff_scope(check, metrics));
                                 summary.total_graded += 1;
                             }
                         }

@@ -52,7 +52,7 @@
           "type": "string",
           "enum": ["shared", "isolated"],
           "default": "shared",
-          "description": "Isolation hint for run batching. 'isolated' forces this eval into its own group so it never shares an env with another eval (for confounds the framework can't detect from fixture conflicts, e.g. the agent mutates a shared fixture). Defaults to 'shared'. Evals whose fixtures conflict are auto-isolated regardless."
+          "description": "Legacy isolation hint retained for config compatibility. Canonical runs already give every (eval, condition, run) dispatch a private environment for diff-scope capture, so 'shared' and 'isolated' currently have the same effective isolation."
         },
         "skill_should_trigger": {
           "type": "boolean",
@@ -70,7 +70,8 @@
       "oneOf": [
         { "$ref": "#/definitions/transcriptCheck" },
         { "$ref": "#/definitions/llmJudge" },
-        { "$ref": "#/definitions/commandCheck" }
+        { "$ref": "#/definitions/commandCheck" },
+        { "$ref": "#/definitions/diffScope" }
       ]
     },
     "transcriptCheck": {
@@ -169,6 +170,29 @@
         "expect_stdout": {
           "type": "string",
           "description": "Optional regex matched against the command's complete stdout."
+        }
+      }
+    },
+    "diffScope": {
+      "type": "object",
+      "required": ["id", "type"],
+      "anyOf": [
+        { "required": ["max_files_touched"] },
+        { "required": ["max_lines_changed"] }
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "type": { "const": "diff_scope" },
+        "max_files_touched": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment. Framework files under .eval-magic-outputs are excluded."
+        },
+        "max_lines_changed": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum total byte-lines added plus byte-lines removed allowed. Diffing uses Myers operations with zero-context hunks."
         }
       }
     }

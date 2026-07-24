@@ -79,12 +79,14 @@ If it does not load as a Codex skill, read the skill from `/work/staged/widget-s
 
 Available fixture files:
   - /work/fixtures/input.txt
-Output directory: /work/outputs
+Task environment: /work/task
+Framework output directory: /work/outputs
 
 Instructions:
-- Write any files you produce into the output directory.
+- Work normally on the task: you may edit existing files and create new files inside the task environment.
+- Use the framework output directory only for framework artifacts.
 - After completing the task, write your final user-facing response to /work/outputs/final-message.md.
-- Do not write outside the output directory.
+- Do not write outside the task environment.
 
 User request:
 Build me a widget.
@@ -103,12 +105,14 @@ No skill is loaded. Respond as you naturally would.
 
 Available fixture files:
   - /work/fixtures/input.txt
-Output directory: /work/outputs-b
+Task environment: /work/task-b
+Framework output directory: /work/outputs-b
 
 Instructions:
-- Write any files you produce into the output directory.
+- Work normally on the task: you may edit existing files and create new files inside the task environment.
+- Use the framework output directory only for framework artifacts.
 - After completing the task, write your final user-facing response to /work/outputs-b/final-message.md.
-- Do not write outside the output directory.
+- Do not write outside the task environment.
 
 User request:
 Build me a widget.

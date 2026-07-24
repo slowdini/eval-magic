@@ -1,0 +1,15 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/diff-scope.schema.json",
+  "title": "Diff Scope Metrics",
+  "description": "Runner-owned final-environment diff metrics for one eval run. Compares the complete task environment with its post-staging, post-guard baseline while excluding .eval-magic-outputs framework artifacts. Lives beside run.json as diff-scope.json.",
+  "type": "object",
+  "required": ["files_touched", "lines_added", "lines_removed", "hunks"],
+  "additionalProperties": false,
+  "properties": {
+    "files_touched": { "type": "integer", "minimum": 0 },
+    "lines_added": { "type": "integer", "minimum": 0, "description": "Byte-lines inserted by a Myers diff." },
+    "lines_removed": { "type": "integer", "minimum": 0, "description": "Byte-lines deleted by a Myers diff." },
+    "hunks": { "type": "integer", "minimum": 0, "description": "Contiguous non-equal operation groups, with zero context." }
+  }
+}

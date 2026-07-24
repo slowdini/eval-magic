@@ -5,6 +5,7 @@
 
 use crate::helpers::*;
 use serde_json::json;
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -148,6 +149,53 @@ fn dispatch_tasks_grouped_by_condition() {
 }
 
 #[test]
+fn every_dispatch_has_a_private_env_and_post_guard_diff_baseline() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review", "expected_output": "a review" },
+        { "id": "e2", "prompt": "review again", "expected_output": "a review" } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--guard"])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    let roots: HashSet<&str> = tasks
+        .iter()
+        .map(|task| task["eval_root"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        roots.len(),
+        tasks.len(),
+        "every task must own its eval_root"
+    );
+
+    for task in tasks {
+        let run_dir = Path::new(task["run_record_path"].as_str().unwrap())
+            .parent()
+            .unwrap();
+        let manifest = read_json(&run_dir.join("diff-scope-baseline/manifest.json"));
+        assert!(
+            manifest["preexisting_files"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|path| path
+                    .as_str()
+                    .unwrap()
+                    .ends_with(".slow-powers-eval-guard.json")),
+            "baseline must be captured after guard installation: {manifest}"
+        );
+    }
+}
+
+#[test]
 fn dispatch_outputs_live_under_env() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
@@ -168,8 +216,8 @@ fn dispatch_outputs_live_under_env() {
     // tempdir, so a lexical starts_with would mismatch.
     let iter = fs::canonicalize(iteration_dir(&cwd)).unwrap();
     for task in tasks {
-        // The agent-under-test (cwd = its per-(group, condition) env) writes only
-        // inside that env's .eval-magic-outputs/.
+        // Framework artifacts live under the private task env's hidden output
+        // subtree; ordinary task edits may live elsewhere in the same env.
         let cond = task["condition"].as_str().unwrap();
         let env = fs::canonicalize(cli_env_dir(&cwd, "g1", cond)).unwrap();
         let outputs_root = env.join(".eval-magic-outputs");
@@ -198,7 +246,7 @@ fn dispatch_outputs_live_under_env() {
 }
 
 #[test]
-fn shared_fixture_copied_once_across_conditions_and_runs() {
+fn fixture_is_copied_into_each_private_run_environment() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review",
@@ -222,18 +270,12 @@ fn shared_fixture_copied_once_across_conditions_and_runs() {
         .assert()
         .success();
 
-    // One copy per env, shared env-relative by that env's runs. Each condition env
-    // carries its own copy, referenced env-relative ("fixture.txt") by every task.
-    for cond in ["with_skill", "without_skill"] {
-        assert_eq!(
-            read_str(&cli_env_dir(&cwd, "g1", cond).join("fixture.txt")),
-            "DATA"
-        );
-    }
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     let tasks = dispatch["tasks"].as_array().unwrap();
     assert_eq!(tasks.len(), 4, "1 eval × 2 conditions × 2 runs");
     for task in tasks {
+        let eval_root = Path::new(task["eval_root"].as_str().unwrap());
+        assert_eq!(read_str(&eval_root.join("fixture.txt")), "DATA");
         assert_eq!(
             task["fixtures"].as_array().unwrap(),
             &vec![json!("fixture.txt")]
@@ -258,12 +300,7 @@ fn two_evals_sharing_a_fixture_declaration_succeeds() {
         .assert()
         .success();
 
-    // Two evals declaring the same fixture from the same source is an idempotent
-    // share: the with_skill env carries a single copy.
-    assert_eq!(
-        read_str(&cli_env_dir(&cwd, "g1", "with_skill").join("shared.txt")),
-        "SHARED"
-    );
+    // The declaration is valid, and each task gets an independent copy.
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     for id in ["e1", "e2"] {
         let task = dispatch["tasks"]
@@ -275,6 +312,10 @@ fn two_evals_sharing_a_fixture_declaration_succeeds() {
         assert_eq!(
             task["fixtures"].as_array().unwrap(),
             &vec![json!("shared.txt")]
+        );
+        assert_eq!(
+            read_str(&Path::new(task["eval_root"].as_str().unwrap()).join("shared.txt")),
+            "SHARED"
         );
     }
 }

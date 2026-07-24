@@ -37,6 +37,14 @@
       "description": "Per-condition rollup, keyed by condition name.",
       "additionalProperties": { "$ref": "#/definitions/conditionSummary" }
     },
+    "diff_scope": {
+      "type": "object",
+      "description": "Raw final-environment diff metrics per condition, ordered by eval id and then run index. Omitted for iterations created before diff-scope capture.",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "$ref": "#/definitions/diffScopeRun" }
+      }
+    },
     "delta": {
       "type": "object",
       "required": ["direction", "pass_rate", "duration_ms", "total_tokens"],
@@ -70,6 +78,19 @@
         "total_tokens": { "$ref": "#/definitions/stats" },
         "skill_invocation_n": { "type": "integer" },
         "skill_invocation_rate": { "type": ["number", "null"] }
+      }
+    },
+    "diffScopeRun": {
+      "type": "object",
+      "required": ["eval_id", "files_touched", "lines_added", "lines_removed", "hunks"],
+      "additionalProperties": false,
+      "properties": {
+        "eval_id": { "type": "string" },
+        "run_index": { "type": "integer", "minimum": 1 },
+        "files_touched": { "type": "integer", "minimum": 0 },
+        "lines_added": { "type": "integer", "minimum": 0 },
+        "lines_removed": { "type": "integer", "minimum": 0 },
+        "hunks": { "type": "integer", "minimum": 0 }
       }
     }
   }

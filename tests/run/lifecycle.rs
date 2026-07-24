@@ -401,6 +401,10 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
                 && outputs_dir.ends_with(&format!("run-{k}")),
             "outputs not namespaced under env per run: {outputs_dir}"
         );
+        assert!(
+            std::path::Path::new(outputs_dir).is_dir(),
+            "missing env outputs dir {outputs_dir}"
+        );
         let desc = task["agent_description"].as_str().unwrap();
         assert!(
             desc.contains(&format!(":r{k}:")),
@@ -417,13 +421,6 @@ fn runs_flag_expands_dispatches_into_run_dirs() {
                     .join(cond)
                     .join(format!("run-{k}"));
                 assert!(run_dir.is_dir(), "missing meta run dir {run_dir:?}");
-                // Per-run outputs dir inside the condition's env.
-                let out_dir = cli_env_dir(&cwd, "g1", cond)
-                    .join(".eval-magic-outputs")
-                    .join(format!("eval-{eval}"))
-                    .join(cond)
-                    .join(format!("run-{k}"));
-                assert!(out_dir.is_dir(), "missing env outputs dir {out_dir:?}");
             }
         }
     }

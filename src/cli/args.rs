@@ -481,23 +481,26 @@ pub(crate) enum Commands {
     ///
     /// Fixed-order chain: record-runs → fill-transcripts → detect-stray-writes →
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
-    /// writes, grades `transcript_check` assertions, injects held-out
-    /// `command_check.setup_files`, and executes each runner-owned command check
-    /// in its task environment, applying its environment overrides and running
-    /// every environment matrix cell. Command checks work with every harness and
-    /// while the agent write guard remains armed. Then stops at the judge
-    /// hand-off, listing a judge task per `llm_judge` assertion. Requires
+    /// writes, captures always-on final-environment files/lines/hunks in
+    /// `diff-scope.json`, grades `transcript_check` assertions, prepares
+    /// `diff_scope` grading for finalize, injects held-out
+    /// `command_check.setup_files`, and executes each
+    /// runner-owned command check in its task environment, applying its
+    /// environment overrides and running every environment matrix cell. Diff
+    /// scope is captured before held-out files are injected. Then stops at the
+    /// judge hand-off, listing a judge task per `llm_judge` assertion. Requires
     /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
     /// harness exposes transcripts.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///
-    /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts
-    /// and runner-owned `command_check` results into normal `grading.json` files,
-    /// then writes `benchmark.json`. If a live guard remains armed — the cwd
-    /// guard, or any per-task Cli env guard — prints a `teardown` reminder before
-    /// source edits. Requires `--iteration`.
+    /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts,
+    /// runner-owned `command_check` results, and deterministic `diff_scope`
+    /// files/lines thresholds into normal `grading.json` files, then writes
+    /// `benchmark.json` with raw per-run metrics from `diff-scope.json`. If a live
+    /// guard remains armed — the cwd guard, or any per-task Cli env guard — prints
+    /// a `teardown` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
@@ -514,25 +517,26 @@ pub(crate) enum Commands {
     /// runner-built iterations; still the tool for filling a pre-existing (hand- or
     /// agent-written) `run.json`.
     FillTranscripts(CommonArgs),
-    /// Detect writes outside the sandbox output boundary.
+    /// Detect writes outside each private task environment.
     ///
     /// Scans each run's `tool_invocations` and writes `stray-writes.json`: write
-    /// tools targeting paths outside the run's outputs dir (violations), mutating
+    /// tools targeting paths outside the run's `eval_root` (violations), mutating
     /// Bash heuristics (warnings), and live-source reads (an arm that read the live
-    /// skill instead of its staged copy). `aggregate` lifts all three into
-    /// `benchmark.json`'s `validity_warnings`.
+    /// skill instead of its staged copy). Normal edits inside the task environment
+    /// are allowed. `aggregate` lifts all three into `benchmark.json`'s
+    /// `validity_warnings`.
     DetectStrayWrites(CommonArgs),
     /// Grade run records (runner checks + LLM-judge task emission).
     ///
-    /// Evaluates `transcript_check` assertions directly (regex against
-    /// `tool_invocations`). It also injects held-out `command_check.setup_files`
-    /// after dispatch and executes each runner-owned command in its task
-    /// environment, applying its environment overrides and running every
-    /// environment matrix cell; completed command results are reused unless
-    /// `--overwrite` reruns them. Command checks work with every harness and
-    /// while the agent write guard remains armed. Emits judge-task files for
-    /// `llm_judge` assertions; with `--finalize`, merges every result into
-    /// per-run `grading.json`.
+    /// Captures always-on final-environment files/lines/hunks in `diff-scope.json`
+    /// and evaluates `transcript_check` assertions directly (regex against
+    /// `tool_invocations`). A `diff_scope` assertion gates the captured file count
+    /// and/or added-plus-removed line count. Grade captures scope before it injects
+    /// held-out `command_check.setup_files` and executes each runner-owned command
+    /// in its task environment, applying fixed environment overrides and running
+    /// every environment matrix cell; completed command and diff-scope results
+    /// are reused. Emits judge-task files for `llm_judge` assertions; with
+    /// `--finalize`, merges every result into per-run `grading.json`.
     ///
     /// Injects the `__skill_invoked` meta-check — did the skill actually influence
     /// behavior? It has two tiers, chosen automatically per run: code-based (where
@@ -545,8 +549,10 @@ pub(crate) enum Commands {
     /// Aggregate before/after benchmark deltas.
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
-    /// pass-rate / duration / token stats per condition, the delta, and
-    /// `validity_warnings`.
+    /// pass-rate / duration / token stats per condition, the delta,
+    /// `validity_warnings`, and raw per-run files/lines/hunks from
+    /// `diff-scope.json`. The top-level `diff_scope` field is omitted for
+    /// compatible older iterations that predate metric capture.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///

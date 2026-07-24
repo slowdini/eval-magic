@@ -374,6 +374,45 @@ mod tests {
         }
     }
 
+    #[test]
+    fn accepts_diff_scope_with_either_or_both_thresholds() {
+        for assertion in [
+            json!({
+                "id": "files",
+                "type": "diff_scope",
+                "max_files_touched": 1
+            }),
+            json!({
+                "id": "lines",
+                "type": "diff_scope",
+                "max_lines_changed": 8
+            }),
+            json!({
+                "id": "both",
+                "type": "diff_scope",
+                "max_files_touched": 1,
+                "max_lines_changed": 8
+            }),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([assertion]);
+            validate_evals_config(&config, "evals.json").unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_diff_scope_without_a_threshold() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "report-only",
+            "type": "diff_scope"
+        }]);
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("diff_scope"), "{error}");
+    }
+
     fn with_command_check(files: &[&str], setup_files: &[&str]) -> Value {
         let mut config = base();
         config["evals"][0]["files"] = json!(files);

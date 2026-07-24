@@ -25,12 +25,13 @@ pub enum SchemaName {
     Benchmark,
     JudgeTasks,
     CommandCheck,
+    DiffScope,
     HarnessDescriptor,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 8] = [
+    const ALL: [SchemaName; 9] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
@@ -38,6 +39,7 @@ impl SchemaName {
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
         SchemaName::CommandCheck,
+        SchemaName::DiffScope,
         SchemaName::HarnessDescriptor,
     ];
 
@@ -52,6 +54,7 @@ impl SchemaName {
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
             SchemaName::CommandCheck => "command-check",
+            SchemaName::DiffScope => "diff-scope",
             SchemaName::HarnessDescriptor => "harness-descriptor",
         }
     }
@@ -68,6 +71,7 @@ impl SchemaName {
             SchemaName::CommandCheck => {
                 include_str!("../../schema/command-check.schema.json")
             }
+            SchemaName::DiffScope => include_str!("../../schema/diff-scope.schema.json"),
             SchemaName::HarnessDescriptor => {
                 include_str!("../../schema/harness-descriptor.schema.json")
             }
@@ -239,6 +243,25 @@ mod tests {
             result.is_ok(),
             "command_check grading should validate: {result:?}"
         );
+    }
+
+    #[test]
+    fn validates_diff_scope_metrics_and_rejects_extra_fields() {
+        let metrics = json!({
+            "files_touched": 2,
+            "lines_added": 4,
+            "lines_removed": 1,
+            "hunks": 2
+        });
+        let valid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &metrics, "diff-scope.json");
+        assert!(valid.is_ok(), "{valid:?}");
+
+        let mut extra = metrics;
+        extra["paths"] = json!(["src/main.rs"]);
+        let invalid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &extra, "diff-scope.json");
+        assert!(invalid.is_err());
     }
 
     #[test]

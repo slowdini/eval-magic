@@ -104,3 +104,33 @@ fn command_check_grader_roundtrips_snake_case() {
     let back: Grader = serde_json::from_value(value).unwrap();
     assert_eq!(back, Grader::CommandCheck);
 }
+
+#[test]
+fn assertion_diff_scope_roundtrips_thresholds() {
+    let parsed: Assertion = serde_json::from_value(json!({
+        "id": "minimal-fix",
+        "type": "diff_scope",
+        "max_files_touched": 1,
+        "max_lines_changed": 8
+    }))
+    .unwrap();
+    let Assertion::DiffScope(diff_scope) = parsed else {
+        panic!("expected diff_scope variant");
+    };
+    assert_eq!(diff_scope.id, "minimal-fix");
+    assert_eq!(diff_scope.max_files_touched, Some(1));
+    assert_eq!(diff_scope.max_lines_changed, Some(8));
+
+    let out = serde_json::to_value(Assertion::DiffScope(diff_scope)).unwrap();
+    assert_eq!(out["type"], "diff_scope");
+    assert_eq!(out["max_files_touched"], 1);
+    assert_eq!(out["max_lines_changed"], 8);
+}
+
+#[test]
+fn diff_scope_grader_roundtrips_snake_case() {
+    let value = serde_json::to_value(Grader::DiffScope).unwrap();
+    assert_eq!(value, Value::String("diff_scope".into()));
+    let back: Grader = serde_json::from_value(value).unwrap();
+    assert_eq!(back, Grader::DiffScope);
+}

@@ -31,7 +31,7 @@
           },
           "grader": {
             "type": "string",
-            "enum": ["transcript_check", "llm_judge", "command_check"],
+            "enum": ["transcript_check", "llm_judge", "command_check", "diff_scope"],
             "description": "Which grader produced this result."
           }
         }
@@ -62,7 +62,7 @@
           "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
           "grader": {
             "type": "string",
-            "enum": ["transcript_check", "llm_judge", "command_check"]
+            "enum": ["transcript_check", "llm_judge", "command_check", "diff_scope"]
           }
         }
       }

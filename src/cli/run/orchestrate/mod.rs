@@ -1,6 +1,6 @@
 //! `command_run` — the top-level orchestrator that builds an iteration's
 //! workspace: validate the request, stage the skill(s), generate every
-//! `(eval, condition)` dispatch task, write `dispatch.json` /
+//! `(eval, condition, run)` dispatch task, write `dispatch.json` /
 //! `dispatch-manifest.md` / `conditions.json`, optionally arm the write guard,
 //! and preflight plugin shadows.
 //!
@@ -76,9 +76,8 @@ struct Resolved {
     skill_path_b: Option<String>,
     selected_evals: Vec<Eval>,
     total_evals: usize,
-    /// Isolation groups computed from the selected evals' fixtures + hints, in
-    /// config order. Always at least one group (`g1`); a single group is the
-    /// common no-conflict case.
+    /// Task-scoped groups computed from the selected evals in config order.
+    /// Always at least one group (`g1`) for a non-empty selection.
     groups: Vec<super::grouping::Group>,
 }
 
@@ -88,7 +87,7 @@ struct Staged {
     cond_a_slug: Option<String>,
     cond_b_slug: Option<String>,
     /// Sibling skills' `(name, description)` — env-independent. `build` resolves
-    /// the on-disk path per env (Cli stages a separate env per (group, condition)).
+    /// the on-disk path for each private task environment.
     sibling_meta: Vec<(String, String)>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
@@ -116,8 +115,8 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
 
     // Redirect staging into the isolated env dir. `resolve_request` has now
     // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
-    // staging root, so the existing root-parameterized staging path follows it
-    // (every `skills_dir_for_harness(&ctx.stage_root, …)` site). eval-magic meta
+    // staging root, so the existing root-parameterized staging path follows it.
+    // eval-magic metadata
     // stays above the env in `iteration_dir`. Only `run` overrides the cwd default
     // set in `detect_run_context`; teardown/finalize keep operating at cwd.
     let mut owned_ctx = ctx.clone();

@@ -82,10 +82,11 @@ fn auto_isolates_and_multi_run_tasks_get_distinct_hidden_envs() {
 
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     let groups = dispatch["groups"].as_array().unwrap();
-    assert_eq!(groups.len(), 2);
-    assert_eq!(groups[0]["evals"], json!(["ordinary-1", "ordinary-2"]));
+    assert_eq!(groups.len(), 3);
+    assert_eq!(groups[0]["evals"], json!(["ordinary-1"]));
     assert_eq!(groups[1]["evals"], json!(["held-out"]));
-    assert_eq!(groups[1]["rationale"], "assertion: command_check");
+    assert_eq!(groups[2]["evals"], json!(["ordinary-2"]));
+    assert_eq!(groups[1]["rationale"], "metric: diff_scope");
 
     let command_tasks: Vec<_> = dispatch["tasks"]
         .as_array()
