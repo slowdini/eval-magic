@@ -1,0 +1,83 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/command-check.schema.json",
+  "title": "Command Check Result",
+  "description": "Runner-owned result for one command_check assertion before finalize folds it into grading.json.",
+  "type": "object",
+  "required": [
+    "id",
+    "passed",
+    "evidence",
+    "expected_exit_code",
+    "actual_exit_code",
+    "stdout",
+    "stderr"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string" },
+    "passed": { "type": "boolean" },
+    "evidence": { "type": "string" },
+    "expected_exit_code": {
+      "type": "integer",
+      "minimum": -2147483648,
+      "maximum": 2147483647
+    },
+    "actual_exit_code": {
+      "type": ["integer", "null"],
+      "minimum": -2147483648,
+      "maximum": 2147483647,
+      "description": "The single command's exit code, null for signal termination or a matrix result."
+    },
+    "stdout": {
+      "type": "string",
+      "description": "Lossy UTF-8 stdout diagnostic, truncated to at most 2 KiB; empty for a matrix result."
+    },
+    "stderr": {
+      "type": "string",
+      "description": "Lossy UTF-8 stderr diagnostic, truncated to at most 2 KiB; empty for a matrix result."
+    },
+    "cells": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Per-cell results for a matrix command check. Absent for a non-matrix check.",
+      "items": {
+        "type": "object",
+        "required": [
+          "env",
+          "passed",
+          "evidence",
+          "actual_exit_code",
+          "stdout",
+          "stderr"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "env": {
+            "type": "object",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Effective command-check environment overrides for this cell."
+          },
+          "passed": { "type": "boolean" },
+          "evidence": { "type": "string" },
+          "actual_exit_code": {
+            "type": ["integer", "null"],
+            "minimum": -2147483648,
+            "maximum": 2147483647
+          },
+          "stdout": {
+            "type": "string",
+            "description": "Lossy UTF-8 stdout diagnostic, truncated to at most 2 KiB."
+          },
+          "stderr": {
+            "type": "string",
+            "description": "Lossy UTF-8 stderr diagnostic, truncated to at most 2 KiB."
+          }
+        }
+      }
+    }
+  }
+}

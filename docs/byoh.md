@@ -36,7 +36,9 @@ cool-cli run --cd <eval-root>{model_arg} \
 That run is complete: `run` warns about each enhancement the descriptor doesn't declare (naming the
 fallback that carries it), builds `dispatch.json` / `RUNBOOK.md` / `dispatch-manifest.md` with your
 exec recipe, and after you dispatch the tasks, `ingest` assembles records from each task's
-`outputs/final-message.md`, runs the `detect-stray-writes` audit, and hands grading to `llm_judge`.
+`outputs/final-message.md`, captures final-environment metrics in `diff-scope.json`, runs the
+`detect-stray-writes` audit against the task's `eval_root`, executes any runner-owned
+`command_check` assertions, and hands soft grading to `llm_judge`.
 
 For a one-off descriptor that shouldn't live in the project, pass it directly — its label becomes
 the invocation's default harness, so `--harness` can be omitted:
@@ -66,11 +68,23 @@ and `{guard_args}` (guard-only arguments, built-ins only); the `<eval-root>`,
 `<dispatch_prompt_path>`, and `<outputs_dir>` placeholders are filled per task by whoever dispatches
 (the runbook explains this). Two hard requirements:
 
-1. **Run from the task's `eval_root`** — each task's per-`(group, condition)` env dir is the
-   subprocess cwd.
+1. **Run from the task's `eval_root`** — each `(eval, condition, run)` owns a private env and uses
+   it as the subprocess cwd. Task source edits belong there; framework artifacts belong under the
+   supplied `<outputs_dir>`.
 2. **Recover the final message** — the agent's final reply must land in
    `outputs/final-message.md`. If your CLI can't write it directly (like the example above
    redirecting stdout), capture it yourself before running `ingest`.
+
+Scripted evals additionally require `[conversation].resume_exec_template`. The driver fills
+shell-quoted `{session_arg}` / `{prompt_arg}` values and per-round `<eval-root>` /
+`<outputs_dir>` paths; the command must resume rather than fork that session. This capability also
+requires transcript extraction of ordered assistant messages and the native session id. There is
+no baseline fallback: `run` rejects `turns` for a harness that cannot preserve their conversational
+meaning.
+
+`harness lint <name|file> --probe` proves both hard requirements end-to-end before a real run —
+it renders `exec_template` exactly as `run` would and asserts that `outputs/final-message.md` is
+recovered afterwards. See the workflow section below and `harness lint --help`.
 
 ## Layering and field-level merge
 
@@ -120,7 +134,8 @@ map as inline comments in its scaffolded template. The short map:
 |-------|----------|----------------------|
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
 | `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
-| `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable, `llm_judge` carries grading, tokens/duration unrecorded |
+| `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
+| `[conversation]` | native `resume_exec_template` using the captured session id | no safe fallback: evals declaring `turns` are rejected in run preflight |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
@@ -184,6 +199,16 @@ result_coalesce = ["output", "result", "error"]
 where = { type = "item.completed", "item.type" = "agent_message" }
 field = "item.text"
 
+# Ordered assistant messages and the native session id are additionally
+# required when [conversation] is declared.
+[transcript.extract.assistant_messages]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.session_id]
+where = { type = "thread.started" }
+field = "thread_id"
+
 # Tokens: over matching records, sum the listed integer fields.
 [transcript.extract.tokens]
 where = { type = "turn.completed" }
@@ -195,19 +220,21 @@ sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_toke
 timestamp_spread = "timestamp"
 ```
 
-The primitive set is exactly five, deliberately minimal:
+The primitive set is deliberately minimal:
 
 1. **`where`** — a dotted-path → expected-string equality filter shared by every sub-table
    (omitted = every record matches). String equality only: no operators, negation, or wildcards.
 2. **`final_text`** — a field pick; the last matching record wins.
-3. **`tools`** — the flat tool-item mapping: name from `name_field`, args = the item minus
+3. **`assistant_messages`** — every matching field pick, preserving stream order.
+4. **`session_id`** — a field pick for the native resumable session id; the last match wins.
+5. **`tools`** — the flat tool-item mapping: name from `name_field`, args = the item minus
    `args_omit` (key order preserved; `null` when nothing remains), result = the first *present*
    field of `result_coalesce` (present-but-null counts; strings verbatim, everything else compact
    JSON).
-4. **`tokens`** — sum the `sum` fields over matching records. A missing or non-integer field
+6. **`tokens`** — sum the `sum` fields over matching records. A missing or non-integer field
    counts 0, but a record where *no* listed path resolves leaves the total untouched — it never
    turns an absent total into zero.
-5. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
+7. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
    minus first; needs at least two parseable timestamps).
 
 Dotted paths (`"usage.input_tokens"`, `"item.text"`) descend nested objects only — there is no
@@ -260,8 +287,19 @@ eval-magic harness show <name>   # the resolved post-merge descriptor as authora
 
 Then `run --harness <name>` and read the warnings: each one names the fallback carrying that part
 of the run, which doubles as your wiring roadmap — declare the enhancement and the warning
-disappears. (A `harness lint --probe` live dispatch check — rendering the exec template with a
-trivial prompt and verifying final-message recovery — is planned; see the tracking issue.)
+disappears. Close the loop end-to-end before a real dispatch with
+`eval-magic harness lint <name|file> --probe`: it renders `dispatch.exec_template` with a trivial
+prompt in a throwaway temp dir, asks for confirmation, runs the command via `/bin/sh -c` from
+that dir, and verifies `outputs/final-message.md` is recovered (non-empty). It also
+render-only-validates `parallel_command_template` / `judge_command_template` — rendering each
+with stand-in values and reporting any unresolved `{token}` the run would later surface.
+
+`--probe` invokes the **real** harness CLI (network, tokens, usage limits), so it is strictly
+opt-in and never part of standard CI checks — it is a one-time BYOH check. The confirm banner
+prints the rendered command and a `y/N` prompt; pass `--yes` to skip it (default-deny when stdin
+is not a TTY, so the probe never spends usage unattended in a pipe), and `--probe-timeout <SECS>`
+(default 300 = 5 min) to cap the run. Run it only after `harness lint` already passes the static
+checks — a static failure aborts before any exec. See `harness lint --help` for the full contract.
 
 ## Upstreaming your descriptor
 
@@ -269,7 +307,7 @@ A descriptor that proves out locally can become a built-in — as a **data-only 
 beyond a mechanical registration. What counts as data vs code:
 
 - **Data — one descriptor PR:** the descriptor file itself: `label` / `skills_dir` /
-  `config_dirs`, the `[dispatch]` templates, `[model]`, `[staging]` + `[skills_block]`,
+  `config_dirs`, the `[dispatch]` / `[conversation]` templates, `[model]`, `[staging]` + `[skills_block]`,
   `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (the declarative tier is pure
   data), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
   (`claude-stream-json`, `codex-items`, `opencode-events`, `opencode`, `claude-plugins`,

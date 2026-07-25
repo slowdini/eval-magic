@@ -14,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
-use crate::core::{AvailableSkill, Eval, Harness};
+use crate::core::{AvailableSkill, Eval, Harness, ScriptedTurn};
 
 use super::RunError;
 
@@ -36,6 +36,12 @@ pub struct DispatchTask {
     pub outputs_dir: String,
     pub run_record_path: String,
     pub timing_path: String,
+    /// Ordered scripted follow-ups; absent for one-shot tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<Vec<ScriptedTurn>>,
+    /// Runner-owned completion artifact for a scripted conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_path: Option<String>,
     pub agent_description: String,
     pub dispatch_prompt_path: String,
     /// Group id this task belongs to; absent when there is exactly one group
@@ -43,8 +49,8 @@ pub struct DispatchTask {
     /// byte-identical.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
-    /// The agent-under-test's cwd for this task — its per-`(group, condition)` env
-    /// dir, which the CLI dispatch recipe's `<eval-root>` placeholder resolves to.
+    /// The agent-under-test's private cwd for this task, which the CLI dispatch
+    /// recipe's `<eval-root>` placeholder resolves to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_root: Option<String>,
     #[serde(default, skip_serializing)]
@@ -63,6 +69,7 @@ pub struct DispatchTaskOpts<'a> {
     pub staged_skill_path: Option<&'a str>,
     pub user_prompt: &'a str,
     pub fixtures: Vec<String>,
+    pub turns: Option<&'a [ScriptedTurn]>,
     pub outputs_dir: &'a str,
     pub cond_dir: &'a str,
     pub bootstrap_content: Option<&'a str>,
@@ -80,8 +87,8 @@ pub struct DispatchTaskOpts<'a> {
     /// Isolation-group id this task belongs to; `None` in the single-group case
     /// (keeps the serialized task byte-identical to the pre-grouping shape).
     pub group: Option<&'a str>,
-    /// The task's env dir (the agent-under-test's cwd); `None` in the single-group
-    /// case (the shared `env/`).
+    /// The task's env dir (the agent-under-test's cwd); `None` only for legacy
+    /// callers that do not carry an environment manifest.
     pub eval_root: Option<&'a str>,
 }
 
@@ -208,15 +215,23 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     }
     task_lines.push(String::new());
     task_lines.push(fixtures_block);
-    task_lines.push(format!("Output directory: {}", opts.outputs_dir));
+    if let Some(eval_root) = opts.eval_root {
+        task_lines.push(format!("Task environment: {eval_root}"));
+    }
+    task_lines.push(format!("Framework output directory: {}", opts.outputs_dir));
     task_lines.push(String::new());
     task_lines.push("Instructions:".to_string());
-    task_lines.push("- Write any files you produce into the output directory.".to_string());
+    task_lines.push(
+        "- Work normally on the task: you may edit existing files and create new files inside the task environment."
+            .to_string(),
+    );
+    task_lines
+        .push("- Use the framework output directory only for framework artifacts.".to_string());
     task_lines.push(format!(
         "- After completing the task, write your final user-facing response to {}/final-message.md.",
         opts.outputs_dir
     ));
-    task_lines.push("- Do not write outside the output directory.".to_string());
+    task_lines.push("- Do not write outside the task environment.".to_string());
     task_lines.push(String::new());
     task_lines.push("User request:".to_string());
     task_lines.push(opts.user_prompt.to_string());
@@ -243,6 +258,13 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         outputs_dir: opts.outputs_dir.to_string(),
         run_record_path: cond_dir.join("run.json").to_string_lossy().into_owned(),
         timing_path: cond_dir.join("timing.json").to_string_lossy().into_owned(),
+        turns: opts.turns.map(<[ScriptedTurn]>::to_vec),
+        conversation_path: opts.turns.map(|_| {
+            cond_dir
+                .join("conversation.json")
+                .to_string_lossy()
+                .into_owned()
+        }),
         agent_description,
         dispatch_prompt_path: Path::new(opts.outputs_dir)
             .join("dispatch-prompt.txt")
@@ -389,10 +411,44 @@ pub fn build_manifest(
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
     ];
-    if let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
-        guard: context.guard,
-        agent_model: context.agent_model,
-    }) {
+    let scripted: Vec<usize> = tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, task)| task.turns.as_ref().map(|_| index))
+        .collect();
+    if !scripted.is_empty() {
+        header.extend([
+            "## Scripted multi-turn dispatch".to_string(),
+            String::new(),
+            "Run these tasks through eval-magic's conversation driver. It resumes one native \
+             session, enforces each delivery gate, and writes the task's conversation.json. A \
+             gate stop is valid eval data; a task interrupted before conversation.json is \
+             incomplete and ingest skips it."
+                .to_string(),
+            String::new(),
+        ]);
+        for index in &scripted {
+            header.push(format!(
+                "eval-magic dispatch-task --dispatch dispatch.json --task-index {index}"
+            ));
+        }
+        header.push(String::new());
+    }
+    if scripted.len() < tasks.len()
+        && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
+            guard: context.guard,
+            agent_model: context.agent_model,
+            one_shot_only: !scripted.is_empty(),
+        })
+    {
+        if !scripted.is_empty() {
+            header.extend([
+                "The harness recipe below applies only to task entries whose `turns` field is \
+                 absent."
+                    .to_string(),
+                String::new(),
+            ]);
+        }
         header.extend(lines);
     }
     header.extend([
@@ -415,18 +471,23 @@ pub fn build_manifest(
                 .run_index
                 .map(|k| format!(" / run-{k}"))
                 .unwrap_or_default();
-            [
+            let mut lines = vec![
                 format!("### {} / {}{run_seg}", t.eval_id, t.condition),
                 String::new(),
                 format!("- run.json:    {}", t.run_record_path),
                 format!("- timing.json: {}", t.timing_path),
+            ];
+            if let Some(path) = &t.conversation_path {
+                lines.push(format!("- conversation.json: {path}"));
+            }
+            lines.extend([
                 String::new(),
                 "```".to_string(),
                 t.dispatch_prompt.clone(),
                 "```".to_string(),
                 String::new(),
-            ]
-            .join("\n")
+            ]);
+            lines.join("\n")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -437,6 +498,8 @@ pub fn build_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod conversation;
 
     fn mk_evals(ids: &[&str]) -> Vec<Eval> {
         ids.iter()
@@ -449,6 +512,7 @@ mod tests {
                 skill_should_trigger: None,
                 runs: None,
                 isolation: None,
+                turns: None,
             })
             .collect()
     }
@@ -563,6 +627,23 @@ mod tests {
     }
 
     // ── build_dispatch_task: bootstrap injection ──────────────────────────
+
+    #[test]
+    fn prompt_allows_task_edits_but_reserves_outputs_for_framework_artifacts() {
+        let task = build_dispatch_task(&DispatchTaskOpts {
+            eval_root: Some("/tmp/env"),
+            ..base_opts()
+        })
+        .unwrap();
+        let prompt = task.dispatch_prompt;
+
+        assert!(prompt.contains("Task environment: /tmp/env"));
+        assert!(prompt.contains("edit existing files and create new files inside"));
+        assert!(prompt.contains("framework artifacts"));
+        assert!(prompt.contains("Do not write outside the task environment."));
+        assert!(!prompt.contains("Write any files you produce into the output directory."));
+        assert!(!prompt.contains("Do not write outside the output directory."));
+    }
 
     #[test]
     fn prepends_session_start_context_for_claude_code() {

@@ -97,6 +97,8 @@ label = "{label}"
 ##   [transcript.extract.tools]       where / item / name_field / skip_names / args_omit /
 ##                                    result_coalesce — each matching item becomes an invocation
 ##   [transcript.extract.final_text]  where + field — dotted-path pick, last match wins
+##   [transcript.extract.assistant_messages] where + field — every matching text in event order
+##   [transcript.extract.session_id]  where + field — native session id, last match wins
 ##   [transcript.extract.tokens]      where + sum — add up the listed integer fields
 ##   [transcript.extract.duration]    field (millisecond pick) OR timestamp_spread (last minus
 ##                                    first RFC 3339 timestamp)
@@ -117,6 +119,21 @@ label = "{label}"
 # surfaces_skill_invocation = false
 # skill_tool = "Skill"
 # skill_arg = "skill"
+
+## -------------------------------------------------------------------------------------------
+## [conversation] — native same-session continuation for scripted eval `turns`. This capability
+## has no generic fallback: run rejects multi-turn evals for a harness that omits it. It requires
+## [dispatch].exec_template plus transcript parsing that exposes both ordered assistant messages
+## and the native session id. Named parsers provide those directly; a declarative extractor must
+## declare [transcript.extract.assistant_messages] and [transcript.extract.session_id].
+##
+## eval-magic fills {session_arg}/{prompt_arg} with shell-quoted values and replaces
+## <eval-root>/<outputs_dir> per round. The command must resume (not fork) the named session and
+## write a fresh events file under the round's <outputs_dir>.
+## VERIFY: start one session, recover its id, resume it with a second prompt, and confirm the
+## second transcript identifies the same session.
+# [conversation]
+# resume_exec_template = '{label} run --cd <eval-root> --session {session_arg}{model_arg} {prompt_arg} > <outputs_dir>/{label}-events.jsonl'
 
 ## -------------------------------------------------------------------------------------------
 ## [model] — the CLI flag that selects a model. Without it, --agent-model / --judge-model are
@@ -186,7 +203,9 @@ label = "{label}"
 ##   1. eval-magic harness lint .eval-magic/harnesses/{label}.toml — all checks pass.
 ##   2. A real smoke eval: eval-magic run --harness {label}, dispatch the tasks, then ingest and
 ##      finalize — the preflight warnings name the fallback carrying anything not declared.
-##      (A `harness lint --probe` live dispatch check is planned but does not exist yet.)
+##      For the exec template specifically, `eval-magic harness lint .eval-magic/harnesses/{label}.toml
+##      --probe --yes` renders it with a trivial prompt and verifies final-message recovery — opt-in,
+##      invokes the real harness CLI, never part of standard CI. See `harness lint --help`.
 ##   3. .eval-magic/harnesses/{label}-notes.md records every verified value, its source, and the
 ##      harness version.
 ##   4. Open the PR with .github/PULL_REQUEST_TEMPLATE/harness-descriptor.md — a data-only PR:

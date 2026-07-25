@@ -15,7 +15,7 @@
 //! only, so keys containing literal dots are unaddressable.
 
 use crate::adapters::TranscriptSummary;
-use crate::adapters::transcript::read_jsonl;
+use crate::adapters::transcript::{TranscriptEvent, read_jsonl};
 use crate::core::ToolInvocation;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -26,7 +26,7 @@ use std::path::Path;
 /// Dotted-path → expected-string equality filter; empty matches every record.
 type Where = BTreeMap<String, String>;
 
-/// The `[transcript.extract]` block: which of the four outputs to produce and
+/// The `[transcript.extract]` block: which normalized outputs to produce and
 /// how. Validation requires at least one sub-table.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExtractSpec {
@@ -34,6 +34,10 @@ pub struct ExtractSpec {
     pub tools: Option<ToolsExtract>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub final_text: Option<FieldPick>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assistant_messages: Option<FieldPick>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<FieldPick>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tokens: Option<TokensExtract>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -107,6 +111,11 @@ pub(crate) fn parse_full(spec: &ExtractSpec, path: &Path) -> io::Result<Transcri
     let records = read_jsonl::<Value>(path)?;
     Ok(TranscriptSummary {
         tool_invocations: extract_tools(spec, &records),
+        events: extract_events(spec, &records),
+        session_id: spec
+            .session_id
+            .as_ref()
+            .and_then(|pick| extract_final_text(pick, &records)),
         total_tokens: spec
             .tokens
             .as_ref()
@@ -142,50 +151,75 @@ fn stringify_value(v: &Value) -> String {
 }
 
 fn extract_tools(spec: &ExtractSpec, records: &[Value]) -> Vec<ToolInvocation> {
-    let Some(tools) = &spec.tools else {
-        return Vec::new();
-    };
     let mut invocations = Vec::new();
     for record in records {
-        if !matches(record, &tools.r#where) {
-            continue;
-        }
-        let item_value = match &tools.item {
-            Some(path) => match resolve(record, path) {
-                Some(v) => v,
-                None => continue,
-            },
-            None => record,
-        };
-        let Some(item) = item_value.as_object() else {
-            continue;
-        };
-        let Some(name) = item.get(&tools.name_field).and_then(Value::as_str) else {
-            continue;
-        };
-        if tools.skip_names.iter().any(|skip| skip == name) {
-            continue;
-        }
-        let mut args = serde_json::Map::new();
-        for (key, value) in item {
-            if tools.args_omit.iter().any(|omit| omit == key) {
-                continue;
-            }
-            args.insert(key.clone(), value.clone());
-        }
-        let result = tools
-            .result_coalesce
-            .iter()
-            .find_map(|key| item.get(key).map(stringify_value));
         let ordinal = invocations.len() as u32;
-        invocations.push(ToolInvocation {
-            name: name.to_string(),
-            args: (!args.is_empty()).then_some(Value::Object(args)),
-            result: result.map(Value::String),
-            ordinal,
-        });
+        if let Some(invocation) = extract_tool(spec.tools.as_ref(), record, ordinal) {
+            invocations.push(invocation);
+        }
     }
     invocations
+}
+
+fn extract_tool(
+    tools: Option<&ToolsExtract>,
+    record: &Value,
+    ordinal: u32,
+) -> Option<ToolInvocation> {
+    let tools = tools?;
+    if !matches(record, &tools.r#where) {
+        return None;
+    }
+    let item_value = match &tools.item {
+        Some(path) => resolve(record, path)?,
+        None => record,
+    };
+    let item = item_value.as_object()?;
+    let name = item.get(&tools.name_field).and_then(Value::as_str)?;
+    if tools.skip_names.iter().any(|skip| skip == name) {
+        return None;
+    }
+    let mut args = serde_json::Map::new();
+    for (key, value) in item {
+        if tools.args_omit.iter().any(|omit| omit == key) {
+            continue;
+        }
+        args.insert(key.clone(), value.clone());
+    }
+    let result = tools
+        .result_coalesce
+        .iter()
+        .find_map(|key| item.get(key).map(stringify_value));
+    Some(ToolInvocation {
+        name: name.to_string(),
+        args: (!args.is_empty()).then_some(Value::Object(args)),
+        result: result.map(Value::String),
+        ordinal,
+    })
+}
+
+fn extract_events(spec: &ExtractSpec, records: &[Value]) -> Vec<TranscriptEvent> {
+    let mut events = Vec::new();
+    for record in records {
+        if let Some(pick) = &spec.assistant_messages
+            && matches(record, &pick.r#where)
+            && let Some(text) = resolve(record, &pick.field).and_then(Value::as_str)
+        {
+            events.push(TranscriptEvent::AssistantMessage {
+                ordinal: events.len() as u32,
+                text: text.to_string(),
+            });
+        }
+        if let Some(invocation) = extract_tool(spec.tools.as_ref(), record, events.len() as u32) {
+            events.push(TranscriptEvent::ToolInvocation {
+                ordinal: invocation.ordinal,
+                name: invocation.name,
+                args: invocation.args,
+                result: invocation.result,
+            });
+        }
+    }
+    events
 }
 
 fn extract_final_text(pick: &FieldPick, records: &[Value]) -> Option<String> {
@@ -290,6 +324,14 @@ mod tests {
             [final_text]
             where = { type = "item.completed", "item.type" = "agent_message" }
             field = "item.text"
+
+            [assistant_messages]
+            where = { type = "item.completed", "item.type" = "agent_message" }
+            field = "item.text"
+
+            [session_id]
+            where = { type = "thread.started" }
+            field = "thread_id"
 
             [tokens]
             where = { type = "turn.completed" }
@@ -398,7 +440,7 @@ mod tests {
         write_jsonl(
             &path,
             &[
-                json!({"type": "thread.started", "timestamp": "2026-06-07T10:00:00.000Z"}),
+                json!({"type": "thread.started", "thread_id": "thread-flat-1", "timestamp": "2026-06-07T10:00:00.000Z"}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "output": "README.md"}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:04.000Z", "item": {"id": "item_2", "type": "agent_message", "text": "First."}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:05.000Z", "item": {"id": "item_3", "type": "agent_message", "text": "Final."}}),
@@ -415,6 +457,29 @@ mod tests {
                 result: Some(Value::String("README.md".into())),
                 ordinal: 0,
             }]
+        );
+        assert_eq!(full.session_id.as_deref(), Some("thread-flat-1"));
+        assert_eq!(
+            serde_json::to_value(&full.events).unwrap(),
+            json!([
+                {
+                    "type": "tool_invocation",
+                    "ordinal": 0,
+                    "name": "command_execution",
+                    "args": {"command": "ls"},
+                    "result": "README.md"
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 1,
+                    "text": "First."
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 2,
+                    "text": "Final."
+                }
+            ])
         );
         assert_eq!(full.final_text, Some("Final.".into()));
         assert_eq!(full.total_tokens, Some(125)); // fields not listed in `sum` excluded

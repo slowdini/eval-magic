@@ -1,19 +1,18 @@
-//! Copy an eval's fixtures into the isolated env (`iteration-N/env/`), laid out
-//! like a real repo so the agent-under-test reads them at natural project-relative
-//! paths. One shared env hosts every eval's fixtures, so [`FixtureClaims`] dedups
-//! idempotent re-declarations and rejects cross-eval clobbers.
+//! Copy an eval's fixtures into its isolated task env, laid out like a real repo
+//! so the agent-under-test reads them at natural project-relative paths.
+//! [`FixtureClaims`] retains the legacy shared-group collision checks used by the
+//! environment planner.
 
 use std::fs;
 use std::path::Path;
 
-use crate::core::Eval;
+use crate::core::{AssertionCommandCheck, Eval};
 
 use super::{RunError, copy_entry};
 
 /// Cross-eval claims on env-relative fixture destinations: `dest → (eval_id, source)`.
-/// One shared `env/` hosts every eval's fixtures, so two evals targeting the same path
-/// from *different* sources is an ambiguous, order-dependent clobber — [`claim_fixture_dest`]
-/// rejects it. Same source is an idempotent re-declaration (the common shared-fixture case).
+/// Used when a planned group contains multiple evals; canonical diff-scope runs
+/// currently task-scope groups, but legacy plans remain readable.
 pub type FixtureClaims = std::collections::HashMap<String, (String, String)>;
 
 /// Record that `eval_id` provides the fixture at env-relative `dest` from `source`.
@@ -77,6 +76,31 @@ pub fn fixture_pairs(ev: &Eval, skill_dir: &Path) -> Result<Vec<(String, String)
     Ok(pairs)
 }
 
+/// Resolve a command check's held-out setup paths without copying them. This is
+/// called during read-only run resolution so a missing source fails before any
+/// workspace or staged environment is created.
+pub fn setup_file_pairs(
+    check: &AssertionCommandCheck,
+    skill_dir: &Path,
+) -> Result<Vec<(String, String)>, RunError> {
+    let Some(files) = check.setup_files.as_ref().filter(|files| !files.is_empty()) else {
+        return Ok(Vec::new());
+    };
+    let mut pairs = Vec::with_capacity(files.len());
+    for file in files {
+        validate_fixture_rel(file)?;
+        let source = skill_dir.join("evals").join(file);
+        if !source.exists() {
+            return Err(RunError::msg(format!(
+                "command-check setup file not found: {}",
+                source.display()
+            )));
+        }
+        pairs.push((file.clone(), source.to_string_lossy().into_owned()));
+    }
+    Ok(pairs)
+}
+
 /// Copy an eval's fixture files into `env_root`, preserving each declared relative path
 /// so the env reads like a real repo (`files: ["src/main.rs"]` → `env/src/main.rs`), and
 /// returning the env-relative paths (the agent-under-test's cwd is `env/`). Fixtures are
@@ -120,6 +144,7 @@ mod tests {
             skill_should_trigger: None,
             runs: None,
             isolation: None,
+            turns: None,
         }
     }
 

@@ -24,19 +24,25 @@ pub enum SchemaName {
     StrayWrites,
     Benchmark,
     JudgeTasks,
+    CommandCheck,
+    DiffScope,
     HarnessDescriptor,
+    Conversation,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 7] = [
+    const ALL: [SchemaName; 10] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
+        SchemaName::CommandCheck,
+        SchemaName::DiffScope,
         SchemaName::HarnessDescriptor,
+        SchemaName::Conversation,
     ];
 
     /// The schema's kebab-case name, as used in error messages and the on-disk
@@ -49,7 +55,10 @@ impl SchemaName {
             SchemaName::StrayWrites => "stray-writes",
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
+            SchemaName::CommandCheck => "command-check",
+            SchemaName::DiffScope => "diff-scope",
             SchemaName::HarnessDescriptor => "harness-descriptor",
+            SchemaName::Conversation => "conversation",
         }
     }
 
@@ -62,9 +71,14 @@ impl SchemaName {
             SchemaName::StrayWrites => include_str!("../../schema/stray-writes.schema.json"),
             SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
             SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),
+            SchemaName::CommandCheck => {
+                include_str!("../../schema/command-check.schema.json")
+            }
+            SchemaName::DiffScope => include_str!("../../schema/diff-scope.schema.json"),
             SchemaName::HarnessDescriptor => {
                 include_str!("../../schema/harness-descriptor.schema.json")
             }
+            SchemaName::Conversation => include_str!("../../schema/conversation.schema.json"),
         }
     }
 }
@@ -164,6 +178,30 @@ mod tests {
     }
 
     #[test]
+    fn conversation_tool_results_use_the_portable_run_record_value_shape() {
+        let conversation = json!({
+            "status": "completed",
+            "delivered_followups": 0,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
+                {
+                    "type": "tool_invocation",
+                    "ordinal": 1,
+                    "round": 1,
+                    "name": "Read",
+                    "result": ["not", "portable"]
+                },
+                {"type": "assistant_message", "ordinal": 2, "round": 1, "text": "Done."}
+            ]
+        });
+
+        let result: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn accepts_skill_path_null_on_the_without_skill_arm() {
         let mut data = valid_run_record();
         data["condition"] = json!("without_skill");
@@ -208,6 +246,50 @@ mod tests {
         data["surprise"] = json!(true);
         let r: Result<Value, _> = validate_against_schema(SchemaName::RunRecord, &data, "run.json");
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn grading_schema_accepts_command_check_grader() {
+        let data = json!({
+            "assertion_results": [{
+                "id": "tests-pass",
+                "passed": true,
+                "evidence": "exit code matched",
+                "confidence": 1.0,
+                "grader": "command_check"
+            }],
+            "summary": {
+                "passed": 1,
+                "failed": 0,
+                "total": 1,
+                "pass_rate": 1.0
+            }
+        });
+        let result: Result<Value, _> =
+            validate_against_schema(SchemaName::Grading, &data, "grading.json");
+        assert!(
+            result.is_ok(),
+            "command_check grading should validate: {result:?}"
+        );
+    }
+
+    #[test]
+    fn validates_diff_scope_metrics_and_rejects_extra_fields() {
+        let metrics = json!({
+            "files_touched": 2,
+            "lines_added": 4,
+            "lines_removed": 1,
+            "hunks": 2
+        });
+        let valid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &metrics, "diff-scope.json");
+        assert!(valid.is_ok(), "{valid:?}");
+
+        let mut extra = metrics;
+        extra["paths"] = json!(["src/main.rs"]);
+        let invalid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &extra, "diff-scope.json");
+        assert!(invalid.is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "eval-magic"
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior."
 license = "MIT"
@@ -43,6 +43,8 @@ jsonschema = { version = "0.46.5", default-features = false }
 regex = { version = "1.12.3", default-features = false, features = ["std", "perf"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.150", features = ["preserve_order"] }
+similar = { version = "3.1.1", default-features = false }
+tempfile = "3.27.0"
 thiserror = "2.0.18"
 # Harness descriptor files (harnesses/*.toml). `display` serializes the
 # resolved (layer-merged) descriptor back to authorable TOML for
@@ -53,7 +55,6 @@ walkdir = "2.5.0"
 [dev-dependencies]
 assert_cmd = "2.2.2"
 predicates = "3.1.4"
-tempfile = "3.27.0"
 
 # Installs the git hooks under .cargo-husky/hooks/ into .git/hooks on `cargo test`.
 [dev-dependencies.cargo-husky]

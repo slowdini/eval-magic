@@ -31,17 +31,25 @@ pub(crate) fn render_cli_model_arg(flag: Option<&str>, model: Option<&str>) -> S
 /// the `sh -c` body; it references `$eval_root` / `$prompt_path` /
 /// `$outputs_dir` and joins as one element, so the output is line-identical
 /// to the scaffold-with-block form.
-pub(crate) fn render_parallel_dispatch_recipe(command_block: &str) -> String {
+pub(crate) fn render_parallel_dispatch_recipe(command_block: &str, one_shot_only: bool) -> String {
+    let tasks = if one_shot_only {
+        ".tasks[] | select(.turns == null)"
+    } else {
+        ".tasks[]"
+    };
     [
-        "JOBS=${JOBS:-4}",
-        "jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + \"\\u0000\"' dispatch.json | \\",
-        "  xargs -0 -P \"$JOBS\" -I{} sh -c '",
-        "    eval_root=\"$(printf \"%s\" \"$1\" | cut -f1)\"",
-        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"",
-        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f3)\"",
-        "    mkdir -p \"$outputs_dir\"",
-        command_block,
-        "  ' sh {}",
+        "JOBS=${JOBS:-4}".to_string(),
+        format!(
+            "jq -j '{tasks} | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + \
+             \"\\u0000\"' dispatch.json | \\"
+        ),
+        "  xargs -0 -P \"$JOBS\" -I{} sh -c '".to_string(),
+        "    eval_root=\"$(printf \"%s\" \"$1\" | cut -f1)\"".to_string(),
+        "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
+        "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f3)\"".to_string(),
+        "    mkdir -p \"$outputs_dir\"".to_string(),
+        command_block.to_string(),
+        "  ' sh {}".to_string(),
     ]
     .join("\n")
 }

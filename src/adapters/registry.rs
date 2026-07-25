@@ -327,6 +327,16 @@ pub fn adapter_for(harness: Harness) -> &'static dyn HarnessAdapter {
         .adapter
 }
 
+/// The resolved merged descriptor value for a harness, suitable for persisting
+/// into a runner-owned dispatch artifact.
+pub fn descriptor_value_for(harness: Harness) -> &'static serde_json::Value {
+    &registry()
+        .iter()
+        .find(|entry| entry.label == harness.name())
+        .expect("Harness handles originate from the registry")
+        .value
+}
+
 /// True when `harness` has an embedded built-in descriptor among its sources
 /// — i.e. it is not defined by user-supplied descriptor files alone. Preflight
 /// uses this to hard-reject `--guard` on user-only harnesses (the write guard

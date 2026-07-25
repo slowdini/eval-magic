@@ -21,7 +21,7 @@ use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
 use super::super::{RunError, write_json};
-use super::envs::{EnvLayoutInput, env_targets, task_env_root};
+use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_indices};
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
 
@@ -70,8 +70,7 @@ pub(super) fn write_dispatch(
     };
 
     // availableSkills for a condition in a given env = siblings + the
-    // skill-under-test when that condition loads it. Paths are env-specific (Cli
-    // stages a separate env per (group, condition)). Empty when nothing was staged.
+    // skill-under-test when that condition loads it. Paths are task-env-specific.
     let available_skills_for = |env_root: &Path,
                                 cond_skill_path: Option<&str>,
                                 cond_slug: Option<&str>|
@@ -121,7 +120,7 @@ pub(super) fn write_dispatch(
     }
 
     // A single group keeps the `group` key off each task (>1 group tags them);
-    // `eval_root` (the per-task cwd) is always set, one env per (group, condition).
+    // `eval_root` (the private per-task cwd) is always set.
     let multi_group = r.groups.len() > 1;
 
     let mut tasks = Vec::new();
@@ -140,11 +139,6 @@ pub(super) fn write_dispatch(
         ),
     ] {
         for group in &r.groups {
-            let env_root = task_env_root(&r.iteration_dir, &group.id, cond_name);
-            let env_root_str = env_root.to_string_lossy().into_owned();
-            let staged_path = staged_skill_path_for(&env_root, cond_slug);
-            let available_skills = available_skills_for(&env_root, cond_skill_path, cond_slug);
-
             for eval_id in &group.eval_ids {
                 let ev = r
                     .selected_evals
@@ -165,6 +159,20 @@ pub(super) fn write_dispatch(
                     } else {
                         (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
                     };
+                    let env_run_index = group
+                        .task_runs
+                        .is_some_and(|task_runs| task_runs > 1)
+                        .then_some(run_idx);
+                    let env_root = task_env_root_for_run(
+                        &r.iteration_dir,
+                        &group.id,
+                        cond_name,
+                        env_run_index,
+                    );
+                    let env_root_str = env_root.to_string_lossy().into_owned();
+                    let staged_path = staged_skill_path_for(&env_root, cond_slug);
+                    let available_skills =
+                        available_skills_for(&env_root, cond_skill_path, cond_slug);
                     // Create the per-run meta dir (run.json / timing.json), which
                     // lives above the env.
                     fs::create_dir_all(&run_dir)?;
@@ -194,6 +202,7 @@ pub(super) fn write_dispatch(
                         staged_skill_path: staged_path.as_deref(),
                         user_prompt: &ev.prompt,
                         fixtures,
+                        turns: ev.turns.as_deref(),
                         outputs_dir: &outputs_dir_str,
                         cond_dir: &run_dir_str,
                         bootstrap_content: staged.bootstrap_content.as_deref(),
@@ -254,6 +263,14 @@ pub(super) fn write_dispatch(
         "harness": ctx.harness,
         "tasks": tasks,
     });
+    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
+        let descriptor = crate::adapters::registry::descriptor_value_for(ctx.harness);
+        let envelope = dispatch_json
+            .as_object_mut()
+            .expect("dispatch envelope is an object");
+        envelope.insert("guard".to_string(), Value::Bool(opts.guard_armed()));
+        envelope.insert("harness_descriptor".to_string(), descriptor.clone());
+    }
     // The isolation-batch plan the executing session/human follows: which evals
     // share an env, why, and (per condition) the env each batch runs in. There is
     // one env per (group, condition).
@@ -263,10 +280,24 @@ pub(super) fn write_dispatch(
         .map(|g| {
             let envs: Vec<Value> = [r.cond_a, r.cond_b]
                 .iter()
-                .map(|cond| {
-                    json!({
-                        "condition": cond,
-                        "dir": task_env_root(&r.iteration_dir, &g.id, cond).to_string_lossy(),
+                .flat_map(|cond| {
+                    task_run_indices(g).into_iter().map(move |run_index| {
+                        let mut env = json!({
+                            "condition": cond,
+                            "dir": task_env_root_for_run(
+                                &r.iteration_dir,
+                                &g.id,
+                                cond,
+                                run_index,
+                            )
+                            .to_string_lossy(),
+                        });
+                        if let Some(run_index) = run_index {
+                            env.as_object_mut()
+                                .expect("env summary is an object")
+                                .insert("run_index".to_string(), json!(run_index));
+                        }
+                        env
                     })
                 })
                 .collect();
@@ -298,6 +329,7 @@ pub(super) fn write_dispatch(
         cond_a: r.cond_a,
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
+        multi_turn_tasks: tasks.iter().filter(|task| task.turns.is_some()).count(),
         target_args: &target_args,
         guard: opts.guard_armed(),
         agent_model: opts.agent_model,
@@ -315,7 +347,7 @@ pub(super) fn post_build(
     opts: &RunOptions,
     r: &Resolved,
 ) -> Result<(), RunError> {
-    // Every env this run staged: one per (group, condition). Computed once and
+    // Every private task env this run staged. Computed once and
     // reused below to arm the guard in each env and to point the plugin-shadow
     // preflight at a real staged env.
     let targets = env_targets(&EnvLayoutInput {
@@ -353,8 +385,8 @@ pub(super) fn post_build(
 
     // Shadow preflight: a staged skill name also discoverable from the operator's
     // live environment contaminates the run. Scan the first staged env, not
-    // `ctx.stage_root` — only the per-`(group, condition)` envs are created, so
-    // the project-local settings the scan reads must come from a real staged env.
+    // `ctx.stage_root` — project-local settings must be read from a real staged
+    // task env.
     let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
     names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
     let scan_root = targets
@@ -366,5 +398,7 @@ pub(super) fn post_build(
         write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
         eprintln!("{}", adapter.format_shadow_banner(&report));
     }
+    crate::pipeline::capture_iteration_baselines(&r.iteration_dir)
+        .map_err(|error| RunError::msg(error.to_string()))?;
     Ok(())
 }

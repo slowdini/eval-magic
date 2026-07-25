@@ -15,7 +15,7 @@
 
 pub mod capabilities;
 pub mod claude_code;
-mod cli_command;
+pub(crate) mod cli_command;
 pub mod codex;
 pub mod descriptor;
 pub mod descriptor_adapter;

@@ -444,6 +444,7 @@ mod tests {
                 skill_should_trigger: None,
                 runs: None,
                 isolation: None,
+                turns: None,
             }
         }
 

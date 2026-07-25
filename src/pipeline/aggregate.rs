@@ -2,10 +2,10 @@
 //!
 //! Compares exactly two conditions: collects
 //! `pass_rate` (from `grading.json`), `total_tokens`/`duration_ms` (from
-//! `timing.json`), and the skill-invocation determination per condition; computes
-//! mean/stddev and the `a - b` delta; accumulates validity warnings (mixed timing
-//! sources, sub-100% invocation rate, stray-write violations + live-source reads,
-//! plugin shadows); and writes `benchmark.json`.
+//! `timing.json`), raw per-run diff scope, and the skill-invocation determination
+//! per condition; computes mean/stddev and the `a - b` delta; accumulates validity
+//! warnings (mixed timing sources, sub-100% invocation rate, stray-write
+//! violations + live-source reads, plugin shadows); and writes `benchmark.json`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -16,6 +16,7 @@ use serde_json::Value;
 
 use crate::adapters::{PluginShadowReport, adapter_for, shadow_validity_warnings};
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
+use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::{now_iso8601, write_json};
 use crate::pipeline::slots::run_slots;
@@ -96,7 +97,18 @@ pub struct Benchmark {
     pub missing_gradings: usize,
     pub validity_warnings: Vec<String>,
     pub run_summary: Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff_scope: Option<Value>,
     delta: Delta,
+}
+
+#[derive(Debug, Serialize)]
+struct DiffScopeRun {
+    eval_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_index: Option<u32>,
+    #[serde(flatten)]
+    metrics: DiffScopeMetrics,
 }
 
 /// Per-condition accumulators.
@@ -171,6 +183,11 @@ pub fn aggregate(
 
     let mut missing_gradings = 0usize;
     let mut timing_sources: HashSet<String> = HashSet::new();
+    let mut diff_scope_by_condition: HashMap<String, Vec<DiffScopeRun>> = condition_names
+        .iter()
+        .map(|condition| (condition.clone(), Vec::new()))
+        .collect();
+    let mut missing_diff_scopes = Vec::new();
 
     for eval_dir in &eval_dirs {
         for cond in &condition_names {
@@ -178,6 +195,31 @@ pub fn aggregate(
             for slot in run_slots(&cond_dir) {
                 let grading_path = slot.dir.join("grading.json");
                 let timing_path = slot.dir.join("timing.json");
+                let diff_scope_path = slot.dir.join("diff-scope.json");
+                if diff_scope_path.exists() {
+                    let metrics = validate_against_schema(
+                        SchemaName::DiffScope,
+                        &serde_json::from_str(&fs::read_to_string(&diff_scope_path)?)?,
+                        &diff_scope_path.to_string_lossy(),
+                    )?;
+                    diff_scope_by_condition
+                        .get_mut(cond)
+                        .expect("condition diff-scope bucket")
+                        .push(DiffScopeRun {
+                            eval_id: eval_dir
+                                .strip_prefix("eval-")
+                                .unwrap_or(eval_dir)
+                                .to_string(),
+                            run_index: slot.run_index,
+                            metrics,
+                        });
+                } else {
+                    let run = slot
+                        .run_index
+                        .map(|index| format!("/run-{index}"))
+                        .unwrap_or_default();
+                    missing_diff_scopes.push(format!("{eval_dir}/{cond}{run}"));
+                }
 
                 if !grading_path.exists() {
                     let run = slot
@@ -297,6 +339,32 @@ pub fn aggregate(
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
     collect_shadow_warnings(iteration_dir, conditions, &mut validity_warnings);
 
+    let has_diff_scopes = diff_scope_by_condition
+        .values()
+        .any(|runs| !runs.is_empty());
+    if has_diff_scopes && !missing_diff_scopes.is_empty() {
+        validity_warnings.push(format!(
+            "{} run(s) are missing diff-scope metrics ({}) — compare scope only across the listed runs.",
+            missing_diff_scopes.len(),
+            missing_diff_scopes.join(", ")
+        ));
+    }
+    let diff_scope = has_diff_scopes.then(|| {
+        let mut by_condition = serde_json::Map::new();
+        for condition in &condition_names {
+            by_condition.insert(
+                condition.clone(),
+                serde_json::to_value(
+                    diff_scope_by_condition
+                        .remove(condition)
+                        .expect("condition diff-scope bucket"),
+                )
+                .expect("diff-scope runs serialize"),
+            );
+        }
+        Value::Object(by_condition)
+    });
+
     let benchmark = Benchmark {
         generated: now_iso8601(),
         mode: conditions.mode,
@@ -305,6 +373,7 @@ pub fn aggregate(
         missing_gradings,
         validity_warnings,
         run_summary: Value::Object(run_summary),
+        diff_scope,
         delta,
     };
 
@@ -340,7 +409,7 @@ fn collect_stray_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
     for r in &report.runs {
         if !r.violations.is_empty() {
             warnings.push(format!(
-                "{}/{} wrote {} file(s) outside its outputs dir — data point may be tainted (see stray-writes.json).",
+                "{}/{} wrote {} file(s) outside its task environment — data point may be tainted (see stray-writes.json).",
                 r.eval_id,
                 r.condition,
                 r.violations.len()

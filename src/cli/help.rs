@@ -13,7 +13,7 @@ EXAMPLES:
 
   # Mode A — evaluate a new skill (with vs. without)
   eval-magic run
-  # run builds per-(group, condition) envs + RUNBOOK.md (a human-followed recipe),
+  # run builds one private env per dispatch + RUNBOOK.md (a human-followed recipe),
   # arming the write guard automatically when the harness supports it.
   # Follow it to dispatch each task in dispatch.json via `claude -p`, capturing each
   # task's outputs/claude-events.jsonl, then:
@@ -32,6 +32,9 @@ EXAMPLES:
   eval-magic run --dry-run
   eval-magic run --only case-a,case-b
   eval-magic run --skip slow-case
+
+  # Scripted evals with a turns[] array use the generated runbook's driver:
+  eval-magic dispatch-task --dispatch .eval-magic/my-skill/iteration-1/dispatch.json --task-index 0
 
   # Opt out of the auto-armed write guard
   eval-magic run --no-guard

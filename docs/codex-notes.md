@@ -33,6 +33,9 @@ alias.
   pipeline reads.
 - `</dev/null` matters when dispatching in parallel from a pipe (e.g. `xargs -P`): without it,
   Codex treats piped stdin as additional prompt context.
+- Scripted follow-ups run from `<eval-root>` through `codex exec resume <SESSION_ID> <PROMPT>`;
+  `thread.started.thread_id` supplies the id and each round keeps `--json` plus its own
+  `--output-last-message` capture. Verified against `codex exec resume --help` on 2026-07-24.
 
 ## Model flag
 
@@ -82,7 +85,9 @@ system skill; verify that case manually when relevant.
 
 `item.completed` events whose item type is not an agent message / reasoning / plan update become
 tool invocations: `command_execution`, `file_change`, `web_search`, and MCP items.
-`transcript_check` matches these parsed items. The JSONL exposes **no deterministic skill-tool
+`thread.started.thread_id` is normalized as the resumable session id, and every completed
+`agent_message` is preserved in event order for conversation gating. `transcript_check` matches
+these parsed items. The JSONL exposes **no deterministic skill-tool
 event**, so `transcript_surfaces_skill_invocation()` is false and the `__skill_invoked` meta-check
 uses the LLM-judge fallback. Token accounting excludes cached input tokens.
 

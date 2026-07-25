@@ -8,6 +8,7 @@
 
 pub mod aggregate;
 pub mod detect_stray_writes;
+pub mod diff_scope;
 pub mod error;
 pub mod fill_transcripts;
 pub mod grade;
@@ -20,8 +21,11 @@ pub use detect_stray_writes::{
     StrayFinding, StrayWritesReport, detect_live_source_reads, detect_stray_writes,
     detect_stray_writes_report,
 };
+pub use diff_scope::{
+    DiffScopeMetrics, DiffScopeSummary, capture_iteration_baselines, measure_iteration_diff_scopes,
+};
 pub use error::PipelineError;
 pub use fill_transcripts::{FillTranscriptsResult, fill_transcripts};
-pub use grade::{GradeContext, emit_judge_tasks, finalize};
+pub use grade::{GradeContext, emit_judge_tasks, finalize, grade_command_checks};
 pub use record_runs::{RecordRunsResult, record_runs};
 pub use slots::{RunSlot, run_slots};

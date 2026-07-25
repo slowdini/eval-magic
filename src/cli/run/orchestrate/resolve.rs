@@ -6,12 +6,12 @@ use std::fs;
 use serde_json::Value;
 
 use crate::cli::command_target_args;
-use crate::core::{Mode, RunContext};
+use crate::core::{Assertion, Mode, RunContext};
 use crate::validation::validate_evals_config;
 
 use super::super::RunError;
 use super::super::dispatch::select_evals;
-use super::super::fixtures::fixture_pairs;
+use super::super::fixtures::{fixture_pairs, setup_file_pairs};
 use super::super::grouping::{GroupInput, compute_groups};
 use super::super::util::{condition_names_for, make_run_nonce, next_iteration};
 use super::{Resolved, RunOptions};
@@ -57,6 +57,17 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     let selected_evals = select_evals(&config.evals, opts.only, opts.skip)?;
     let total_evals = config.evals.len();
 
+    // Resolve held-out setup sources before creating the iteration. The files
+    // are deliberately not copied here; command grading injects them during
+    // ingest after the agent has finished.
+    for ev in &selected_evals {
+        for assertion in ev.assertions.as_deref().unwrap_or(&[]) {
+            if let Assertion::CommandCheck(check) = assertion {
+                setup_file_pairs(check, &ctx.skill_subdir)?;
+            }
+        }
+    }
+
     // Compute isolation groups up front (fixture-conflict + explicit hint), before
     // any env is staged: staging and dispatch both consume this plan. `fixture_pairs`
     // also fails fast here if a declared fixture is missing.
@@ -71,6 +82,10 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
             eval_id: &ev.id,
             isolation: ev.isolation,
             fixtures,
+            // Every canonical run publishes final-environment diff metrics, so
+            // each eval/run needs a private environment.
+            task_scoped: true,
+            runs: ev.runs.unwrap_or(opts.runs),
         })
         .collect();
     let groups = compute_groups(&group_inputs);

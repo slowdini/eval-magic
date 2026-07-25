@@ -174,14 +174,10 @@ fn detect_stray_writes_flags_unverifiable_when_nothing_was_inspected() {
         .stdout(contains("No out-of-bounds").not());
 }
 
-/// Without a `dispatch.json` outputs_dir for the run, the detector must NOT
-/// fabricate the old flat-layout boundary (`<cond_dir>/outputs`). Under the
-/// isolated env layout the agent writes into `env/.eval-magic-outputs/...`, an
-/// absolute path only `dispatch.json` carries; guessing the old convention would
-/// mis-flag every legitimate write as a violation. The detector instead skips
-/// out-of-bounds write classification for that run and logs why.
+/// Without a `dispatch.json` eval_root for the run, the detector must not
+/// fabricate a task boundary. It skips out-of-bounds classification and logs why.
 #[test]
-fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir() {
+fn detect_stray_writes_skips_write_classification_without_dispatch_eval_root() {
     use serde_json::json;
 
     let tmp = TempDir::new().unwrap();
@@ -230,7 +226,7 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir()
         .to_string_lossy()
         .into_owned();
 
-    // No dispatch.json is written: the run has no recorded outputs_dir.
+    // No dispatch.json is written: the run has no recorded eval_root.
     fs::write(
         cond_dir.join("run.json"),
         serde_json::to_string(&json!({
@@ -261,7 +257,7 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir()
         .arg("1")
         .assert()
         .success()
-        .stderr(contains("no outputs_dir in dispatch.json"));
+        .stderr(contains("no eval_root in dispatch.json"));
 
     let report: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(iteration_dir.join("stray-writes.json")).unwrap())
@@ -271,12 +267,11 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_outputs_dir()
     assert_eq!(report["totals"]["violations"], json!(0));
 }
 
-/// With `dispatch.json` carrying the env-layout outputs_dir
-/// (`env/.eval-magic-outputs/...`), the detector classifies against that real
-/// boundary: a write inside it is clean, a write elsewhere in the env (the realistic
-/// repo, outside outputs) is a violation under the outputs-only contract.
+/// With `dispatch.json` carrying the task's eval_root, the detector permits
+/// ordinary source edits anywhere in that private task environment and flags
+/// only writes that leave it.
 #[test]
-fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
+fn detect_stray_writes_uses_eval_root_boundary_from_dispatch() {
     use serde_json::json;
 
     let tmp = TempDir::new().unwrap();
@@ -299,16 +294,14 @@ fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
     let cond_dir = iteration_dir.join("eval-e1").join("old_skill");
     fs::create_dir_all(&cond_dir).unwrap();
 
-    // The isolated env's outputs tree — where the agent is supposed to write.
-    let outputs_dir = iteration_dir
-        .join("env")
+    let eval_root = iteration_dir.join("env-g1-old_skill").join("eval-e1");
+    let outputs_dir = eval_root
         .join(".eval-magic-outputs")
         .join("eval-e1")
         .join("old_skill");
-    let in_bounds = outputs_dir.join("answer.md").to_string_lossy().into_owned();
-    // A write elsewhere inside the env (the realistic repo), outside outputs.
+    let output_artifact = outputs_dir.join("answer.md").to_string_lossy().into_owned();
+    let source_edit = eval_root.join("src/lib.rs").to_string_lossy().into_owned();
     let stray = iteration_dir
-        .join("env")
         .join("notes.md")
         .to_string_lossy()
         .into_owned();
@@ -328,7 +321,7 @@ fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
     )
     .unwrap();
 
-    // dispatch.json carries the absolute env-layout outputs_dir for the run.
+    // dispatch.json carries both framework outputs and the broader task boundary.
     fs::write(
         iteration_dir.join("dispatch.json"),
         serde_json::to_string(&json!({
@@ -337,6 +330,7 @@ fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
                     "eval_id": "e1",
                     "condition": "old_skill",
                     "outputs_dir": outputs_dir.to_string_lossy(),
+                    "eval_root": eval_root.to_string_lossy(),
                 }
             ],
         }))
@@ -354,8 +348,9 @@ fn detect_stray_writes_uses_env_layout_outputs_dir_from_dispatch() {
             "files": [],
             "final_message": "done",
             "tool_invocations": [
-                {"name": "Write", "args": {"file_path": in_bounds}, "ordinal": 0},
-                {"name": "Write", "args": {"file_path": stray}, "ordinal": 1},
+                {"name": "Write", "args": {"file_path": output_artifact}, "ordinal": 0},
+                {"name": "Edit", "args": {"file_path": source_edit}, "ordinal": 1},
+                {"name": "Write", "args": {"file_path": stray}, "ordinal": 2},
             ],
             "total_tokens": null,
             "duration_ms": null,

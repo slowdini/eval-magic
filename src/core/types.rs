@@ -6,6 +6,8 @@
 //! Types are honest and strict about what each artifact contains, but tolerate
 //! unknown fields (no `deny_unknown_fields`) so older artifacts stay readable.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -20,6 +22,8 @@ pub const SKILL_INVOKED_META_ID: &str = "__skill_invoked";
 pub enum Assertion {
     TranscriptCheck(AssertionTranscriptCheck),
     LlmJudge(AssertionLlmJudge),
+    CommandCheck(AssertionCommandCheck),
+    DiffScope(AssertionDiffScope),
 }
 
 /// A check evaluated against the run transcript (substring/pattern match).
@@ -42,11 +46,43 @@ pub struct AssertionLlmJudge {
     pub model: Option<String>,
 }
 
+/// A runner-owned command assertion evaluated against the final task environment.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertionCommandCheck {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_files: Option<Vec<String>>,
+    pub command: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub env: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matrix: Option<BTreeMap<String, Vec<String>>>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub expect_exit_code: i32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expect_stdout: Option<String>,
+}
+
+/// A deterministic threshold over the final task environment's diff scope.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AssertionDiffScope {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_files_touched: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_lines_changed: Option<u64>,
+}
+
+fn is_zero(value: &i32) -> bool {
+    *value == 0
+}
+
 /// Ordering constraint for a transcript check.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MustPrecede {
     CompletionClaim,
+    FirstWrite,
     Any,
 }
 
@@ -68,18 +104,34 @@ pub struct Eval {
     /// to the flag's value (1 unless raised).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u32>,
-    /// Explicit isolation hint for run batching. `shared` (default, omitted) lets
-    /// the eval batch with others; `isolated` forces it into its own singleton
-    /// group, for confounds the framework can't auto-detect (e.g. the agent
-    /// mutates a shared fixture another eval reads). Conflicting fixtures
-    /// auto-isolate into separate groups regardless of this hint.
+    /// Legacy isolation hint retained for config compatibility. Canonical runs
+    /// already give every dispatch a private environment for diff-scope capture,
+    /// so `shared` and `isolated` currently have the same effective isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<Isolation>,
+    /// Ordered scripted user follow-ups. Absence preserves one-shot dispatch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turns: Option<Vec<ScriptedTurn>>,
 }
 
-/// Per-eval isolation hint controlling how an eval is grouped into run batches.
-/// `Shared` is the default (an eval may share an env with non-conflicting evals);
-/// `Isolated` forces the eval into its own singleton group.
+/// One scripted user follow-up delivered after an assistant response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScriptedTurn {
+    pub prompt: String,
+    pub deliver_when: DeliverWhen,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_response_matches: Option<String>,
+}
+
+/// Gate controlling whether a scripted user follow-up is delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverWhen {
+    Always,
+    AgentAsks,
+}
+
+/// Legacy per-eval isolation hint. Every new run is task-scoped regardless.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Isolation {
@@ -197,6 +249,61 @@ pub struct RunRecord {
     /// Appended last so legacy single-run records serialize byte-identically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_index: Option<u32>,
+    /// Ordered multi-turn evidence and scripted-delivery outcome. Absent for
+    /// legacy one-shot runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationRecord>,
+}
+
+/// The completed outcome of one scripted conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationRecord {
+    pub status: ConversationStatus,
+    pub delivered_followups: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<ConversationStopReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_before_followup: Option<u32>,
+    pub events: Vec<ConversationEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStatus {
+    Completed,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStopReason {
+    AgentDidNotAsk,
+    AgentResponseMismatch,
+}
+
+/// One globally ordered event across every delivered conversation round.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConversationEvent {
+    UserMessage {
+        ordinal: u32,
+        round: u32,
+        text: String,
+    },
+    AssistantMessage {
+        ordinal: u32,
+        round: u32,
+        text: String,
+    },
+    ToolInvocation {
+        ordinal: u32,
+        round: u32,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<Value>,
+    },
 }
 
 /// The result of grading one assertion.
@@ -217,6 +324,8 @@ pub struct AssertionResult {
 pub enum Grader {
     TranscriptCheck,
     LlmJudge,
+    CommandCheck,
+    DiffScope,
 }
 
 /// The full grading output for one run.
@@ -323,6 +432,7 @@ mod tests {
             skill_should_trigger: None,
             runs: None,
             isolation: None,
+            turns: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -343,6 +453,7 @@ mod tests {
             skill_should_trigger: None,
             runs: None,
             isolation: Some(Isolation::Isolated),
+            turns: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert_eq!(
@@ -366,6 +477,7 @@ mod tests {
             total_tokens: None,
             duration_ms: None,
             run_index: None,
+            conversation: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
@@ -374,6 +486,7 @@ mod tests {
         assert_eq!(out.get("duration_ms"), Some(&Value::Null));
         // Absent run_index is omitted, keeping single-run records byte-identical.
         assert!(out.get("run_index").is_none());
+        assert!(out.get("conversation").is_none());
     }
 
     #[test]
@@ -444,61 +557,6 @@ mod tests {
         assert!(out.get("run_nonce").is_none());
     }
 
-    /// Fixture artifacts captured from the pre-#135 binary (compile-time
-    /// `Harness` enum era). Parsing and re-serializing with the artifact
-    /// writer format (`to_string_pretty` + trailing newline, matching
-    /// `pipeline::io::write_json`) must reproduce every byte, so opening the
-    /// harness identifier can never reshape existing artifacts.
-    #[test]
-    fn conditions_json_fixtures_round_trip_byte_identically() {
-        for (name, fixture) in [
-            (
-                "claude-code",
-                include_str!("../../tests/fixtures/conditions/claude-code.json"),
-            ),
-            (
-                "codex",
-                include_str!("../../tests/fixtures/conditions/codex.json"),
-            ),
-            (
-                "opencode",
-                include_str!("../../tests/fixtures/conditions/opencode.json"),
-            ),
-            (
-                "no-harness",
-                include_str!("../../tests/fixtures/conditions/no-harness.json"),
-            ),
-        ] {
-            let record: ConditionsRecord = serde_json::from_str(fixture)
-                .unwrap_or_else(|e| panic!("fixture {name} no longer parses: {e}"));
-            let mut out = serde_json::to_string_pretty(&record).unwrap();
-            out.push('\n');
-            assert_eq!(
-                out, fixture,
-                "fixture {name} did not round-trip byte-identically"
-            );
-        }
-    }
-
-    /// A `conditions.json` naming a harness the registry doesn't know must
-    /// fail deserialization with the known harnesses listed, mirroring the
-    /// `--harness` CLI rejection.
-    #[test]
-    fn conditions_json_with_unknown_harness_errors_naming_known_harnesses() {
-        let err = serde_json::from_value::<ConditionsRecord>(json!({
-            "mode": "new-skill",
-            "conditions": [],
-            "timestamp": "2026-06-08T00:00:00Z",
-            "harness": "nonexistent"
-        }))
-        .unwrap_err()
-        .to_string();
-        assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
-        for name in ["claude-code", "codex", "opencode"] {
-            assert!(err.contains(name), "error must name {name}: {err}");
-        }
-    }
-
     #[test]
     fn timing_source_kebab_roundtrips() {
         let v = serde_json::to_value(TimingSource::CompletionEvent).unwrap();
@@ -507,3 +565,7 @@ mod tests {
         assert_eq!(back, TimingSource::CompletionEvent);
     }
 }
+
+#[cfg(test)]
+#[path = "types/artifact_tests.rs"]
+mod artifact_tests;

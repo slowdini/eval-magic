@@ -61,6 +61,34 @@ fn run_help_documents_no_guard() {
         .stdout(contains("--no-guard"));
 }
 
+#[test]
+fn grade_and_ingest_help_document_runner_owned_command_checks() {
+    for command in ["grade", "ingest"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("command_check"))
+            .stdout(contains("runner"))
+            .stdout(contains("held-out"))
+            .stdout(contains("environment matrix"));
+    }
+}
+
+#[test]
+fn pipeline_help_documents_always_on_diff_scope_metrics() {
+    for command in ["ingest", "grade", "finalize", "aggregate"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("diff_scope"))
+            .stdout(contains("diff-scope.json"))
+            .stdout(contains("files"))
+            .stdout(contains("lines"));
+    }
+}
+
 /// `ingest` reaches its own context validation when invoked bare.
 #[test]
 fn ingest_is_wired_and_validates_context() {

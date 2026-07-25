@@ -339,6 +339,25 @@ pub trait HarnessAdapter {
         false
     }
 
+    /// Render the harness's one-shot CLI command for a task. Angle-bracket
+    /// task paths remain for the caller to substitute.
+    fn cli_exec_command(&self, _guard: bool, _agent_model: Option<&str>) -> Option<String> {
+        None
+    }
+
+    /// **Enhancement: native conversation resume.** Whether the harness can
+    /// continue a captured native session for scripted follow-up turns.
+    fn has_conversation_resume(&self) -> bool {
+        false
+    }
+
+    /// Render one same-session follow-up command. In addition to the usual
+    /// angle-bracket task paths, `{session_arg}` and `{prompt_arg}` remain for
+    /// the conversation driver to fill with shell-quoted values.
+    fn cli_resume_command(&self, _guard: bool, _agent_model: Option<&str>) -> Option<String> {
+        None
+    }
+
     /// **Enhancement: dispatch recipes.** The `Next:` guidance printed after
     /// `run`: how to dispatch each task through this harness's one-shot CLI
     /// and then ingest. Empty when no dispatch recipe is wired.
@@ -380,6 +399,8 @@ pub struct CliDispatchContext<'a> {
 pub struct CliManifestContext<'a> {
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+    /// Exclude scripted tasks from a mixed suite's one-shot recipe.
+    pub one_shot_only: bool,
 }
 
 /// Context for rendering a harness's one-shot CLI judge-dispatch guidance.

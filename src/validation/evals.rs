@@ -2,16 +2,18 @@
 //! hand-rolled constraints draft-07 can't express.
 
 use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
 
+use regex::Regex;
 use serde_json::Value;
 
-use crate::core::EvalsConfig;
+use crate::core::{Assertion, DeliverWhen, EvalsConfig};
 use crate::validation::error::ValidationError;
 use crate::validation::schema::{SchemaName, validate_against_schema};
 
 /// Validate a parsed `evals.json`. Runs the structural schema check, then the
-/// supplemental duplicate-`id` guard (uniqueness by a sub-field isn't
-/// expressible in JSON Schema draft-07), returning the typed config on success.
+/// supplemental duplicate-`id`, command environment, and held-out path guards,
+/// returning the typed config on success.
 pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig, ValidationError> {
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
@@ -24,9 +26,160 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
                 id: ev.id.clone(),
             });
         }
+
+        for (turn_index, turn) in ev.turns.as_deref().unwrap_or(&[]).iter().enumerate() {
+            if turn.prompt.trim().is_empty() {
+                return Err(ValidationError::InvalidConfig {
+                    path: source.to_string(),
+                    message: format!(
+                        "eval '{}', turns[{turn_index}]: prompt must contain non-whitespace text",
+                        ev.id
+                    ),
+                });
+            }
+            if turn.deliver_when == DeliverWhen::Always && turn.agent_response_matches.is_some() {
+                return Err(ValidationError::InvalidConfig {
+                    path: source.to_string(),
+                    message: format!(
+                        "eval '{}', turns[{turn_index}]: agent_response_matches is only valid when deliver_when is 'agent_asks'",
+                        ev.id
+                    ),
+                });
+            }
+            if let Some(pattern) = &turn.agent_response_matches
+                && let Err(error) = Regex::new(pattern)
+            {
+                return Err(ValidationError::InvalidConfig {
+                    path: source.to_string(),
+                    message: format!(
+                        "eval '{}', turns[{turn_index}]: invalid agent_response_matches regex {pattern:?}: {error}",
+                        ev.id
+                    ),
+                });
+            }
+        }
+
+        let visible = ev.files.as_deref().unwrap_or(&[]);
+        for assertion in ev.assertions.as_deref().unwrap_or(&[]) {
+            if let Assertion::TranscriptCheck(check) = assertion {
+                if check.check == "assistant_message_matches" && ev.turns.is_none() {
+                    return Err(ValidationError::InvalidConfig {
+                        path: source.to_string(),
+                        message: format!(
+                            "eval '{}', transcript_check '{}': assistant_message_matches \
+                             requires a non-empty turns array",
+                            ev.id, check.id
+                        ),
+                    });
+                }
+                if let Some(pattern) = &check.pattern
+                    && let Err(error) = Regex::new(pattern)
+                {
+                    return Err(ValidationError::InvalidConfig {
+                        path: source.to_string(),
+                        message: format!(
+                            "eval '{}', transcript_check '{}': invalid pattern regex \
+                             {pattern:?}: {error}",
+                            ev.id, check.id
+                        ),
+                    });
+                }
+            }
+            let Assertion::CommandCheck(check) = assertion else {
+                continue;
+            };
+            for (name, value) in check.env.as_ref().into_iter().flatten() {
+                validate_environment_name(source, &ev.id, &check.id, "env", name)?;
+                validate_environment_value(source, &ev.id, &check.id, "env", name, value)?;
+            }
+            for (name, values) in check.matrix.as_ref().into_iter().flatten() {
+                validate_environment_name(source, &ev.id, &check.id, "matrix", name)?;
+                for value in values {
+                    validate_environment_value(source, &ev.id, &check.id, "matrix", name, value)?;
+                }
+            }
+            for setup in check.setup_files.as_deref().unwrap_or(&[]) {
+                let setup_path = normalize_relative(setup).map_err(|()| {
+                    ValidationError::InvalidConfig {
+                        path: source.to_string(),
+                        message: format!(
+                            "eval '{}', command_check '{}': setup_files path must be relative and stay within the task environment: {setup}",
+                            ev.id, check.id
+                        ),
+                    }
+                })?;
+                for fixture in visible {
+                    let Ok(fixture_path) = normalize_relative(fixture) else {
+                        continue;
+                    };
+                    if paths_overlap(&fixture_path, &setup_path) {
+                        return Err(ValidationError::InvalidConfig {
+                            path: source.to_string(),
+                            message: format!(
+                                "eval '{}', command_check '{}': visible fixture '{}' and setup_files path '{}' overlap; held-out setup paths must be disjoint from agent-visible files",
+                                ev.id, check.id, fixture, setup
+                            ),
+                        });
+                    }
+                }
+            }
+        }
     }
 
     Ok(validated)
+}
+
+fn validate_environment_name(
+    source: &str,
+    eval_id: &str,
+    check_id: &str,
+    field: &str,
+    name: &str,
+) -> Result<(), ValidationError> {
+    if name.is_empty() || name.contains('=') || name.contains('\0') {
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{eval_id}', command_check '{check_id}': {field} environment variable name must be non-empty and contain neither '=' nor NUL: {name:?}"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_environment_value(
+    source: &str,
+    eval_id: &str,
+    check_id: &str,
+    field: &str,
+    name: &str,
+    value: &str,
+) -> Result<(), ValidationError> {
+    if value.contains('\0') {
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{eval_id}', command_check '{check_id}': {field} environment variable {name:?} value must not contain NUL"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn normalize_relative(value: &str) -> Result<PathBuf, ()> {
+    let mut normalized = PathBuf::new();
+    for component in Path::new(value).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return Err(()),
+        }
+    }
+    Ok(normalized)
+}
+
+fn paths_overlap(left: &Path, right: &Path) -> bool {
+    left.starts_with(right) || right.starts_with(left)
 }
 
 #[cfg(test)]
@@ -136,5 +289,331 @@ mod tests {
         let mut config = base();
         config["evals"] = json!([]);
         assert!(validate_evals_config(&config, "evals.json").is_err());
+    }
+
+    #[test]
+    fn accepts_ordered_scripted_follow_up_turns() {
+        let mut config = base();
+        config["evals"][0]["turns"] = json!([
+            {
+                "prompt": "Which users are affected?",
+                "deliver_when": "always"
+            },
+            {
+                "prompt": "They are all in US timezones and this is a date-only field.",
+                "deliver_when": "agent_asks",
+                "agent_response_matches": "(?i)(time ?zone|date-only)"
+            }
+        ]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let turns = parsed.evals[0].turns.as_ref().unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].prompt, "Which users are affected?");
+        assert_eq!(turns[0].deliver_when, crate::core::DeliverWhen::Always);
+        assert_eq!(turns[1].deliver_when, crate::core::DeliverWhen::AgentAsks);
+        assert_eq!(
+            turns[1].agent_response_matches.as_deref(),
+            Some("(?i)(time ?zone|date-only)")
+        );
+    }
+
+    #[test]
+    fn rejects_assistant_message_check_without_scripted_turns() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "asked",
+            "type": "transcript_check",
+            "check": "assistant_message_matches",
+            "pattern": "timezone"
+        }]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("assistant_message_matches"), "{err}");
+        assert!(err.contains("turns"), "{err}");
+    }
+
+    #[test]
+    fn rejects_invalid_scripted_turn_shapes() {
+        for (turn, expected) in [
+            (json!({"prompt": "", "deliver_when": "always"}), "prompt"),
+            (
+                json!({"prompt": "answer", "deliver_when": "sometimes"}),
+                "deliver_when",
+            ),
+            (
+                json!({
+                    "prompt": "answer",
+                    "deliver_when": "always",
+                    "agent_response_matches": "topic"
+                }),
+                "agent_response_matches",
+            ),
+            (
+                json!({
+                    "prompt": "answer",
+                    "deliver_when": "agent_asks",
+                    "agent_response_matches": "("
+                }),
+                "agent_response_matches",
+            ),
+        ] {
+            let mut config = base();
+            config["evals"][0]["turns"] = json!([turn]);
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_an_empty_scripted_turns_array() {
+        let mut config = base();
+        config["evals"][0]["turns"] = json!([]);
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("turns"), "{error}");
+    }
+
+    #[test]
+    fn accepts_command_check_with_optional_setup_stdout_and_exit_code() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([
+            {
+                "id": "default-exit",
+                "type": "command_check",
+                "command": "cargo test"
+            },
+            {
+                "id": "full",
+                "type": "command_check",
+                "setup_files": ["holdout/test.rs"],
+                "command": "cargo test --test holdout",
+                "expect_exit_code": 2,
+                "expect_stdout": "2 tests passed"
+            }
+        ]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let assertions = parsed.evals[0].assertions.as_ref().unwrap();
+        let crate::core::Assertion::CommandCheck(defaulted) = &assertions[0] else {
+            panic!("expected command_check");
+        };
+        assert_eq!(defaulted.expect_exit_code, 0);
+        let crate::core::Assertion::CommandCheck(full) = &assertions[1] else {
+            panic!("expected command_check");
+        };
+        assert_eq!(
+            full.setup_files.as_deref(),
+            Some(&["holdout/test.rs".into()][..])
+        );
+        assert_eq!(full.expect_exit_code, 2);
+        assert_eq!(full.expect_stdout.as_deref(), Some("2 tests passed"));
+    }
+
+    #[test]
+    fn accepts_command_check_environment_and_matrix() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "timezone-matrix",
+            "type": "command_check",
+            "command": "bun test",
+            "env": {
+                "CI": "1",
+                "EMPTY": "",
+                "TZ": "UTC"
+            },
+            "matrix": {
+                "LOCALE": ["en_US", "de_DE"],
+                "MODE": ["", "strict"],
+                "TZ": ["UTC", "America/Los_Angeles"]
+            }
+        }]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let crate::core::Assertion::CommandCheck(check) =
+            &parsed.evals[0].assertions.as_ref().unwrap()[0]
+        else {
+            panic!("expected command_check");
+        };
+        assert_eq!(check.env.as_ref().unwrap()["CI"], "1");
+        assert_eq!(check.env.as_ref().unwrap()["EMPTY"], "");
+        assert_eq!(check.matrix.as_ref().unwrap()["MODE"][0], "");
+        assert_eq!(
+            check.matrix.as_ref().unwrap()["TZ"],
+            ["UTC", "America/Los_Angeles"]
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_command_check_environment_names_and_nul_values() {
+        for (field, value) in [
+            ("env", json!({ "BAD=NAME": "value" })),
+            ("env", json!({ "GOOD_NAME": "bad\u{0}value" })),
+            ("matrix", json!({ "BAD=NAME": ["value"] })),
+            ("matrix", json!({ "GOOD_NAME": ["bad\u{0}value"] })),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([{
+                "id": "environment",
+                "type": "command_check",
+                "command": "true",
+                field: value
+            }]);
+
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+            assert!(error.contains("environment"), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_empty_or_duplicate_command_check_environment_collections() {
+        for (field, value) in [
+            ("env", json!({})),
+            ("matrix", json!({})),
+            ("matrix", json!({ "TZ": [] })),
+            ("matrix", json!({ "TZ": ["UTC", "UTC"] })),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([{
+                "id": "environment",
+                "type": "command_check",
+                "command": "true",
+                field: value
+            }]);
+
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_non_string_command_check_environment_values() {
+        for (field, value) in [
+            ("env", json!({ "CI": 1 })),
+            ("env", json!({ "CI": null })),
+            ("matrix", json!({ "TZ": ["UTC", 1] })),
+            ("matrix", json!({ "TZ": "UTC" })),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([{
+                "id": "environment",
+                "type": "command_check",
+                "command": "true",
+                field: value
+            }]);
+
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(field), "{field}: {error}");
+        }
+    }
+
+    #[test]
+    fn accepts_diff_scope_with_either_or_both_thresholds() {
+        for assertion in [
+            json!({
+                "id": "files",
+                "type": "diff_scope",
+                "max_files_touched": 1
+            }),
+            json!({
+                "id": "lines",
+                "type": "diff_scope",
+                "max_lines_changed": 8
+            }),
+            json!({
+                "id": "both",
+                "type": "diff_scope",
+                "max_files_touched": 1,
+                "max_lines_changed": 8
+            }),
+        ] {
+            let mut config = base();
+            config["evals"][0]["assertions"] = json!([assertion]);
+            validate_evals_config(&config, "evals.json").unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_diff_scope_without_a_threshold() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "report-only",
+            "type": "diff_scope"
+        }]);
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("diff_scope"), "{error}");
+    }
+
+    fn with_command_check(files: &[&str], setup_files: &[&str]) -> Value {
+        let mut config = base();
+        config["evals"][0]["files"] = json!(files);
+        config["evals"][0]["assertions"] = json!([{
+            "id": "held-out",
+            "type": "command_check",
+            "setup_files": setup_files,
+            "command": "test -f holdout/test.txt"
+        }]);
+        config
+    }
+
+    #[test]
+    fn rejects_exact_visible_and_setup_file_overlap() {
+        let config = with_command_check(&["holdout/test.txt"], &["holdout/test.txt"]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "error was: {err}");
+        assert!(err.contains("holdout/test.txt"), "error was: {err}");
+    }
+
+    #[test]
+    fn rejects_visible_directory_ancestor_of_setup_file() {
+        let config = with_command_check(&["holdout"], &["holdout/test.txt"]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "error was: {err}");
+        assert!(err.contains("holdout"), "error was: {err}");
+    }
+
+    #[test]
+    fn rejects_setup_directory_ancestor_of_visible_file() {
+        let config = with_command_check(&["src/main.rs"], &["src"]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("overlap"), "error was: {err}");
+        assert!(err.contains("src"), "error was: {err}");
+    }
+
+    #[test]
+    fn rejects_absolute_and_escaping_setup_paths() {
+        for setup in ["/tmp/holdout.txt", "../holdout.txt", "holdout/../../escape"] {
+            let config = with_command_check(&["src/main.rs"], &[setup]);
+            let err = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("setup_files"), "{setup}: {err}");
+            assert!(err.contains("relative"), "{setup}: {err}");
+        }
+    }
+
+    #[test]
+    fn accepts_disjoint_visible_and_setup_paths() {
+        let config = with_command_check(&["src/main.rs"], &["holdout/test.txt"]);
+        validate_evals_config(&config, "evals.json").unwrap();
     }
 }

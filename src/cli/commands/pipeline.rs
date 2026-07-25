@@ -161,17 +161,21 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let result = pipeline::record_runs(&dir, ctx.harness, args.overwrite)?;
 
     println!(
-        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, missing transcript: {}",
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, skipped (incomplete conversation): {}, missing transcript: {}",
         result.recorded,
         result.skipped_existing,
         result.skipped_no_final_message,
         result.skipped_prompt_unread,
+        result.skipped_incomplete_conversation,
         result.missing_transcript
     );
     if let Some(warning) = result.transcript_warning(ctx.harness) {
         eprintln!("{warning}");
     }
     if let Some(warning) = result.prompt_unread_warning() {
+        eprintln!("{warning}");
+    }
+    if let Some(warning) = result.incomplete_conversation_warning() {
         eprintln!("{warning}");
     }
     Ok(())
@@ -191,7 +195,7 @@ pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Report writes outside the sandbox output boundary (and live-source reads) for
+/// Report writes outside each private task environment (and live-source reads) for
 /// every run in the iteration.
 pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
@@ -206,7 +210,7 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     for r in &report.runs {
         for v in &r.violations {
             eprintln!(
-                "✗ {}/{}: {} wrote outside outputs dir → {} (ordinal {})",
+                "✗ {}/{}: {} wrote outside task environment → {} (ordinal {})",
                 r.eval_id,
                 r.condition,
                 v.tool,
@@ -294,6 +298,19 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
         let target_args = command_target_args(&ctx);
         println!("\nNext: eval-magic aggregate{target_args} --iteration {iteration}");
     } else {
+        let diffs = pipeline::measure_iteration_diff_scopes(&dir)?;
+        println!(
+            "Diff scope: {} measured, {} reused, {} missing baseline, {} shared environment",
+            diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
+        );
+        let commands =
+            pipeline::grade_command_checks(&dir, &evals, &ctx.skill_subdir, common.overwrite)?;
+        if commands.executed + commands.reused > 0 {
+            println!(
+                "Command checks: {} executed, {} reused, {} failed",
+                commands.executed, commands.reused, commands.failed
+            );
+        }
         let s = pipeline::emit_judge_tasks(&gctx)?;
         println!("Wrote {}", dir.join("judge-tasks.json").display());
         println!(

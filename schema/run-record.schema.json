@@ -80,6 +80,106 @@
       "type": "integer",
       "minimum": 1,
       "description": "1-based run index within a multi-run (eval, condition) cell; absent for single-run cells."
+    },
+    "conversation": {
+      "$ref": "#/definitions/conversation",
+      "description": "Ordered multi-turn evidence and scripted-delivery outcome. Absent for one-shot runs."
+    }
+  },
+  "definitions": {
+    "conversation": {
+      "type": "object",
+      "required": ["status", "delivered_followups", "events"],
+      "additionalProperties": false,
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["completed", "stopped"]
+        },
+        "delivered_followups": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stop_reason": {
+          "type": "string",
+          "enum": ["agent_did_not_ask", "agent_response_mismatch"]
+        },
+        "stopped_before_followup": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "events": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/userMessage" },
+              { "$ref": "#/definitions/assistantMessage" },
+              { "$ref": "#/definitions/conversationTool" }
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "status": { "const": "stopped" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["stop_reason", "stopped_before_followup"]
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "completed" } },
+            "required": ["status"]
+          },
+          "then": {
+            "not": {
+              "anyOf": [
+                { "required": ["stop_reason"] },
+                { "required": ["stopped_before_followup"] }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "userMessage": {
+      "type": "object",
+      "required": ["type", "ordinal", "round", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "user_message" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "round": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" }
+      }
+    },
+    "assistantMessage": {
+      "type": "object",
+      "required": ["type", "ordinal", "round", "text"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "assistant_message" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "round": { "type": "integer", "minimum": 1 },
+        "text": { "type": "string" }
+      }
+    },
+    "conversationTool": {
+      "type": "object",
+      "required": ["type", "ordinal", "round", "name"],
+      "additionalProperties": false,
+      "properties": {
+        "type": { "const": "tool_invocation" },
+        "ordinal": { "type": "integer", "minimum": 0 },
+        "round": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string" },
+        "args": { "type": ["object", "string", "array", "null"] },
+        "result": { "type": ["string", "object", "null"] }
+      }
     }
   }
 }

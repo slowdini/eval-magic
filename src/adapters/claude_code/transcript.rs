@@ -7,6 +7,7 @@
 //! [`TranscriptSummary`](crate::adapters::TranscriptSummary) the pipeline
 //! consumes lives in `crate::adapters::transcript`.
 
+use crate::adapters::transcript::TranscriptEvent;
 use crate::core::ToolInvocation;
 use serde::Deserialize;
 use serde_json::Value;
@@ -123,6 +124,43 @@ pub(crate) fn extract_invocations(records: &[TranscriptRecord]) -> Vec<ToolInvoc
     }
 
     invocations
+}
+
+pub(crate) fn extract_events(records: &[TranscriptRecord]) -> Vec<TranscriptEvent> {
+    let invocations = extract_invocations(records);
+    let mut tool_index = 0usize;
+    let mut events = Vec::new();
+    for record in records {
+        if record.record_type.as_deref() != Some("assistant") {
+            continue;
+        }
+        for block in content_blocks(&record.message) {
+            let ordinal = events.len() as u32;
+            match block.get("type").and_then(Value::as_str) {
+                Some("text") => {
+                    if let Some(text) = block.get("text").and_then(Value::as_str) {
+                        events.push(TranscriptEvent::AssistantMessage {
+                            ordinal,
+                            text: text.to_string(),
+                        });
+                    }
+                }
+                Some("tool_use") => {
+                    if let Some(invocation) = invocations.get(tool_index) {
+                        events.push(TranscriptEvent::ToolInvocation {
+                            ordinal,
+                            name: invocation.name.clone(),
+                            args: invocation.args.clone(),
+                            result: invocation.result.clone(),
+                        });
+                    }
+                    tool_index += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    events
 }
 
 /// The concatenated text blocks of the last assistant message carrying any text.

@@ -1,6 +1,8 @@
-//! `run` — build the iteration workspace and dispatch plan (the default action).
+//! `run` and `dispatch-task` handlers.
 
-use crate::cli::args::RunArgs;
+use std::path::Path;
+
+use crate::cli::args::{DispatchTaskArgs, RunArgs};
 use crate::cli::run;
 use crate::cli::{parse_id_list, run_context_with_bootstrap};
 
@@ -33,4 +35,12 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
         },
     )?;
     Ok(())
+}
+
+pub(crate) fn run_dispatch_task(args: DispatchTaskArgs) -> anyhow::Result<()> {
+    run::conversation::command_dispatch_task(
+        Path::new(&args.dispatch),
+        args.task_index,
+        args.overwrite,
+    )
 }

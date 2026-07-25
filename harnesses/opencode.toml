@@ -124,3 +124,11 @@ Parallel dispatch from this iteration directory:
 
 Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/opencode-events.jsonl`.
 '''
+
+[conversation]
+resume_exec_template = '''
+opencode run --dir <eval-root> --session {session_arg} --format json --auto{model_arg} \
+  {prompt_arg} \
+  </dev/null \
+  > <outputs_dir>/opencode-events.jsonl \
+  2> <outputs_dir>/opencode-stderr.log'''

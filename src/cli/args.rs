@@ -82,11 +82,10 @@ pub struct CommonArgs {
     pub mode: Option<String>,
     /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
-    /// Claude Code and Codex both support staged skills, transcript ingest, and
-    /// the write guard (armed automatically). Each reads its own per-task events
-    /// file (`claude-events.jsonl`, `codex-events.jsonl`); Codex stages skills
-    /// under `.agents/skills`. OpenCode stages skills under `.opencode/skills`;
-    /// transcript ingest and the write guard are not yet wired for OpenCode.
+    /// All three built-ins support staged skills, transcript ingest, scripted
+    /// same-session follow-ups, and the automatically armed write guard. Each
+    /// reads its own per-task events file; Codex stages skills under
+    /// `.agents/skills`, and OpenCode under `.opencode/skills`.
     /// The name is resolved against the harness descriptor registry after
     /// parsing; an unknown name errors listing every registered harness.
     #[arg(long)]
@@ -107,7 +106,7 @@ pub struct CommonArgs {
     /// Skip these eval ids (comma-separated). Mutually exclusive with `--only`.
     #[arg(long)]
     pub skip: Option<String>,
-    /// Replace existing records rather than erroring.
+    /// Replace existing records and rerun completed command checks.
     #[arg(long)]
     pub overwrite: bool,
 }
@@ -162,7 +161,8 @@ pub(crate) enum HarnessCommands {
     /// user, project, file — a merged descriptor shows all of them, e.g.
     /// `built-in + project`) and the enhancements the resolved descriptor
     /// declares (staging, skills-block, transcript, model-flag, guard,
-    /// shadow-preflight, dispatch-recipes; `baseline` when none). The session's
+    /// shadow-preflight, dispatch-recipes, conversation-resume; `baseline` when
+    /// none). The session's
     /// default harness — `claude-code`, or the `--harness-file` descriptor when
     /// one is loaded — is marked `(default)`.
     List,
@@ -190,11 +190,39 @@ pub(crate) enum HarnessCommands {
     /// checked against its real merge target. A name target re-lints every
     /// discovered layer file strictly, surfacing descriptors that registry
     /// initialization skipped with a warning. Exits non-zero when any check
-    /// fails. (A future `--probe` flag is reserved for a live dispatch probe
-    /// through the exec template.)
+    /// fails.
+    ///
+    /// With `--probe`, and only after every static check passes, also exercises
+    /// the descriptor end-to-end: renders `dispatch.exec_template` with a
+    /// trivial prompt in a throwaway temp dir, runs it via `/bin/sh -c` from
+    /// the temp `eval_root`, and verifies `outputs/final-message.md` is
+    /// recovered (non-empty). It additionally render-only-validates
+    /// `parallel_command_template` and `judge_command_template` for
+    /// placeholder-shape errors — rendering each with stand-in values and
+    /// reporting any unresolved `{token}` the run would later surface.
+    ///
+    /// `--probe` invokes the real harness CLI (network, tokens, usage
+    /// limits), so it is opt-in and never runs as part of standard CI checks
+    /// — it is a one-time BYOH check. Before exec it prints an "about to
+    /// execute" banner with the rendered command and asks `y/N`; pass `--yes`
+    /// to skip the prompt, and `--probe-timeout <SECS>` (default 300 = 5 min)
+    /// to cap the run.
     Lint {
         /// Descriptor file path, or a registered harness name.
         target: String,
+        /// Execute the dispatch exec template with a trivial prompt and verify
+        /// final-message recovery (opt-in; costs real CLI usage). See the
+        /// subcommand description above for the full contract.
+        #[arg(long)]
+        probe: bool,
+        /// Skip the interactive `y/N` confirm before a `--probe` exec.
+        /// Default-deny when stdin is not a TTY, so the probe never runs
+        /// unattended inside a pipe or CI step.
+        #[arg(long)]
+        yes: bool,
+        /// Override the `--probe` exec timeout in seconds (default 300 = 5 min).
+        #[arg(long, value_name = "SECS")]
+        probe_timeout: Option<u64>,
     },
 }
 
@@ -449,6 +477,20 @@ pub struct RunArgs {
     pub label: Option<String>,
 }
 
+/// Execute one runner-owned multi-turn task from a generated dispatch plan.
+#[derive(Debug, Args)]
+pub struct DispatchTaskArgs {
+    /// Path to the runner-generated dispatch.json.
+    #[arg(long, value_name = "PATH")]
+    pub dispatch: String,
+    /// Zero-based index into dispatch.json's tasks array.
+    #[arg(long)]
+    pub task_index: usize,
+    /// Replace an existing conversation.json and rerun the task.
+    #[arg(long)]
+    pub overwrite: bool,
+}
+
 /// Every subcommand on the CLI.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
@@ -460,6 +502,12 @@ pub(crate) enum Commands {
     /// `codex exec`). Also writes `RUNBOOK.md`, a human-followable handoff for the
     /// run ("Read and follow RUNBOOK.md").
     Run(RunArgs),
+    /// Execute one scripted multi-turn task through its harness CLI.
+    ///
+    /// Starts the task, resumes the same native session for every delivered
+    /// follow-up, and writes the task's conversation.json completion artifact.
+    /// One-shot tasks continue to use the commands in dispatch-manifest.md.
+    DispatchTask(DispatchTaskArgs),
     /// Snapshot a workspace baseline.
     ///
     /// Snapshots the skill as a Mode B baseline under
@@ -481,17 +529,26 @@ pub(crate) enum Commands {
     ///
     /// Fixed-order chain: record-runs → fill-transcripts → detect-stray-writes →
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
-    /// writes, grades `transcript_check` assertions, then stops at the judge
-    /// hand-off, listing a judge task per `llm_judge` assertion. Requires
-    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl`.
+    /// writes, captures always-on final-environment files/lines/hunks in
+    /// `diff-scope.json`, grades `transcript_check` assertions, prepares
+    /// `diff_scope` grading for finalize, injects held-out
+    /// `command_check.setup_files`, and executes each
+    /// runner-owned command check in its task environment, applying its
+    /// environment overrides and running every environment matrix cell. Diff
+    /// scope is captured before held-out files are injected. Then stops at the
+    /// judge hand-off, listing a judge task per `llm_judge` assertion. Requires
+    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
+    /// harness exposes transcripts.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
     ///
-    /// Fixed-order chain: grade `--finalize` → aggregate. Merges the judge verdicts
-    /// and writes `benchmark.json`. If a live guard remains armed — the cwd guard, or
-    /// any per-`(group, condition)` Cli env guard — prints a `teardown` reminder before
-    /// source edits. Requires `--iteration`.
+    /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts,
+    /// runner-owned `command_check` results, and deterministic `diff_scope`
+    /// files/lines thresholds into normal `grading.json` files, then writes
+    /// `benchmark.json` with raw per-run metrics from `diff-scope.json`. If a live
+    /// guard remains armed — the cwd guard, or any per-task Cli env guard — prints
+    /// a `teardown` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
     /// Assemble run records from a dispatch and its transcripts.
     ///
@@ -508,19 +565,28 @@ pub(crate) enum Commands {
     /// runner-built iterations; still the tool for filling a pre-existing (hand- or
     /// agent-written) `run.json`.
     FillTranscripts(CommonArgs),
-    /// Detect writes outside the sandbox output boundary.
+    /// Detect writes outside each private task environment.
     ///
     /// Scans each run's `tool_invocations` and writes `stray-writes.json`: write
-    /// tools targeting paths outside the run's outputs dir (violations), mutating
+    /// tools targeting paths outside the run's `eval_root` (violations), mutating
     /// Bash heuristics (warnings), and live-source reads (an arm that read the live
-    /// skill instead of its staged copy). `aggregate` lifts all three into
-    /// `benchmark.json`'s `validity_warnings`.
+    /// skill instead of its staged copy). Normal edits inside the task environment
+    /// are allowed. `aggregate` lifts all three into `benchmark.json`'s
+    /// `validity_warnings`.
     DetectStrayWrites(CommonArgs),
-    /// Grade run records (transcript checks + LLM-judge task emission).
+    /// Grade run records (runner checks + LLM-judge task emission).
     ///
-    /// Evaluates `transcript_check` assertions directly (regex against
-    /// `tool_invocations`) and emits judge-task files for `llm_judge` assertions;
-    /// with `--finalize`, merges judge responses into per-run `grading.json`.
+    /// Captures always-on final-environment files/lines/hunks in `diff-scope.json`
+    /// and evaluates `transcript_check` assertions directly: regex against
+    /// tool invocations or, for scripted evals, assistant messages across rounds.
+    /// Checks can require a match before the final completion claim or before the
+    /// first write/patch tool call. A `diff_scope` assertion gates the captured file count
+    /// and/or added-plus-removed line count. Grade captures scope before it injects
+    /// held-out `command_check.setup_files` and executes each runner-owned command
+    /// in its task environment, applying fixed environment overrides and running
+    /// every environment matrix cell; completed command and diff-scope results
+    /// are reused. Emits judge-task files for `llm_judge` assertions; with
+    /// `--finalize`, merges every result into per-run `grading.json`.
     ///
     /// Injects the `__skill_invoked` meta-check — did the skill actually influence
     /// behavior? It has two tiers, chosen automatically per run: code-based (where
@@ -533,8 +599,10 @@ pub(crate) enum Commands {
     /// Aggregate before/after benchmark deltas.
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
-    /// pass-rate / duration / token stats per condition, the delta, and
-    /// `validity_warnings`.
+    /// pass-rate / duration / token stats per condition, the delta,
+    /// `validity_warnings`, and raw per-run files/lines/hunks from
+    /// `diff-scope.json`. The top-level `diff_scope` field is omitted for
+    /// compatible older iterations that predate metric capture.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///

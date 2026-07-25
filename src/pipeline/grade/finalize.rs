@@ -2,7 +2,8 @@
 //!
 //! For each
 //! `(eval, condition)` it grades `transcript_check` assertions directly, folds in
-//! the `llm_judge` responses written by the orchestrator (missing → FAIL),
+//! persisted `command_check` results, deterministic `diff_scope` thresholds,
+//! and the `llm_judge` responses written by the orchestrator (missing → FAIL),
 //! assembles the skill-invocation meta result, and writes a schema-valid
 //! `grading.json` with pass/fail summaries.
 
@@ -10,17 +11,21 @@ use std::fs;
 
 use serde::Deserialize;
 
+use crate::adapters::adapter_for;
 use crate::core::{
     Assertion, AssertionResult, Grader, GradingResult, GradingSummary, MetaSummary, RunRecord,
     SKILL_INVOKED_META_ID, ToolInvocation,
 };
+use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::GradeContext;
-use super::transcript_check::grade_transcript_check;
+use super::command_check::CommandCheckResult;
+use super::diff_scope::grade_diff_scope;
+use super::transcript_check::grade_transcript_check_with_context;
 
 /// What finalize graded, for the CLI summary.
 #[derive(Debug, Default, Clone, Copy)]
@@ -45,7 +50,7 @@ struct JudgeResponse {
     grader: Option<Grader>,
 }
 
-/// Fold judge responses + transcript checks into a `grading.json` per
+/// Fold runner checks and judge responses into a `grading.json` per
 /// `(eval, condition)`. See the module docs for the per-assertion behavior.
 pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
     let conds: Vec<(String, Option<String>)> = ctx
@@ -56,6 +61,11 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
         .collect();
 
     let mut summary = FinalizeSummary::default();
+    let transcript_vocabulary = ctx
+        .conditions
+        .harness
+        .map(|harness| adapter_for(harness).tool_vocabulary())
+        .unwrap_or_default();
 
     for ev in &ctx.evals.evals {
         let assertions = ev.assertions.as_deref().unwrap_or(&[]);
@@ -90,8 +100,20 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     .as_ref()
                                     .map(|r| r.tool_invocations.as_slice())
                                     .unwrap_or(&[]);
-                                assertion_results.push(grade_transcript_check(tc, invocations));
-                                if invocations.is_empty() {
+                                let conversation = run_record
+                                    .as_ref()
+                                    .and_then(|run| run.conversation.as_ref());
+                                assertion_results.push(grade_transcript_check_with_context(
+                                    tc,
+                                    invocations,
+                                    conversation,
+                                    &transcript_vocabulary,
+                                ));
+                                let unverifiable = match tc.check.as_str() {
+                                    "assistant_message_matches" => conversation.is_none(),
+                                    _ => invocations.is_empty(),
+                                };
+                                if unverifiable {
                                     summary.total_unverifiable += 1;
                                 } else {
                                     summary.total_graded += 1;
@@ -126,6 +148,47 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     confidence: Some(response.confidence.unwrap_or(0.0)),
                                     grader: Some(Grader::LlmJudge),
                                 });
+                                summary.total_graded += 1;
+                            }
+                            Assertion::CommandCheck(check) => {
+                                let result_path = slot
+                                    .dir
+                                    .join("command-checks")
+                                    .join(format!("{}.json", check.id));
+                                if !result_path.exists() {
+                                    return Err(PipelineError::Message(format!(
+                                        "missing command_check result: {}. Run ingest (or grade without --finalize) before finalize.",
+                                        result_path.display()
+                                    )));
+                                }
+                                let result: CommandCheckResult = validate_against_schema(
+                                    SchemaName::CommandCheck,
+                                    &serde_json::from_str(&fs::read_to_string(&result_path)?)?,
+                                    &result_path.to_string_lossy(),
+                                )?;
+                                assertion_results.push(AssertionResult {
+                                    id: check.id.clone(),
+                                    passed: result.passed,
+                                    evidence: result.evidence,
+                                    confidence: Some(1.0),
+                                    grader: Some(Grader::CommandCheck),
+                                });
+                                summary.total_graded += 1;
+                            }
+                            Assertion::DiffScope(check) => {
+                                let result_path = slot.dir.join("diff-scope.json");
+                                if !result_path.exists() {
+                                    return Err(PipelineError::Message(format!(
+                                        "missing diff_scope result: {}. Run ingest before finalize; if this iteration predates diff-scope baselines, rebuild it first.",
+                                        result_path.display()
+                                    )));
+                                }
+                                let metrics: DiffScopeMetrics = validate_against_schema(
+                                    SchemaName::DiffScope,
+                                    &serde_json::from_str(&fs::read_to_string(&result_path)?)?,
+                                    &result_path.to_string_lossy(),
+                                )?;
+                                assertion_results.push(grade_diff_scope(check, metrics));
                                 summary.total_graded += 1;
                             }
                         }
