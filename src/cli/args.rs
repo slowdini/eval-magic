@@ -190,11 +190,39 @@ pub(crate) enum HarnessCommands {
     /// checked against its real merge target. A name target re-lints every
     /// discovered layer file strictly, surfacing descriptors that registry
     /// initialization skipped with a warning. Exits non-zero when any check
-    /// fails. (A future `--probe` flag is reserved for a live dispatch probe
-    /// through the exec template.)
+    /// fails.
+    ///
+    /// With `--probe`, and only after every static check passes, also exercises
+    /// the descriptor end-to-end: renders `dispatch.exec_template` with a
+    /// trivial prompt in a throwaway temp dir, runs it via `/bin/sh -c` from
+    /// the temp `eval_root`, and verifies `outputs/final-message.md` is
+    /// recovered (non-empty). It additionally render-only-validates
+    /// `parallel_command_template` and `judge_command_template` for
+    /// placeholder-shape errors — rendering each with stand-in values and
+    /// reporting any unresolved `{token}` the run would later surface.
+    ///
+    /// `--probe` invokes the real harness CLI (network, tokens, usage
+    /// limits), so it is opt-in and never runs as part of standard CI checks
+    /// — it is a one-time BYOH check. Before exec it prints an "about to
+    /// execute" banner with the rendered command and asks `y/N`; pass `--yes`
+    /// to skip the prompt, and `--probe-timeout <SECS>` (default 300 = 5 min)
+    /// to cap the run.
     Lint {
         /// Descriptor file path, or a registered harness name.
         target: String,
+        /// Execute the dispatch exec template with a trivial prompt and verify
+        /// final-message recovery (opt-in; costs real CLI usage). See the
+        /// subcommand description above for the full contract.
+        #[arg(long)]
+        probe: bool,
+        /// Skip the interactive `y/N` confirm before a `--probe` exec.
+        /// Default-deny when stdin is not a TTY, so the probe never runs
+        /// unattended inside a pipe or CI step.
+        #[arg(long)]
+        yes: bool,
+        /// Override the `--probe` exec timeout in seconds (default 300 = 5 min).
+        #[arg(long, value_name = "SECS")]
+        probe_timeout: Option<u64>,
     },
 }
 

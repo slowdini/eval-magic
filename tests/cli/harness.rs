@@ -395,3 +395,183 @@ fn missing_harness_file_is_fatal() {
         .failure()
         .stderr(contains("--harness-file").and(contains("missing.toml")));
 }
+
+// ---------------------------------------------------------------------------
+// `harness lint --probe`: live dispatch probe for the exec template.
+// ---------------------------------------------------------------------------
+//
+// The probe invokes the real harness CLI (network/tokens) and is opt-in, never
+// part of standard CI. The tests below use fake shell `exec_template`s that
+// write the final-message file themselves — so no agent CLI is ever invoked
+// and the suite stays hermetic.
+
+/// Descriptor with a fake `exec_template` that writes the final message the
+/// probe looks for. Used as the "probe succeeds" baseline.
+const PROBE_OK_TOML: &str = "label = \"probe-ok\"\n\n\
+    [dispatch]\n\
+    exec_template = 'printf \"ok\\n\" > <outputs_dir>/final-message.md'\n";
+
+#[test]
+fn harness_lint_probe_recovers_final_message_for_fake_exec_template() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-ok.toml");
+    fs::write(&file, PROBE_OK_TOML).unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("✓ live exec template"));
+}
+
+#[test]
+fn harness_lint_probe_runs_against_a_registered_name() {
+    let tmp = TempDir::new().unwrap();
+    write_project_descriptor(tmp.path(), "probe-ok.toml", PROBE_OK_TOML);
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint", "probe-ok", "--probe", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("✓ live exec template"));
+}
+
+#[test]
+fn harness_lint_probe_fails_when_final_message_missing() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-bad.toml");
+    fs::write(
+        &file,
+        "label = \"probe-bad\"\n\n[dispatch]\nexec_template = 'true'\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("✗").and(contains("final-message.md")));
+}
+
+#[test]
+fn harness_lint_probe_renders_parallel_and_judge_templates() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-full.toml");
+    fs::write(
+        &file,
+        "label = \"probe-full\"\n\n\
+         [model]\nflag = \"-m\"\n\n\
+         [dispatch]\n\
+         exec_template = 'printf \"ok\\n\" > <outputs_dir>/final-message.md'\n\
+         capture_prefix = \"out\"\n\
+         parallel_command_template = \"agent --cd {cwd} run\"\n\
+         judge_command_template = \"judge --cd {cwd} $model_arg \\\\\"\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .success()
+        .stdout(
+            contains("✓ live exec template")
+                .and(contains("✓ render: parallel_command_template"))
+                .and(contains("✓ render: judge_command_template")),
+        );
+}
+
+#[test]
+fn harness_lint_probe_aborts_without_yes_on_non_yes_stdin() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-ok.toml");
+    fs::write(&file, PROBE_OK_TOML).unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe"])
+        .write_stdin("n\n")
+        .assert()
+        .failure()
+        .stderr(
+            contains("About to execute")
+                .and(contains("aborted"))
+                .and(contains("✓ live exec template").not()),
+        );
+}
+
+#[test]
+fn harness_lint_probe_timeout_kills_a_long_command() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-slow.toml");
+    fs::write(
+        &file,
+        "label = \"probe-slow\"\n\n[dispatch]\nexec_template = 'sleep 3'\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes", "--probe-timeout", "1"])
+        .assert()
+        .failure()
+        .stderr(contains("✗").and(contains("timed out")));
+}
+
+#[test]
+fn harness_lint_probe_without_exec_template_reports_nothing_to_run() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("no-dispatch.toml");
+    fs::write(&file, "label = \"no-dispatch\"\n").unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("✗").and(contains("dispatch.exec_template")));
+}
+
+#[test]
+fn harness_lint_probe_does_not_run_after_static_checks_fail() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("broken.toml");
+    fs::write(&file, "label = \"broken\"\nmystery = 1\n").unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .failure()
+        .stderr(contains("mystery").and(contains("About to execute").not()));
+}
+
+#[test]
+fn harness_lint_help_lists_the_probe_flags() {
+    skill_eval()
+        .args(["harness", "lint", "--help"])
+        .assert()
+        .success()
+        .stdout(
+            contains("--probe")
+                .and(contains("--yes"))
+                .and(contains("--probe-timeout")),
+        );
+}
