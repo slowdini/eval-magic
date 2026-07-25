@@ -15,6 +15,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
+pub mod conversation;
 pub mod dispatch;
 pub mod fixtures;
 #[cfg(test)]

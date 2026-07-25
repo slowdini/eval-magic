@@ -60,6 +60,9 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 - **Shadow preflight:** the `opencode-skills` capability scans every root OpenCode discovers
   skills from and warns at build time when a staged logical skill is also live there — see
   "Isolating from live skills" below.
+- **Conversation resume:** scripted follow-ups use
+  `opencode run --dir <eval-root> --session <SESSION_ID>`; `sessionID` on the JSON event envelope
+  supplies and verifies the native id. Verified against `opencode run --help` on 2026-07-24.
 - **Write guard:** a project plugin staged at `.opencode/plugins/slow-powers-eval-guard.js` —
   see "Write guard" below.
 

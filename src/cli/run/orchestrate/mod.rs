@@ -99,6 +99,19 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     // to the eval config actually selected for the run.
     let resolved = resolve::resolve_request(ctx, opts)?;
 
+    if resolved
+        .selected_evals
+        .iter()
+        .any(|eval| eval.turns.as_ref().is_some_and(|turns| !turns.is_empty()))
+        && !adapter_for(ctx.harness).has_conversation_resume()
+    {
+        return Err(RunError::msg(format!(
+            "--harness {} cannot run evals with scripted follow-up turns: its descriptor \
+             declares no [conversation] native resume capability",
+            adapter_for(ctx.harness).label()
+        )));
+    }
+
     // The harness preflight provides supported enhancements automatically (the
     // write guard auto-arms), warns about undeclared ones (naming each
     // fallback), and adjusts the options — it only rejects genuinely
@@ -222,6 +235,22 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
+    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
+        let mix = r.selected_evals.iter().any(|eval| eval.turns.is_none());
+        println!(
+            "\nNext: read RUNBOOK.md and run every task with scripted `turns` through \
+             `eval-magic dispatch-task` so follow-ups resume the same native session.{} \
+             Then run `eval-magic ingest{target_args} --iteration {} --harness {}`.",
+            if mix {
+                " Use its harness recipe only for the remaining one-shot tasks."
+            } else {
+                ""
+            },
+            r.iteration,
+            adapter_for(ctx.harness).label()
+        );
+        return;
+    }
     // One-shot CLI dispatch; the exact command is harness-specific.
     println!(
         "{}",

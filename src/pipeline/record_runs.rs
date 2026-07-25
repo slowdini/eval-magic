@@ -5,8 +5,9 @@
 //! from sources already on disk: carry-over fields from the dispatch task, the
 //! `final_message` (from `<outputs_dir>/final-message.md`, falling back to the
 //! transcript's last assistant text), and `tool_invocations`/tokens/duration from
-//! each task's events file (`outputs/<harness>-events.jsonl` — Claude Code's
-//! `claude -p` stream-json or Codex's `codex-events.jsonl`).
+//! each task's events file. Scripted tasks take ordered messages/tools from the
+//! runner-owned `conversation.json` and sum raw timing across
+//! `outputs/turn-N/<harness>-events.jsonl`.
 //!
 //! Existing records always win: an agent/operator-written `run.json` is skipped
 //! without `overwrite`, and `timing.json` is backfill-only — completion-event
@@ -19,10 +20,12 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::adapters::{TranscriptSummary, adapter_for};
-use crate::core::{Harness, RunRecord, TimingRecord, TimingSource};
+use crate::core::{ConversationEvent, Harness, RunRecord, TimingRecord, TimingSource};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::validation::{SchemaName, validate_against_schema};
+
+mod conversation;
 
 /// The `dispatch.json` envelope record-runs reads.
 #[derive(Debug, Deserialize)]
@@ -46,6 +49,8 @@ struct DispatchTask {
     timing_path: String,
     #[serde(default)]
     dispatch_prompt_path: String,
+    #[serde(default)]
+    conversation_path: Option<String>,
 }
 
 /// Tally of what record-runs did across the dispatch's tasks.
@@ -56,14 +61,14 @@ pub struct RecordRunsResult {
     pub skipped_no_final_message: usize,
     pub missing_transcript: usize,
     pub skipped_prompt_unread: usize,
+    pub skipped_incomplete_conversation: usize,
 }
 
 impl RecordRunsResult {
-    /// A loud, actionable warning when runs were recorded from `final-message.md`
-    /// but their transcripts didn't link — leaving `tool_invocations`/tokens/
-    /// duration empty so `transcript_check` assertions silently grade
-    /// unverifiable. `None` when every run matched its transcript. The hint names
-    /// the per-task events file the harness CLI was expected to write.
+    /// A loud, actionable warning when one-shot events are missing or a
+    /// scripted conversation lacks one or more raw round transcripts. Scripted
+    /// runs retain their ordered conversation evidence, but timing is omitted
+    /// unless every round can be summed.
     pub fn transcript_warning(&self, harness: Harness) -> Option<String> {
         if self.missing_transcript == 0 {
             return None;
@@ -79,10 +84,11 @@ impl RecordRunsResult {
         let file = adapter_for(harness)
             .cli_events_filename()
             .unwrap_or_else(|| "the events file".to_string());
-        let cause = format!("expected `outputs/{file}` was not found");
+        let cause =
+            format!("expected `{file}` transcript file(s) were not found under task outputs");
         Some(format!(
-            "{lead} — {cause}; tool_invocations/tokens/duration are empty, so transcript_check \
-             assertions will grade unverifiable."
+            "{lead} — {cause}; one-shot runs lack tool evidence and timing, while scripted runs \
+             retain conversation evidence but omit incomplete timing."
         ))
     }
 
@@ -101,6 +107,22 @@ impl RecordRunsResult {
              prompt (the agent never received its instructions). These are NOT recorded, so they \
              cannot be graded as data. Check the env/sandbox can reach each task's \
              `dispatch_prompt_path`, then re-dispatch."
+        ))
+    }
+
+    /// Warn when a scripted task never produced its runner-owned completion
+    /// artifact. Raw per-turn transcripts are intentionally not ingested
+    /// without it because the driver may have failed between turns.
+    pub fn incomplete_conversation_warning(&self) -> Option<String> {
+        let n = self.skipped_incomplete_conversation;
+        if n == 0 {
+            return None;
+        }
+        let plural = if n == 1 { "" } else { "s" };
+        Some(format!(
+            "⚠ {n} scripted conversation{plural} skipped — conversation.json is missing, so \
+             eval-magic cannot distinguish a completed/stopped scenario from an interrupted \
+             dispatch. Re-run the corresponding `dispatch-task` command."
         ))
     }
 }
@@ -127,8 +149,16 @@ pub fn record_runs(
 
     let mut result = RecordRunsResult::default();
     for task in &tasks {
-        let summary = transcript_summary_for_task(harness, task);
-        if summary.is_none() {
+        let conversation = conversation::for_task(task)?;
+        if task.conversation_path.is_some() && conversation.is_none() {
+            result.skipped_incomplete_conversation += 1;
+            continue;
+        }
+        let (summary, transcripts_complete) = match &conversation {
+            Some(conversation) => conversation::summary_for_task(harness, task, conversation),
+            None => (transcript_summary_for_task(harness, task), true),
+        };
+        if summary.is_none() || !transcripts_complete {
             result.missing_transcript += 1;
         }
 
@@ -151,7 +181,16 @@ pub fn record_runs(
             continue;
         } else {
             let final_message_path = Path::new(&task.outputs_dir).join("final-message.md");
-            let final_message = if final_message_path.exists() {
+            let final_message = if let Some(conversation) = &conversation {
+                conversation
+                    .events
+                    .iter()
+                    .rev()
+                    .find_map(|event| match event {
+                        ConversationEvent::AssistantMessage { text, .. } => Some(text.clone()),
+                        _ => None,
+                    })
+            } else if final_message_path.exists() {
                 Some(fs::read_to_string(&final_message_path)?.trim().to_string())
             } else {
                 summary.as_ref().and_then(|s| s.final_text.clone())
@@ -169,14 +208,20 @@ pub fn record_runs(
                 prompt: task.user_prompt.clone(),
                 files: task.fixtures.clone(),
                 final_message,
-                tool_invocations: summary
-                    .as_ref()
-                    .map(|s| s.tool_invocations.clone())
-                    .unwrap_or_default(),
+                tool_invocations: conversation.as_ref().map_or_else(
+                    || {
+                        summary
+                            .as_ref()
+                            .map(|s| s.tool_invocations.clone())
+                            .unwrap_or_default()
+                    },
+                    conversation::tool_invocations,
+                ),
                 // Timing lives in timing.json; run.json never carries it.
                 total_tokens: None,
                 duration_ms: None,
                 run_index: task.run_index,
+                conversation: conversation.clone(),
             };
             validate_against_schema::<RunRecord>(
                 SchemaName::RunRecord,
@@ -189,7 +234,8 @@ pub fn record_runs(
 
         // timing.json — backfill only; completion-event numbers always win.
         let timing_path = Path::new(&task.timing_path);
-        if let Some(summary) = &summary
+        if transcripts_complete
+            && let Some(summary) = &summary
             && (!timing_path.exists() || overwrite)
         {
             let timing = TimingRecord {
@@ -276,6 +322,8 @@ mod tests {
     use serde_json::{Value, json};
     use std::path::PathBuf;
     use tempfile::TempDir;
+
+    mod conversation;
 
     fn jsonl(lines: &[Value]) -> String {
         let body = lines
@@ -819,6 +867,10 @@ mod tests {
         assert!(
             warning.contains("codex-events.jsonl"),
             "names the Codex source: {warning}"
+        );
+        assert!(
+            warning.contains("under task outputs"),
+            "covers one-shot and per-turn transcript locations: {warning}"
         );
         assert!(
             !warning.contains("agent_description"),

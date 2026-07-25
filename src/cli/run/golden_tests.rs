@@ -129,6 +129,7 @@ fn golden_runbook_per_harness() {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
+            multi_turn_tasks: 0,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             guard: true,
             agent_model: Some("model-x"),

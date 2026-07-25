@@ -102,3 +102,11 @@ Parallel dispatch from this iteration directory:
 
 Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.
 '''
+
+[conversation]
+resume_exec_template = '''
+cd <eval-root> && claude -p --resume {session_arg} --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \
+  {prompt_arg} \
+  </dev/null \
+  > <outputs_dir>/claude-events.jsonl \
+  2> <outputs_dir>/claude-stderr.log'''

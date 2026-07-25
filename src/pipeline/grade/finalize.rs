@@ -11,6 +11,7 @@ use std::fs;
 
 use serde::Deserialize;
 
+use crate::adapters::adapter_for;
 use crate::core::{
     Assertion, AssertionResult, Grader, GradingResult, GradingSummary, MetaSummary, RunRecord,
     SKILL_INVOKED_META_ID, ToolInvocation,
@@ -24,7 +25,7 @@ use crate::validation::{SchemaName, validate_against_schema};
 use super::GradeContext;
 use super::command_check::CommandCheckResult;
 use super::diff_scope::grade_diff_scope;
-use super::transcript_check::grade_transcript_check;
+use super::transcript_check::grade_transcript_check_with_context;
 
 /// What finalize graded, for the CLI summary.
 #[derive(Debug, Default, Clone, Copy)]
@@ -60,6 +61,11 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
         .collect();
 
     let mut summary = FinalizeSummary::default();
+    let transcript_vocabulary = ctx
+        .conditions
+        .harness
+        .map(|harness| adapter_for(harness).tool_vocabulary())
+        .unwrap_or_default();
 
     for ev in &ctx.evals.evals {
         let assertions = ev.assertions.as_deref().unwrap_or(&[]);
@@ -94,8 +100,20 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     .as_ref()
                                     .map(|r| r.tool_invocations.as_slice())
                                     .unwrap_or(&[]);
-                                assertion_results.push(grade_transcript_check(tc, invocations));
-                                if invocations.is_empty() {
+                                let conversation = run_record
+                                    .as_ref()
+                                    .and_then(|run| run.conversation.as_ref());
+                                assertion_results.push(grade_transcript_check_with_context(
+                                    tc,
+                                    invocations,
+                                    conversation,
+                                    &transcript_vocabulary,
+                                ));
+                                let unverifiable = match tc.check.as_str() {
+                                    "assistant_message_matches" => conversation.is_none(),
+                                    _ => invocations.is_empty(),
+                                };
+                                if unverifiable {
                                     summary.total_unverifiable += 1;
                                 } else {
                                     summary.total_graded += 1;

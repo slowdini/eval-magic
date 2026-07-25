@@ -30,6 +30,7 @@ pub(crate) struct RunbookContext<'a> {
     pub cond_a: &'a str,
     pub cond_b: &'a str,
     pub num_tasks: usize,
+    pub multi_turn_tasks: usize,
     /// The self-sufficient `--skill-dir … --skill …` selector (leading space),
     /// from [`command_target_args`](crate::cli::command_target_args).
     pub target_args: &'a str,
@@ -76,12 +77,40 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
     // `dispatch-manifest.md` and the printed next steps; pipeline commands carry
     // `--harness`. Owners outlive the `render` call below.
     let label = harness_label(ctx.harness);
-    let dispatch_recipe = adapter.cli_next_steps(CliDispatchContext {
+    let one_shot_recipe = adapter.cli_next_steps(CliDispatchContext {
         guard: ctx.guard,
         target_args: ctx.target_args,
         iteration: ctx.iteration,
         agent_model: ctx.agent_model,
     });
+    let dispatch_recipe = if ctx.multi_turn_tasks == 0 {
+        one_shot_recipe
+    } else {
+        let driver = format!(
+            "Scripted tasks must run through eval-magic's conversation driver so every follow-up \
+             resumes the same native session and produces a schema-validated \
+             `conversation.json`. From this iteration directory:\n\n```bash\n\
+             JOBS=${{JOBS:-4}}\n\
+             jq -r '.tasks | to_entries[] | select(.value.turns != null) | .key' \
+             \"{dispatch_json}\" | \\\n  xargs -P \"$JOBS\" -n 1 eval-magic dispatch-task \
+             --dispatch \"{dispatch_json}\" --task-index\n```\n\n\
+             A normal guardrail stop (`agent_did_not_ask` or `agent_response_mismatch`) is valid \
+             completed eval data; an interrupted task has no `conversation.json` and ingest \
+             skips it."
+        );
+        if ctx.multi_turn_tasks == ctx.num_tasks {
+            format!(
+                "{driver}\n\nThen run `eval-magic ingest{} --iteration {} --harness {label}`.",
+                ctx.target_args, ctx.iteration
+            )
+        } else {
+            format!(
+                "{driver}\n\nFor the remaining task entries whose `turns` field is absent, use \
+                 the one-shot harness recipe below (do not use it for scripted tasks):\n\
+                 {one_shot_recipe}"
+            )
+        }
+    };
     let judge_recipe = adapter
         .cli_judge_next_steps(CliJudgeContext {
             guard: ctx.guard,
@@ -159,6 +188,7 @@ mod tests {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
+            multi_turn_tasks: 0,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             guard: false,
             agent_model: Some("gpt-5-mini"),
@@ -229,5 +259,30 @@ mod tests {
             &[("A", "value-with-{{B}}-inside"), ("B", "second")],
         );
         assert_eq!(out, "value-with-{{B}}-inside second");
+    }
+
+    #[test]
+    fn all_scripted_runbook_uses_dispatch_task_instead_of_one_shot_recipe() {
+        let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
+        let book = build_runbook(&RunbookContext {
+            harness: Harness::resolve("codex").unwrap(),
+            skill_name: "widget-skill",
+            iteration: 2,
+            iteration_dir: &dir,
+            mode: Mode::NewSkill,
+            cond_a: "with_skill",
+            cond_b: "without_skill",
+            num_tasks: 4,
+            multi_turn_tasks: 4,
+            target_args: " --skill /tmp/widget-skill",
+            guard: false,
+            agent_model: None,
+        });
+        assert!(book.contains("eval-magic dispatch-task"));
+        assert!(book.contains("conversation.json"));
+        assert!(
+            !book.contains("--output-last-message <outputs_dir>/final-message.md"),
+            "all-scripted runs must not advertise the one-shot eval command"
+        );
     }
 }

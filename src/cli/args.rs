@@ -82,11 +82,10 @@ pub struct CommonArgs {
     pub mode: Option<String>,
     /// Target harness: `claude-code` (default), `codex`, or `opencode`.
     ///
-    /// Claude Code and Codex both support staged skills, transcript ingest, and
-    /// the write guard (armed automatically). Each reads its own per-task events
-    /// file (`claude-events.jsonl`, `codex-events.jsonl`); Codex stages skills
-    /// under `.agents/skills`. OpenCode stages skills under `.opencode/skills`;
-    /// transcript ingest and the write guard are not yet wired for OpenCode.
+    /// All three built-ins support staged skills, transcript ingest, scripted
+    /// same-session follow-ups, and the automatically armed write guard. Each
+    /// reads its own per-task events file; Codex stages skills under
+    /// `.agents/skills`, and OpenCode under `.opencode/skills`.
     /// The name is resolved against the harness descriptor registry after
     /// parsing; an unknown name errors listing every registered harness.
     #[arg(long)]
@@ -162,7 +161,8 @@ pub(crate) enum HarnessCommands {
     /// user, project, file — a merged descriptor shows all of them, e.g.
     /// `built-in + project`) and the enhancements the resolved descriptor
     /// declares (staging, skills-block, transcript, model-flag, guard,
-    /// shadow-preflight, dispatch-recipes; `baseline` when none). The session's
+    /// shadow-preflight, dispatch-recipes, conversation-resume; `baseline` when
+    /// none). The session's
     /// default harness — `claude-code`, or the `--harness-file` descriptor when
     /// one is loaded — is marked `(default)`.
     List,
@@ -449,6 +449,20 @@ pub struct RunArgs {
     pub label: Option<String>,
 }
 
+/// Execute one runner-owned multi-turn task from a generated dispatch plan.
+#[derive(Debug, Args)]
+pub struct DispatchTaskArgs {
+    /// Path to the runner-generated dispatch.json.
+    #[arg(long, value_name = "PATH")]
+    pub dispatch: String,
+    /// Zero-based index into dispatch.json's tasks array.
+    #[arg(long)]
+    pub task_index: usize,
+    /// Replace an existing conversation.json and rerun the task.
+    #[arg(long)]
+    pub overwrite: bool,
+}
+
 /// Every subcommand on the CLI.
 #[derive(Debug, Subcommand)]
 pub(crate) enum Commands {
@@ -460,6 +474,12 @@ pub(crate) enum Commands {
     /// `codex exec`). Also writes `RUNBOOK.md`, a human-followable handoff for the
     /// run ("Read and follow RUNBOOK.md").
     Run(RunArgs),
+    /// Execute one scripted multi-turn task through its harness CLI.
+    ///
+    /// Starts the task, resumes the same native session for every delivered
+    /// follow-up, and writes the task's conversation.json completion artifact.
+    /// One-shot tasks continue to use the commands in dispatch-manifest.md.
+    DispatchTask(DispatchTaskArgs),
     /// Snapshot a workspace baseline.
     ///
     /// Snapshots the skill as a Mode B baseline under
@@ -529,8 +549,10 @@ pub(crate) enum Commands {
     /// Grade run records (runner checks + LLM-judge task emission).
     ///
     /// Captures always-on final-environment files/lines/hunks in `diff-scope.json`
-    /// and evaluates `transcript_check` assertions directly (regex against
-    /// `tool_invocations`). A `diff_scope` assertion gates the captured file count
+    /// and evaluates `transcript_check` assertions directly: regex against
+    /// tool invocations or, for scripted evals, assistant messages across rounds.
+    /// Checks can require a match before the final completion claim or before the
+    /// first write/patch tool call. A `diff_scope` assertion gates the captured file count
     /// and/or added-plus-removed line count. Grade captures scope before it injects
     /// held-out `command_check.setup_files` and executes each runner-owned command
     /// in its task environment, applying fixed environment overrides and running

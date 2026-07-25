@@ -7,6 +7,7 @@
 //! accounting (excludes cached input tokens).
 
 use crate::adapters::TranscriptSummary;
+use crate::adapters::transcript::TranscriptEvent;
 use crate::adapters::transcript::read_jsonl;
 use crate::core::ToolInvocation;
 use serde_json::{Map, Value};
@@ -74,6 +75,38 @@ fn extract_invocations(records: &[Value]) -> Vec<ToolInvocation> {
     invocations
 }
 
+fn extract_events(records: &[Value]) -> Vec<TranscriptEvent> {
+    let mut events = Vec::new();
+    for record in records {
+        if record.get("type").and_then(Value::as_str) != Some("item.completed") {
+            continue;
+        }
+        let Some(item) = record.get("item").and_then(Value::as_object) else {
+            continue;
+        };
+        let Some(item_type) = item.get("type").and_then(Value::as_str) else {
+            continue;
+        };
+        let ordinal = events.len() as u32;
+        if item_type == "agent_message" {
+            if let Some(text) = item.get("text").and_then(Value::as_str) {
+                events.push(TranscriptEvent::AssistantMessage {
+                    ordinal,
+                    text: text.to_string(),
+                });
+            }
+        } else if !NON_TOOL_ITEMS.contains(&item_type) {
+            events.push(TranscriptEvent::ToolInvocation {
+                ordinal,
+                name: item_type.to_string(),
+                args: item_args(item),
+                result: maybe_result(item).map(Value::String),
+            });
+        }
+    }
+    events
+}
+
 /// Parse a Codex event stream into ordered tool invocations.
 pub fn parse_codex_events(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation>> {
     Ok(extract_invocations(&read_jsonl::<Value>(jsonl_path)?))
@@ -94,6 +127,12 @@ pub fn parse_codex_events_full(jsonl_path: &Path) -> io::Result<TranscriptSummar
     let mut timestamp_count = 0usize;
     let mut final_text: Option<String> = None;
     let mut total_tokens: Option<i64> = None;
+    let session_id = records.iter().find_map(|record| {
+        (record.get("type").and_then(Value::as_str) == Some("thread.started"))
+            .then(|| record.get("thread_id").and_then(Value::as_str))
+            .flatten()
+            .map(str::to_string)
+    });
 
     for record in &records {
         if let Some(ts_str) = record.get("timestamp").and_then(Value::as_str)
@@ -132,6 +171,8 @@ pub fn parse_codex_events_full(jsonl_path: &Path) -> io::Result<TranscriptSummar
 
     Ok(TranscriptSummary {
         tool_invocations: extract_invocations(&records),
+        events: extract_events(&records),
+        session_id,
         total_tokens,
         duration_ms,
         final_text,
@@ -252,7 +293,7 @@ mod tests {
         write_jsonl(
             &path,
             &[
-                json!({"type": "thread.started", "timestamp": "2026-06-07T10:00:00.000Z"}),
+                json!({"type": "thread.started", "thread_id": "thread-codex-1", "timestamp": "2026-06-07T10:00:00.000Z"}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "output": "README.md"}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:04.000Z", "item": {"id": "item_2", "type": "agent_message", "text": "First."}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:05.000Z", "item": {"id": "item_3", "type": "agent_message", "text": "Final."}}),
@@ -269,6 +310,29 @@ mod tests {
                 result: Some(Value::String("README.md".into())),
                 ordinal: 0,
             }]
+        );
+        assert_eq!(full.session_id.as_deref(), Some("thread-codex-1"));
+        assert_eq!(
+            serde_json::to_value(&full.events).unwrap(),
+            json!([
+                {
+                    "type": "tool_invocation",
+                    "ordinal": 0,
+                    "name": "command_execution",
+                    "args": {"command": "ls"},
+                    "result": "README.md"
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 1,
+                    "text": "First."
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 2,
+                    "text": "Final."
+                }
+            ])
         );
         assert_eq!(full.final_text, Some("Final.".into()));
         assert_eq!(full.total_tokens, Some(125)); // cached input excluded

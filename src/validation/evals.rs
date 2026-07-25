@@ -4,9 +4,10 @@
 use std::collections::HashSet;
 use std::path::{Component, Path, PathBuf};
 
+use regex::Regex;
 use serde_json::Value;
 
-use crate::core::{Assertion, EvalsConfig};
+use crate::core::{Assertion, DeliverWhen, EvalsConfig};
 use crate::validation::error::ValidationError;
 use crate::validation::schema::{SchemaName, validate_against_schema};
 
@@ -26,8 +27,64 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
             });
         }
 
+        for (turn_index, turn) in ev.turns.as_deref().unwrap_or(&[]).iter().enumerate() {
+            if turn.prompt.trim().is_empty() {
+                return Err(ValidationError::InvalidConfig {
+                    path: source.to_string(),
+                    message: format!(
+                        "eval '{}', turns[{turn_index}]: prompt must contain non-whitespace text",
+                        ev.id
+                    ),
+                });
+            }
+            if turn.deliver_when == DeliverWhen::Always && turn.agent_response_matches.is_some() {
+                return Err(ValidationError::InvalidConfig {
+                    path: source.to_string(),
+                    message: format!(
+                        "eval '{}', turns[{turn_index}]: agent_response_matches is only valid when deliver_when is 'agent_asks'",
+                        ev.id
+                    ),
+                });
+            }
+            if let Some(pattern) = &turn.agent_response_matches
+                && let Err(error) = Regex::new(pattern)
+            {
+                return Err(ValidationError::InvalidConfig {
+                    path: source.to_string(),
+                    message: format!(
+                        "eval '{}', turns[{turn_index}]: invalid agent_response_matches regex {pattern:?}: {error}",
+                        ev.id
+                    ),
+                });
+            }
+        }
+
         let visible = ev.files.as_deref().unwrap_or(&[]);
         for assertion in ev.assertions.as_deref().unwrap_or(&[]) {
+            if let Assertion::TranscriptCheck(check) = assertion {
+                if check.check == "assistant_message_matches" && ev.turns.is_none() {
+                    return Err(ValidationError::InvalidConfig {
+                        path: source.to_string(),
+                        message: format!(
+                            "eval '{}', transcript_check '{}': assistant_message_matches \
+                             requires a non-empty turns array",
+                            ev.id, check.id
+                        ),
+                    });
+                }
+                if let Some(pattern) = &check.pattern
+                    && let Err(error) = Regex::new(pattern)
+                {
+                    return Err(ValidationError::InvalidConfig {
+                        path: source.to_string(),
+                        message: format!(
+                            "eval '{}', transcript_check '{}': invalid pattern regex \
+                             {pattern:?}: {error}",
+                            ev.id, check.id
+                        ),
+                    });
+                }
+            }
             let Assertion::CommandCheck(check) = assertion else {
                 continue;
             };
@@ -232,6 +289,93 @@ mod tests {
         let mut config = base();
         config["evals"] = json!([]);
         assert!(validate_evals_config(&config, "evals.json").is_err());
+    }
+
+    #[test]
+    fn accepts_ordered_scripted_follow_up_turns() {
+        let mut config = base();
+        config["evals"][0]["turns"] = json!([
+            {
+                "prompt": "Which users are affected?",
+                "deliver_when": "always"
+            },
+            {
+                "prompt": "They are all in US timezones and this is a date-only field.",
+                "deliver_when": "agent_asks",
+                "agent_response_matches": "(?i)(time ?zone|date-only)"
+            }
+        ]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let turns = parsed.evals[0].turns.as_ref().unwrap();
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0].prompt, "Which users are affected?");
+        assert_eq!(turns[0].deliver_when, crate::core::DeliverWhen::Always);
+        assert_eq!(turns[1].deliver_when, crate::core::DeliverWhen::AgentAsks);
+        assert_eq!(
+            turns[1].agent_response_matches.as_deref(),
+            Some("(?i)(time ?zone|date-only)")
+        );
+    }
+
+    #[test]
+    fn rejects_assistant_message_check_without_scripted_turns() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "asked",
+            "type": "transcript_check",
+            "check": "assistant_message_matches",
+            "pattern": "timezone"
+        }]);
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("assistant_message_matches"), "{err}");
+        assert!(err.contains("turns"), "{err}");
+    }
+
+    #[test]
+    fn rejects_invalid_scripted_turn_shapes() {
+        for (turn, expected) in [
+            (json!({"prompt": "", "deliver_when": "always"}), "prompt"),
+            (
+                json!({"prompt": "answer", "deliver_when": "sometimes"}),
+                "deliver_when",
+            ),
+            (
+                json!({
+                    "prompt": "answer",
+                    "deliver_when": "always",
+                    "agent_response_matches": "topic"
+                }),
+                "agent_response_matches",
+            ),
+            (
+                json!({
+                    "prompt": "answer",
+                    "deliver_when": "agent_asks",
+                    "agent_response_matches": "("
+                }),
+                "agent_response_matches",
+            ),
+        ] {
+            let mut config = base();
+            config["evals"][0]["turns"] = json!([turn]);
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(expected), "{expected}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_an_empty_scripted_turns_array() {
+        let mut config = base();
+        config["evals"][0]["turns"] = json!([]);
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("turns"), "{error}");
     }
 
     #[test]

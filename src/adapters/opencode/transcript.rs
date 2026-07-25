@@ -11,7 +11,7 @@
 //! the envelope timestamps.
 
 use crate::adapters::TranscriptSummary;
-use crate::adapters::transcript::read_jsonl;
+use crate::adapters::transcript::{TranscriptEvent, read_jsonl};
 use crate::core::ToolInvocation;
 use serde_json::Value;
 use std::io;
@@ -51,6 +51,52 @@ fn extract_invocations(records: &[Value]) -> Vec<ToolInvocation> {
     invocations
 }
 
+fn extract_events(records: &[Value]) -> Vec<TranscriptEvent> {
+    let mut events = Vec::new();
+    for record in records {
+        let ordinal = events.len() as u32;
+        match record.get("type").and_then(Value::as_str) {
+            Some("tool_use") => {
+                let Some(part) = record.get("part").and_then(Value::as_object) else {
+                    continue;
+                };
+                let Some(name) = part.get("tool").and_then(Value::as_str) else {
+                    continue;
+                };
+                let state = part.get("state");
+                let args = state
+                    .and_then(|s| s.get("input"))
+                    .filter(|input| input.is_object())
+                    .cloned();
+                let result = state
+                    .and_then(|s| s.get("output").or_else(|| s.get("error")))
+                    .and_then(Value::as_str)
+                    .map(|value| Value::String(value.to_string()));
+                events.push(TranscriptEvent::ToolInvocation {
+                    ordinal,
+                    name: name.to_string(),
+                    args,
+                    result,
+                });
+            }
+            Some("text") => {
+                if let Some(text) = record
+                    .get("part")
+                    .and_then(|part| part.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    events.push(TranscriptEvent::AssistantMessage {
+                        ordinal,
+                        text: text.to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
 /// Parse an OpenCode `--format json` event stream into ordered tool
 /// invocations.
 pub fn parse_opencode_events(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation>> {
@@ -67,6 +113,10 @@ pub fn parse_opencode_events_full(jsonl_path: &Path) -> io::Result<TranscriptSum
     let mut timestamp_count = 0usize;
     let mut final_text: Option<String> = None;
     let mut total_tokens: Option<i64> = None;
+    let session_id = records
+        .iter()
+        .find_map(|record| record.get("sessionID").and_then(Value::as_str))
+        .map(str::to_string);
 
     for record in &records {
         // OpenCode envelope timestamps are epoch milliseconds (numbers), not
@@ -110,6 +160,8 @@ pub fn parse_opencode_events_full(jsonl_path: &Path) -> io::Result<TranscriptSum
 
     Ok(TranscriptSummary {
         tool_invocations: extract_invocations(&records),
+        events: extract_events(&records),
+        session_id,
         total_tokens,
         duration_ms,
         final_text,
@@ -295,6 +347,29 @@ mod tests {
         );
 
         let full = parse_opencode_events_full(&path).unwrap();
+        assert_eq!(full.session_id.as_deref(), Some("ses_1"));
+        assert_eq!(
+            serde_json::to_value(&full.events).unwrap(),
+            json!([
+                {
+                    "type": "tool_invocation",
+                    "ordinal": 0,
+                    "name": "bash",
+                    "args": {"command": "ls"},
+                    "result": "README.md"
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 1,
+                    "text": "First."
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 2,
+                    "text": "Final."
+                }
+            ])
+        );
         assert_eq!(full.tool_invocations.len(), 1);
         assert_eq!(full.tool_invocations[0].name, "bash");
         assert_eq!(full.final_text, Some("Final.".into()));

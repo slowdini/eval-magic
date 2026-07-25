@@ -82,6 +82,7 @@ fn is_zero(value: &i32) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum MustPrecede {
     CompletionClaim,
+    FirstWrite,
     Any,
 }
 
@@ -108,6 +109,26 @@ pub struct Eval {
     /// so `shared` and `isolated` currently have the same effective isolation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub isolation: Option<Isolation>,
+    /// Ordered scripted user follow-ups. Absence preserves one-shot dispatch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turns: Option<Vec<ScriptedTurn>>,
+}
+
+/// One scripted user follow-up delivered after an assistant response.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScriptedTurn {
+    pub prompt: String,
+    pub deliver_when: DeliverWhen,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_response_matches: Option<String>,
+}
+
+/// Gate controlling whether a scripted user follow-up is delivered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeliverWhen {
+    Always,
+    AgentAsks,
 }
 
 /// Legacy per-eval isolation hint. Every new run is task-scoped regardless.
@@ -228,6 +249,61 @@ pub struct RunRecord {
     /// Appended last so legacy single-run records serialize byte-identically.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_index: Option<u32>,
+    /// Ordered multi-turn evidence and scripted-delivery outcome. Absent for
+    /// legacy one-shot runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationRecord>,
+}
+
+/// The completed outcome of one scripted conversation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationRecord {
+    pub status: ConversationStatus,
+    pub delivered_followups: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<ConversationStopReason>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped_before_followup: Option<u32>,
+    pub events: Vec<ConversationEvent>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStatus {
+    Completed,
+    Stopped,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationStopReason {
+    AgentDidNotAsk,
+    AgentResponseMismatch,
+}
+
+/// One globally ordered event across every delivered conversation round.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ConversationEvent {
+    UserMessage {
+        ordinal: u32,
+        round: u32,
+        text: String,
+    },
+    AssistantMessage {
+        ordinal: u32,
+        round: u32,
+        text: String,
+    },
+    ToolInvocation {
+        ordinal: u32,
+        round: u32,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<Value>,
+    },
 }
 
 /// The result of grading one assertion.
@@ -356,6 +432,7 @@ mod tests {
             skill_should_trigger: None,
             runs: None,
             isolation: None,
+            turns: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -376,6 +453,7 @@ mod tests {
             skill_should_trigger: None,
             runs: None,
             isolation: Some(Isolation::Isolated),
+            turns: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert_eq!(
@@ -399,6 +477,7 @@ mod tests {
             total_tokens: None,
             duration_ms: None,
             run_index: None,
+            conversation: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
@@ -407,6 +486,7 @@ mod tests {
         assert_eq!(out.get("duration_ms"), Some(&Value::Null));
         // Absent run_index is omitted, keeping single-run records byte-identical.
         assert!(out.get("run_index").is_none());
+        assert!(out.get("conversation").is_none());
     }
 
     #[test]

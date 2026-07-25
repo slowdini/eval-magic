@@ -27,11 +27,12 @@ pub enum SchemaName {
     CommandCheck,
     DiffScope,
     HarnessDescriptor,
+    Conversation,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 9] = [
+    const ALL: [SchemaName; 10] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
@@ -41,6 +42,7 @@ impl SchemaName {
         SchemaName::CommandCheck,
         SchemaName::DiffScope,
         SchemaName::HarnessDescriptor,
+        SchemaName::Conversation,
     ];
 
     /// The schema's kebab-case name, as used in error messages and the on-disk
@@ -56,6 +58,7 @@ impl SchemaName {
             SchemaName::CommandCheck => "command-check",
             SchemaName::DiffScope => "diff-scope",
             SchemaName::HarnessDescriptor => "harness-descriptor",
+            SchemaName::Conversation => "conversation",
         }
     }
 
@@ -75,6 +78,7 @@ impl SchemaName {
             SchemaName::HarnessDescriptor => {
                 include_str!("../../schema/harness-descriptor.schema.json")
             }
+            SchemaName::Conversation => include_str!("../../schema/conversation.schema.json"),
         }
     }
 }
@@ -171,6 +175,30 @@ mod tests {
         data["tool_invocations"] = json!([]);
         let r: Result<Value, _> = validate_against_schema(SchemaName::RunRecord, &data, "run.json");
         assert!(r.is_ok());
+    }
+
+    #[test]
+    fn conversation_tool_results_use_the_portable_run_record_value_shape() {
+        let conversation = json!({
+            "status": "completed",
+            "delivered_followups": 0,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
+                {
+                    "type": "tool_invocation",
+                    "ordinal": 1,
+                    "round": 1,
+                    "name": "Read",
+                    "result": ["not", "portable"]
+                },
+                {"type": "assistant_message", "ordinal": 2, "round": 1, "text": "Done."}
+            ]
+        });
+
+        let result: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+
+        assert!(result.is_err());
     }
 
     #[test]

@@ -134,3 +134,54 @@ fn diff_scope_grader_roundtrips_snake_case() {
     let back: Grader = serde_json::from_value(value).unwrap();
     assert_eq!(back, Grader::DiffScope);
 }
+
+#[test]
+fn run_record_roundtrips_a_stopped_multi_turn_conversation() {
+    let record: RunRecord = serde_json::from_value(json!({
+        "eval_id": "timezone",
+        "condition": "with_skill",
+        "skill_path": "/skills/investigating-bugs/SKILL.md",
+        "prompt": "The due date is wrong. Fix it.",
+        "files": [],
+        "final_message": "Which users are affected?",
+        "tool_invocations": [],
+        "total_tokens": null,
+        "duration_ms": null,
+        "conversation": {
+            "status": "stopped",
+            "delivered_followups": 0,
+            "stop_reason": "agent_response_mismatch",
+            "stopped_before_followup": 1,
+            "events": [
+                {
+                    "type": "user_message",
+                    "ordinal": 0,
+                    "round": 1,
+                    "text": "The due date is wrong. Fix it."
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 1,
+                    "round": 1,
+                    "text": "Which users are affected?"
+                }
+            ]
+        }
+    }))
+    .unwrap();
+
+    let conversation = record.conversation.as_ref().unwrap();
+    assert_eq!(conversation.status, ConversationStatus::Stopped);
+    assert_eq!(
+        conversation.stop_reason,
+        Some(ConversationStopReason::AgentResponseMismatch)
+    );
+    assert_eq!(conversation.events.len(), 2);
+
+    let out = serde_json::to_value(record).unwrap();
+    assert_eq!(out["conversation"]["stopped_before_followup"], 1);
+    assert_eq!(
+        out["conversation"]["events"][1]["type"],
+        "assistant_message"
+    );
+}

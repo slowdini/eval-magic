@@ -70,6 +70,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
 
     match command {
         Commands::Run(args) => run_run(args),
+        Commands::DispatchTask(args) => run_dispatch_task(args),
         Commands::Ingest(args) => run_ingest(args),
         Commands::Finalize(args) => run_finalize(args),
         Commands::Init(args) => run_init(args),

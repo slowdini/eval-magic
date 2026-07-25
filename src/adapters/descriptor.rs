@@ -72,6 +72,8 @@ pub struct HarnessDescriptor {
     pub shadow: Option<ShadowSection>,
     #[serde(default, skip_serializing_if = "DispatchSection::is_empty")]
     pub dispatch: DispatchSection,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conversation: Option<ConversationSection>,
 }
 
 /// Run-option capabilities. The `Default` mirrors the baseline every harness
@@ -321,6 +323,15 @@ pub struct DispatchSection {
     pub judge_command_template: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_template: Option<String>,
+}
+
+/// Native same-session continuation for scripted multi-turn evals.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ConversationSection {
+    /// Command template for one follow-up turn. The driver fills
+    /// `{session_arg}` and `{prompt_arg}` with shell-quoted values and the
+    /// usual angle-bracket paths with task-local destinations.
+    pub resume_exec_template: String,
 }
 
 impl DispatchSection {

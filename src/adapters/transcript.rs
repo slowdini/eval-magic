@@ -11,6 +11,24 @@ use std::path::Path;
 
 use crate::core::ToolInvocation;
 
+/// One ordered, user-visible or tool event parsed from a harness transcript.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum TranscriptEvent {
+    AssistantMessage {
+        ordinal: u32,
+        text: String,
+    },
+    ToolInvocation {
+        ordinal: u32,
+        name: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        args: Option<serde_json::Value>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<serde_json::Value>,
+    },
+}
+
 /// Read a JSONL file, deserializing each non-blank line as `T` and silently
 /// skipping malformed lines (a partial transcript still yields its parseable
 /// records).
@@ -27,6 +45,13 @@ pub(crate) fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> io::Res
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TranscriptSummary {
     pub tool_invocations: Vec<ToolInvocation>,
+    /// Ordered assistant-message and tool events, for multi-turn gating and
+    /// cross-event grading.
+    #[serde(default)]
+    pub events: Vec<TranscriptEvent>,
+    /// Native conversation/session identifier used to resume the next turn.
+    #[serde(default)]
+    pub session_id: Option<String>,
     /// Total token usage (input + output + cache creation/read), as reported by
     /// the run's terminal `result` event.
     pub total_tokens: Option<i64>,

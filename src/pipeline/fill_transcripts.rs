@@ -91,6 +91,14 @@ pub fn fill_transcripts(
                     &source,
                 )?;
 
+                if run.conversation.is_some() {
+                    // record-runs already populated the authoritative global
+                    // tool order from conversation.json. An empty list is a
+                    // legitimate tool-free conversation, not a missing fill.
+                    result.skipped += 1;
+                    continue;
+                }
+
                 if !run.tool_invocations.is_empty() && !overwrite {
                     result.skipped += 1;
                     continue;

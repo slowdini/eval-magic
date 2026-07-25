@@ -58,7 +58,7 @@ impl DescriptorAdapter {
 
     /// The single-dispatch command: the exec template with `{model_arg}` /
     /// `{guard_args}` filled for this run. Empty when no template is wired.
-    fn exec_command(&self, guard: bool, agent_model: Option<&str>) -> String {
+    fn render_exec_command(&self, guard: bool, agent_model: Option<&str>) -> String {
         let Some(template) = &self.descriptor.dispatch.exec_template else {
             return String::new();
         };
@@ -70,6 +70,18 @@ impl DescriptorAdapter {
                 ("guard_args", self.guard_args(guard)),
             ],
         )
+    }
+
+    fn render_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+        let template = &self.descriptor.conversation.as_ref()?.resume_exec_template;
+        let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
+        Some(subst(
+            template,
+            &[
+                ("model_arg", &model_arg),
+                ("guard_args", self.guard_args(guard)),
+            ],
+        ))
     }
 
     /// The `{guard_args}` value for this run: the descriptor's fragment when
@@ -298,6 +310,22 @@ impl HarnessAdapter for DescriptorAdapter {
         self.descriptor.dispatch.exec_template.is_some()
     }
 
+    fn cli_exec_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+        self.descriptor
+            .dispatch
+            .exec_template
+            .as_ref()
+            .map(|_| self.render_exec_command(guard, agent_model))
+    }
+
+    fn has_conversation_resume(&self) -> bool {
+        self.descriptor.conversation.is_some()
+    }
+
+    fn cli_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+        self.render_resume_command(guard, agent_model)
+    }
+
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
         let ingest_line = format!(
             "ingest{} --iteration {} --harness {}",
@@ -311,7 +339,7 @@ impl HarnessAdapter for DescriptorAdapter {
                 Some(_) => format!(
                     "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task \
                      with:\n{}\nThen run `{ingest_line}`.",
-                    self.exec_command(ctx.guard, ctx.agent_model)
+                    self.render_exec_command(ctx.guard, ctx.agent_model)
                 ),
                 None => format!(
                     "\nNext: read dispatch-manifest.md and dispatch each task through your \
@@ -320,7 +348,7 @@ impl HarnessAdapter for DescriptorAdapter {
                 ),
             };
         };
-        let exec_command = self.exec_command(ctx.guard, ctx.agent_model);
+        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model);
         let iteration = ctx.iteration.to_string();
         let model_note = if ctx.agent_model.is_some() {
             self.descriptor.dispatch.model_note.as_deref().unwrap_or("")
@@ -344,7 +372,7 @@ impl HarnessAdapter for DescriptorAdapter {
             // generic recipe section; without either, the manifest's shared
             // header text already covers the baseline handoff.
             self.descriptor.dispatch.exec_template.as_ref()?;
-            let exec_command = self.exec_command(ctx.guard, ctx.agent_model);
+            let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model);
             return Some(
                 format!(
                     "## Dispatch recipe\n\nFrom each task's `eval_root`, dispatch with:\n\
@@ -357,17 +385,20 @@ impl HarnessAdapter for DescriptorAdapter {
                 .collect(),
             );
         };
-        let exec_command = self.exec_command(ctx.guard, ctx.agent_model);
+        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model);
         let parallel_recipe = match &self.descriptor.dispatch.parallel_command_template {
             Some(block_template) => {
                 let model_arg = render_cli_model_arg(self.model_flag(), ctx.agent_model);
-                render_parallel_dispatch_recipe(&subst(
-                    block_template,
-                    &[
-                        ("model_arg", &model_arg),
-                        ("guard_args", self.guard_args(ctx.guard)),
-                    ],
-                ))
+                render_parallel_dispatch_recipe(
+                    &subst(
+                        block_template,
+                        &[
+                            ("model_arg", &model_arg),
+                            ("guard_args", self.guard_args(ctx.guard)),
+                        ],
+                    ),
+                    ctx.one_shot_only,
+                )
             }
             None => String::new(),
         };
@@ -459,11 +490,36 @@ mod tests {
             .cli_manifest_section(CliManifestContext {
                 guard: false,
                 agent_model: None,
+                one_shot_only: false,
             })
             .expect("an exec template earns a generic manifest recipe")
             .join("\n");
         assert!(manifest.contains("cool-cli run"), "{manifest}");
         assert!(manifest.contains("final-message.md"), "{manifest}");
+    }
+
+    #[test]
+    fn built_in_harnesses_render_native_resume_commands() {
+        for harness in [
+            Harness::resolve("claude-code").unwrap(),
+            Harness::resolve("codex").unwrap(),
+            Harness::resolve("opencode").unwrap(),
+        ] {
+            let adapter = adapter_for(harness);
+            assert!(
+                adapter.has_conversation_resume(),
+                "{} should support scripted follow-up turns",
+                adapter.label()
+            );
+            let command = adapter
+                .cli_resume_command(false, Some("test-model"))
+                .expect("built-in resume command");
+            assert!(command.contains("<eval-root>"), "{command}");
+            assert!(command.contains("<outputs_dir>"), "{command}");
+            assert!(command.contains("{session_arg}"), "{command}");
+            assert!(command.contains("{prompt_arg}"), "{command}");
+            assert!(command.contains("test-model"), "{command}");
+        }
     }
 
     #[test]
@@ -487,6 +543,7 @@ mod tests {
                 .cli_manifest_section(CliManifestContext {
                     guard: false,
                     agent_model: None,
+                    one_shot_only: false,
                 })
                 .is_none(),
             "the manifest's generic header already covers the no-recipe baseline"

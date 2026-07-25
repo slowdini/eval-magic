@@ -20,9 +20,11 @@ use serde_json::Value;
 use crate::core::ToolInvocation;
 
 use crate::adapters::TranscriptSummary;
-use crate::adapters::transcript::read_jsonl;
+use crate::adapters::transcript::{TranscriptEvent, read_jsonl};
 
-use super::transcript::{TranscriptRecord, UsageRecord, extract_invocations, last_assistant_text};
+use super::transcript::{
+    TranscriptRecord, UsageRecord, extract_events, extract_invocations, last_assistant_text,
+};
 
 /// The terminal `{"type":"result", …}` event of a `-p` stream-json run.
 #[derive(Debug, serde::Deserialize)]
@@ -78,9 +80,30 @@ pub fn parse_claude_stream_json_full(path: &Path) -> io::Result<TranscriptSummar
         }
         _ => last_assistant_text(&records),
     };
+    let session_id = values.iter().find_map(|value| {
+        (value.get("type").and_then(Value::as_str) == Some("system"))
+            .then(|| value.get("session_id").and_then(Value::as_str))
+            .flatten()
+            .map(str::to_string)
+    });
+    let mut events = extract_events(&records);
+    if let Some(text) = &final_text {
+        let last_matches = events.iter().rev().find_map(|event| match event {
+            TranscriptEvent::AssistantMessage { text, .. } => Some(text),
+            TranscriptEvent::ToolInvocation { .. } => None,
+        }) == Some(text);
+        if !last_matches {
+            events.push(TranscriptEvent::AssistantMessage {
+                ordinal: events.len() as u32,
+                text: text.clone(),
+            });
+        }
+    }
 
     Ok(TranscriptSummary {
         tool_invocations: extract_invocations(&records),
+        events,
+        session_id,
         total_tokens,
         duration_ms,
         final_text,
@@ -146,13 +169,29 @@ mod tests {
         write_jsonl(
             &path,
             &[
-                json!({"type": "system", "subtype": "init"}),
+                json!({"type": "system", "subtype": "init", "session_id": "session-claude-1"}),
                 json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "text", "text": "working"}]}}),
                 json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 5637, "usage": usage()}),
             ],
         );
 
         let summary = super::parse_claude_stream_json_full(&path).unwrap();
+        assert_eq!(summary.session_id.as_deref(), Some("session-claude-1"));
+        assert_eq!(
+            serde_json::to_value(&summary.events).unwrap(),
+            json!([
+                {
+                    "type": "assistant_message",
+                    "ordinal": 0,
+                    "text": "working"
+                },
+                {
+                    "type": "assistant_message",
+                    "ordinal": 1,
+                    "text": "Done"
+                }
+            ])
+        );
         assert_eq!(summary.final_text, Some("Done".into()));
         assert_eq!(summary.duration_ms, Some(5637));
         // 4932 + 139 + 8287 + 33490

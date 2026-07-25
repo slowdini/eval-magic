@@ -41,7 +41,7 @@ cargo build --release          # binary at target/release/eval-magic
 
 ## How an eval works
 
-For each test case, the runner sets up two conditions and a fresh subagent runs each with clean context. Each subagent is dispatched through the harness's one-shot CLI (`claude -p`, `codex exec`) — the specifics per harness are covered under [Harnesses](#harnesses):
+For each test case, the runner sets up two conditions and a fresh native session runs each with clean context. A one-shot case uses one harness CLI call (`claude -p`, `codex exec`); a scripted case resumes that same session for each delivered follow-up. Harness details are covered under [Harnesses](#harnesses):
 
 - **Mode A — new skill:** `with_skill` vs `without_skill`. Validates a brand-new skill beats baseline behavior with no skill loaded.
 - **Mode B — revision (the common case):** `old_skill` vs `new_skill`. Tests a language change to an existing skill — you snapshot the old `SKILL.md`, then run both variants against the same prompts. A negative or zero `delta.pass_rate` is a signal to revert.
@@ -71,6 +71,36 @@ eval-magic init
   ]
 }
 ```
+
+For a scenario that needs clarification before the agent can safely act, add an
+ordered `turns` array. There is no turn-count cap:
+
+```json
+{
+  "id": "timezone-date-fix",
+  "prompt": "The displayed date is wrong. Fix it.",
+  "expected_output": "Clarifies semantics before editing, then fixes the bug",
+  "turns": [
+    {
+      "prompt": "Affected users are in US timezones.",
+      "deliver_when": "agent_asks",
+      "agent_response_matches": "(?i)time ?zone"
+    },
+    {
+      "prompt": "It is a date-only field.",
+      "deliver_when": "always"
+    }
+  ]
+}
+```
+
+`always` sends the follow-up unconditionally. `agent_asks` requires the preceding
+assistant round to contain `?`; an optional Rust regex is an additional compatibility
+gate. If either gate fails, the conversation stops normally with
+`agent_did_not_ask` or `agent_response_mismatch`, later canned turns are not sent,
+and the stopped run remains gradeable. Scripted tasks run through
+`eval-magic dispatch-task` as directed by the generated runbook so every round
+resumes the same native harness session.
 
 You can also script it with `--id`, `--prompt`, and `--expected-output`. If
 `evals/evals.json` already exists, `init` refuses to overwrite it unless you pass
@@ -139,7 +169,7 @@ teardown
 
 1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one private task env per `(eval, condition, run)` (`iteration-N/env-<group>-<condition>/`, with `-run-<k>` for repeated runs), copies visible fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. After staging, guard installation, and shadow preflight, it snapshots each final-environment baseline. Then it prints a handoff, not a dispatch.
 2. **Follow the runbook.** From `iteration-N/`, read `RUNBOOK.md` end to end. An agent session can drive it (*Read and follow `RUNBOOK.md`*) or you can follow it by hand — the commands are identical. It carries the exact per-task dispatch recipe plus the `ingest` / `finalize` commands, each already threaded with `--harness`.
-3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. For each task, run the harness CLI recipe from its `eval_root`, pointing the dispatched subagent at `dispatch_prompt_path` to read and follow exactly, and capture framework artifacts into its hidden `.eval-magic-outputs/` subtree. The agent may edit existing source or create files anywhere inside `eval_root`; it must not write outside that task environment. Conditions and repeated runs are physically isolated.
+3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. One-shot tasks use the harness CLI recipe. Tasks with `turns` use `eval-magic dispatch-task`, which starts the harness CLI once, resumes the same native session for each delivered follow-up, and writes a schema-validated `conversation.json`; raw events remain under `outputs/turn-N/`. The agent may edit existing source or create files anywhere inside `eval_root`; it must not write outside that task environment. Conditions and repeated runs are physically isolated.
 4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json`, scans for writes outside `eval_root`, measures the final environment into `diff-scope.json`, grades transcript checks, and only then injects and runs held-out `command_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion; `diff_scope` thresholds are folded in at finalize.
 5. **Dispatch judges.** Same pattern as step 3: run the CLI recipe for each judge task to read its prompt file and write its verdict back.
 6. **`finalize`** (grade `--finalize` → aggregate) merges judge verdicts, runner-owned command results, and `diff_scope` thresholds, then writes `benchmark.json` into `iteration-N/`, *above* the envs. Its top-level `diff_scope` object also preserves the raw per-run metrics whether or not an eval declared a scope assertion. Read it. If a guard marker is still live, it also reminds you to run `teardown-guard` before editing source.
@@ -155,7 +185,7 @@ Each dispatch `cd`s into a fully isolated cwd holding only its fixtures, plus th
 
 ## Cost & confirmation
 
-An eval run is not free: an N-case suite is **2N full agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
+An eval run is not free: an N-case suite is **2N native agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A scripted case can add up to one model turn per delivered follow-up in each condition (and stops early when a gate fails). `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
 
 If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. Pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection (see the [Harnesses](#harnesses) table); otherwise they are recorded as provenance. The write guard arms automatically on harnesses that support it (see the same table); pass `--no-guard` only when the user actively opts out. Unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
 
@@ -165,10 +195,20 @@ The judgment of *whether* a change needs an eval, and how to design cases that a
 
 After you've seen what iteration 1 produces, add **assertions** to `evals.json` and re-grade the compatible iteration. Four types:
 
-- **`transcript_check` — mechanical.** Regex matched against a run's tool invocations. Fast, deterministic, cheap. Use for "did the agent run X" or "did file Y get written." Requires the harness's transcript-ingest enhancement (see the [Harnesses](#harnesses) table); without it these grade as unverifiable.
+- **`transcript_check` — mechanical.** `tool_invocation_matches` regex-matches tool calls; scripted runs also support `assistant_message_matches` across every assistant round. `must_precede` can be `any`, `completion_claim`, or `first_write` (the first harness-declared write/patch tool; if no write occurs, that boundary is satisfied). Fast, deterministic, cheap. Requires transcript ingest; assistant-message checks additionally require a scripted `conversation.json`.
 - **`command_check` — runner-owned.** After the agent finishes, `ingest` copies optional held-out `setup_files` from `<skill>/evals/` into the same relative paths in that task's env, then runs a trusted command there through `sh -c` (Unix) or `cmd /C` (Windows). Optional `env` entries override the inherited runner environment; optional `matrix` entries run the command once per Cartesian-product cell. The exit code defaults to `0`; optional `expect_stdout` is a regex over complete stdout, and every expectation must pass in every cell. It works with every harness, needs no transcript or LLM judge, and still runs while the agent write guard is armed.
 - **`diff_scope` — runner-owned.** Deterministically gates the agent's final-environment change with `max_files_touched`, `max_lines_changed`, or both. `max_lines_changed` is added plus removed byte-lines; `hunks` is reported but is not a threshold. Framework artifacts under `.eval-magic-outputs/` are excluded, while all other newly created files count, including ignored files and caches. Use scope as a secondary signal alongside a correctness assertion: the smallest diff is not necessarily the best change.
 - **`llm_judge` — judged.** Soft criteria a model evaluates. Use for "did the response quote actual evidence." Graded by a dispatched judge subagent. Harness-independent.
+
+```json
+{
+  "id": "clarified-timezone-before-edit",
+  "type": "transcript_check",
+  "check": "assistant_message_matches",
+  "pattern": "(?i)time ?zone",
+  "must_precede": "first_write"
+}
+```
 
 ```json
 {
@@ -245,13 +285,15 @@ Per skill being evaluated, the runner produces this generated workspace tree (au
         eval-<id>/<condition>/[run-<k>/]
           dispatch-prompt.txt
           final-message.md
-          <harness>-events.jsonl
+          <harness>-events.jsonl          # one-shot raw events
+          turn-N/<harness>-events.jsonl   # scripted raw round events
     eval-<id>/
       <condition-a>/                     # e.g. with_skill, old_skill
         diff-scope-baseline/             # private pre-dispatch baseline
         diff-scope.json                  # raw final-environment metrics
         command-checks/<assertion>.json  # runner-owned held-out check results
         run.json                         # portable run record
+        conversation.json                # scripted completion/stop + ordered events
         timing.json                      # tokens + duration
         grading.json                     # assertion results
       <condition-b>/                     # e.g. without_skill, new_skill
@@ -311,19 +353,19 @@ Every artifact follows a JSON Schema in [`schema/`](schema/), so a run record me
 
 ### How dispatch works
 
-Every eval test and judge is dispatched the same way: through the harness's one-shot CLI (`claude -p`, `codex exec`), one subprocess per task, each `cd`'d into its recorded `eval_root` and writing its events transcript to disk. `run` prepares the envs and `RUNBOOK.md`; from there an **agent session** can drive the loop (reading the runbook and shelling out each recipe) or a **human** can follow the same runbook by hand. The generated `RUNBOOK.md` / `dispatch-manifest.md` carry the exact per-task recipes for the selected harness — they, not this README, are the runtime reference for dispatch commands.
+One-shot evals and judges dispatch through the harness CLI (`claude -p`, `codex exec`), one subprocess per task. Scripted evals use the runner-owned `dispatch-task` command: it launches one subprocess per round but resumes one native session and one `eval_root` across all delivered turns. `run` prepares the envs and `RUNBOOK.md`; from there an **agent session** can drive the loop (reading the runbook and shelling out each recipe) or a **human** can follow the same runbook by hand. The generated `RUNBOOK.md` / `dispatch-manifest.md` carry the exact per-task recipes for the selected harness — they, not this README, are the runtime reference for dispatch commands.
 
 ### Support
 
 This table is the source of truth for per-harness enhancement support:
 
-| Harness | Native staging | Dispatch recipes | Transcript ingest | Model flag | Write guard | Shadow preflight |
-|---------|:--------------:|:----------------:|:-----------------:|:----------:|:-----------:|:----------------:|
-| **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| **OpenCode** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Harness | Native staging | Dispatch recipes | Transcript ingest | Conversation resume | Model flag | Write guard | Shadow preflight |
+|---------|:--------------:|:----------------:|:-----------------:|:-------------------:|:----------:|:-----------:|:----------------:|
+| **Claude Code** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **Codex** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **OpenCode** | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-A missing enhancement degrades fidelity, never correctness — every column has a fallback: without native staging, `--no-stage` inlines each `SKILL.md` into its dispatch prompt; without transcript ingest, `transcript_check` assertions grade as unverifiable and `llm_judge` carries the grading (tokens and duration go unrecorded), while runner-owned `command_check` remains available; without a model flag, `--agent-model` / `--judge-model` are recorded as provenance only; without a write guard, the run continues unguarded (auto-arm quietly stays off; an explicit `--guard` warns) and `detect-stray-writes` audits after the fact; without shadow preflight, no automatic live-skill collision scan runs; without dispatch recipes, `RUNBOOK.md` / `dispatch-manifest.md` carry handoff guidance without a copy-pasteable per-task command. Supported enhancements are provided automatically — the write guard arms on every staged run of a guard-capable harness unless `--no-guard` opts out, and the `run` preflight names actionable fallbacks where it can.
+Most missing enhancements degrade fidelity without blocking the run: without native staging, `--no-stage` inlines each `SKILL.md`; without transcript ingest, transcript checks grade as unverifiable and tokens/duration go unrecorded; without a model flag, models are provenance only; without a write guard or shadow preflight, the post-run audit and operator checks carry those responsibilities; without dispatch recipes, the runbook carries generic handoff guidance. Conversation resume is deliberately stricter: an eval that declares `turns` is rejected during preflight when its harness has no `[conversation]` capability, because sending canned replies into unrelated fresh sessions would produce misleading data.
 
 Per-harness implementation notes for developers wiring features live in [docs/claude-notes.md](docs/claude-notes.md), [docs/codex-notes.md](docs/codex-notes.md), and [docs/opencode-notes.md](docs/opencode-notes.md).
 

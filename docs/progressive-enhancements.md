@@ -8,17 +8,17 @@
 > list`/`show`/`lint` — is the user-facing [byoh.md](byoh.md).
 
 Harness compatibility is not a parity checklist to audit — it is **a minimal baseline every harness
-satisfies, plus optional enhancements** a harness's adapter opts into. A missing enhancement
-degrades fidelity, never correctness: every enhancement has a documented fallback.
+satisfies, plus optional enhancements** a harness's adapter opts into. Most missing enhancements
+have a documented lower-fidelity fallback. Native conversation resume is the deliberate exception:
+an eval that declares scripted `turns` is rejected when the harness cannot preserve one session.
 
 ## One dispatch mechanism
 
-Every eval test and judge is dispatched the same way: through the harness's one-shot CLI, one
-subprocess per task, each `cd`'d into its recorded `eval_root` and writing its output to disk.
-There is no other mode. The **generated artifacts are the runtime source of truth** for how to
+One-shot evals and judges dispatch through the harness CLI, one subprocess per task. Scripted evals
+use `eval-magic dispatch-task`, one subprocess per round while resuming one harness-native session
+and one `eval_root`. The **generated artifacts are the runtime source of truth** for how to
 dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` carrying the exact per-task recipe
-for the selected harness (rendered by the adapter's dispatch-recipe methods) — hand-maintained docs
-never carry command recipes.
+for the selected harness — hand-maintained docs never carry command recipes.
 
 ## The baseline contract
 
@@ -39,13 +39,14 @@ writes that leave the private task environment. Run records without transcript i
 from `outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
 
 In descriptor terms the baseline is one required field: `label`. Everything else in a harness
-descriptor is optional — an absent field or table gets a working generic fallback, and the `run`
+descriptor is optional for one-shot evals — an absent field or table gets a working generic fallback, and the `run`
 preflight *warns* naming that fallback rather than rejecting (a harness without `skills_dir`
 forces `--no-stage`; without a declared guard the run continues unguarded behind the
 `detect-stray-writes` audit; requested models without a model flag are recorded as provenance
 only). Supported enhancements are provided automatically — the write guard auto-arms wherever a
 harness declares one and staging is active (`--no-guard` opts out). Only genuinely contradictory
-flag combinations stay errors.
+flag combinations stay errors. A selected eval with `turns` also requires `[conversation]`; no
+generic fresh-session fallback can preserve the meaning of a canned reply.
 
 ## Where this lives in code
 
@@ -139,9 +140,9 @@ uses the LLM-judge fallback.
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
 ingest pipeline never calls a parser), exactly one of `parser`/`extract` (validation rejects both
 or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
-five fixed primitives (equality `where` filter, final-text pick, flat tool-item mapping, token
-sum, duration rule), documented with a worked example in [byoh.md](byoh.md) — the built-in `codex`
-descriptor ingests through it.
+equality `where` filters, final and ordered assistant-text picks, a session-id pick, flat
+tool-item mapping, token sum, and duration rule, documented with a worked example in
+[byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
 (`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
 extract engine's differential test compares against) — a new harness emitting a compatible event
@@ -149,6 +150,25 @@ stream reuses one with zero code.
 The tool names the transcript yields must be declared in `[tools]` (see the write-guard
 enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
 combination.
+
+### Native conversation resume
+
+*Why harness-specific:* each CLI spells same-session continuation differently and exposes its
+session identifier in a different transcript event.
+
+*What it unlocks:* an eval's ordered `turns` array. `dispatch-task` starts the normal one-shot
+command, extracts the native session id, evaluates `agent_asks` (`?`) plus the optional response
+regex, and resumes the same session for each delivered follow-up. It writes raw round transcripts
+under `outputs/turn-N/` and atomically commits `conversation.json` only after a complete or normal
+guardrail-stopped scenario. `ingest` skips an interrupted task with no completion artifact.
+
+*Fallback:* none. `run` rejects selected multi-turn evals when the harness omits this capability;
+silently starting a fresh session would make the canned user response meaningless.
+
+*Descriptor fields:* `[conversation].resume_exec_template`, with required
+`<eval-root>`, `<outputs_dir>`, `{session_arg}`, and `{prompt_arg}` placeholders. It requires
+`dispatch.exec_template` and transcript parsing. Declarative transcript extraction must include
+`assistant_messages` and `session_id`; named built-in parsers provide the same normalized fields.
 
 ### Native skill staging + skills block
 
@@ -301,7 +321,8 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
    requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
 4. Add the harness to the README support table (all enhancements ❌ at baseline).
 5. Wire enhancements in leverage order — dispatch recipes and transcript ingest first (they carry
-   the most fidelity), then staging, model flag, guard (guard requires built-in status — user
+   the most fidelity and are prerequisites for conversation resume), then conversation resume,
+   staging, model flag, guard (guard requires built-in status — user
    descriptors may not declare one) — updating the table as each lands. Most enhancements are
    descriptor fields; add a named capability in `src/adapters/capabilities.rs` (plus its
    `src/adapters/<harness>/` module) only when the harness's stream or hooks are incompatible with
