@@ -93,7 +93,7 @@
         "extract": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Declarative extractor for flat event streams — five fixed primitives, no more: an equality filter (`where`), a final-text field pick (last match wins), a flat tool-item mapping, a token sum, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
+          "description": "Declarative extractor for flat event streams: an equality filter (`where`), final/ordered assistant text picks, a native session-id pick, a flat tool-item mapping, a token sum, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
           "properties": {
             "tools": {
               "type": "object",
@@ -138,6 +138,34 @@
               "required": ["field"],
               "additionalProperties": false,
               "description": "Final assistant text: dotted-path string pick over matching records; the last match wins.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "field": { "type": "string", "minLength": 1 }
+              }
+            },
+            "assistant_messages": {
+              "type": "object",
+              "required": ["field"],
+              "additionalProperties": false,
+              "description": "Ordered assistant messages: every matching dotted-path string becomes a transcript event.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "field": { "type": "string", "minLength": 1 }
+              }
+            },
+            "session_id": {
+              "type": "object",
+              "required": ["field"],
+              "additionalProperties": false,
+              "description": "Native resumable session id: dotted-path string pick over matching records; the last match wins.",
               "properties": {
                 "where": {
                   "type": "object",
@@ -315,6 +343,19 @@
         "manifest_template": {
           "type": "string",
           "description": "The dispatch-manifest harness section; {exec_command}/{parallel_recipe} placeholders; ends with exactly one newline."
+        }
+      }
+    },
+    "conversation": {
+      "type": "object",
+      "required": ["resume_exec_template"],
+      "additionalProperties": false,
+      "description": "Native same-session continuation used by scripted multi-turn evals.",
+      "properties": {
+        "resume_exec_template": {
+          "type": "string",
+          "minLength": 1,
+          "description": "One follow-up dispatch command. Must reference <eval-root>, <outputs_dir>, {session_arg}, and {prompt_arg}; {model_arg}/{guard_args} are filled like dispatch.exec_template."
         }
       }
     }

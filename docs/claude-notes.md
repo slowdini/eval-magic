@@ -31,6 +31,8 @@ hook-entry and `hookSpecificOutput` verdict templates) is rendered by the generi
   `result` event rather than a file.
 - `</dev/null` detaches stdin so a permission prompt can't block on a TTY and piped task data
   can't become extra prompt context.
+- Scripted follow-ups use `claude -p --resume <SESSION_ID>` from the same env; the initial
+  `system.session_id` supplies the id. Verified against `claude --help` on 2026-07-24.
 
 ## Transcript (stream-json)
 

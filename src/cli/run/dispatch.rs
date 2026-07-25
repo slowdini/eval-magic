@@ -14,7 +14,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
-use crate::core::{AvailableSkill, Eval, Harness};
+use crate::core::{AvailableSkill, Eval, Harness, ScriptedTurn};
 
 use super::RunError;
 
@@ -36,6 +36,12 @@ pub struct DispatchTask {
     pub outputs_dir: String,
     pub run_record_path: String,
     pub timing_path: String,
+    /// Ordered scripted follow-ups; absent for one-shot tasks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turns: Option<Vec<ScriptedTurn>>,
+    /// Runner-owned completion artifact for a scripted conversation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_path: Option<String>,
     pub agent_description: String,
     pub dispatch_prompt_path: String,
     /// Group id this task belongs to; absent when there is exactly one group
@@ -63,6 +69,7 @@ pub struct DispatchTaskOpts<'a> {
     pub staged_skill_path: Option<&'a str>,
     pub user_prompt: &'a str,
     pub fixtures: Vec<String>,
+    pub turns: Option<&'a [ScriptedTurn]>,
     pub outputs_dir: &'a str,
     pub cond_dir: &'a str,
     pub bootstrap_content: Option<&'a str>,
@@ -251,6 +258,13 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         outputs_dir: opts.outputs_dir.to_string(),
         run_record_path: cond_dir.join("run.json").to_string_lossy().into_owned(),
         timing_path: cond_dir.join("timing.json").to_string_lossy().into_owned(),
+        turns: opts.turns.map(<[ScriptedTurn]>::to_vec),
+        conversation_path: opts.turns.map(|_| {
+            cond_dir
+                .join("conversation.json")
+                .to_string_lossy()
+                .into_owned()
+        }),
         agent_description,
         dispatch_prompt_path: Path::new(opts.outputs_dir)
             .join("dispatch-prompt.txt")
@@ -397,10 +411,44 @@ pub fn build_manifest(
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
     ];
-    if let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
-        guard: context.guard,
-        agent_model: context.agent_model,
-    }) {
+    let scripted: Vec<usize> = tasks
+        .iter()
+        .enumerate()
+        .filter_map(|(index, task)| task.turns.as_ref().map(|_| index))
+        .collect();
+    if !scripted.is_empty() {
+        header.extend([
+            "## Scripted multi-turn dispatch".to_string(),
+            String::new(),
+            "Run these tasks through eval-magic's conversation driver. It resumes one native \
+             session, enforces each delivery gate, and writes the task's conversation.json. A \
+             gate stop is valid eval data; a task interrupted before conversation.json is \
+             incomplete and ingest skips it."
+                .to_string(),
+            String::new(),
+        ]);
+        for index in &scripted {
+            header.push(format!(
+                "eval-magic dispatch-task --dispatch dispatch.json --task-index {index}"
+            ));
+        }
+        header.push(String::new());
+    }
+    if scripted.len() < tasks.len()
+        && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
+            guard: context.guard,
+            agent_model: context.agent_model,
+            one_shot_only: !scripted.is_empty(),
+        })
+    {
+        if !scripted.is_empty() {
+            header.extend([
+                "The harness recipe below applies only to task entries whose `turns` field is \
+                 absent."
+                    .to_string(),
+                String::new(),
+            ]);
+        }
         header.extend(lines);
     }
     header.extend([
@@ -423,18 +471,23 @@ pub fn build_manifest(
                 .run_index
                 .map(|k| format!(" / run-{k}"))
                 .unwrap_or_default();
-            [
+            let mut lines = vec![
                 format!("### {} / {}{run_seg}", t.eval_id, t.condition),
                 String::new(),
                 format!("- run.json:    {}", t.run_record_path),
                 format!("- timing.json: {}", t.timing_path),
+            ];
+            if let Some(path) = &t.conversation_path {
+                lines.push(format!("- conversation.json: {path}"));
+            }
+            lines.extend([
                 String::new(),
                 "```".to_string(),
                 t.dispatch_prompt.clone(),
                 "```".to_string(),
                 String::new(),
-            ]
-            .join("\n")
+            ]);
+            lines.join("\n")
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -445,6 +498,8 @@ pub fn build_manifest(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod conversation;
 
     fn mk_evals(ids: &[&str]) -> Vec<Eval> {
         ids.iter()
@@ -457,6 +512,7 @@ mod tests {
                 skill_should_trigger: None,
                 runs: None,
                 isolation: None,
+                turns: None,
             })
             .collect()
     }

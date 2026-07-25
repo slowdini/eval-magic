@@ -368,6 +368,9 @@ fn declared_enhancements(descriptor: &HarnessDescriptor) -> String {
     if descriptor.transcript.is_some() {
         list.push("transcript");
     }
+    if descriptor.conversation.is_some() {
+        list.push("conversation-resume");
+    }
     if descriptor.model.is_some() {
         list.push("model-flag");
     }
@@ -404,6 +407,7 @@ mod tests {
         assert_eq!(descriptor.label, "demo");
         assert!(descriptor.skills_dir.is_none());
         assert!(descriptor.transcript.is_none());
+        assert!(descriptor.conversation.is_none());
         assert!(descriptor.guard.is_none());
         assert!(descriptor.dispatch.is_empty());
     }

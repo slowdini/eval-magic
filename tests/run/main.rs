@@ -13,6 +13,7 @@ mod byoh;
 mod claude_cli;
 mod codex;
 mod command_check;
+mod conversation;
 mod diff_scope;
 mod env_layout;
 mod grouping;

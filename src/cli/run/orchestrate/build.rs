@@ -202,6 +202,7 @@ pub(super) fn write_dispatch(
                         staged_skill_path: staged_path.as_deref(),
                         user_prompt: &ev.prompt,
                         fixtures,
+                        turns: ev.turns.as_deref(),
                         outputs_dir: &outputs_dir_str,
                         cond_dir: &run_dir_str,
                         bootstrap_content: staged.bootstrap_content.as_deref(),
@@ -262,6 +263,14 @@ pub(super) fn write_dispatch(
         "harness": ctx.harness,
         "tasks": tasks,
     });
+    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
+        let descriptor = crate::adapters::registry::descriptor_value_for(ctx.harness);
+        let envelope = dispatch_json
+            .as_object_mut()
+            .expect("dispatch envelope is an object");
+        envelope.insert("guard".to_string(), Value::Bool(opts.guard_armed()));
+        envelope.insert("harness_descriptor".to_string(), descriptor.clone());
+    }
     // The isolation-batch plan the executing session/human follows: which evals
     // share an env, why, and (per condition) the env each batch runs in. There is
     // one env per (group, condition).
@@ -320,6 +329,7 @@ pub(super) fn write_dispatch(
         cond_a: r.cond_a,
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
+        multi_turn_tasks: tasks.iter().filter(|task| task.turns.is_some()).count(),
         target_args: &target_args,
         guard: opts.guard_armed(),
         agent_model: opts.agent_model,

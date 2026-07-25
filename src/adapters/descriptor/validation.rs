@@ -10,6 +10,8 @@ use super::{
     DescriptorError, GuardEngine, HarnessDescriptor, render_staged_slug, stage_name_error,
 };
 
+mod conversation;
+
 /// The placeholders a slug template must carry to keep cleanup prefix-scans
 /// and per-cell uniqueness working.
 const SLUG_PLACEHOLDERS: [&str; 4] = ["{prefix}", "{iteration}", "{condition}", "{skill_name}"];
@@ -306,12 +308,15 @@ pub(super) fn validate_descriptor(
         if let Some(extract) = &transcript.extract {
             if extract.tools.is_none()
                 && extract.final_text.is_none()
+                && extract.assistant_messages.is_none()
+                && extract.session_id.is_none()
                 && extract.tokens.is_none()
                 && extract.duration.is_none()
             {
                 return fail(
-                    "[transcript.extract] declares none of tools/final_text/tokens/duration; \
-                     an empty extract block parses nothing — declare at least one output"
+                    "[transcript.extract] declares none of tools/final_text/assistant_messages/\
+                     session_id/tokens/duration; an empty extract block parses nothing — \
+                     declare at least one output"
                         .into(),
                 );
             }
@@ -326,6 +331,11 @@ pub(super) fn validate_descriptor(
             }
         }
     }
+
+    conversation::validate(d).map_err(|message| DescriptorError::Invariant {
+        path: source.to_string(),
+        message,
+    })?;
 
     // Tool roles are disjoint: one name in two roles would double-classify
     // invocations in the stray-writes audit.
@@ -469,6 +479,8 @@ pub(super) fn validate_descriptor(
 #[cfg(test)]
 mod tests {
     use super::super::load_descriptor;
+
+    mod conversation;
 
     /// Load through the full pipeline so each rejection test proves the
     /// invariant fires on a descriptor that already passed the schema gate.

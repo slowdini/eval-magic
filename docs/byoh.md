@@ -75,6 +75,13 @@ and `{guard_args}` (guard-only arguments, built-ins only); the `<eval-root>`,
    `outputs/final-message.md`. If your CLI can't write it directly (like the example above
    redirecting stdout), capture it yourself before running `ingest`.
 
+Scripted evals additionally require `[conversation].resume_exec_template`. The driver fills
+shell-quoted `{session_arg}` / `{prompt_arg}` values and per-round `<eval-root>` /
+`<outputs_dir>` paths; the command must resume rather than fork that session. This capability also
+requires transcript extraction of ordered assistant messages and the native session id. There is
+no baseline fallback: `run` rejects `turns` for a harness that cannot preserve their conversational
+meaning.
+
 ## Layering and field-level merge
 
 Descriptor files stack in precedence order; **later layers override individual fields** of an
@@ -124,6 +131,7 @@ map as inline comments in its scaffolded template. The short map:
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
 | `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
 | `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
+| `[conversation]` | native `resume_exec_template` using the captured session id | no safe fallback: evals declaring `turns` are rejected in run preflight |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
@@ -187,6 +195,16 @@ result_coalesce = ["output", "result", "error"]
 where = { type = "item.completed", "item.type" = "agent_message" }
 field = "item.text"
 
+# Ordered assistant messages and the native session id are additionally
+# required when [conversation] is declared.
+[transcript.extract.assistant_messages]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.session_id]
+where = { type = "thread.started" }
+field = "thread_id"
+
 # Tokens: over matching records, sum the listed integer fields.
 [transcript.extract.tokens]
 where = { type = "turn.completed" }
@@ -198,19 +216,21 @@ sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_toke
 timestamp_spread = "timestamp"
 ```
 
-The primitive set is exactly five, deliberately minimal:
+The primitive set is deliberately minimal:
 
 1. **`where`** — a dotted-path → expected-string equality filter shared by every sub-table
    (omitted = every record matches). String equality only: no operators, negation, or wildcards.
 2. **`final_text`** — a field pick; the last matching record wins.
-3. **`tools`** — the flat tool-item mapping: name from `name_field`, args = the item minus
+3. **`assistant_messages`** — every matching field pick, preserving stream order.
+4. **`session_id`** — a field pick for the native resumable session id; the last match wins.
+5. **`tools`** — the flat tool-item mapping: name from `name_field`, args = the item minus
    `args_omit` (key order preserved; `null` when nothing remains), result = the first *present*
    field of `result_coalesce` (present-but-null counts; strings verbatim, everything else compact
    JSON).
-4. **`tokens`** — sum the `sum` fields over matching records. A missing or non-integer field
+6. **`tokens`** — sum the `sum` fields over matching records. A missing or non-integer field
    counts 0, but a record where *no* listed path resolves leaves the total untouched — it never
    turns an absent total into zero.
-5. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
+7. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
    minus first; needs at least two parseable timestamps).
 
 Dotted paths (`"usage.input_tokens"`, `"item.text"`) descend nested objects only — there is no
@@ -272,7 +292,7 @@ A descriptor that proves out locally can become a built-in — as a **data-only 
 beyond a mechanical registration. What counts as data vs code:
 
 - **Data — one descriptor PR:** the descriptor file itself: `label` / `skills_dir` /
-  `config_dirs`, the `[dispatch]` templates, `[model]`, `[staging]` + `[skills_block]`,
+  `config_dirs`, the `[dispatch]` / `[conversation]` templates, `[model]`, `[staging]` + `[skills_block]`,
   `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (the declarative tier is pure
   data), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
   (`claude-stream-json`, `codex-items`, `opencode-events`, `opencode`, `claude-plugins`,

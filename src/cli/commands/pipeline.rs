@@ -161,17 +161,21 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let result = pipeline::record_runs(&dir, ctx.harness, args.overwrite)?;
 
     println!(
-        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, missing transcript: {}",
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, skipped (incomplete conversation): {}, missing transcript: {}",
         result.recorded,
         result.skipped_existing,
         result.skipped_no_final_message,
         result.skipped_prompt_unread,
+        result.skipped_incomplete_conversation,
         result.missing_transcript
     );
     if let Some(warning) = result.transcript_warning(ctx.harness) {
         eprintln!("{warning}");
     }
     if let Some(warning) = result.prompt_unread_warning() {
+        eprintln!("{warning}");
+    }
+    if let Some(warning) = result.incomplete_conversation_warning() {
         eprintln!("{warning}");
     }
     Ok(())
