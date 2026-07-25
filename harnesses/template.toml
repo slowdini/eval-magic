@@ -203,7 +203,9 @@ label = "{label}"
 ##   1. eval-magic harness lint .eval-magic/harnesses/{label}.toml — all checks pass.
 ##   2. A real smoke eval: eval-magic run --harness {label}, dispatch the tasks, then ingest and
 ##      finalize — the preflight warnings name the fallback carrying anything not declared.
-##      (A `harness lint --probe` live dispatch check is planned but does not exist yet.)
+##      For the exec template specifically, `eval-magic harness lint .eval-magic/harnesses/{label}.toml
+##      --probe --yes` renders it with a trivial prompt and verifies final-message recovery — opt-in,
+##      invokes the real harness CLI, never part of standard CI. See `harness lint --help`.
 ##   3. .eval-magic/harnesses/{label}-notes.md records every verified value, its source, and the
 ##      harness version.
 ##   4. Open the PR with .github/PULL_REQUEST_TEMPLATE/harness-descriptor.md — a data-only PR:

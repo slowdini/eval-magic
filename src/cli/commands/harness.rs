@@ -17,6 +17,8 @@ use crate::core::Harness;
 
 use crate::cli::args::{HarnessArgs, HarnessCommands};
 
+mod probe;
+
 /// The `harness init` descriptor scaffold; `{label}` is substituted with the
 /// new harness's name.
 const INIT_TEMPLATE: &str = include_str!("../../../harnesses/template.toml");
@@ -33,7 +35,15 @@ pub(crate) fn run_harness(args: HarnessArgs) -> anyhow::Result<()> {
         } => run_init_scaffold(&name, stdout, force),
         HarnessCommands::List => run_list(),
         HarnessCommands::Show { name } => run_show(&name),
-        HarnessCommands::Lint { target } => run_lint(&target),
+        HarnessCommands::Lint {
+            target,
+            probe,
+            yes,
+            probe_timeout,
+        } => run_lint(
+            &target,
+            probe::ProbeOpts::from_flags(probe, yes, probe_timeout),
+        ),
     }
 }
 
@@ -104,7 +114,7 @@ fn run_init_scaffold(name: &str, stdout: bool, force: bool) -> anyhow::Result<()
     );
     println!("Scaffolded notes skeleton:     {}", notes_path.display());
     println!();
-    lint_file(&descriptor_path)?;
+    lint_file(&descriptor_path, None)?;
     println!();
     println!("Next:");
     println!("  1. Fill in verified values — follow the template's comments; never guess a flag");
@@ -170,20 +180,23 @@ fn run_show(name: &str) -> anyhow::Result<()> {
 }
 
 /// Lint a descriptor file, or every discovered layer of a registered name.
-fn run_lint(target: &str) -> anyhow::Result<()> {
+/// When `probe_opts` is `Some`, run the live dispatch probe after the static
+/// checks pass — see [`probe::run_probe`].
+fn run_lint(target: &str, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Result<()> {
     let looks_like_path = target.contains(std::path::MAIN_SEPARATOR)
         || target.ends_with(".toml")
         || Path::new(target).is_file();
     if looks_like_path {
-        lint_file(Path::new(target))
+        lint_file(Path::new(target), probe_opts)
     } else {
-        lint_name(target)
+        lint_name(target, probe_opts)
     }
 }
 
 /// Run one descriptor file through the full load pipeline, reporting each
-/// check as a ✓/✗ line (the `validate` idiom).
-fn lint_file(path: &Path) -> anyhow::Result<()> {
+/// check as a ✓/✗ line (the `validate` idiom). When `probe_opts` is `Some`,
+/// run the live dispatch probe after every static check passes.
+fn lint_file(path: &Path, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Result<()> {
     let display = path.display();
     let toml_src = fs::read_to_string(path).with_context(|| format!("cannot read {display}"))?;
     let mut failed = 0usize;
@@ -199,6 +212,10 @@ fn lint_file(path: &Path) -> anyhow::Result<()> {
             None
         }
     };
+
+    // The finalized descriptor (post-merge, post-invariants) when the static
+    // phase passes — kept so the probe can build its adapter without re-loading.
+    let mut resolved: Option<HarnessDescriptor> = None;
 
     if let Some(value) = &value {
         match check_user_layer_restrictions(value, &display.to_string()) {
@@ -227,10 +244,13 @@ fn lint_file(path: &Path) -> anyhow::Result<()> {
             None => (value.clone(), display.to_string()),
         };
         match finalize_descriptor(&merged, &provenance) {
-            Ok(_) => match &target {
-                Some(info) => println!("✓ cross-field invariants (merged onto {})", info.label),
-                None => println!("✓ cross-field invariants"),
-            },
+            Ok(descriptor) => {
+                match &target {
+                    Some(info) => println!("✓ cross-field invariants (merged onto {})", info.label),
+                    None => println!("✓ cross-field invariants"),
+                }
+                resolved = Some(descriptor);
+            }
             Err(e) => {
                 eprintln!("✗ {e}");
                 failed += 1;
@@ -242,13 +262,18 @@ fn lint_file(path: &Path) -> anyhow::Result<()> {
         bail!("descriptor lint failed for {display}: {failed} check(s) failed");
     }
     println!("Linted {display}: all checks passed.");
+    if let Some(opts) = probe_opts
+        && let Some(descriptor) = resolved
+    {
+        probe::run_probe(descriptor, &display.to_string(), opts)?;
+    }
     Ok(())
 }
 
 /// Strictly re-lint every discovered layer file, reporting the ones registry
 /// initialization skipped with a warning, and re-validate the named harness's
 /// merged chain.
-fn lint_name(name: &str) -> anyhow::Result<()> {
+fn lint_name(name: &str, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Result<()> {
     let project_root = std::env::current_dir().unwrap_or_default();
     let (sources, io_warnings) =
         discover_sources(default_config_root().as_deref(), &project_root, None)
@@ -303,11 +328,18 @@ fn lint_name(name: &str) -> anyhow::Result<()> {
         }
     }
 
+    // The finalized descriptor when the resolved chain passes — kept so the
+    // probe can build its adapter without re-loading.
+    let mut resolved: Option<(HarnessDescriptor, String)> = None;
+
     match &chain {
         Some((value, steps)) => {
             let provenance = steps.join(" + ");
             match finalize_descriptor(value, &provenance) {
-                Ok(_) => println!("✓ resolved descriptor: {provenance}"),
+                Ok(descriptor) => {
+                    println!("✓ resolved descriptor: {provenance}");
+                    resolved = Some((descriptor, provenance));
+                }
                 Err(e) => {
                     eprintln!("✗ {e}");
                     failed += 1;
@@ -335,6 +367,11 @@ fn lint_name(name: &str) -> anyhow::Result<()> {
         );
     }
     println!("Linted {name}: all checks passed.");
+    if let Some(opts) = probe_opts
+        && let Some((descriptor, provenance)) = resolved
+    {
+        probe::run_probe(descriptor, &provenance, opts)?;
+    }
     Ok(())
 }
 

@@ -82,6 +82,10 @@ requires transcript extraction of ordered assistant messages and the native sess
 no baseline fallback: `run` rejects `turns` for a harness that cannot preserve their conversational
 meaning.
 
+`harness lint <name|file> --probe` proves both hard requirements end-to-end before a real run —
+it renders `exec_template` exactly as `run` would and asserts that `outputs/final-message.md` is
+recovered afterwards. See the workflow section below and `harness lint --help`.
+
 ## Layering and field-level merge
 
 Descriptor files stack in precedence order; **later layers override individual fields** of an
@@ -283,8 +287,19 @@ eval-magic harness show <name>   # the resolved post-merge descriptor as authora
 
 Then `run --harness <name>` and read the warnings: each one names the fallback carrying that part
 of the run, which doubles as your wiring roadmap — declare the enhancement and the warning
-disappears. (A `harness lint --probe` live dispatch check — rendering the exec template with a
-trivial prompt and verifying final-message recovery — is planned; see the tracking issue.)
+disappears. Close the loop end-to-end before a real dispatch with
+`eval-magic harness lint <name|file> --probe`: it renders `dispatch.exec_template` with a trivial
+prompt in a throwaway temp dir, asks for confirmation, runs the command via `/bin/sh -c` from
+that dir, and verifies `outputs/final-message.md` is recovered (non-empty). It also
+render-only-validates `parallel_command_template` / `judge_command_template` — rendering each
+with stand-in values and reporting any unresolved `{token}` the run would later surface.
+
+`--probe` invokes the **real** harness CLI (network, tokens, usage limits), so it is strictly
+opt-in and never part of standard CI checks — it is a one-time BYOH check. The confirm banner
+prints the rendered command and a `y/N` prompt; pass `--yes` to skip it (default-deny when stdin
+is not a TTY, so the probe never spends usage unattended in a pipe), and `--probe-timeout <SECS>`
+(default 300 = 5 min) to cap the run. Run it only after `harness lint` already passes the static
+checks — a static failure aborts before any exec. See `harness lint --help` for the full contract.
 
 ## Upstreaming your descriptor
 
