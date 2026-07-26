@@ -12,6 +12,7 @@ pub mod diff_scope;
 pub mod error;
 pub mod fill_transcripts;
 pub mod grade;
+pub(crate) mod guard_denials;
 pub mod io;
 pub mod record_runs;
 pub mod slots;

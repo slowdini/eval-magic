@@ -3,8 +3,10 @@
 //! Each harness's installer (in its adapter module, e.g.
 //! `crate::adapters::claude_code::guard`) writes a marker listing the allowed
 //! roots and merges a `PreToolUse` hook into that harness's project config,
-//! using the marker/manifest helpers here. The original hook file is backed up
-//! verbatim in a manifest so [`teardown_guard`] restores it exactly.
+//! using the marker/manifest helpers here. Arming also initializes a privacy-safe
+//! raw denial log under the guarded task env; disarming preserves that evidence.
+//! The original hook file is backed up verbatim in a manifest so
+//! [`teardown_guard`] restores it exactly.
 //!
 //! The hook command points at the running binary (`std::env::current_exe`), so
 //! there is no separate hook script to ship and no interpreter to select.
@@ -28,6 +30,10 @@ use super::{guard::read_marker, marker_is_armed};
 pub const GUARD_MARKER: &str = ".slow-powers-eval-guard.json";
 /// Manifest recording what install changed, so teardown can restore it.
 pub const GUARD_MANIFEST: &str = ".slow-powers-eval-guard-manifest.json";
+/// Per-task raw denial log directory, relative to the guarded eval root.
+pub(crate) const GUARD_DENIALS_DIR: &str = ".eval-magic-outputs";
+/// Per-task raw denial log filename.
+pub(crate) const GUARD_DENIALS_LOG: &str = "guard-denials.jsonl";
 
 /// Default lifetime of an armed guard. Bounds how long a crashed run's hook can
 /// linger before it is treated as expired (see `super::decide`).
@@ -92,12 +98,20 @@ pub(crate) fn write_marker(
     ttl: Option<Duration>,
 ) -> io::Result<()> {
     let expires_ms = now_ms() + ttl.unwrap_or(GUARD_TTL).as_millis() as i64;
+    let denial_log_path = absolutize(&stage_root.join(GUARD_DENIALS_DIR).join(GUARD_DENIALS_LOG));
+    if let Some(parent) = denial_log_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    // Re-arming starts a fresh observation window for this task. Teardown
+    // intentionally leaves this evidence file in place.
+    fs::write(&denial_log_path, "")?;
     write_json(
         marker_path,
         &json!({
             "active": true,
             "allowedRoots": marker_allowed_roots(stage_root),
             "expiresAt": iso_millis(expires_ms),
+            "denialLogPath": denial_log_path,
         }),
     )
 }

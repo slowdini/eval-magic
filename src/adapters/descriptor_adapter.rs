@@ -272,7 +272,7 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn guard_verdict(&self, payload: &str, marker: Option<GuardMarker>) -> Option<String> {
         let guard = self.descriptor.guard.as_ref()?;
-        super::guard::guard_verdict(guard, payload, marker)
+        super::guard::guard_verdict(guard, &self.label(), payload, marker)
     }
 
     fn guard_hook_cleanup_dir(&self, stage_root: &Path) -> Option<PathBuf> {
@@ -421,7 +421,10 @@ impl HarnessAdapter for DescriptorAdapter {
         let cwd = ctx.iteration_dir.display().to_string();
         let command_line = subst(
             template,
-            &[("cwd", &cwd), ("guard_args", self.guard_args(ctx.guard))],
+            // Judges run from the iteration metadata directory, outside every
+            // guarded task env. Hook-trust bypass is only for eval-agent
+            // dispatches whose cwd actually contains the vetted guard hook.
+            &[("cwd", &cwd), ("guard_args", self.guard_args(false))],
         );
         Some(render_judge_dispatch_recipe(
             &command_line,
@@ -612,9 +615,13 @@ mod tests {
         // (same structure as the Claude judge recipe), not an if/else pair.
         assert!(
             recipe.contains(
-                "    codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write --dangerously-bypass-hook-trust $model_arg --json \\"
+                "    codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write $model_arg --json \\"
             ),
             "{recipe}"
+        );
+        assert!(
+            !recipe.contains("--dangerously-bypass-hook-trust"),
+            "judges run outside guarded task envs: {recipe}"
         );
         assert!(
             recipe.contains("    model_arg=\"\"; [ -n \"$model\" ] && model_arg=\"-m $model\""),

@@ -14,6 +14,7 @@ mod command_check;
 mod grade;
 mod grade_models;
 mod guard;
+mod guard_denials;
 mod harness;
 mod harness_init;
 mod init;

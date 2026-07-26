@@ -170,7 +170,7 @@ teardown
 1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one private task env per `(eval, condition, run)` (`iteration-N/env-<group>-<condition>/`, with `-run-<k>` for repeated runs), copies visible fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. After staging, guard installation, and shadow preflight, it snapshots each final-environment baseline. Then it prints a handoff, not a dispatch.
 2. **Follow the runbook.** From `iteration-N/`, read `RUNBOOK.md` end to end. An agent session can drive it (*Read and follow `RUNBOOK.md`*) or you can follow it by hand — the commands are identical. It carries the exact per-task dispatch recipe plus the `ingest` / `finalize` commands, each already threaded with `--harness`.
 3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. One-shot tasks use the harness CLI recipe. Tasks with `turns` use `eval-magic dispatch-task`, which starts the harness CLI once, resumes the same native session for each delivered follow-up, and writes a schema-validated `conversation.json`; raw events remain under `outputs/turn-N/`. The agent may edit existing source or create files anywhere inside `eval_root`; it must not write outside that task environment. Conditions and repeated runs are physically isolated.
-4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json`, scans for writes outside `eval_root`, measures the final environment into `diff-scope.json`, grades transcript checks, and only then injects and runs held-out `command_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion; `diff_scope` thresholds are folded in at finalize.
+4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json`, scans for writes outside `eval_root`, and collects every guard block from the private envs into `guard-denials.json` even when a task produced no `run.json`. It also measures the final environment into `diff-scope.json`, grades transcript checks, and only then injects and runs held-out `command_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion; `diff_scope` thresholds are folded in at finalize.
 5. **Dispatch judges.** Same pattern as step 3: run the CLI recipe for each judge task to read its prompt file and write its verdict back.
 6. **`finalize`** (grade `--finalize` → aggregate) merges judge verdicts, runner-owned command results, and `diff_scope` thresholds, then writes `benchmark.json` into `iteration-N/`, *above* the envs. Its top-level `diff_scope` object also preserves the raw per-run metrics whether or not an eval declared a scope assertion. Read it. If a guard marker is still live, it also reminds you to run `teardown-guard` before editing source.
 7. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
@@ -268,7 +268,7 @@ A skill that adds 13 seconds and 1700 tokens but improves pass rate by 50 points
 
 `diff_scope` is intentionally raw rather than averaged: each condition's array is ordered by eval id and then run index. It is captured for every new run, even when no `diff_scope` assertion is configured. Treat it as diagnostic context, not an optimization target—smaller can mean focused, but it can also mean incomplete.
 
-Read `validity_warnings` **before** trusting any delta — a low skill-invocation rate, a flagged stray write, or a flagged live-source read (an arm that read the live skill source instead of its staged copy) means the result may not reflect the skill at all.
+Read `validity_warnings` **before** trusting any delta — a low skill-invocation rate, a flagged stray write, a guard denial, or a flagged live-source read (an arm that read the live skill source instead of its staged copy) means the result may not reflect the skill at all. Every guard denial is reported, including a legitimate boundary block, because the rejected action changed agent behavior; inspect `guard-denials.json` for the affected task and count.
 
 ## Workspace layout
 
@@ -282,6 +282,7 @@ Per skill being evaluated, the runner produces this generated workspace tree (au
     env-g<eval>-<condition>[-run-<k>]/   # private agent cwd
       <fixture and task files>            # edits/new files are measured
       .eval-magic-outputs/                # framework artifacts; excluded from scope
+        guard-denials.jsonl               # raw privacy-safe blocks; no patch/command bodies
         eval-<id>/<condition>/[run-<k>/]
           dispatch-prompt.txt
           final-message.md
@@ -299,6 +300,8 @@ Per skill being evaluated, the runner produces this generated workspace tree (au
       <condition-b>/                     # e.g. without_skill, new_skill
         diff-scope-baseline/  diff-scope.json  command-checks/  run.json  timing.json  grading.json
     conditions.json                      # what each condition is, which SKILL.md it loaded
+    stray-writes.json                    # post-hoc write/read audit
+    guard-denials.json                   # guard blocks joined to dispatch task keys
     benchmark.json                       # aggregate stats
     skill-snapshot.md                    # frozen SKILL.md at run time
 ```
@@ -381,7 +384,7 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 
 ## Bundled assets
 
-- `schema/` — JSON Schemas for every artifact (`evals`, run records, `grading`, `stray-writes`, `benchmark`, `judge-tasks`, harness descriptors); the portable cross-harness contract, embedded in the binary
+- `schema/` — JSON Schemas for every artifact (`evals`, run records, `grading`, `stray-writes`, `guard-denials`, `benchmark`, `judge-tasks`, harness descriptors); the portable cross-harness contract, embedded in the binary
 - `harnesses/` — the built-in harness descriptor files (one TOML per harness: declarative values plus named-capability references), schema-validated and embedded in the binary, plus the commented `harness init` templates
 - `profiles/` — the shared plan-mode procedure profile (`--plan-mode`) and runbook templates, embedded in the binary
 

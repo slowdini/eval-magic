@@ -9,10 +9,11 @@
 use chrono::DateTime;
 use serde::Deserialize;
 use serde_json::Value;
+use std::path::Path;
 
 use super::policy::{
-    apply_patch_paths, classify_bash, is_patch_tool, is_shell_tool, is_under_any, is_write_tool,
-    path_arg,
+    apply_patch_paths, classify_bash_with_cwd, is_patch_tool, is_shell_tool, is_under_any,
+    is_write_tool, path_arg, resolve_path,
 };
 
 /// The staged marker file that arms the guard. The guard is a no-op unless this
@@ -28,6 +29,8 @@ pub struct GuardMarker {
     pub allowed_roots: Option<Vec<String>>,
     #[serde(default)]
     pub expires_at: Option<String>,
+    #[serde(default)]
+    pub denial_log_path: Option<String>,
 }
 
 /// The outcome of [`decide`]: allow, or deny with a human-readable reason.
@@ -49,6 +52,29 @@ impl GuardDecision {
         Self {
             allow: false,
             reason: Some(reason),
+        }
+    }
+}
+
+/// Internal decision envelope carrying privacy-safe path evidence for denial
+/// logging. The public [`GuardDecision`] API remains unchanged.
+pub(crate) struct GuardEvaluation {
+    pub decision: GuardDecision,
+    pub resolved_targets: Vec<String>,
+}
+
+impl GuardEvaluation {
+    fn allow() -> Self {
+        Self {
+            decision: GuardDecision::allow(),
+            resolved_targets: Vec::new(),
+        }
+    }
+
+    fn deny(reason: String, resolved_targets: Vec<String>) -> Self {
+        Self {
+            decision: GuardDecision::deny(reason),
+            resolved_targets,
         }
     }
 }
@@ -84,40 +110,70 @@ pub fn decide(
     marker: Option<&GuardMarker>,
     now_ms: i64,
 ) -> GuardDecision {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    decide_with_cwd(tool_name, tool_input, marker, now_ms, &cwd).decision
+}
+
+/// Cwd-aware implementation behind [`decide`]. Hook callers pass the cwd from
+/// the invocation payload; legacy/public callers retain process-cwd behavior.
+pub(crate) fn decide_with_cwd(
+    tool_name: &str,
+    tool_input: &Value,
+    marker: Option<&GuardMarker>,
+    now_ms: i64,
+    invocation_cwd: &Path,
+) -> GuardEvaluation {
     if !marker_is_armed(marker, now_ms) {
-        return GuardDecision::allow();
+        return GuardEvaluation::allow();
     }
     let roots = marker
         .and_then(|m| m.allowed_roots.clone())
         .unwrap_or_default();
-    let repo_root = std::env::current_dir().unwrap_or_default();
 
     if is_write_tool(tool_name) {
         if let Some(p) = path_arg(tool_input)
-            && !is_under_any(p, &roots, &repo_root)
+            && !is_under_any(p, &roots, invocation_cwd)
         {
-            return GuardDecision::deny(format!(
-                "eval guard: {tool_name} to {p} is outside the eval sandbox (allowed: {})",
-                roots.join(", ")
-            ));
+            return GuardEvaluation::deny(
+                format!(
+                    "eval guard: {tool_name} to {p} is outside the eval sandbox (allowed: {})",
+                    roots.join(", ")
+                ),
+                vec![resolve_path(p, invocation_cwd).display().to_string()],
+            );
         }
-        return GuardDecision::allow();
+        return GuardEvaluation::allow();
     }
 
     if is_patch_tool(tool_name) {
         let paths = apply_patch_paths(tool_input);
         if paths.is_empty() {
-            return GuardDecision::deny(format!(
-                "eval guard: blocked {tool_name} because no patch target path could be determined"
-            ));
+            return GuardEvaluation::deny(
+                format!(
+                    "eval guard: blocked {tool_name} because no patch target path could be \
+                     determined"
+                ),
+                Vec::new(),
+            );
         }
-        if let Some(path) = paths.iter().find(|p| !is_under_any(p, &roots, &repo_root)) {
-            return GuardDecision::deny(format!(
-                "eval guard: {tool_name} target {path} is outside the eval sandbox (allowed: {})",
-                roots.join(", ")
-            ));
+        if let Some(path) = paths
+            .iter()
+            .find(|p| !is_under_any(p, &roots, invocation_cwd))
+        {
+            let resolved_targets = paths
+                .iter()
+                .map(|target| resolve_path(target, invocation_cwd).display().to_string())
+                .collect();
+            return GuardEvaluation::deny(
+                format!(
+                    "eval guard: {tool_name} target {path} is outside the eval sandbox \
+                     (allowed: {})",
+                    roots.join(", ")
+                ),
+                resolved_targets,
+            );
         }
-        return GuardDecision::allow();
+        return GuardEvaluation::allow();
     }
 
     if is_shell_tool(tool_name) {
@@ -125,14 +181,18 @@ pub fn decide(
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if let Some(reason) = classify_bash(command, &roots) {
-            return GuardDecision::deny(format!(
-                "eval guard: blocked {tool_name} ({reason}) — runs outside the eval sandbox"
-            ));
+        if let Some(classification) = classify_bash_with_cwd(command, &roots, invocation_cwd) {
+            return GuardEvaluation::deny(
+                format!(
+                    "eval guard: blocked {tool_name} ({}) — runs outside the eval sandbox",
+                    classification.reason
+                ),
+                classification.resolved_targets,
+            );
         }
     }
 
-    GuardDecision::allow()
+    GuardEvaluation::allow()
 }
 
 #[cfg(test)]
@@ -165,6 +225,7 @@ mod tests {
             active: Some(true),
             allowed_roots: Some(ROOTS.iter().map(|s| s.to_string()).collect()),
             expires_at: Some(future()),
+            denial_log_path: None,
         }
     }
 

@@ -47,7 +47,7 @@
           },
           "warnings": {
             "type": "array",
-            "description": "Heuristic: a Bash command matched a mutating pattern (install, git, sed -i, redirection) without referencing the task environment.",
+            "description": "Heuristic: a Bash command matched a mutating pattern (install, git, sed -i), or a literal redirection/tee target resolved outside the task environment from the invocation cwd.",
             "items": { "$ref": "#/definitions/finding" }
           },
           "live_source_reads": {

@@ -13,12 +13,14 @@ pub mod decide;
 pub mod guard;
 pub mod install;
 pub mod policy;
+mod shell_targets;
 
 pub(crate) use decide::marker_is_armed;
 pub use decide::{GuardDecision, GuardMarker, decide};
+pub(crate) use guard::GuardDenialRecord;
 pub(crate) use guard::parse_tool_call;
 pub use guard::read_marker;
-pub(crate) use install::guard_is_armed;
+pub(crate) use install::{GUARD_DENIALS_DIR, GUARD_DENIALS_LOG, guard_is_armed};
 pub use install::{GUARD_MANIFEST, GUARD_MARKER, teardown_guard};
 pub use policy::{classify_bash, is_shell_tool, is_under, is_under_any, is_write_tool, path_arg};
 
