@@ -206,6 +206,15 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     let report =
         pipeline::detect_stray_writes_report(&dir, iteration, &ctx.skill_subdir, &repo_root)?;
     println!("Wrote {}", dir.join("stray-writes.json").display());
+    println!("Wrote {}", dir.join("guard-denials.json").display());
+
+    if report.guard_denials > 0 {
+        eprintln!(
+            "⚠ {} guard denial(s) altered agent behavior — inspect guard-denials.json before \
+             trusting the affected data points.",
+            report.guard_denials
+        );
+    }
 
     for r in &report.runs {
         for v in &r.violations {

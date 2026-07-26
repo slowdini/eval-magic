@@ -12,6 +12,7 @@ mod helpers;
 mod byoh;
 mod claude_cli;
 mod codex;
+mod codex_guard;
 mod command_check;
 mod conversation;
 mod diff_scope;

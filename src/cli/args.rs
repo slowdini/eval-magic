@@ -396,16 +396,25 @@ pub struct RunArgs {
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
-    /// redirects to absolute paths — and acting as a backstop when the isolated
-    /// session runs with relaxed permissions. The marker auto-expires after 6h
-    /// and is torn down at the next run; while armed the
+    /// redirects that resolve outside the env — and acting as a backstop when the
+    /// isolated session runs with relaxed permissions. Literal relative redirect
+    /// and `tee` targets resolve from the tool invocation cwd; dynamic, malformed,
+    /// or outside targets are blocked. Every denial appends privacy-safe metadata
+    /// (never the full command or patch) to the task's
+    /// `.eval-magic-outputs/guard-denials.jsonl`; `ingest` joins those logs into
+    /// `guard-denials.json`, and `aggregate` emits one validity warning per
+    /// affected task. Re-arming truncates stale raw records; disarming the guard
+    /// preserves the current log. The marker auto-expires after 6h and is torn
+    /// down at the next run; while armed the
     /// hook fires on your own tool calls too. If it remains armed after `finalize`,
     /// `finalize` reminds you to run `teardown` before editing source (which disarms
     /// the cwd guard and every per-`(group, condition)` Cli env's guard). Requires
     /// staging — with `--no-stage` the guard stays off and the run is unguarded.
-    /// Codex dispatches must include `--dangerously-bypass-hook-trust` so the
-    /// vetted project-local eval hook runs. Unguarded, stray writes are only
-    /// *detected* after the fact by `detect-stray-writes`, never blocked.
+    /// Codex eval-agent dispatches must include
+    /// `--dangerously-bypass-hook-trust` so the vetted project-local eval hook
+    /// runs; judge recipes omit it because judges run outside guarded task envs.
+    /// Unguarded, stray writes are only *detected* after the fact by
+    /// `detect-stray-writes`, never blocked.
     /// Under Claude Code the `PreToolUse` hook is staged in each env's
     /// `.claude/settings.local.json`, and each `claude -p` dispatch loads it from
     /// that cwd (`cd <eval-root>`), enforcing the eval boundary (the recipe never
@@ -529,8 +538,11 @@ pub(crate) enum Commands {
     ///
     /// Fixed-order chain: record-runs → fill-transcripts → detect-stray-writes →
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
-    /// writes, captures always-on final-environment files/lines/hunks in
-    /// `diff-scope.json`, grades `transcript_check` assertions, prepares
+    /// writes, and maps raw per-env guard logs through `dispatch.json` into
+    /// `guard-denials.json` (including tasks without `run.json`). Malformed raw
+    /// records fail with their source path and line number. It captures always-on
+    /// final-environment files/lines/hunks in `diff-scope.json`, grades
+    /// `transcript_check` assertions, prepares
     /// `diff_scope` grading for finalize, injects held-out
     /// `command_check.setup_files`, and executes each
     /// runner-owned command check in its task environment, applying its
@@ -570,9 +582,12 @@ pub(crate) enum Commands {
     /// Scans each run's `tool_invocations` and writes `stray-writes.json`: write
     /// tools targeting paths outside the run's `eval_root` (violations), mutating
     /// Bash heuristics (warnings), and live-source reads (an arm that read the live
-    /// skill instead of its staged copy). Normal edits inside the task environment
-    /// are allowed. `aggregate` lifts all three into `benchmark.json`'s
-    /// `validity_warnings`.
+    /// skill instead of its staged copy). It also maps each guarded task's
+    /// `.eval-magic-outputs/guard-denials.jsonl` through `dispatch.json` and writes
+    /// the schema-gated iteration-level `guard-denials.json`, even without
+    /// `run.json`. Normal edits inside the task environment are allowed.
+    /// `aggregate` lifts findings and one warning per denial-affected task into
+    /// `benchmark.json`'s `validity_warnings`.
     DetectStrayWrites(CommonArgs),
     /// Grade run records (runner checks + LLM-judge task emission).
     ///
@@ -600,9 +615,10 @@ pub(crate) enum Commands {
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
     /// pass-rate / duration / token stats per condition, the delta,
-    /// `validity_warnings`, and raw per-run files/lines/hunks from
-    /// `diff-scope.json`. The top-level `diff_scope` field is omitted for
-    /// compatible older iterations that predate metric capture.
+    /// `validity_warnings` (including one per task in `guard-denials.json`), and
+    /// raw per-run files/lines/hunks from `diff-scope.json`. The top-level
+    /// `diff_scope` field is omitted for compatible older iterations that predate
+    /// metric capture.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///

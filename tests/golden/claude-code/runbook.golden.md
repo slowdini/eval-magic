@@ -18,8 +18,10 @@ cd <eval-root> && claude -p --output-format stream-json --verbose --permission-m
   2> <outputs_dir>/claude-stderr.log
 Then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code`.
 
-`ingest` records each run, backfills transcripts, scans for stray writes, and grades every
-mechanical assertion. It then prints any `llm_judge` tasks it could not grade itself.
+`ingest` records each run, backfills transcripts, scans for stray writes, collects guarded-task
+blocks into `guard-denials.json`, and grades every mechanical assertion. Inspect any denial
+warning before trusting the affected task. It then prints any `llm_judge` tasks it could not
+grade itself.
 
 ## 2. Dispatch the judge agents, then finalize
 Dispatch each judge task from judge-tasks.json with:

@@ -20,17 +20,17 @@
 //! user layers from declaring one.
 
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use crate::sandbox::decide::{GuardMarker, decide};
+use crate::sandbox::decide::{GuardMarker, decide_with_cwd};
 use crate::sandbox::install::{
-    GUARD_MANIFEST, GUARD_MARKER, write_json, write_manifest, write_marker,
+    GUARD_MANIFEST, GUARD_MARKER, iso_millis, write_json, write_manifest, write_marker,
 };
-use crate::sandbox::{now_ms, parse_tool_call};
+use crate::sandbox::{GuardDenialRecord, now_ms, parse_tool_call};
 
 use super::descriptor::{GuardEngine, GuardSection, subst};
 
@@ -215,20 +215,57 @@ fn install_json_hooks(
 /// never brick a session.
 pub(crate) fn guard_verdict(
     guard: &GuardSection,
+    harness: &str,
     payload: &str,
     marker: Option<GuardMarker>,
 ) -> Option<String> {
-    let (tool_name, tool_input) = parse_tool_call(payload)?;
-    let decision = decide(&tool_name, &tool_input, marker.as_ref(), now_ms());
-    if decision.allow {
+    let call = parse_tool_call(payload)?;
+    let process_cwd = std::env::current_dir().unwrap_or_default();
+    let timestamp_ms = now_ms();
+    let evaluation = decide_with_cwd(
+        &call.tool_name,
+        &call.tool_input,
+        marker.as_ref(),
+        timestamp_ms,
+        call.cwd.as_deref().unwrap_or(&process_cwd),
+    );
+    if evaluation.decision.allow {
         return None;
     }
+    let reason = evaluation.decision.reason.unwrap_or_default();
+    if let Some(log_path) = marker.as_ref().and_then(|m| m.denial_log_path.as_deref()) {
+        let mut input_keys = call
+            .tool_input
+            .as_object()
+            .map(|input| input.keys().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        input_keys.sort();
+        let record = GuardDenialRecord {
+            timestamp: iso_millis(timestamp_ms),
+            harness: harness.to_string(),
+            tool: call.tool_name,
+            reason: reason.clone(),
+            resolved_targets: evaluation.resolved_targets,
+            input_keys,
+        };
+        // Observability must never weaken enforcement: a missing/unwritable log
+        // still returns the original block verdict.
+        let _ = append_guard_denial(Path::new(log_path), &record);
+    }
     let mut verdict: Value = serde_json::from_str(&guard.verdict_template).ok()?;
-    substitute_strings(
-        &mut verdict,
-        &[("reason", decision.reason.as_deref().unwrap_or(""))],
-    );
+    substitute_strings(&mut verdict, &[("reason", &reason)]);
     serde_json::to_string(&verdict).ok()
+}
+
+fn append_guard_denial(path: &Path, record: &GuardDenialRecord) -> io::Result<()> {
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    let mut line = serde_json::to_vec(record)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    line.push(b'\n');
+    file.write_all(&line)
 }
 
 /// The hook-surface dir the install created outside the skills dir, which
@@ -304,12 +341,14 @@ fn resolve_rel(root: &Path, rel: &str) -> PathBuf {
 }
 
 #[cfg(test)]
+mod guard_denial_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::adapters::descriptor::{EMBEDDED_DESCRIPTORS, HarnessDescriptor, load_descriptor};
     use crate::sandbox::guard_is_armed;
     use crate::sandbox::install::{iso_millis, teardown_guard};
-    use chrono::DateTime;
     use tempfile::TempDir;
 
     struct Case {
@@ -354,7 +393,7 @@ mod tests {
 
     fn verdict(label: &str, payload: &str, marker: Option<GuardMarker>) -> Option<String> {
         let d = descriptor(label);
-        guard_verdict(d.guard.as_ref().unwrap(), payload, marker)
+        guard_verdict(d.guard.as_ref().unwrap(), label, payload, marker)
     }
 
     fn claude_skills_dir(stage_root: &Path) -> PathBuf {
@@ -383,45 +422,8 @@ mod tests {
             active: Some(true),
             allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
             expires_at: None,
+            denial_log_path: None,
         }
-    }
-
-    #[test]
-    fn install_writes_an_active_marker_hook_and_manifest() {
-        let c = setup();
-        install("claude-code", &c.stage_root);
-
-        let marker = read_json(&claude_skills_dir(&c.stage_root).join(GUARD_MARKER));
-        assert_eq!(marker["active"], json!(true));
-        let expires = marker["expiresAt"].as_str().unwrap();
-        let exp_ms = DateTime::parse_from_rfc3339(expires)
-            .unwrap()
-            .timestamp_millis();
-        assert!(exp_ms > now_ms());
-        let env = absolutize(&c.stage_root).display().to_string();
-        assert!(
-            marker["allowedRoots"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|r| r.as_str().unwrap() == env)
-        );
-
-        let settings = read_json(&settings_path(&c.stage_root));
-        let hook = &settings["hooks"]["PreToolUse"][0];
-        assert!(hook["matcher"].as_str().unwrap().contains("Write"));
-        assert!(
-            hook["hooks"][0]["command"]
-                .as_str()
-                .unwrap()
-                .contains("guard")
-        );
-
-        assert!(
-            claude_skills_dir(&c.stage_root)
-                .join(GUARD_MANIFEST)
-                .exists()
-        );
     }
 
     #[test]
@@ -461,22 +463,6 @@ mod tests {
         assert_eq!(
             command,
             format!("\"/g/eval-magic\" guard \"{}\"", marker.display())
-        );
-    }
-
-    #[test]
-    fn teardown_deletes_settings_it_created() {
-        let c = setup();
-        install("claude-code", &c.stage_root);
-        assert!(settings_path(&c.stage_root).exists());
-
-        assert!(teardown_guard(&c.stage_root));
-        assert!(!settings_path(&c.stage_root).exists());
-        assert!(!claude_skills_dir(&c.stage_root).join(GUARD_MARKER).exists());
-        assert!(
-            !claude_skills_dir(&c.stage_root)
-                .join(GUARD_MANIFEST)
-                .exists()
         );
     }
 

@@ -10,7 +10,7 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
     response_base="${response_path%.json}"
     mkdir -p "$(dirname "$response_path")"
     model_arg=""; [ -n "$model" ] && model_arg="-m $model"
-    codex --ask-for-approval never exec --cd "/work/iter-1" --sandbox workspace-write --dangerously-bypass-hook-trust $model_arg --json \
+    codex --ask-for-approval never exec --cd "/work/iter-1" --sandbox workspace-write $model_arg --json \
       "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
       </dev/null \
       > "$response_base.codex-events.jsonl" \

@@ -213,7 +213,9 @@ OpenCode's auto-loaded project plugin that blocks by throwing the reason).
 *What it unlocks:* out-of-bounds writes are *blocked before they happen* instead of detected
 afterwards. The guard is provided automatically: every staged run of a guard-declaring built-in
 arms it unless `--no-guard` opts out (`--guard` makes the request explicit, turning silent
-can't-arm cases into a warning or error).
+can't-arm cases into a warning or error). Every block is also recorded as privacy-safe metadata
+under the task env and collected into `guard-denials.json`; `aggregate` emits one validity warning
+per affected task because even an intentional boundary block changed agent behavior.
 
 *Fallback:* `detect-stray-writes` audits after the fact. (It also flags **live-source reads** — an
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
@@ -235,9 +237,13 @@ serialized verbatim — the verdict bytes are the harness's on-disk contract. Va
 per-engine shape (the schema's conditional requiredness, plus load-time checks barring the other
 engine's fields), that every hooked `matcher` tool is declared in `[tools]` (json-hooks), that
 the templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit
-in string values. The guard arbiter and `detect-stray-writes` classify tool names against the
-cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript ingest
-without declaring the harness's tool names is rejected at descriptor load. The hidden `guard` /
+in string values. Patch payload extraction accepts structured `files` plus raw
+`command`/`patch`/`input`/`content`/`patchText` bodies and validates every source and destination.
+The quote-aware Bash scanner resolves literal redirect and `tee` targets from the invocation cwd;
+dynamic, malformed, or outside targets remain denied. The guard arbiter and
+`detect-stray-writes` classify tool names against the cross-harness vocabulary union
+(`all_tool_vocabulary`), so wiring a guard or transcript ingest without declaring the harness's
+tool names is rejected at descriptor load. The hidden `guard` /
 `guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a new
 guard-capable built-in uses the generic `guard-hook --harness <label>` entry point (OpenCode's
 plugin spawns exactly that) — a descriptor `[guard]` block is all it takes, no bespoke
@@ -296,7 +302,8 @@ carry exact per-task commands (including parallel and judge variants).
 *Descriptor fields:* the `[dispatch]` table — `exec_template`, `parallel_command_template`,
 `judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
 `guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
-per run; the shared jq/xargs parallel and judge scaffolds stay code
+for eval-agent dispatches; judge commands deliberately render empty `guard_args` because they run
+outside the guarded task envs. The shared jq/xargs parallel and judge scaffolds stay code
 (`src/adapters/cli_command.rs`) with the per-harness command block spliced in. Validation rejects
 a template whose placeholder has no backing field.
 

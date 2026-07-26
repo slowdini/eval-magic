@@ -22,6 +22,7 @@ pub enum SchemaName {
     Evals,
     Grading,
     StrayWrites,
+    GuardDenials,
     Benchmark,
     JudgeTasks,
     CommandCheck,
@@ -32,11 +33,12 @@ pub enum SchemaName {
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 10] = [
+    const ALL: [SchemaName; 11] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
+        SchemaName::GuardDenials,
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
         SchemaName::CommandCheck,
@@ -53,6 +55,7 @@ impl SchemaName {
             SchemaName::Evals => "evals",
             SchemaName::Grading => "grading",
             SchemaName::StrayWrites => "stray-writes",
+            SchemaName::GuardDenials => "guard-denials",
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
             SchemaName::CommandCheck => "command-check",
@@ -69,6 +72,9 @@ impl SchemaName {
             SchemaName::Evals => include_str!("../../schema/evals.schema.json"),
             SchemaName::Grading => include_str!("../../schema/grading.schema.json"),
             SchemaName::StrayWrites => include_str!("../../schema/stray-writes.schema.json"),
+            SchemaName::GuardDenials => {
+                include_str!("../../schema/guard-denials.schema.json")
+            }
             SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
             SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),
             SchemaName::CommandCheck => {
@@ -290,6 +296,46 @@ mod tests {
         let invalid: Result<Value, _> =
             validate_against_schema(SchemaName::DiffScope, &extra, "diff-scope.json");
         assert!(invalid.is_err());
+    }
+
+    #[test]
+    fn validates_guard_denials_and_rejects_unexpected_payload_content() {
+        let report = serde_json::json!({
+            "generated": "2026-07-26T12:00:00.000Z",
+            "iteration": 1,
+            "total_denials": 1,
+            "tasks": [{
+                "eval_id": "e1",
+                "condition": "old_skill",
+                "run_index": 2,
+                "denial_count": 1,
+                "denials": [{
+                    "timestamp": "2026-07-26T11:59:00.000Z",
+                    "harness": "codex",
+                    "tool": "Bash",
+                    "reason": "outside redirect",
+                    "resolved_targets": ["/etc/out"],
+                    "input_keys": ["command"],
+                }],
+            }],
+        });
+        validate_against_schema::<serde_json::Value>(
+            SchemaName::GuardDenials,
+            &report,
+            "guard-denials.json",
+        )
+        .unwrap();
+
+        let mut extra = report;
+        extra["tasks"][0]["denials"][0]["command"] = serde_json::json!("secret");
+        assert!(
+            validate_against_schema::<serde_json::Value>(
+                SchemaName::GuardDenials,
+                &extra,
+                "guard-denials.json",
+            )
+            .is_err()
+        );
     }
 
     #[test]

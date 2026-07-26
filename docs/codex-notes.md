@@ -97,7 +97,25 @@ A guarded run (the guard auto-arms; `--guard`/`--no-guard` make it explicit) mer
 `PreToolUse` hook into `.codex/hooks.json` (matcher:
 `^Bash$|^apply_patch$|^Edit$|^Write$`, with a 30s timeout and status message). Dispatches must pass
 `--dangerously-bypass-hook-trust` so the vetted project-local hook actually runs — the generated
-recipes add it whenever the run was armed. The hook invokes the hidden `guard-codex` subcommand
+eval-agent recipes add it whenever the run was armed. Judge recipes never add the flag: judges
+run from the iteration metadata directory, outside the guarded task envs.
+
+Codex exposes the raw patch body as `tool_input.command` (the contract landed in
+[openai/codex#18391](https://github.com/openai/codex/pull/18391)). The arbiter extracts every add,
+update/delete source, and move destination from that body and resolves relative paths from the
+hook payload's `cwd`. Bash output validation uses a quote-aware lexical scan for `>`, `>>`, `>|`,
+file-descriptor-prefixed redirects, and `tee`: every literal target must resolve under an allowed
+root, while dynamic, malformed, or outside targets are blocked. Merely mentioning an allowed root
+elsewhere in the command does not scope an unrelated redirect.
+
+Guard installation initializes `.eval-magic-outputs/guard-denials.jsonl` and records its absolute
+path in the optional marker field `denialLogPath`. Each block appends only timestamp, harness,
+tool, reason, resolved targets, and sorted input keys — never patch or command content. Re-arming
+truncates the log; guard teardown preserves it; a logging failure never suppresses the block.
+`detect-stray-writes` joins the raw logs to dispatch tasks in `guard-denials.json`, and
+`aggregate` reports one validity warning per affected task.
+
+The hook invokes the hidden `guard-codex` subcommand
 (**stable on-disk contract — never rename**), which blocks via Codex's
 `{ "decision": "block", "reason": "..." }` stdout shape and stays silent to allow. Teardown prunes
 `.codex/` when restoring the original config leaves it empty (`guard_hook_cleanup_dir`).

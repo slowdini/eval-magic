@@ -89,6 +89,24 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
     }
 }
 
+#[test]
+fn help_documents_guard_denial_artifacts_and_privacy() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("guard-denials.jsonl"))
+        .stdout(contains("never the full command or patch"));
+
+    for command in ["ingest", "detect-stray-writes", "aggregate"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("guard-denials.json"));
+    }
+}
+
 /// `ingest` reaches its own context validation when invoked bare.
 #[test]
 fn ingest_is_wired_and_validates_context() {

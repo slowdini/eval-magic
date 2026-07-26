@@ -5,7 +5,8 @@
 //! `timing.json`), raw per-run diff scope, and the skill-invocation determination
 //! per condition; computes mean/stddev and the `a - b` delta; accumulates validity
 //! warnings (mixed timing sources, sub-100% invocation rate, stray-write
-//! violations + live-source reads, plugin shadows); and writes `benchmark.json`.
+//! violations + live-source reads, guard denials, plugin shadows); and writes
+//! `benchmark.json`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -18,6 +19,7 @@ use crate::adapters::{PluginShadowReport, adapter_for, shadow_validity_warnings}
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::guard_denials::GuardDenialsReport;
 use crate::pipeline::io::{now_iso8601, write_json};
 use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
@@ -337,6 +339,7 @@ pub fn aggregate(
     }
 
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
+    collect_guard_denial_warnings(iteration_dir, &mut validity_warnings);
     collect_shadow_warnings(iteration_dir, conditions, &mut validity_warnings);
 
     let has_diff_scopes = diff_scope_by_condition
@@ -385,6 +388,35 @@ pub fn aggregate(
     )?;
     write_json(&out_path, &benchmark)?;
     Ok(benchmark)
+}
+
+/// Add exactly one warning per task affected by the write guard. Boundary
+/// blocks are included: whether legitimate or erroneous, each denial changed
+/// the agent's available actions and therefore the observed eval behavior.
+fn collect_guard_denial_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
+    let Ok(raw) = fs::read_to_string(iteration_dir.join("guard-denials.json")) else {
+        return;
+    };
+    let Ok(report) = serde_json::from_str::<GuardDenialsReport>(&raw) else {
+        return;
+    };
+    for task in report.tasks {
+        let run = task
+            .run_index
+            .map(|index| format!("/run-{index}"))
+            .unwrap_or_default();
+        let denial_word = if task.denial_count == 1 {
+            "denial"
+        } else {
+            "denials"
+        };
+        warnings.push(format!(
+            "{}/{}{run} encountered {} guard {denial_word} — agent behavior changed; review \
+             guard-denials.json before trusting this data point, even when the blocked boundary \
+             was intentional.",
+            task.eval_id, task.condition, task.denial_count
+        ));
+    }
 }
 
 /// The provenance label for a timing record (`completion-event` when absent).
