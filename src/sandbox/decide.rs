@@ -335,6 +335,38 @@ mod tests {
     }
 
     #[test]
+    fn armed_guard_allows_local_git_but_denies_remote_git() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        let local = decide_with_cwd(
+            "Bash",
+            &json!({ "command": "git add . && git commit -m done" }),
+            Some(&marker()),
+            now_ms(),
+            cwd,
+        );
+        assert!(local.decision.allow, "{:?}", local.decision.reason);
+
+        let remote = decide_with_cwd(
+            "Bash",
+            &json!({ "command": "git push /work/.eval-magic/task" }),
+            Some(&marker()),
+            now_ms(),
+            cwd,
+        );
+        assert!(!remote.decision.allow);
+        assert!(remote.decision.reason.unwrap().contains("remote"));
+
+        let unguarded = decide_with_cwd(
+            "Bash",
+            &json!({ "command": "git push origin main" }),
+            None,
+            now_ms(),
+            cwd,
+        );
+        assert!(unguarded.decision.allow);
+    }
+
+    #[test]
     fn denies_apply_patch_outside_allowed_roots() {
         let d = decide_now(
             "apply_patch",

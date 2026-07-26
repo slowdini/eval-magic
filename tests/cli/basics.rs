@@ -62,6 +62,19 @@ fn run_help_documents_no_guard() {
 }
 
 #[test]
+fn run_help_documents_task_git_repository_isolation() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Git is required"))
+        .stdout(contains("branch `work`"))
+        .stdout(contains("no remotes"))
+        .stdout(contains("Local Git operations"))
+        .stdout(contains("remote Git operations"));
+}
+
+#[test]
 fn grade_and_ingest_help_document_runner_owned_command_checks() {
     for command in ["grade", "ingest"] {
         skill_eval()

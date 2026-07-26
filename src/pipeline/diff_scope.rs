@@ -227,8 +227,11 @@ fn capture_task_baseline(eval_root: &Path, run_dir: &Path) -> Result<(), Pipelin
     let file_snapshot = baseline_dir.join(BASELINE_FILES);
     fs::create_dir_all(&file_snapshot)?;
 
-    let framework_outputs = eval_root.join(".eval-magic-outputs");
-    let mut preexisting_paths = walk_files(eval_root, Some(&framework_outputs))?;
+    let excluded_roots = [
+        eval_root.join(".eval-magic-outputs"),
+        eval_root.join(".git"),
+    ];
+    let mut preexisting_paths = walk_files(eval_root, &excluded_roots)?;
     preexisting_paths.sort();
     let preexisting_files = preexisting_paths
         .iter()
@@ -267,8 +270,11 @@ fn measure_task_diff(eval_root: &Path, run_dir: &Path) -> Result<DiffScopeMetric
         }
         candidates.insert(relative);
     }
-    let framework_outputs = eval_root.join(".eval-magic-outputs");
-    for path in walk_files(eval_root, Some(&framework_outputs))? {
+    let excluded_roots = [
+        eval_root.join(".eval-magic-outputs"),
+        eval_root.join(".git"),
+    ];
+    for path in walk_files(eval_root, &excluded_roots)? {
         candidates.insert(relative_key(eval_root, &path)?);
     }
 
@@ -321,14 +327,14 @@ fn file_content(path: &Path) -> Result<FileContent, PipelineError> {
     Ok(FileContent::Missing)
 }
 
-fn walk_files(root: &Path, excluded_root: Option<&Path>) -> Result<Vec<PathBuf>, PipelineError> {
+fn walk_files(root: &Path, excluded_roots: &[PathBuf]) -> Result<Vec<PathBuf>, PipelineError> {
     if !root.exists() {
         return Ok(Vec::new());
     }
     WalkDir::new(root)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| !is_excluded(entry, excluded_root))
+        .filter_entry(|entry| !is_excluded(entry, excluded_roots))
         .filter_map(|entry| match entry {
             Ok(entry) if entry.file_type().is_file() || entry.file_type().is_symlink() => {
                 Some(Ok(entry.into_path()))
@@ -342,8 +348,10 @@ fn walk_files(root: &Path, excluded_root: Option<&Path>) -> Result<Vec<PathBuf>,
         .collect()
 }
 
-fn is_excluded(entry: &DirEntry, excluded_root: Option<&Path>) -> bool {
-    excluded_root.is_some_and(|excluded| entry.path().starts_with(excluded))
+fn is_excluded(entry: &DirEntry, excluded_roots: &[PathBuf]) -> bool {
+    excluded_roots
+        .iter()
+        .any(|excluded| entry.path().starts_with(excluded))
 }
 
 fn relative_key(root: &Path, path: &Path) -> Result<String, PipelineError> {
@@ -462,6 +470,34 @@ mod tests {
                 lines_added: 4,
                 lines_removed: 3,
                 hunks: 4,
+            }
+        );
+    }
+
+    #[test]
+    fn baseline_ignores_only_runner_owned_root_git_metadata() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let eval_root = temp.path().join("env");
+        let run_dir = temp.path().join("run");
+        fs::create_dir_all(eval_root.join(".git")).unwrap();
+        fs::create_dir_all(eval_root.join("vendor/.git")).unwrap();
+        fs::write(eval_root.join(".git/config"), "root-before\n").unwrap();
+        fs::write(eval_root.join("vendor/.git/config"), "nested-before\n").unwrap();
+        fs::write(eval_root.join("source.txt"), "before\n").unwrap();
+
+        capture_task_baseline(&eval_root, &run_dir).unwrap();
+
+        fs::write(eval_root.join(".git/config"), "root-after\n").unwrap();
+        fs::write(eval_root.join("vendor/.git/config"), "nested-after\n").unwrap();
+        fs::write(eval_root.join("source.txt"), "after\n").unwrap();
+
+        assert_eq!(
+            measure_task_diff(&eval_root, &run_dir).unwrap(),
+            DiffScopeMetrics {
+                files_touched: 2,
+                lines_added: 2,
+                lines_removed: 2,
+                hunks: 2,
             }
         );
     }

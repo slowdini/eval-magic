@@ -8,6 +8,26 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Inherited Git routing variables that can redirect repository discovery or
+/// object/index access away from a command's current working directory.
+pub(crate) const GIT_ROUTING_ENV_VARS: &[&str] = &[
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_COMMON_DIR",
+    "GIT_CEILING_DIRECTORIES",
+];
+
+/// Remove inherited repository-routing state before running a command whose
+/// current directory is intended to define its Git boundary.
+pub(crate) fn clear_git_environment(command: &mut Command) {
+    for name in GIT_ROUTING_ENV_VARS {
+        command.env_remove(name);
+    }
+}
+
 /// Outcome of a git invocation.
 ///
 /// `status` is `None` when git could not be spawned at all (e.g. ENOENT, a
@@ -28,7 +48,10 @@ pub struct GitOutput {
 /// with the spawn error surfaced into `stderr`, so callers can handle it
 /// alongside git's own failures.
 pub fn run_git(args: &[&str], cwd: &Path) -> GitOutput {
-    match Command::new("git").args(args).current_dir(cwd).output() {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(cwd);
+    clear_git_environment(&mut command);
+    match command.output() {
         Ok(out) => GitOutput {
             status: out.status.code(),
             stdout: out.stdout,

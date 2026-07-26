@@ -49,6 +49,15 @@ fn validate_fixture_rel(f: &str) -> Result<(), RunError> {
             "fixture path must be relative and stay within env: {f}"
         )));
     }
+    let first_normal = p.components().find_map(|component| match component {
+        std::path::Component::Normal(value) => Some(value.to_string_lossy()),
+        _ => None,
+    });
+    if first_normal.is_some_and(|component| component.eq_ignore_ascii_case(".git")) {
+        return Err(RunError::msg(format!(
+            "fixture path uses reserved runner-owned Git metadata at task root: {f}"
+        )));
+    }
     Ok(())
 }
 
@@ -207,6 +216,24 @@ mod tests {
                 .to_string()
                 .contains("fixture not found")
         );
+    }
+
+    #[test]
+    fn fixture_paths_reserve_only_a_root_dot_git_component_case_insensitively() {
+        for bad in [
+            ".git",
+            ".git/config",
+            "./.GIT/config",
+            ".GiT/hooks/pre-commit",
+        ] {
+            let error = validate_fixture_rel(bad).unwrap_err();
+            assert!(
+                error.to_string().contains("reserved"),
+                "expected root Git metadata rejection for {bad}, got: {error}"
+            );
+        }
+
+        validate_fixture_rel("vendor/.git/config").unwrap();
     }
 
     #[test]

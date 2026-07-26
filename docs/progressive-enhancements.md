@@ -86,13 +86,17 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
 
 ## Runner-owned environment checks are baseline
 
-Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging,
-guard installation, and shadow preflight, `run` snapshots the task environment. During `ingest`,
-before any held-out setup is injected, the runner compares that baseline with the final environment
-and writes raw `files_touched`, `lines_added`, `lines_removed`, and zero-context Myers `hunks` to
-`diff-scope.json`. Framework artifacts under `.eval-magic-outputs/` are excluded; all other new
-files count. `benchmark.json` preserves these metrics per run even without a `diff_scope` assertion.
-An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or both.
+Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging, and
+guard installation, `run` recreates a runner-owned Git repository at that root, commits the task
+state on branch `work`, runs shadow preflight at the resulting repository boundary, and snapshots
+the task environment. Git is therefore a runtime prerequisite; each task starts clean and has no
+remotes. During `ingest`, before any held-out setup is injected, the runner compares that baseline
+with the final environment and writes raw `files_touched`, `lines_added`, `lines_removed`, and
+zero-context Myers `hunks` to `diff-scope.json`. Framework artifacts under the task root's
+`.eval-magic-outputs/` and runner-owned `.git/` are excluded; nested repository metadata and all
+other new files count. `benchmark.json` preserves these metrics per run even without a `diff_scope`
+assertion. An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or
+both.
 
 This is deliberately a secondary signal: a smaller diff can be focused, but it can also be
 incomplete. Pair a scope gate with a correctness assertion.
@@ -100,10 +104,11 @@ incomplete. Pair a scope gate with a correctness assertion.
 `command_check` is intentionally not a harness enhancement. `run` detects the assertion before
 dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
 copies the assertion's held-out `setup_files` from the skill's `evals/` directory into that root and
-executes the trusted command through the platform shell. Optional `env` values override the
-inherited runner environment; optional `matrix` values execute every Cartesian-product cell and
-persist per-cell results. The files are never staged or mentioned to the agent, and therefore never
-inflate scope metrics.
+executes the trusted command through the platform shell. Root `.git` paths are reserved for both
+visible and held-out fixtures, while nested repositories remain valid. The runner clears inherited
+Git routing variables before optional `env` values override the environment; optional `matrix`
+values execute every Cartesian-product cell and persist per-cell results. The files are never staged
+or mentioned to the agent, and therefore never inflate scope metrics.
 
 This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
 the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed
@@ -240,7 +245,12 @@ the templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` p
 in string values. Patch payload extraction accepts structured `files` plus raw
 `command`/`patch`/`input`/`content`/`patchText` bodies and validates every source and destination.
 The quote-aware Bash scanner resolves literal redirect and `tee` targets from the invocation cwd;
-dynamic, malformed, or outside targets remain denied. The guard arbiter and
+dynamic, malformed, or outside targets remain denied. It allows local Git inspection, staging,
+commits, and branching within the task boundary, but denies outside/dynamic repository routing,
+`git worktree add`, remote-capable subcommands, mutating `git remote`, and remote/url config writes.
+Read-only `git remote`, `git remote -v`, `git remote get-url`, and config reads remain available.
+`--no-guard` opts out of these blocks, though the task repository still begins without remotes. The
+guard arbiter and
 `detect-stray-writes` classify tool names against the cross-harness vocabulary union
 (`all_tool_vocabulary`), so wiring a guard or transcript ingest without declaring the harness's
 tool names is rejected at descriptor load. The hidden `guard` /

@@ -8,6 +8,30 @@ use std::fs;
 use std::path::Path;
 
 #[test]
+fn missing_git_fails_before_creating_an_iteration() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let empty_path = tmp.path().join("empty-path");
+    fs::create_dir(&empty_path).unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .env("PATH", &empty_path)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(contains(
+            "Git is required to prepare isolated task repositories",
+        ));
+    assert!(
+        !iteration_dir(&cwd).exists(),
+        "Git preflight must fail before workspace creation"
+    );
+}
+
+#[test]
 fn guard_installs_pretooluse_hook_under_env() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);

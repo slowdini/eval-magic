@@ -65,14 +65,6 @@ static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::
         ),
         (r"\bpip3?\s+install\b".to_string(), "pip install"),
         (r"\bsed\s+-i\b".to_string(), "in-place file edit (sed -i)"),
-        (
-            r"\bgit\s+(commit|add|push|checkout|reset|restore|merge|rebase)\b".to_string(),
-            "git mutation",
-        ),
-        (
-            r"\bgit\s+worktree\s+add\b".to_string(),
-            "git worktree add (working tree outside the sandbox)",
-        ),
         // A create/copy/move/link verb whose operand is a path under any
         // harness config dir (`adapters::all_config_dir_names`) — catches
         // stray writes to a config dir that aren't a `>` redirect (caught
@@ -235,6 +227,11 @@ pub(crate) fn classify_bash_with_cwd(
     }
     if let Some(denial) =
         super::shell_targets::classify_output_targets(command, allowed_roots, invocation_cwd)
+    {
+        return Some(denial);
+    }
+    if let Some(denial) =
+        super::git_command::classify_git_commands(command, allowed_roots, invocation_cwd)
     {
         return Some(denial);
     }
@@ -404,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_bash_flags_install_and_git_mutations() {
+    fn classify_bash_flags_installs_and_git_worktree_escape() {
         assert_eq!(
             classify_bash("npm install left-pad", &roots()),
             Some("package install/add")
@@ -417,6 +414,95 @@ mod tests {
             classify_bash("echo hi > out.log", &roots()),
             Some("output redirection to a file")
         );
+    }
+
+    #[test]
+    fn classify_bash_allows_local_git_workflows_inside_the_task_repository() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git status --short",
+            "git add . && git commit -m baseline",
+            "git switch -c scratch",
+            "git checkout -- src/lib.rs",
+            "git reset HEAD~1",
+            "git branch topic",
+            "git rev-parse --git-dir",
+            "git -C /work/.eval-magic/task status",
+            "GIT_WORK_TREE=/work/.eval-magic/task git status",
+        ] {
+            assert_eq!(
+                classify_bash_with_cwd(command, &roots(), cwd),
+                None,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_bash_denies_git_repository_routing_escapes() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git -C /outside status",
+            "git --git-dir=/outside/repo.git status",
+            "git --work-tree /outside status",
+            "GIT_DIR=/outside/repo.git git status",
+            "env GIT_WORK_TREE=../../outside git status",
+            "git -C \"$TARGET\" status",
+            "git --git-dir='unterminated status",
+        ] {
+            let denial = classify_bash_with_cwd(command, &roots(), cwd)
+                .unwrap_or_else(|| panic!("expected Git routing denial for {command}"));
+            assert_eq!(denial.reason, "git repository routing escape", "{command}");
+        }
+    }
+
+    #[test]
+    fn classify_bash_denies_remote_git_operations_before_allowed_root_shortcut() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git clone https://example.com/repo.git",
+            "git fetch origin",
+            "git --no-pager push origin main",
+            "git -c color.ui=false push origin main",
+            "git pull",
+            "git push /work/.eval-magic/task",
+            "git ls-remote origin",
+            "git submodule update --init",
+            "git send-email patch",
+            "git svn fetch",
+            "git p4 sync",
+            "git archive --remote=origin HEAD",
+            "git remote add origin https://example.com/repo.git",
+            "git remote remove origin",
+            "git config remote.origin.url https://example.com/repo.git",
+            "git config --add url.ssh://git@example.com/.insteadOf gh:",
+            "git config set remote.origin.url https://example.com/repo.git",
+            "git config unset remote.origin.url",
+            "git config rename-section remote.origin remote.backup",
+            "git config remove-section remote.origin",
+        ] {
+            let denial = classify_bash_with_cwd(command, &roots(), cwd)
+                .unwrap_or_else(|| panic!("expected remote Git denial for {command}"));
+            assert_eq!(denial.reason, "git remote operation", "{command}");
+        }
+    }
+
+    #[test]
+    fn classify_bash_allows_remote_inspection_without_mutation() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git remote",
+            "git remote -v",
+            "git remote get-url origin",
+            "git config remote.origin.url",
+            "git config --get url.ssh://git@example.com/.insteadOf",
+        ] {
+            assert_eq!(
+                classify_bash_with_cwd(command, &roots(), cwd),
+                None,
+                "{command}"
+            );
+        }
     }
 
     #[test]

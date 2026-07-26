@@ -11,6 +11,7 @@ pub mod detect_stray_writes;
 pub mod diff_scope;
 pub mod error;
 pub mod fill_transcripts;
+mod git_isolation;
 pub mod grade;
 pub(crate) mod guard_denials;
 pub mod io;

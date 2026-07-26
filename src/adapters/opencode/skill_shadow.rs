@@ -100,6 +100,12 @@ fn repository_skill_dirs(scan_root: &Path) -> Vec<PathBuf> {
     else {
         return Vec::new();
     };
+    // A task-local repository makes the staged env itself the worktree root.
+    // Its intentional staged skills are already skipped, and OpenCode's
+    // project walk must not continue into the parent eval workspace.
+    if repo_root == scan_root {
+        return Vec::new();
+    }
     let mut dirs = Vec::new();
     // Start at the parent: scan_root is the staged env itself, whose own
     // skills dir holds the intentional staged copies.

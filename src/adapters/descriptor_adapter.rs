@@ -14,7 +14,8 @@ use crate::sandbox::GuardMarker;
 
 use super::TranscriptSummary;
 use super::cli_command::{
-    render_cli_model_arg, render_judge_dispatch_recipe, render_parallel_dispatch_recipe,
+    render_agent_dispatch_command, render_cli_model_arg, render_judge_dispatch_recipe,
+    render_parallel_dispatch_recipe,
 };
 use super::descriptor::{HarnessDescriptor, render_staged_slug, stage_name_error, subst};
 use super::harness::{
@@ -63,25 +64,25 @@ impl DescriptorAdapter {
             return String::new();
         };
         let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
-        subst(
-            template,
-            &[
-                ("model_arg", &model_arg),
-                ("guard_args", self.guard_args(guard)),
-            ],
-        )
-    }
-
-    fn render_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
-        let template = &self.descriptor.conversation.as_ref()?.resume_exec_template;
-        let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
-        Some(subst(
+        render_agent_dispatch_command(&subst(
             template,
             &[
                 ("model_arg", &model_arg),
                 ("guard_args", self.guard_args(guard)),
             ],
         ))
+    }
+
+    fn render_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+        let template = &self.descriptor.conversation.as_ref()?.resume_exec_template;
+        let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
+        Some(render_agent_dispatch_command(&subst(
+            template,
+            &[
+                ("model_arg", &model_arg),
+                ("guard_args", self.guard_args(guard)),
+            ],
+        )))
     }
 
     /// The `{guard_args}` value for this run: the descriptor's fragment when
@@ -443,7 +444,7 @@ impl HarnessAdapter for DescriptorAdapter {
 mod tests {
     use std::path::Path;
 
-    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext};
+    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext};
     use crate::adapters::registry::adapter_for;
     use crate::core::{AvailableSkill, Harness};
 
@@ -522,6 +523,32 @@ mod tests {
             assert!(command.contains("{session_arg}"), "{command}");
             assert!(command.contains("{prompt_arg}"), "{command}");
             assert!(command.contains("test-model"), "{command}");
+        }
+    }
+
+    #[test]
+    fn agent_dispatch_recipes_clear_inherited_git_routing_state() {
+        let prelude = "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+                       GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES";
+        for harness in [
+            Harness::resolve("claude-code").unwrap(),
+            Harness::resolve("codex").unwrap(),
+            Harness::resolve("opencode").unwrap(),
+        ] {
+            let adapter = adapter_for(harness);
+            let exec = adapter.cli_exec_command(false, None).unwrap();
+            assert!(exec.starts_with(prelude), "{exec}");
+            let resume = adapter.cli_resume_command(false, None).unwrap();
+            assert!(resume.starts_with(prelude), "{resume}");
+            let manifest = adapter
+                .cli_manifest_section(CliManifestContext {
+                    guard: false,
+                    agent_model: None,
+                    one_shot_only: false,
+                })
+                .unwrap()
+                .join("\n");
+            assert!(manifest.contains(&format!("    {prelude}\n")), "{manifest}");
         }
     }
 

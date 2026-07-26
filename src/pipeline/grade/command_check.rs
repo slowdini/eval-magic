@@ -8,7 +8,7 @@ use std::process::{Command, ExitStatus};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::core::{Assertion, AssertionCommandCheck, EvalsConfig};
+use crate::core::{Assertion, AssertionCommandCheck, EvalsConfig, clear_git_environment};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
 use crate::validation::{SchemaName, validate_against_schema};
@@ -372,6 +372,10 @@ fn execute_command_check_cell(
     };
 
     command.current_dir(eval_root);
+    // The task root defines repository discovery for runner-owned checks.
+    // Explicit eval-author overlays are applied afterward, so a check may
+    // intentionally restore a routing variable when that is part of the test.
+    clear_git_environment(&mut command);
     command.envs(&env);
     let output = command.output();
 

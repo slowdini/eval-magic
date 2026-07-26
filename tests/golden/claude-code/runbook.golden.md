@@ -11,6 +11,7 @@ repo.
 ## 1. Dispatch the eval agents, then ingest
 
 Next: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
 cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits --model model-x \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \

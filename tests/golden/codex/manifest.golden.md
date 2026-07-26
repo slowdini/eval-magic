@@ -13,6 +13,7 @@ After all dispatches (Codex):
 Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.
 
 ```bash
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
 codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust -m model-x --json \
   --output-last-message <outputs_dir>/final-message.md \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
@@ -31,6 +32,7 @@ jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + "\u
     prompt_path="$(printf "%s" "$1" | cut -f2)"
     outputs_dir="$(printf "%s" "$1" | cut -f3)"
     mkdir -p "$outputs_dir"
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
     codex --ask-for-approval never exec --cd "$eval_root" --sandbox workspace-write --dangerously-bypass-hook-trust -m model-x --json \
       --output-last-message "$outputs_dir/final-message.md" \
       "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to $outputs_dir/final-message.md." \

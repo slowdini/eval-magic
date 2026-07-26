@@ -3,6 +3,7 @@
 use crate::helpers::{canonical_root, skill_eval};
 use assert_cmd::Command;
 use std::fs;
+use std::process::Command as StdCommand;
 
 /// Create skill-dir/SKILL.md + iteration-1, returning
 /// `(skill_dir, skill_md_path, iteration_dir, cwd)`.
@@ -81,6 +82,20 @@ fn agg_cmd(cwd: &std::path::Path, skill_dir: &std::path::Path) -> Command {
 fn read_benchmark(iteration_dir: &std::path::Path) -> serde_json::Value {
     serde_json::from_str(&fs::read_to_string(iteration_dir.join("benchmark.json")).unwrap())
         .unwrap()
+}
+
+fn git(cwd: &std::path::Path, args: &[&str]) {
+    let output = StdCommand::new("git")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 /// Two new-skill conditions (`with_skill` loaded, `without_skill` null).
@@ -235,6 +250,54 @@ fn aggregate_warns_on_uneven_run_counts_across_conditions() {
             .iter()
             .any(|w| w.as_str().unwrap().contains("uneven run counts")),
         "expected an uneven-run-counts warning, got: {warns:?}"
+    );
+}
+
+#[test]
+fn aggregate_warns_when_a_legacy_task_resolves_to_an_ancestor_repository() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+        write_timing(
+            &iteration_dir,
+            cond,
+            serde_json::json!({"total_tokens": 100, "duration_ms": 1}),
+        );
+    }
+
+    git(&cwd, &["init", "-b", "parent"]);
+    let legacy_root = iteration_dir.join("legacy-env");
+    fs::create_dir_all(&legacy_root).unwrap();
+    fs::write(
+        iteration_dir.join("dispatch.json"),
+        serde_json::to_string(&serde_json::json!({
+            "tasks": [{
+                "eval_id": "e1",
+                "condition": "with_skill",
+                "eval_root": legacy_root,
+                "run_record_path": iteration_dir.join("eval-e1/with_skill/run.json")
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let warnings = read_benchmark(&iteration_dir)["validity_warnings"]
+        .as_array()
+        .unwrap()
+        .clone();
+    assert!(
+        warnings.iter().any(|warning| {
+            let warning = warning.as_str().unwrap();
+            warning.contains("e1/with_skill")
+                && warning.contains("Git top-level")
+                && warning.contains("ancestor")
+        }),
+        "expected a task-specific Git isolation warning, got: {warnings:?}"
     );
 }
 

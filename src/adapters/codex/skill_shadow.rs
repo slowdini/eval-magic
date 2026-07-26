@@ -128,6 +128,9 @@ fn repository_skill_dirs(scan_root: &Path) -> Vec<PathBuf> {
     else {
         return Vec::new();
     };
+    if repo_root == scan_root {
+        return Vec::new();
+    }
     let mut dirs = Vec::new();
     let mut cursor = scan_root.parent();
     while let Some(path) = cursor {

@@ -5,13 +5,13 @@ use std::path::Path;
 use super::policy::{BashClassification, OUTPUT_REDIRECTION_REASON, is_under_any, resolve_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ShellWord {
-    value: String,
-    dynamic: bool,
+pub(super) struct ShellWord {
+    pub(super) value: String,
+    pub(super) dynamic: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum ShellToken {
+pub(super) enum ShellToken {
     Word(ShellWord),
     OutputRedirect,
     InputRedirect,
@@ -19,15 +19,15 @@ enum ShellToken {
     Separator,
 }
 
-struct LexedShell {
-    tokens: Vec<ShellToken>,
-    malformed: bool,
+pub(super) struct LexedShell {
+    pub(super) tokens: Vec<ShellToken>,
+    pub(super) malformed: bool,
 }
 
 /// Split just enough shell syntax to locate literal output targets. Quotes and
 /// backslash escapes are removed from words; expansion/glob syntax is marked
 /// dynamic so it can be denied without executing a shell.
-fn lex_shell(command: &str) -> LexedShell {
+pub(super) fn lex_shell(command: &str) -> LexedShell {
     let chars: Vec<char> = command.chars().collect();
     let mut tokens = Vec::new();
     let mut i = 0usize;
