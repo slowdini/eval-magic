@@ -10,7 +10,7 @@ This README is the complete operating guide: install, author cases, run the loop
 
 ## Install
 
-`eval-magic` ships as a standalone binary named `eval-magic`, with no runtime dependencies. Each [GitHub Release](https://github.com/slowdini/eval-magic/releases) carries prebuilt binaries for macOS (Apple Silicon + Intel), Linux (x64 + ARM64), and Windows (x64), plus installer scripts.
+`eval-magic` ships as a standalone binary named `eval-magic`; Git is its only runtime prerequisite. Each [GitHub Release](https://github.com/slowdini/eval-magic/releases) carries prebuilt binaries for macOS (Apple Silicon + Intel), Linux (x64 + ARM64), and Windows (x64), plus installer scripts.
 
 macOS / Linux:
 
@@ -167,7 +167,7 @@ run (prepare one private env per dispatch + RUNBOOK.md)
 teardown
 ```
 
-1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one private task env per `(eval, condition, run)` (`iteration-N/env-<group>-<condition>/`, with `-run-<k>` for repeated runs), copies visible fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. After staging, guard installation, and shadow preflight, it snapshots each final-environment baseline. Then it prints a handoff, not a dispatch.
+1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one private task env per `(eval, condition, run)` (`iteration-N/env-<group>-<condition>/`, with `-run-<k>` for repeated runs), copies visible fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. After staging and guard installation, it initializes each task as a clean Git repository, runs shadow preflight from that repository boundary, and snapshots the final-environment baseline. Then it prints a handoff, not a dispatch.
 2. **Follow the runbook.** From `iteration-N/`, read `RUNBOOK.md` end to end. An agent session can drive it (*Read and follow `RUNBOOK.md`*) or you can follow it by hand — the commands are identical. It carries the exact per-task dispatch recipe plus the `ingest` / `finalize` commands, each already threaded with `--harness`.
 3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. One-shot tasks use the harness CLI recipe. Tasks with `turns` use `eval-magic dispatch-task`, which starts the harness CLI once, resumes the same native session for each delivered follow-up, and writes a schema-validated `conversation.json`; raw events remain under `outputs/turn-N/`. The agent may edit existing source or create files anywhere inside `eval_root`; it must not write outside that task environment. Conditions and repeated runs are physically isolated.
 4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json`, scans for writes outside `eval_root`, and collects every guard block from the private envs into `guard-denials.json` even when a task produced no `run.json`. It also measures the final environment into `diff-scope.json`, grades transcript checks, and only then injects and runs held-out `command_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion; `diff_scope` thresholds are folded in at finalize.
@@ -183,6 +183,8 @@ The chains run in-process and stop at the first failure; re-running after a fix 
 
 Each dispatch `cd`s into a fully isolated cwd holding only its fixtures, plus the staged skill for the skill-loaded arm. Multi-run envs are suffixed `-run-<k>`. The legacy `"isolation": "shared" | "isolated"` field remains schema-valid, but both values currently receive the same task-scoped isolation.
 
+Git is required at run time. Each private environment has a runner-owned root `.git`, branch `work`, one clean baseline commit (`eval-magic task baseline`), and no remotes. The generated dispatch commands clear inherited Git routing variables so repository discovery stays anchored to `eval_root`; an explicit `--iteration` rebuild recreates `.git` and discards prior task branches, history, and remotes. Root `.git` fixture and held-out setup paths are reserved, case-insensitively, while nested repositories such as `vendor/.git` remain valid fixtures.
+
 ## Cost & confirmation
 
 An eval run is not free: an N-case suite is **2N native agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A scripted case can add up to one model turn per delivered follow-up in each condition (and stops early when a gate fails). `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
@@ -196,8 +198,8 @@ The judgment of *whether* a change needs an eval, and how to design cases that a
 After you've seen what iteration 1 produces, add **assertions** to `evals.json` and re-grade the compatible iteration. Four types:
 
 - **`transcript_check` — mechanical.** `tool_invocation_matches` regex-matches tool calls; scripted runs also support `assistant_message_matches` across every assistant round. `must_precede` can be `any`, `completion_claim`, or `first_write` (the first harness-declared write/patch tool; if no write occurs, that boundary is satisfied). Fast, deterministic, cheap. Requires transcript ingest; assistant-message checks additionally require a scripted `conversation.json`.
-- **`command_check` — runner-owned.** After the agent finishes, `ingest` copies optional held-out `setup_files` from `<skill>/evals/` into the same relative paths in that task's env, then runs a trusted command there through `sh -c` (Unix) or `cmd /C` (Windows). Optional `env` entries override the inherited runner environment; optional `matrix` entries run the command once per Cartesian-product cell. The exit code defaults to `0`; optional `expect_stdout` is a regex over complete stdout, and every expectation must pass in every cell. It works with every harness, needs no transcript or LLM judge, and still runs while the agent write guard is armed.
-- **`diff_scope` — runner-owned.** Deterministically gates the agent's final-environment change with `max_files_touched`, `max_lines_changed`, or both. `max_lines_changed` is added plus removed byte-lines; `hunks` is reported but is not a threshold. Framework artifacts under `.eval-magic-outputs/` are excluded, while all other newly created files count, including ignored files and caches. Use scope as a secondary signal alongside a correctness assertion: the smallest diff is not necessarily the best change.
+- **`command_check` — runner-owned.** After the agent finishes, `ingest` copies optional held-out `setup_files` from `<skill>/evals/` into the same relative paths in that task's env, then runs a trusted command there through `sh -c` (Unix) or `cmd /C` (Windows). Inherited Git routing variables are cleared before optional `env` and `matrix` entries are applied, so eval authors may deliberately restore one while ordinary checks stay in the task repository. The exit code defaults to `0`; optional `expect_stdout` is a regex over complete stdout, and every expectation must pass in every cell. It works with every harness, needs no transcript or LLM judge, and still runs while the agent write guard is armed.
+- **`diff_scope` — runner-owned.** Deterministically gates the agent's final-environment change with `max_files_touched`, `max_lines_changed`, or both. `max_lines_changed` is added plus removed byte-lines; `hunks` is reported but is not a threshold. Framework artifacts under the task root's `.eval-magic-outputs/` and runner-owned `.git/` are excluded, while all other newly created files count, including ignored files, caches, and nested repository metadata. Use scope as a secondary signal alongside a correctness assertion: the smallest diff is not necessarily the best change.
 - **`llm_judge` — judged.** Soft criteria a model evaluates. Use for "did the response quote actual evidence." Graded by a dispatched judge subagent. Harness-independent.
 
 ```json
@@ -268,7 +270,7 @@ A skill that adds 13 seconds and 1700 tokens but improves pass rate by 50 points
 
 `diff_scope` is intentionally raw rather than averaged: each condition's array is ordered by eval id and then run index. It is captured for every new run, even when no `diff_scope` assertion is configured. Treat it as diagnostic context, not an optimization target—smaller can mean focused, but it can also mean incomplete.
 
-Read `validity_warnings` **before** trusting any delta — a low skill-invocation rate, a flagged stray write, a guard denial, or a flagged live-source read (an arm that read the live skill source instead of its staged copy) means the result may not reflect the skill at all. Every guard denial is reported, including a legitimate boundary block, because the rejected action changed agent behavior; inspect `guard-denials.json` for the affected task and count.
+Read `validity_warnings` **before** trusting any delta — a low skill-invocation rate, a flagged stray write, a guard denial, a flagged live-source read (an arm that read the live skill source instead of its staged copy), or a legacy task whose Git top-level resolves outside `eval_root` means the result may not reflect the skill at all. Every guard denial is reported, including a legitimate boundary block, because the rejected action changed agent behavior; inspect `guard-denials.json` for the affected task and count.
 
 ## Workspace layout
 
@@ -280,6 +282,7 @@ Per skill being evaluated, the runner produces this generated workspace tree (au
     <label>/SKILL.md
   iteration-N/
     env-g<eval>-<condition>[-run-<k>]/   # private agent cwd
+      .git/                               # runner-owned clean task repository
       <fixture and task files>            # edits/new files are measured
       .eval-magic-outputs/                # framework artifacts; excluded from scope
         guard-denials.jsonl               # raw privacy-safe blocks; no patch/command bodies
@@ -316,7 +319,7 @@ independently and the benchmark's per-condition `mean`/`stddev`/`n` cover all of
         run-2/  diff-scope-baseline/  diff-scope.json  run.json  timing.json  grading.json
 ```
 
-Author eval definitions in `<skill>/evals/evals.json` (or create it with `eval-magic init`); command-check setup sources also live under `<skill>/evals/`. Keep `.eval-magic/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.
+Author eval definitions in `<skill>/evals/evals.json` (or create it with `eval-magic init`); command-check setup sources also live under `<skill>/evals/`. A fixture or setup path may contain a nested `.git`, but its normalized first component cannot be `.git` because that task-root path belongs to the runner. Keep `.eval-magic/` out of version control — it churns on every run. Snapshot retention is manual: delete `<workspace>/<skill>/snapshots/<label>/` when no longer needed.
 
 ## Version-controlled baselines
 

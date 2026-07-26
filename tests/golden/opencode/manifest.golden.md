@@ -13,6 +13,7 @@ After all dispatches (OpenCode):
 Run one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/opencode-events.jsonl` and stderr as `outputs/opencode-stderr.log`.
 
 ```bash
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
 opencode run --dir <eval-root> --format json --auto -m model-x \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
@@ -30,6 +31,7 @@ jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + "\u
     prompt_path="$(printf "%s" "$1" | cut -f2)"
     outputs_dir="$(printf "%s" "$1" | cut -f3)"
     mkdir -p "$outputs_dir"
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
     opencode run --dir "$eval_root" --format json --auto -m model-x \
       "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
       </dev/null \

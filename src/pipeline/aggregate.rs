@@ -19,6 +19,7 @@ use crate::adapters::{PluginShadowReport, adapter_for, shadow_validity_warnings}
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::git_isolation;
 use crate::pipeline::guard_denials::GuardDenialsReport;
 use crate::pipeline::io::{now_iso8601, write_json};
 use crate::pipeline::slots::run_slots;
@@ -338,6 +339,7 @@ pub fn aggregate(
         }
     }
 
+    git_isolation::collect_warnings(iteration_dir, &mut validity_warnings);
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
     collect_guard_denial_warnings(iteration_dir, &mut validity_warnings);
     collect_shadow_warnings(iteration_dir, conditions, &mut validity_warnings);

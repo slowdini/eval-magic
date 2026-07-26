@@ -115,6 +115,48 @@ fn opencode_stages_repo_local_skills_under_opencode() {
 }
 
 #[test]
+fn opencode_shadow_preflight_stops_at_the_task_git_repository() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let ancestor_skill = cwd.join(".agents/skills/mr-review");
+    fs::create_dir_all(&ancestor_skill).unwrap();
+    fs::write(
+        ancestor_skill.join("SKILL.md"),
+        "---\nname: mr-review\ndescription: ancestor copy\n---\n",
+    )
+    .unwrap();
+    let fake_home = tmp.path().join("home");
+
+    let output = skill_eval()
+        .current_dir(&cwd)
+        .env("HOME", &fake_home)
+        .env("XDG_CONFIG_HOME", fake_home.join("xdg"))
+        .env("OPENCODE_CONFIG_DIR", fake_home.join("opencode"))
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "opencode",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("skill-shadow warning"),
+        "ancestor project skills must be hidden by the task repository boundary:\n{stderr}"
+    );
+    assert!(!iteration_dir(&cwd).join("plugin-shadow.json").exists());
+}
+
+#[test]
 fn opencode_plan_mode_injects_profile_and_records_flag() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);

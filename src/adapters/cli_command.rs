@@ -1,6 +1,20 @@
 //! Shared rendering helpers for harness CLI command templates
 //! (Codex's `codex exec`, Claude Code's `claude -p`).
 
+use crate::core::GIT_ROUTING_ENV_VARS;
+
+/// POSIX-shell prelude used for every eval-agent process. Task cwd is the
+/// repository boundary; inherited routing variables must not override it.
+pub(crate) fn git_environment_prelude() -> String {
+    format!("unset {}", GIT_ROUTING_ENV_VARS.join(" "))
+}
+
+/// Prefix one one-shot or resumed eval-agent command with the Git sanitation
+/// prelude. Judge commands intentionally use their separate recipe.
+pub(crate) fn render_agent_dispatch_command(command: &str) -> String {
+    format!("{}\n{command}", git_environment_prelude())
+}
+
 /// Quote a value for a POSIX shell only when it contains anything outside a
 /// conservative safe set, single-quoting and escaping embedded quotes otherwise.
 pub(crate) fn shell_quote_arg(value: &str) -> String {
@@ -48,6 +62,7 @@ pub(crate) fn render_parallel_dispatch_recipe(command_block: &str, one_shot_only
         "    prompt_path=\"$(printf \"%s\" \"$1\" | cut -f2)\"".to_string(),
         "    outputs_dir=\"$(printf \"%s\" \"$1\" | cut -f3)\"".to_string(),
         "    mkdir -p \"$outputs_dir\"".to_string(),
+        format!("    {}", git_environment_prelude()),
         command_block.to_string(),
         "  ' sh {}".to_string(),
     ]

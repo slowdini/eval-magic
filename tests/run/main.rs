@@ -17,6 +17,7 @@ mod command_check;
 mod conversation;
 mod diff_scope;
 mod env_layout;
+mod git_isolation;
 mod grouping;
 mod lifecycle;
 mod opencode;

@@ -397,9 +397,13 @@ pub struct RunArgs {
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
     /// redirects that resolve outside the env — and acting as a backstop when the
-    /// isolated session runs with relaxed permissions. Literal relative redirect
-    /// and `tee` targets resolve from the tool invocation cwd; dynamic, malformed,
-    /// or outside targets are blocked. Every denial appends privacy-safe metadata
+    /// isolated session runs with relaxed permissions. Local Git operations such
+    /// as status, diff, add, commit, and branching are allowed inside the task
+    /// repository. Repository-routing escapes and remote Git operations are
+    /// blocked; `--no-guard` opts out of those blocks, though task repositories
+    /// still begin with no remotes. Literal relative redirect and `tee` targets
+    /// resolve from the tool invocation cwd; dynamic, malformed, or outside
+    /// targets are blocked. Every denial appends privacy-safe metadata
     /// (never the full command or patch) to the task's
     /// `.eval-magic-outputs/guard-denials.jsonl`; `ingest` joins those logs into
     /// `guard-denials.json`, and `aggregate` emits one validity warning per
@@ -510,6 +514,12 @@ pub(crate) enum Commands {
     /// (human-readable). Dispatch each task through the harness CLI (`claude -p`,
     /// `codex exec`). Also writes `RUNBOOK.md`, a human-followable handoff for the
     /// run ("Read and follow RUNBOOK.md").
+    ///
+    /// Git is required. Every task environment is initialized as an independent,
+    /// clean repository on branch `work` with a deterministic baseline commit and
+    /// no remotes. The runner owns its root `.git`; task outputs remain ignored,
+    /// and rebuilding an explicit iteration resets prior Git history, branches,
+    /// and remotes before dispatch.
     Run(RunArgs),
     /// Execute one scripted multi-turn task through its harness CLI.
     ///

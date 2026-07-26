@@ -10,6 +10,7 @@
 //! boundary policy.
 
 pub mod decide;
+mod git_command;
 pub mod guard;
 pub mod install;
 pub mod policy;

@@ -148,6 +148,43 @@ fn command_environment_overrides_are_visible_to_the_child_process() {
     assert_eq!(result.stdout, "configured");
 }
 
+#[cfg(unix)]
+#[test]
+fn command_checks_clear_inherited_git_routing_before_explicit_overlays() {
+    const CHILD_MARKER: &str = "EVAL_MAGIC_GIT_ENV_CHILD";
+    if std::env::var_os(CHILD_MARKER).is_some() {
+        let root = tempfile::TempDir::new().unwrap();
+        let inherited =
+            execute_command_check(&check("printf '%s' \"${GIT_DIR-unset}\""), root.path()).unwrap();
+        assert_eq!(inherited.stdout, "unset");
+
+        let mut restored = check("printf '%s' \"$GIT_DIR\"");
+        restored.env = Some(std::collections::BTreeMap::from([(
+            "GIT_DIR".into(),
+            "/declared/repository.git".into(),
+        )]));
+        let restored = execute_command_check(&restored, root.path()).unwrap();
+        assert_eq!(restored.stdout, "/declared/repository.git");
+        return;
+    }
+
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "pipeline::grade::command_check::tests::command_checks_clear_inherited_git_routing_before_explicit_overlays",
+            "--nocapture",
+        ])
+        .env(CHILD_MARKER, "1")
+        .env("GIT_DIR", "/inherited/repository.git")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child test failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 #[test]
 fn invalid_direct_environment_configuration_returns_an_error_instead_of_panicking() {
     let root = tempfile::TempDir::new().unwrap();

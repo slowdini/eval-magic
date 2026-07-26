@@ -22,6 +22,7 @@ use super::util::mode_str;
 
 mod build;
 mod envs;
+mod git;
 mod resolve;
 mod stage;
 
@@ -95,6 +96,10 @@ struct Staged {
 
 /// Build the iteration workspace and dispatch plan for a run.
 pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> {
+    // Git is a hard runtime dependency for task-repository isolation. Probe it
+    // before resolution chooses or creates any iteration workspace.
+    git::preflight_git(ctx)?;
+
     // Resolve first (read-only): the preflight scopes its transcript warning
     // to the eval config actually selected for the run.
     let resolved = resolve::resolve_request(ctx, opts)?;
