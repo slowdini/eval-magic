@@ -154,6 +154,33 @@ fn missing_setup_source_fails_before_staging() {
 }
 
 #[test]
+fn root_git_setup_path_is_rejected_before_staging() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "held-out", "prompt": "p", "expected_output": "o",
+          "assertions": [{ "id": "secret-test", "type": "command_check",
+            "setup_files": [".GIT/config"], "command": "true" }] }
+    ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    fs::create_dir_all(skill_dir.join("mr-review/evals/.GIT")).unwrap();
+    fs::write(skill_dir.join("mr-review/evals/.GIT/config"), "hostile").unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(contains("reserved runner-owned Git metadata"))
+        .stderr(contains(".GIT/config"));
+    assert!(
+        !iteration_dir(&cwd).exists(),
+        "reserved setup path must fail before staging"
+    );
+}
+
+#[test]
 fn descriptor_without_transcript_support_runs_command_checks() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = json!({

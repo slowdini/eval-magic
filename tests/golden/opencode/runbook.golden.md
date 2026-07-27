@@ -11,6 +11,7 @@ repo.
 ## 1. Dispatch the eval agents, then ingest
 
 Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
 opencode run --dir <eval-root> --format json --auto -m model-x \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
@@ -18,19 +19,23 @@ opencode run --dir <eval-root> --format json --auto -m model-x \
   2> <outputs_dir>/opencode-stderr.log
 Then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness opencode`.
 
-`ingest` records each run, backfills transcripts, scans for stray writes, and grades every
-mechanical assertion. It then prints any `llm_judge` tasks it could not grade itself.
+`ingest` records each run, backfills transcripts, scans for stray writes, collects guarded-task
+blocks into `guard-denials.json`, and grades every mechanical assertion. Inspect any denial
+warning before trusting the affected task. It then prints any `llm_judge` tasks it could not
+grade itself.
 
 ## 2. Dispatch the judge agents, then finalize
 Dispatch each judge task from judge-tasks.json with:
+Existing nonempty response files are skipped; delete one to dispatch that judge again.
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv + "\u0000"' judge-tasks.json | \
-  xargs -0 -P "$JOBS" -I{} sh -c '
-    prompt_path="$(printf "%s" "$1" | cut -f1)"
-    response_path="$(printf "%s" "$1" | cut -f2)"
-    model="$(printf "%s" "$1" | cut -f3)"
+jq -j '.tasks[] | .dispatch_prompt_path, "\u0000", .response_path, "\u0000", ("model=" + (.model // "")), "\u0000"' judge-tasks.json | \
+  xargs -0 -P "$JOBS" -n 3 sh -c '
+    prompt_path="$1"
+    response_path="$2"
+    model="${3#model=}"
+    if [ -s "$response_path" ]; then exit 0; fi
     response_base="${response_path%.json}"
     mkdir -p "$(dirname "$response_path")"
     model_arg=""; [ -n "$model" ] && model_arg="-m $model"
@@ -39,7 +44,7 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
       </dev/null \
       > "$response_base.opencode-events.jsonl" \
       2> "$response_base.opencode-stderr.log"
-  ' sh {}
+  ' sh
 ```
 
 Then merge the verdicts and aggregate:

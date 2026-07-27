@@ -6,9 +6,13 @@
 //! - **violations**: file-write tools (per the adapters' cross-harness
 //!   vocabulary union) whose target path resolves outside the task's eval root.
 //! - **warnings**: shell commands matching a mutating pattern that don't
-//!   reference the eval root (via the sandbox `classify_bash` policy).
+//!   reference the eval root, or literal redirect/`tee` targets resolving
+//!   outside it from the invocation cwd.
 //! - **live_source_reads**: read tools / shell commands that touched the live
 //!   skill-under-test directory instead of its staged copy.
+//! - **guard denials**: raw per-task JSONL is joined through `dispatch.json`
+//!   into the separate schema-gated `guard-denials.json` artifact, even when a
+//!   task has no `run.json`.
 
 use std::path::{Path, PathBuf};
 
@@ -17,9 +21,11 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::guard_denials::collect_guard_denials;
 use crate::pipeline::io::{now_iso8601, write_json};
 use crate::pipeline::slots::{run_key, run_slots};
-use crate::sandbox::{classify_bash, is_shell_tool, is_under, is_write_tool, path_arg};
+use crate::sandbox::policy::classify_bash_with_cwd;
+use crate::sandbox::{is_shell_tool, is_under, is_write_tool, path_arg};
 use crate::validation::{SchemaName, validate_against_schema};
 
 /// A read-only tool carrying a target path argument, in any harness's
@@ -87,15 +93,17 @@ pub fn detect_stray_writes(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
-            if let Some(reason) =
-                classify_bash(command, std::slice::from_ref(&eval_root.to_string()))
-            {
+            if let Some(classification) = classify_bash_with_cwd(
+                command,
+                std::slice::from_ref(&eval_root.to_string()),
+                invocation_cwd,
+            ) {
                 findings.warnings.push(StrayFinding {
                     tool: inv.name.clone(),
                     path: None,
                     command: Some(command.to_string()),
                     ordinal: inv.ordinal,
-                    reason: reason.to_string(),
+                    reason: classification.reason.to_string(),
                 });
             }
         }
@@ -255,6 +263,11 @@ pub struct StrayWritesReport {
     /// not a pass. In-memory only; never serialized into `stray-writes.json`.
     #[serde(skip)]
     pub invocations_inspected: usize,
+    /// Denials collected from guarded task envs, regardless of whether a
+    /// corresponding run.json exists. In-memory only; the records live in the
+    /// separate guard-denials.json artifact.
+    #[serde(skip)]
+    pub guard_denials: usize,
 }
 
 /// `dispatch.json` fields the report builder reads (task-environment boundary).
@@ -298,6 +311,7 @@ pub fn detect_stray_writes_report(
         .collect();
 
     let allowed_roots_by_key = eval_roots_by_key(iteration_dir);
+    let guard_denials = collect_guard_denials(iteration_dir, iteration, repo_root)?;
 
     let mut runs = Vec::new();
     let mut totals = Totals {
@@ -383,6 +397,7 @@ pub fn detect_stray_writes_report(
         totals,
         runs,
         invocations_inspected,
+        guard_denials: guard_denials.total_denials,
     };
 
     let out_path = iteration_dir.join("stray-writes.json");
@@ -561,6 +576,20 @@ mod tests {
             repo(),
         );
         assert!(f.warnings.is_empty());
+    }
+
+    #[test]
+    fn a_relative_redirection_resolves_from_the_task_environment() {
+        let f = detect_stray_writes(
+            &[inv(
+                "Bash",
+                json!({"command": "printf done > final-message.md"}),
+                0,
+            )],
+            ALLOWED_ROOT,
+            Path::new(ALLOWED_ROOT),
+        );
+        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
     }
 
     #[test]

@@ -62,6 +62,19 @@ fn run_help_documents_no_guard() {
 }
 
 #[test]
+fn run_help_documents_task_git_repository_isolation() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("Git is required"))
+        .stdout(contains("branch `work`"))
+        .stdout(contains("no remotes"))
+        .stdout(contains("Local Git operations"))
+        .stdout(contains("remote Git operations"));
+}
+
+#[test]
 fn grade_and_ingest_help_document_runner_owned_command_checks() {
     for command in ["grade", "ingest"] {
         skill_eval()
@@ -86,6 +99,24 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
             .stdout(contains("diff-scope.json"))
             .stdout(contains("files"))
             .stdout(contains("lines"));
+    }
+}
+
+#[test]
+fn help_documents_guard_denial_artifacts_and_privacy() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("guard-denials.jsonl"))
+        .stdout(contains("never the full command or patch"));
+
+    for command in ["ingest", "detect-stray-writes", "aggregate"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("guard-denials.json"));
     }
 }
 

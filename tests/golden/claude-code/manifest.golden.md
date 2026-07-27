@@ -13,6 +13,7 @@ After all dispatches (Claude Code):
 Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claude` has no --cd flag). `--output-format stream-json` requires `--verbose`; detach stdin with `</dev/null` so a permission prompt cannot block and piped task data cannot become extra prompt context; capture stdout as `outputs/claude-events.jsonl` and stderr as `outputs/claude-stderr.log`.
 
 ```bash
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
 cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits --model model-x \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
@@ -24,18 +25,19 @@ Parallel dispatch from this iteration directory:
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + "\u0000"' dispatch.json | \
-  xargs -0 -P "$JOBS" -I{} sh -c '
-    eval_root="$(printf "%s" "$1" | cut -f1)"
-    prompt_path="$(printf "%s" "$1" | cut -f2)"
-    outputs_dir="$(printf "%s" "$1" | cut -f3)"
+jq -j '.tasks[] | .eval_root, "\u0000", .dispatch_prompt_path, "\u0000", .outputs_dir, "\u0000"' dispatch.json | \
+  xargs -0 -P "$JOBS" -n 3 sh -c '
+    eval_root="$1"
+    prompt_path="$2"
+    outputs_dir="$3"
     mkdir -p "$outputs_dir"
+    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
     cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits --model model-x \
       "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
       </dev/null \
       > "$outputs_dir/claude-events.jsonl" \
       2> "$outputs_dir/claude-stderr.log"
-  ' sh {}
+  ' sh
 ```
 
 Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `outputs/claude-events.jsonl`.

@@ -11,8 +11,10 @@ repo.
 ## 1. Dispatch the eval agents, then ingest
 {{DISPATCH_RECIPE}}
 
-`ingest` records each run, backfills transcripts, scans for stray writes, and grades every
-mechanical assertion. It then prints any `llm_judge` tasks it could not grade itself.
+`ingest` records each run, backfills transcripts, scans for stray writes, collects guarded-task
+blocks into `guard-denials.json`, and grades every mechanical assertion. Inspect any denial
+warning before trusting the affected task. It then prints any `llm_judge` tasks it could not
+grade itself.
 
 ## 2. Dispatch the judge agents, then finalize
 {{JUDGE_RECIPE}}

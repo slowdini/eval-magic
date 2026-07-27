@@ -86,13 +86,17 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
 
 ## Runner-owned environment checks are baseline
 
-Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging,
-guard installation, and shadow preflight, `run` snapshots the task environment. During `ingest`,
-before any held-out setup is injected, the runner compares that baseline with the final environment
-and writes raw `files_touched`, `lines_added`, `lines_removed`, and zero-context Myers `hunks` to
-`diff-scope.json`. Framework artifacts under `.eval-magic-outputs/` are excluded; all other new
-files count. `benchmark.json` preserves these metrics per run even without a `diff_scope` assertion.
-An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or both.
+Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging, and
+guard installation, `run` recreates a runner-owned Git repository at that root, commits the task
+state on branch `work`, runs shadow preflight at the resulting repository boundary, and snapshots
+the task environment. Git is therefore a runtime prerequisite; each task starts clean and has no
+remotes. During `ingest`, before any held-out setup is injected, the runner compares that baseline
+with the final environment and writes raw `files_touched`, `lines_added`, `lines_removed`, and
+zero-context Myers `hunks` to `diff-scope.json`. Framework artifacts under the task root's
+`.eval-magic-outputs/` and runner-owned `.git/` are excluded; nested repository metadata and all
+other new files count. `benchmark.json` preserves these metrics per run even without a `diff_scope`
+assertion. An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or
+both.
 
 This is deliberately a secondary signal: a smaller diff can be focused, but it can also be
 incomplete. Pair a scope gate with a correctness assertion.
@@ -100,10 +104,11 @@ incomplete. Pair a scope gate with a correctness assertion.
 `command_check` is intentionally not a harness enhancement. `run` detects the assertion before
 dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
 copies the assertion's held-out `setup_files` from the skill's `evals/` directory into that root and
-executes the trusted command through the platform shell. Optional `env` values override the
-inherited runner environment; optional `matrix` values execute every Cartesian-product cell and
-persist per-cell results. The files are never staged or mentioned to the agent, and therefore never
-inflate scope metrics.
+executes the trusted command through the platform shell. Root `.git` paths are reserved for both
+visible and held-out fixtures, while nested repositories remain valid. The runner clears inherited
+Git routing variables before optional `env` values override the environment; optional `matrix`
+values execute every Cartesian-product cell and persist per-cell results. The files are never staged
+or mentioned to the agent, and therefore never inflate scope metrics.
 
 This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
 the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed
@@ -141,8 +146,8 @@ uses the LLM-judge fallback.
 ingest pipeline never calls a parser), exactly one of `parser`/`extract` (validation rejects both
 or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
 equality `where` filters, final and ordered assistant-text picks, a session-id pick, flat
-tool-item mapping, token sum, and duration rule, documented with a worked example in
-[byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
+tool-item mapping, token sum/subtract reduction, and duration rule, documented with a worked
+example in [byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
 (`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
 extract engine's differential test compares against) — a new harness emitting a compatible event
@@ -166,7 +171,8 @@ guardrail-stopped scenario. `ingest` skips an interrupted task with no completio
 silently starting a fresh session would make the canned user response meaningless.
 
 *Descriptor fields:* `[conversation].resume_exec_template`, with required
-`<eval-root>`, `<outputs_dir>`, `{session_arg}`, and `{prompt_arg}` placeholders. It requires
+`<eval-root>`, `<outputs_dir>`, `{session_arg}`, and `{prompt_arg}` placeholders, plus optional
+`token_usage_aggregation` (`sum` by default, `last` for cumulative session reports). It requires
 `dispatch.exec_template` and transcript parsing. Declarative transcript extraction must include
 `assistant_messages` and `session_id`; named built-in parsers provide the same normalized fields.
 
@@ -213,7 +219,9 @@ OpenCode's auto-loaded project plugin that blocks by throwing the reason).
 *What it unlocks:* out-of-bounds writes are *blocked before they happen* instead of detected
 afterwards. The guard is provided automatically: every staged run of a guard-declaring built-in
 arms it unless `--no-guard` opts out (`--guard` makes the request explicit, turning silent
-can't-arm cases into a warning or error).
+can't-arm cases into a warning or error). Every block is also recorded as privacy-safe metadata
+under the task env and collected into `guard-denials.json`; `aggregate` emits one validity warning
+per affected task because even an intentional boundary block changed agent behavior.
 
 *Fallback:* `detect-stray-writes` audits after the fact. (It also flags **live-source reads** — an
 arm whose subagent read the live skill source instead of its staged copy, which contaminates the
@@ -235,9 +243,18 @@ serialized verbatim — the verdict bytes are the harness's on-disk contract. Va
 per-engine shape (the schema's conditional requiredness, plus load-time checks barring the other
 engine's fields), that every hooked `matcher` tool is declared in `[tools]` (json-hooks), that
 the templates parse as JSON, and that their `{command}`/`{matcher}`/`{reason}` placeholders sit
-in string values. The guard arbiter and `detect-stray-writes` classify tool names against the
-cross-harness vocabulary union (`all_tool_vocabulary`), so wiring a guard or transcript ingest
-without declaring the harness's tool names is rejected at descriptor load. The hidden `guard` /
+in string values. Patch payload extraction accepts structured `files` plus raw
+`command`/`patch`/`input`/`content`/`patchText` bodies and validates every source and destination.
+The quote-aware Bash scanner resolves literal redirect and `tee` targets from the invocation cwd;
+dynamic, malformed, or outside targets remain denied. It allows local Git inspection, staging,
+commits, and branching within the task boundary, but denies outside/dynamic repository routing,
+`git worktree add`, remote-capable subcommands, mutating `git remote`, and remote/url config writes.
+Read-only `git remote`, `git remote -v`, `git remote get-url`, and config reads remain available.
+`--no-guard` opts out of these blocks, though the task repository still begins without remotes. The
+guard arbiter and
+`detect-stray-writes` classify tool names against the cross-harness vocabulary union
+(`all_tool_vocabulary`), so wiring a guard or transcript ingest without declaring the harness's
+tool names is rejected at descriptor load. The hidden `guard` /
 `guard-codex` subcommands are frozen hook entry-point aliases (a stable on-disk contract); a new
 guard-capable built-in uses the generic `guard-hook --harness <label>` entry point (OpenCode's
 plugin spawns exactly that) — a descriptor `[guard]` block is all it takes, no bespoke
@@ -296,7 +313,8 @@ carry exact per-task commands (including parallel and judge variants).
 *Descriptor fields:* the `[dispatch]` table — `exec_template`, `parallel_command_template`,
 `judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
 `guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
-per run; the shared jq/xargs parallel and judge scaffolds stay code
+for eval-agent dispatches; judge commands deliberately render empty `guard_args` because they run
+outside the guarded task envs. The shared jq/xargs parallel and judge scaffolds stay code
 (`src/adapters/cli_command.rs`) with the per-harness command block spliced in. Validation rejects
 a template whose placeholder has no backing field.
 

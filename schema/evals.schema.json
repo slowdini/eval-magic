@@ -47,7 +47,7 @@
         "files": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Fixture file paths relative to the skill's evals/ directory. Copied into the subagent's input directory before dispatch."
+          "description": "Fixture file paths relative to the skill's evals/ directory. Copied into the task repository before dispatch. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
         },
         "runs": {
           "type": "integer",
@@ -167,7 +167,7 @@
         "setup_files": {
           "type": "array",
           "items": { "type": "string", "minLength": 1 },
-          "description": "Optional held-out paths relative to the skill's evals/ directory. The runner injects them into the task environment only during ingest."
+          "description": "Optional held-out paths relative to the skill's evals/ directory. The runner injects them into the task environment only during ingest. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
         },
         "command": {
           "type": "string",
@@ -230,7 +230,7 @@
         "max_files_touched": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment. Framework files under .eval-magic-outputs are excluded."
+          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment. Framework files under the task root's .eval-magic-outputs and runner-owned .git are excluded; nested .git metadata remains measurable."
         },
         "max_lines_changed": {
           "type": "integer",

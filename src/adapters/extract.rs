@@ -1,10 +1,9 @@
 //! Declarative transcript extraction for flat event streams.
 //!
 //! [`ExtractSpec`] is the data half of a descriptor's `[transcript.extract]`
-//! block: five primitives — an equality event filter, a final-text field pick,
-//! a flat tool-item mapping, a token sum, and a duration rule — interpreted by
-//! this one generic engine. A stream that needs more (keyed cross-event joins,
-//! content coercion) is a named code capability
+//! block: equality filters, field picks, a flat tool-item mapping, a token
+//! reduction, and a duration rule interpreted by this one generic engine. A
+//! stream that needs more (keyed cross-event joins, content coercion) is a named code capability
 //! ([`super::capabilities::TranscriptParser`]), not a bigger spec.
 //!
 //! Fixed rules the spec cannot change: `final_text` and `duration.field` take
@@ -77,14 +76,17 @@ pub struct FieldPick {
     pub field: String,
 }
 
-/// Token reduction: over matching records, sum the listed integer fields. A
-/// record where no listed path resolves leaves the total untouched (it never
+/// Token reduction: over matching records, sum the listed integer fields, then
+/// subtract the optional listed integer fields and clamp each record at zero. A
+/// record where no `sum` path resolves leaves the total untouched (it never
 /// turns an absent total into zero).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TokensExtract {
     #[serde(default, rename = "where", skip_serializing_if = "BTreeMap::is_empty")]
     pub r#where: Where,
     pub sum: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subtract: Vec<String>,
 }
 
 /// Duration: either a direct millisecond field pick (last match wins) or the
@@ -248,7 +250,13 @@ fn extract_tokens(tokens: &TokensExtract, records: &[Value]) -> Option<i64> {
             continue;
         }
         let sum: i64 = resolved.iter().filter_map(|v| v.as_i64()).sum();
-        total = Some(total.unwrap_or(0) + sum);
+        let subtract: i64 = tokens
+            .subtract
+            .iter()
+            .filter_map(|path| resolve(record, path).and_then(Value::as_i64))
+            .sum();
+        let subtotal = sum.saturating_sub(subtract).max(0);
+        total = Some(total.unwrap_or(0) + subtotal);
     }
     total
 }
@@ -335,7 +343,8 @@ mod tests {
 
             [tokens]
             where = { type = "turn.completed" }
-            sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_tokens"]
+            sum = ["usage.input_tokens", "usage.output_tokens"]
+            subtract = ["usage.cached_input_tokens"]
 
             [duration]
             timestamp_spread = "timestamp"
@@ -482,7 +491,7 @@ mod tests {
             ])
         );
         assert_eq!(full.final_text, Some("Final.".into()));
-        assert_eq!(full.total_tokens, Some(125)); // fields not listed in `sum` excluded
+        assert_eq!(full.total_tokens, Some(45)); // cached input subtracted; reasoning already in output
         assert_eq!(full.duration_ms, Some(10_000));
     }
 
@@ -540,14 +549,54 @@ mod tests {
         write_jsonl(
             &path,
             &[
-                json!({"type": "turn.completed", "usage": {"input_tokens": 40}}),
+                json!({"type": "turn.completed", "usage": {"input_tokens": 40, "cached_input_tokens": "unknown"}}),
                 json!({"type": "turn.completed", "usage": {"output_tokens": 2}}),
+                json!({"type": "turn.completed", "usage": {"input_tokens": "unknown", "cached_input_tokens": 5}}),
             ],
         );
         assert_eq!(
             parse_full(&codex_spec(), &path).unwrap().total_tokens,
             Some(42)
         );
+    }
+
+    #[test]
+    fn token_subtraction_matches_codex_blended_usage_and_clamps_each_record() {
+        let spec: ExtractSpec = toml::from_str(
+            r#"
+            [tokens]
+            where = { type = "turn.completed" }
+            sum = ["usage.input_tokens", "usage.output_tokens"]
+            subtract = ["usage.cached_input_tokens"]
+            "#,
+        )
+        .unwrap();
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("codex-usage.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                json!({
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 886_850,
+                        "cached_input_tokens": 833_024,
+                        "output_tokens": 10_083,
+                        "reasoning_output_tokens": 6_070
+                    }
+                }),
+                json!({
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "cached_input_tokens": 100,
+                        "output_tokens": 1
+                    }
+                }),
+            ],
+        );
+
+        assert_eq!(parse_full(&spec, &path).unwrap().total_tokens, Some(63_909));
     }
 
     #[test]

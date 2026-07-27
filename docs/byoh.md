@@ -80,7 +80,9 @@ shell-quoted `{session_arg}` / `{prompt_arg}` values and per-round `<eval-root>`
 `<outputs_dir>` paths; the command must resume rather than fork that session. This capability also
 requires transcript extraction of ordered assistant messages and the native session id. There is
 no baseline fallback: `run` rejects `turns` for a harness that cannot preserve their conversational
-meaning.
+meaning. Per-round token totals are summed by default. Set
+`token_usage_aggregation = "last"` in `[conversation]` only when the native CLI reports cumulative
+session usage on every resumed turn.
 
 `harness lint <name|file> --probe` proves both hard requirements end-to-end before a real run —
 it renders `exec_template` exactly as `run` would and asserts that `outputs/final-message.md` is
@@ -135,7 +137,7 @@ map as inline comments in its scaffolded template. The short map:
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
 | `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
 | `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
-| `[conversation]` | native `resume_exec_template` using the captured session id | no safe fallback: evals declaring `turns` are rejected in run preflight |
+| `[conversation]` | native `resume_exec_template` using the captured session id; optional token aggregation (`sum` default, `last` for cumulative reports) | no safe fallback: evals declaring `turns` are rejected in run preflight |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
@@ -209,10 +211,12 @@ field = "item.text"
 where = { type = "thread.started" }
 field = "thread_id"
 
-# Tokens: over matching records, sum the listed integer fields.
+# Tokens: over matching records, sum the required fields, subtract the optional
+# fields, and clamp each record at zero.
 [transcript.extract.tokens]
 where = { type = "turn.completed" }
-sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_tokens"]
+sum = ["usage.input_tokens", "usage.output_tokens"]
+subtract = ["usage.cached_input_tokens"]
 
 # Duration: last minus first RFC 3339 timestamp — or `field = "<path>"` to
 # pick a millisecond value directly (declare exactly one of the two).
@@ -231,9 +235,10 @@ The primitive set is deliberately minimal:
    `args_omit` (key order preserved; `null` when nothing remains), result = the first *present*
    field of `result_coalesce` (present-but-null counts; strings verbatim, everything else compact
    JSON).
-6. **`tokens`** — sum the `sum` fields over matching records. A missing or non-integer field
-   counts 0, but a record where *no* listed path resolves leaves the total untouched — it never
-   turns an absent total into zero.
+6. **`tokens`** — sum the required `sum` fields, subtract the optional `subtract` fields, and
+   clamp each matching record's subtotal at 0. A missing or non-integer field counts 0, but a
+   record where no `sum` path resolves leaves the total untouched — it never turns an absent
+   total into zero.
 7. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
    minus first; needs at least two parseable timestamps).
 

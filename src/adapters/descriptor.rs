@@ -20,6 +20,7 @@ use crate::validation::{SchemaName, ValidationError, validate_against_schema};
 
 use super::capabilities::{ShadowPreflight, SlugCapability, TranscriptParser};
 use super::extract::ExtractSpec;
+use super::harness::TokenUsageAggregation;
 use super::transcript::TranscriptSummary;
 
 pub mod layers;
@@ -332,6 +333,14 @@ pub struct ConversationSection {
     /// `{session_arg}` and `{prompt_arg}` with shell-quoted values and the
     /// usual angle-bracket paths with task-local destinations.
     pub resume_exec_template: String,
+    /// How token totals from resumed turns combine. `sum` is the default for
+    /// per-turn reports; `last` selects the final cumulative report.
+    #[serde(default, skip_serializing_if = "token_usage_aggregation_is_sum")]
+    pub token_usage_aggregation: TokenUsageAggregation,
+}
+
+fn token_usage_aggregation_is_sum(value: &TokenUsageAggregation) -> bool {
+    *value == TokenUsageAggregation::Sum
 }
 
 impl DispatchSection {
@@ -583,6 +592,7 @@ field = "item.text"
 [transcript.extract.tokens]
 where = { type = "turn.completed" }
 sum = ["usage.input_tokens", "usage.output_tokens"]
+subtract = ["usage.cached_input_tokens"]
 
 [transcript.extract.duration]
 timestamp_spread = "timestamp"
@@ -600,10 +610,12 @@ timestamp_spread = "timestamp"
         let shown = toml::to_string(&d).expect("descriptor re-serializes");
         let reloaded = load(&shown).unwrap();
         let extract = reloaded.transcript.unwrap().extract.unwrap();
+        let tokens = extract.tokens.unwrap();
         assert_eq!(
-            extract.tokens.unwrap().sum,
+            tokens.sum,
             vec!["usage.input_tokens", "usage.output_tokens"]
         );
+        assert_eq!(tokens.subtract, vec!["usage.cached_input_tokens"]);
         assert_eq!(
             extract
                 .tools

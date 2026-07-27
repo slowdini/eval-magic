@@ -14,7 +14,8 @@ use crate::sandbox::GuardMarker;
 
 use super::TranscriptSummary;
 use super::cli_command::{
-    render_cli_model_arg, render_judge_dispatch_recipe, render_parallel_dispatch_recipe,
+    render_agent_dispatch_command, render_cli_model_arg, render_judge_dispatch_recipe,
+    render_parallel_dispatch_recipe,
 };
 use super::descriptor::{HarnessDescriptor, render_staged_slug, stage_name_error, subst};
 use super::harness::{
@@ -63,25 +64,25 @@ impl DescriptorAdapter {
             return String::new();
         };
         let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
-        subst(
-            template,
-            &[
-                ("model_arg", &model_arg),
-                ("guard_args", self.guard_args(guard)),
-            ],
-        )
-    }
-
-    fn render_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
-        let template = &self.descriptor.conversation.as_ref()?.resume_exec_template;
-        let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
-        Some(subst(
+        render_agent_dispatch_command(&subst(
             template,
             &[
                 ("model_arg", &model_arg),
                 ("guard_args", self.guard_args(guard)),
             ],
         ))
+    }
+
+    fn render_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+        let template = &self.descriptor.conversation.as_ref()?.resume_exec_template;
+        let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
+        Some(render_agent_dispatch_command(&subst(
+            template,
+            &[
+                ("model_arg", &model_arg),
+                ("guard_args", self.guard_args(guard)),
+            ],
+        )))
     }
 
     /// The `{guard_args}` value for this run: the descriptor's fragment when
@@ -272,7 +273,7 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn guard_verdict(&self, payload: &str, marker: Option<GuardMarker>) -> Option<String> {
         let guard = self.descriptor.guard.as_ref()?;
-        super::guard::guard_verdict(guard, payload, marker)
+        super::guard::guard_verdict(guard, &self.label(), payload, marker)
     }
 
     fn guard_hook_cleanup_dir(&self, stage_root: &Path) -> Option<PathBuf> {
@@ -320,6 +321,14 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn has_conversation_resume(&self) -> bool {
         self.descriptor.conversation.is_some()
+    }
+
+    fn conversation_token_usage_aggregation(&self) -> super::TokenUsageAggregation {
+        self.descriptor
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.token_usage_aggregation)
+            .unwrap_or_default()
     }
 
     fn cli_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
@@ -421,7 +430,10 @@ impl HarnessAdapter for DescriptorAdapter {
         let cwd = ctx.iteration_dir.display().to_string();
         let command_line = subst(
             template,
-            &[("cwd", &cwd), ("guard_args", self.guard_args(ctx.guard))],
+            // Judges run from the iteration metadata directory, outside every
+            // guarded task env. Hook-trust bypass is only for eval-agent
+            // dispatches whose cwd actually contains the vetted guard hook.
+            &[("cwd", &cwd), ("guard_args", self.guard_args(false))],
         );
         Some(render_judge_dispatch_recipe(
             &command_line,
@@ -440,7 +452,9 @@ impl HarnessAdapter for DescriptorAdapter {
 mod tests {
     use std::path::Path;
 
-    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext};
+    use crate::adapters::harness::{
+        CliDispatchContext, CliJudgeContext, CliManifestContext, TokenUsageAggregation,
+    };
     use crate::adapters::registry::adapter_for;
     use crate::core::{AvailableSkill, Harness};
 
@@ -519,6 +533,47 @@ mod tests {
             assert!(command.contains("{session_arg}"), "{command}");
             assert!(command.contains("{prompt_arg}"), "{command}");
             assert!(command.contains("test-model"), "{command}");
+        }
+    }
+
+    #[test]
+    fn codex_uses_last_cumulative_conversation_tokens_while_other_builtins_sum() {
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).conversation_token_usage_aggregation(),
+            TokenUsageAggregation::Last
+        );
+        for name in ["claude-code", "opencode"] {
+            assert_eq!(
+                adapter_for(Harness::resolve(name).unwrap()).conversation_token_usage_aggregation(),
+                TokenUsageAggregation::Sum,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn agent_dispatch_recipes_clear_inherited_git_routing_state() {
+        let prelude = "unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY \
+                       GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES";
+        for harness in [
+            Harness::resolve("claude-code").unwrap(),
+            Harness::resolve("codex").unwrap(),
+            Harness::resolve("opencode").unwrap(),
+        ] {
+            let adapter = adapter_for(harness);
+            let exec = adapter.cli_exec_command(false, None).unwrap();
+            assert!(exec.starts_with(prelude), "{exec}");
+            let resume = adapter.cli_resume_command(false, None).unwrap();
+            assert!(resume.starts_with(prelude), "{resume}");
+            let manifest = adapter
+                .cli_manifest_section(CliManifestContext {
+                    guard: false,
+                    agent_model: None,
+                    one_shot_only: false,
+                })
+                .unwrap()
+                .join("\n");
+            assert!(manifest.contains(&format!("    {prelude}\n")), "{manifest}");
         }
     }
 
@@ -612,9 +667,13 @@ mod tests {
         // (same structure as the Claude judge recipe), not an if/else pair.
         assert!(
             recipe.contains(
-                "    codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write --dangerously-bypass-hook-trust $model_arg --json \\"
+                "    codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write $model_arg --json \\"
             ),
             "{recipe}"
+        );
+        assert!(
+            !recipe.contains("--dangerously-bypass-hook-trust"),
+            "judges run outside guarded task envs: {recipe}"
         );
         assert!(
             recipe.contains("    model_arg=\"\"; [ -n \"$model\" ] && model_arg=\"-m $model\""),
@@ -634,14 +693,16 @@ mod tests {
             })
             .expect("claude judge recipe is wired");
         let expected = r#"Dispatch each judge task from judge-tasks.json with:
+Existing nonempty response files are skipped; delete one to dispatch that judge again.
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv + "\u0000"' judge-tasks.json | \
-  xargs -0 -P "$JOBS" -I{} sh -c '
-    prompt_path="$(printf "%s" "$1" | cut -f1)"
-    response_path="$(printf "%s" "$1" | cut -f2)"
-    model="$(printf "%s" "$1" | cut -f3)"
+jq -j '.tasks[] | .dispatch_prompt_path, "\u0000", .response_path, "\u0000", ("model=" + (.model // "")), "\u0000"' judge-tasks.json | \
+  xargs -0 -P "$JOBS" -n 3 sh -c '
+    prompt_path="$1"
+    response_path="$2"
+    model="${3#model=}"
+    if [ -s "$response_path" ]; then exit 0; fi
     response_base="${response_path%.json}"
     mkdir -p "$(dirname "$response_path")"
     model_arg=""; [ -n "$model" ] && model_arg="--model $model"
@@ -650,7 +711,7 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
       </dev/null \
       > "$response_base.claude-events.jsonl" \
       2> "$response_base.claude-stderr.log"
-  ' sh {}
+  ' sh
 ```"#;
         assert_eq!(recipe, expected);
     }

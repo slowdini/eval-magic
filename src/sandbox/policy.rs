@@ -6,7 +6,7 @@
 //! root. Tool names come from the adapters' cross-harness vocabulary union
 //! ([`all_tool_vocabulary`]), so no harness's tool naming is hardcoded here.
 
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use std::sync::LazyLock;
 
 use regex::Regex;
@@ -46,6 +46,10 @@ pub fn is_shell_tool(tool_name: &str) -> bool {
 /// as warnings; the opt-in guard denies them. Each is meaningful only when the
 /// command does not reference an allowed root (see [`classify_bash`]).
 ///
+/// Output redirects and `tee` are intentionally absent. The quote-aware target
+/// scanner resolves relative paths from the tool invocation cwd instead of
+/// relying on command-text containment.
+///
 /// Compiled once. The patterns are known-valid, so a compile failure here is a
 /// programmer error and panics.
 static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
@@ -61,14 +65,6 @@ static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::
         ),
         (r"\bpip3?\s+install\b".to_string(), "pip install"),
         (r"\bsed\s+-i\b".to_string(), "in-place file edit (sed -i)"),
-        (
-            r"\bgit\s+(commit|add|push|checkout|reset|restore|merge|rebase)\b".to_string(),
-            "git mutation",
-        ),
-        (
-            r"\bgit\s+worktree\s+add\b".to_string(),
-            "git worktree add (working tree outside the sandbox)",
-        ),
         // A create/copy/move/link verb whose operand is a path under any
         // harness config dir (`adapters::all_config_dir_names`) — catches
         // stray writes to a config dir that aren't a `>` redirect (caught
@@ -86,10 +82,6 @@ static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::
             r#"\b(cp|mv|mkdir|touch|ln|rsync)\b[^|;&\n]*[\s'"=/]\.{0,2}/?skills(/|\s|$)"#
                 .to_string(),
             "creates a bare skills/ dir",
-        ),
-        (
-            r"(^|\s)(>>?|tee)\s".to_string(),
-            "output redirection to a file",
         ),
     ]
     .into_iter()
@@ -116,8 +108,9 @@ pub fn path_arg(args: &Value) -> Option<&str> {
 
 /// Extract file paths from an `apply_patch`-style tool payload. Codex exposes
 /// patch targets as a structured `files` list or as freeform patch text
-/// (`patch`/`input`/`content`), OpenCode as `patchText`; collect all of them
-/// so the guard can deny unknown or out-of-bounds patches before they run.
+/// (`command`/`patch`/`input`/`content`), OpenCode as `patchText`; collect all
+/// of them so the guard can deny unknown or out-of-bounds patches before they
+/// run.
 pub fn apply_patch_paths(args: &Value) -> Vec<String> {
     let mut out = Vec::new();
     let Some(obj) = args.as_object() else {
@@ -128,7 +121,7 @@ pub fn apply_patch_paths(args: &Value) -> Vec<String> {
         collect_file_values(files, &mut out);
     }
 
-    for key in ["patch", "input", "content", "patchText"] {
+    for key in ["command", "patch", "input", "content", "patchText"] {
         if let Some(text) = obj.get(key).and_then(Value::as_str) {
             collect_patch_header_paths(text, &mut out);
         }
@@ -178,22 +171,34 @@ fn collect_patch_header_paths(text: &str, out: &mut Vec<String>) {
 
 /// Lexically absolutize a path: join onto `repo_root` if relative, then normalize.
 /// Mirrors node's `resolve()` — no symlink resolution or existence requirement.
-fn absolutize(target: &str, repo_root: &Path) -> std::path::PathBuf {
+pub(crate) fn resolve_path(target: &str, repo_root: &Path) -> PathBuf {
     let joined = if Path::new(target).is_absolute() {
-        std::path::PathBuf::from(target)
+        PathBuf::from(target)
     } else {
         repo_root.join(target)
     };
-    // `std::path::absolute` normalizes `.`/`..` lexically without touching disk.
-    std::path::absolute(&joined).unwrap_or(joined)
+    let absolute = std::path::absolute(&joined).unwrap_or(joined);
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+    normalized
 }
 
 /// True when `target` resolves to `dir` or a descendant of it. Relative `target`s
 /// resolve against `repo_root`. `Path::starts_with` matches whole path
 /// components, so `.eval-magic2` is correctly not under `.eval-magic`.
 pub fn is_under(target: &str, dir: &str, repo_root: &Path) -> bool {
-    let base = absolutize(dir, repo_root);
-    let abs = absolutize(target, repo_root);
+    let base = resolve_path(dir, repo_root);
+    let abs = resolve_path(target, repo_root);
     abs.starts_with(&base)
 }
 
@@ -202,12 +207,33 @@ pub fn is_under_any(target: &str, dirs: &[String], repo_root: &Path) -> bool {
     dirs.iter().any(|d| is_under(target, d, repo_root))
 }
 
-/// If a Bash command matches a mutation pattern and is not scoped to one of
-/// `allowed_roots`, return the human reason; otherwise `None`. A command is
-/// treated as scoped when it textually references an allowed root.
-pub fn classify_bash(command: &str, allowed_roots: &[String]) -> Option<&'static str> {
+pub(super) const OUTPUT_REDIRECTION_REASON: &str = "output redirection to a file";
+
+/// A cwd-aware Bash denial plus the literal targets the scanner resolved.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct BashClassification {
+    pub reason: &'static str,
+    pub resolved_targets: Vec<String>,
+}
+
+/// Cwd-aware/evidence-producing implementation behind [`classify_bash`].
+pub(crate) fn classify_bash_with_cwd(
+    command: &str,
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+) -> Option<BashClassification> {
     if command.is_empty() {
         return None;
+    }
+    if let Some(denial) =
+        super::shell_targets::classify_output_targets(command, allowed_roots, invocation_cwd)
+    {
+        return Some(denial);
+    }
+    if let Some(denial) =
+        super::git_command::classify_git_commands(command, allowed_roots, invocation_cwd)
+    {
+        return Some(denial);
     }
     if allowed_roots.iter().any(|r| command.contains(r)) {
         return None;
@@ -215,7 +241,20 @@ pub fn classify_bash(command: &str, allowed_roots: &[String]) -> Option<&'static
     BASH_MUTATION_PATTERNS
         .iter()
         .find(|(re, _)| re.is_match(command))
-        .map(|(_, reason)| *reason)
+        .map(|(_, reason)| BashClassification {
+            reason,
+            resolved_targets: Vec::new(),
+        })
+}
+
+/// If a Bash command matches a mutation pattern and is not scoped to one of
+/// `allowed_roots`, return the human reason; otherwise `None`. A command is
+/// treated as scoped when it textually references an allowed root. Output-file
+/// targets are the exception: they are resolved lexically from the process cwd
+/// and every target must fall under an allowed root.
+pub fn classify_bash(command: &str, allowed_roots: &[String]) -> Option<&'static str> {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    classify_bash_with_cwd(command, allowed_roots, &cwd).map(|result| result.reason)
 }
 
 #[cfg(test)]
@@ -291,6 +330,28 @@ mod tests {
     }
 
     #[test]
+    fn apply_patch_paths_reads_codex_command_and_every_patch_target() {
+        let paths = apply_patch_paths(&json!({
+            "command": "\
+        *** Begin Patch\n\
+        *** Add File: fixtures/new.txt\n\
+        *** Update File: fixtures/source.txt\n\
+        *** Move to: fixtures/moved.txt\n\
+        *** Delete File: fixtures/old.txt\n\
+        *** End Patch\n"
+        }));
+        assert_eq!(
+            paths,
+            vec![
+                "fixtures/moved.txt".to_string(),
+                "fixtures/new.txt".to_string(),
+                "fixtures/old.txt".to_string(),
+                "fixtures/source.txt".to_string(),
+            ]
+        );
+    }
+
+    #[test]
     fn apply_patch_paths_collects_structured_and_freeform_targets() {
         let paths = apply_patch_paths(&json!({
             "files": [
@@ -340,7 +401,7 @@ mod tests {
     }
 
     #[test]
-    fn classify_bash_flags_install_and_git_mutations() {
+    fn classify_bash_flags_installs_and_git_worktree_escape() {
         assert_eq!(
             classify_bash("npm install left-pad", &roots()),
             Some("package install/add")
@@ -353,6 +414,95 @@ mod tests {
             classify_bash("echo hi > out.log", &roots()),
             Some("output redirection to a file")
         );
+    }
+
+    #[test]
+    fn classify_bash_allows_local_git_workflows_inside_the_task_repository() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git status --short",
+            "git add . && git commit -m baseline",
+            "git switch -c scratch",
+            "git checkout -- src/lib.rs",
+            "git reset HEAD~1",
+            "git branch topic",
+            "git rev-parse --git-dir",
+            "git -C /work/.eval-magic/task status",
+            "GIT_WORK_TREE=/work/.eval-magic/task git status",
+        ] {
+            assert_eq!(
+                classify_bash_with_cwd(command, &roots(), cwd),
+                None,
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn classify_bash_denies_git_repository_routing_escapes() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git -C /outside status",
+            "git --git-dir=/outside/repo.git status",
+            "git --work-tree /outside status",
+            "GIT_DIR=/outside/repo.git git status",
+            "env GIT_WORK_TREE=../../outside git status",
+            "git -C \"$TARGET\" status",
+            "git --git-dir='unterminated status",
+        ] {
+            let denial = classify_bash_with_cwd(command, &roots(), cwd)
+                .unwrap_or_else(|| panic!("expected Git routing denial for {command}"));
+            assert_eq!(denial.reason, "git repository routing escape", "{command}");
+        }
+    }
+
+    #[test]
+    fn classify_bash_denies_remote_git_operations_before_allowed_root_shortcut() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git clone https://example.com/repo.git",
+            "git fetch origin",
+            "git --no-pager push origin main",
+            "git -c color.ui=false push origin main",
+            "git pull",
+            "git push /work/.eval-magic/task",
+            "git ls-remote origin",
+            "git submodule update --init",
+            "git send-email patch",
+            "git svn fetch",
+            "git p4 sync",
+            "git archive --remote=origin HEAD",
+            "git remote add origin https://example.com/repo.git",
+            "git remote remove origin",
+            "git config remote.origin.url https://example.com/repo.git",
+            "git config --add url.ssh://git@example.com/.insteadOf gh:",
+            "git config set remote.origin.url https://example.com/repo.git",
+            "git config unset remote.origin.url",
+            "git config rename-section remote.origin remote.backup",
+            "git config remove-section remote.origin",
+        ] {
+            let denial = classify_bash_with_cwd(command, &roots(), cwd)
+                .unwrap_or_else(|| panic!("expected remote Git denial for {command}"));
+            assert_eq!(denial.reason, "git remote operation", "{command}");
+        }
+    }
+
+    #[test]
+    fn classify_bash_allows_remote_inspection_without_mutation() {
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "git remote",
+            "git remote -v",
+            "git remote get-url origin",
+            "git config remote.origin.url",
+            "git config --get url.ssh://git@example.com/.insteadOf",
+        ] {
+            assert_eq!(
+                classify_bash_with_cwd(command, &roots(), cwd),
+                None,
+                "{command}"
+            );
+        }
     }
 
     #[test]

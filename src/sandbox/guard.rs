@@ -7,8 +7,9 @@
 //! a malformed payload or unreadable marker yields "allow", so the guard can
 //! never brick a session.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use super::decide::GuardMarker;
@@ -20,10 +21,29 @@ pub fn read_marker(path: &Path) -> Option<GuardMarker> {
     serde_json::from_str(&text).ok()
 }
 
-/// Extract the tool name + input from a PreToolUse hook payload (the JSON the
-/// harness sends on stdin). `None` for an empty or malformed payload — treated
-/// as allow by every caller.
-pub(crate) fn parse_tool_call(payload: &str) -> Option<(String, Value)> {
+/// The guard-relevant subset of a harness PreToolUse payload.
+pub(crate) struct ParsedToolCall {
+    pub tool_name: String,
+    pub tool_input: Value,
+    pub cwd: Option<PathBuf>,
+}
+
+/// One compact, privacy-safe line in a task's raw guard denial JSONL log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct GuardDenialRecord {
+    pub timestamp: String,
+    pub harness: String,
+    pub tool: String,
+    pub reason: String,
+    pub resolved_targets: Vec<String>,
+    pub input_keys: Vec<String>,
+}
+
+/// Extract the tool name, input, and invocation cwd from a PreToolUse hook
+/// payload (the JSON the harness sends on stdin). `None` for an empty or
+/// malformed payload — treated as allow by every caller.
+pub(crate) fn parse_tool_call(payload: &str) -> Option<ParsedToolCall> {
     let trimmed = payload.trim();
     let parsed: Value =
         serde_json::from_str(if trimmed.is_empty() { "{}" } else { trimmed }).ok()?;
@@ -50,7 +70,13 @@ pub(crate) fn parse_tool_call(payload: &str) -> Option<(String, Value)> {
         &parsed,
     );
 
-    Some((tool_name, tool_input))
+    let cwd = parsed.get("cwd").and_then(Value::as_str).map(PathBuf::from);
+
+    Some(ParsedToolCall {
+        tool_name,
+        tool_input,
+        cwd,
+    })
 }
 
 fn merge_top_level_files(input: Value, parsed: &Value) -> Value {

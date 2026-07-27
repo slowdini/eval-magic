@@ -71,11 +71,19 @@ ignored; a plugin-list failure does not suppress findings from the direct direct
 produce a build-time Codex banner and the backward-compatible `plugin-shadow.json` artifact;
 `aggregate` turns the same report into Codex-specific `benchmark.json` validity warnings.
 
-eval-magic detects but cannot unload these sources. Disable a conflicting installed plugin from
-Codex's `/plugins` UI, or move/rename a conflicting repo, user, or admin skill before dispatch.
-For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve `CODEX_HOME` if
-the dispatch still needs the existing Codex configuration. That does not isolate plugins stored
-under `CODEX_HOME` or repository/admin skills.
+For an installed-plugin collision, add `--disable plugins` to every eval-agent `codex exec`
+invocation, including every resumed turn. It is a global option, so place it before `exec`, for
+example `codex --disable plugins --ask-for-approval never exec ...`. The flag disables installed
+plugins for that invocation; it does not hide skills in repository, user, or admin directories.
+eval-magic does not currently record manually added Codex launch arguments, so
+`plugin-shadow.json` and the aggregate validity warnings retain the preflight finding. If the flag
+was applied consistently, a plugin-source warning is therefore conservative rather than evidence
+that the eval was contaminated.
+
+For a direct skill collision, move or rename the conflicting repo, user, or admin skill before
+dispatch. For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve
+`CODEX_HOME` if the dispatch still needs the existing Codex configuration. That does not isolate
+plugins stored under `CODEX_HOME` or repository/admin skills.
 
 **Known limit:** Codex also ships bundled system skills, but currently exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled
@@ -89,7 +97,23 @@ tool invocations: `command_execution`, `file_change`, `web_search`, and MCP item
 `agent_message` is preserved in event order for conversation gating. `transcript_check` matches
 these parsed items. The JSONL exposes **no deterministic skill-tool
 event**, so `transcript_surfaces_skill_invocation()` is false and the `__skill_invoked` meta-check
-uses the LLM-judge fallback. Token accounting excludes cached input tokens.
+uses the LLM-judge fallback.
+
+Codex token totals use its blended workload metric:
+
+```text
+max(input_tokens + output_tokens - cached_input_tokens, 0)
+```
+
+`reasoning_output_tokens` is already a detail of `output_tokens`, so adding it again would double
+count reasoning. Resumed `turn.completed` usage is cumulative for the native thread; the Codex
+descriptor therefore uses the final round's total instead of summing round totals.
+
+Current `codex exec --json` transcripts do not include a native duration or event timestamps, so
+`duration_ms` remains `null`. Aggregate reports the missing sample count; a benchmark statistic
+with `n: 0` is unavailable, not a measured zero. Existing timing artifacts are not migrated
+automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
+them from the preserved transcripts when desired.
 
 ## Write guard
 
@@ -97,7 +121,25 @@ A guarded run (the guard auto-arms; `--guard`/`--no-guard` make it explicit) mer
 `PreToolUse` hook into `.codex/hooks.json` (matcher:
 `^Bash$|^apply_patch$|^Edit$|^Write$`, with a 30s timeout and status message). Dispatches must pass
 `--dangerously-bypass-hook-trust` so the vetted project-local hook actually runs — the generated
-recipes add it whenever the run was armed. The hook invokes the hidden `guard-codex` subcommand
+eval-agent recipes add it whenever the run was armed. Judge recipes never add the flag: judges
+run from the iteration metadata directory, outside the guarded task envs.
+
+Codex exposes the raw patch body as `tool_input.command` (the contract landed in
+[openai/codex#18391](https://github.com/openai/codex/pull/18391)). The arbiter extracts every add,
+update/delete source, and move destination from that body and resolves relative paths from the
+hook payload's `cwd`. Bash output validation uses a quote-aware lexical scan for `>`, `>>`, `>|`,
+file-descriptor-prefixed redirects, and `tee`: every literal target must resolve under an allowed
+root, while dynamic, malformed, or outside targets are blocked. Merely mentioning an allowed root
+elsewhere in the command does not scope an unrelated redirect.
+
+Guard installation initializes `.eval-magic-outputs/guard-denials.jsonl` and records its absolute
+path in the optional marker field `denialLogPath`. Each block appends only timestamp, harness,
+tool, reason, resolved targets, and sorted input keys — never patch or command content. Re-arming
+truncates the log; guard teardown preserves it; a logging failure never suppresses the block.
+`detect-stray-writes` joins the raw logs to dispatch tasks in `guard-denials.json`, and
+`aggregate` reports one validity warning per affected task.
+
+The hook invokes the hidden `guard-codex` subcommand
 (**stable on-disk contract — never rename**), which blocks via Codex's
 `{ "decision": "block", "reason": "..." }` stdout shape and stays silent to allow. Teardown prunes
 `.codex/` when restoring the original config leaves it empty (`guard_hook_cleanup_dir`).

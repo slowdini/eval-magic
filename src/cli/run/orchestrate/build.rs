@@ -340,8 +340,8 @@ pub(super) fn write_dispatch(
 }
 
 /// Post-build side effects: arm the write guard (auto-armed when the harness
-/// declares one; `--no-guard` opts out) and run the harness's shadow
-/// preflight.
+/// declares one; `--no-guard` opts out), initialize each private task Git
+/// repository, and run the harness's shadow preflight.
 pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
@@ -382,6 +382,12 @@ pub(super) fn post_build(
     {
         eprintln!("{notice}");
     }
+
+    // Establish the repository boundary after all task-visible framework files
+    // exist, but before project-local skill discovery inspects ancestor state.
+    // Recreating `.git` also resets explicit iteration rebuilds to one clean,
+    // runner-owned baseline with no inherited history or remotes.
+    super::git::initialize_task_repositories(r)?;
 
     // Shadow preflight: a staged skill name also discoverable from the operator's
     // live environment contaminates the run. Scan the first staged env, not
