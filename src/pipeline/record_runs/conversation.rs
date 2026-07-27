@@ -1,4 +1,5 @@
 use super::*;
+use crate::adapters::TokenUsageAggregation;
 use crate::core::{ConversationRecord, ToolInvocation};
 
 pub(super) fn for_task(task: &DispatchTask) -> Result<Option<ConversationRecord>, PipelineError> {
@@ -44,7 +45,12 @@ pub(super) fn summary_for_task(
     if summaries.is_empty() {
         return (None, complete);
     }
-    let total_tokens = sum_some(summaries.iter().map(|summary| summary.total_tokens));
+    let total_tokens = match adapter_for(harness).conversation_token_usage_aggregation() {
+        TokenUsageAggregation::Sum => {
+            sum_some(summaries.iter().map(|summary| summary.total_tokens))
+        }
+        TokenUsageAggregation::Last => summaries.last().and_then(|summary| summary.total_tokens),
+    };
     let duration_ms = sum_some(summaries.iter().map(|summary| summary.duration_ms));
     (
         Some(TranscriptSummary {

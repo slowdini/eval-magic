@@ -369,7 +369,7 @@ pub struct TimingRecord {
     pub duration_ms: Option<Option<i64>>,
     /// Where the numbers came from. `completion-event` = captured live from the
     /// harness's task-completion event; `transcript` = derived from the persisted
-    /// transcript (a different metric — includes cache accounting).
+    /// transcript using the harness's normalization rules.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<TimingSource>,
 }

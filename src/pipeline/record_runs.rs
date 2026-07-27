@@ -6,13 +6,13 @@
 //! `final_message` (from `<outputs_dir>/final-message.md`, falling back to the
 //! transcript's last assistant text), and `tool_invocations`/tokens/duration from
 //! each task's events file. Scripted tasks take ordered messages/tools from the
-//! runner-owned `conversation.json` and sum raw timing across
-//! `outputs/turn-N/<harness>-events.jsonl`.
+//! runner-owned `conversation.json` and combine raw timing across
+//! `outputs/turn-N/<harness>-events.jsonl` according to the harness descriptor.
 //!
 //! Existing records always win: an agent/operator-written `run.json` is skipped
 //! without `overwrite`, and `timing.json` is backfill-only — completion-event
 //! numbers captured at dispatch time are never replaced by transcript-derived
-//! ones (which include cache accounting and are not comparable 1:1).
+//! ones (whose accounting is harness-specific and may not be comparable 1:1).
 
 use std::fs;
 use std::path::Path;
@@ -68,7 +68,7 @@ impl RecordRunsResult {
     /// A loud, actionable warning when one-shot events are missing or a
     /// scripted conversation lacks one or more raw round transcripts. Scripted
     /// runs retain their ordered conversation evidence, but timing is omitted
-    /// unless every round can be summed.
+    /// unless every round can be combined.
     pub fn transcript_warning(&self, harness: Harness) -> Option<String> {
         if self.missing_transcript == 0 {
             return None;
@@ -683,7 +683,7 @@ mod tests {
         let timing = read_timing_value(&iter, "crash", "with_skill");
         assert_eq!(
             timing,
-            json!({"total_tokens": 125, "duration_ms": 30_000, "source": "transcript"})
+            json!({"total_tokens": 40, "duration_ms": 30_000, "source": "transcript"})
         );
     }
 

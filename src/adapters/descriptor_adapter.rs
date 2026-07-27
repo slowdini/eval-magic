@@ -323,6 +323,14 @@ impl HarnessAdapter for DescriptorAdapter {
         self.descriptor.conversation.is_some()
     }
 
+    fn conversation_token_usage_aggregation(&self) -> super::TokenUsageAggregation {
+        self.descriptor
+            .conversation
+            .as_ref()
+            .map(|conversation| conversation.token_usage_aggregation)
+            .unwrap_or_default()
+    }
+
     fn cli_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
         self.render_resume_command(guard, agent_model)
     }
@@ -444,7 +452,9 @@ impl HarnessAdapter for DescriptorAdapter {
 mod tests {
     use std::path::Path;
 
-    use crate::adapters::harness::{CliDispatchContext, CliJudgeContext, CliManifestContext};
+    use crate::adapters::harness::{
+        CliDispatchContext, CliJudgeContext, CliManifestContext, TokenUsageAggregation,
+    };
     use crate::adapters::registry::adapter_for;
     use crate::core::{AvailableSkill, Harness};
 
@@ -523,6 +533,21 @@ mod tests {
             assert!(command.contains("{session_arg}"), "{command}");
             assert!(command.contains("{prompt_arg}"), "{command}");
             assert!(command.contains("test-model"), "{command}");
+        }
+    }
+
+    #[test]
+    fn codex_uses_last_cumulative_conversation_tokens_while_other_builtins_sum() {
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).conversation_token_usage_aggregation(),
+            TokenUsageAggregation::Last
+        );
+        for name in ["claude-code", "opencode"] {
+            assert_eq!(
+                adapter_for(Harness::resolve(name).unwrap()).conversation_token_usage_aggregation(),
+                TokenUsageAggregation::Sum,
+                "{name}"
+            );
         }
     }
 

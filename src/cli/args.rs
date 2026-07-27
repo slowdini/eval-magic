@@ -578,7 +578,8 @@ pub(crate) enum Commands {
     /// task in a runner-built iteration, from `dispatch.json` +
     /// `outputs/final-message.md` + each task's `outputs/<harness>-events.jsonl`.
     /// Never clobbers existing records without `--overwrite`; transcript-derived
-    /// timing carries `"source": "transcript"`. Folded into `ingest`.
+    /// timing carries `"source": "transcript"`. Use `--overwrite` to regenerate
+    /// records and timing after extractor accounting changes. Folded into `ingest`.
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///
@@ -625,10 +626,11 @@ pub(crate) enum Commands {
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
     /// pass-rate / duration / token stats per condition, the delta,
-    /// `validity_warnings` (including one per task in `guard-denials.json`), and
-    /// raw per-run files/lines/hunks from `diff-scope.json`. The top-level
-    /// `diff_scope` field is omitted for compatible older iterations that predate
-    /// metric capture.
+    /// `validity_warnings` (including incomplete timing sample counts and one per
+    /// task in `guard-denials.json`), and raw per-run files/lines/hunks from
+    /// `diff-scope.json`. A timing metric with `n: 0` is unavailable, not a
+    /// measured zero. The top-level `diff_scope` field is omitted for compatible
+    /// older iterations that predate metric capture.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///

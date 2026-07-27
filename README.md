@@ -255,8 +255,8 @@ Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading 
 ```json
 {
   "run_summary": {
-    "with_skill":    { "pass_rate": { "mean": 0.83 }, "duration_ms": { "mean": 45000 }, "total_tokens": { "mean": 3800 } },
-    "without_skill": { "pass_rate": { "mean": 0.33 }, "duration_ms": { "mean": 32000 }, "total_tokens": { "mean": 2100 } }
+    "with_skill":    { "pass_rate": { "mean": 0.83, "n": 6 }, "duration_ms": { "mean": 45000, "n": 6 }, "total_tokens": { "mean": 3800, "n": 6 } },
+    "without_skill": { "pass_rate": { "mean": 0.33, "n": 6 }, "duration_ms": { "mean": 32000, "n": 6 }, "total_tokens": { "mean": 2100, "n": 6 } }
   },
   "diff_scope": {
     "with_skill": [{ "eval_id": "case-a", "files_touched": 2, "lines_added": 14, "lines_removed": 3, "hunks": 3 }],
@@ -268,9 +268,16 @@ Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading 
 
 A skill that adds 13 seconds and 1700 tokens but improves pass rate by 50 points is probably worth it; one that doubles tokens for a 2-point gain is probably not. For Mode B the keys are `old_skill` / `new_skill`, and a positive `delta.pass_rate` means the revision is an improvement.
 
+Token totals are harness-normalized workload metrics, not provider billing totals. For example,
+Codex uses non-cached input plus output; reasoning tokens are already part of output. Duration is
+available only when the harness emits a reliable duration or enough timestamps to derive one.
+Always read each metric's `n`: `n: 0` means unavailable, not a measured zero, even though
+`mean`/`stddev` remain numeric zero for schema compatibility. Deltas use the available samples and
+`validity_warnings` flags incomplete coverage.
+
 `diff_scope` is intentionally raw rather than averaged: each condition's array is ordered by eval id and then run index. It is captured for every new run, even when no `diff_scope` assertion is configured. Treat it as diagnostic context, not an optimization target—smaller can mean focused, but it can also mean incomplete.
 
-Read `validity_warnings` **before** trusting any delta — a low skill-invocation rate, a flagged stray write, a guard denial, a flagged live-source read (an arm that read the live skill source instead of its staged copy), or a legacy task whose Git top-level resolves outside `eval_root` means the result may not reflect the skill at all. Every guard denial is reported, including a legitimate boundary block, because the rejected action changed agent behavior; inspect `guard-denials.json` for the affected task and count.
+Read `validity_warnings` **before** trusting any delta — incomplete timing samples, a low skill-invocation rate, a flagged stray write, a guard denial, a flagged live-source read (an arm that read the live skill source instead of its staged copy), or a legacy task whose Git top-level resolves outside `eval_root` means the result may not reflect the skill at all. Every guard denial is reported, including a legitimate boundary block, because the rejected action changed agent behavior; inspect `guard-denials.json` for the affected task and count.
 
 ## Workspace layout
 

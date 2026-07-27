@@ -93,7 +93,7 @@
         "extract": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Declarative extractor for flat event streams: an equality filter (`where`), final/ordered assistant text picks, a native session-id pick, a flat tool-item mapping, a token sum, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
+          "description": "Declarative extractor for flat event streams: an equality filter (`where`), final/ordered assistant text picks, a native session-id pick, a flat tool-item mapping, a token reduction, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
           "properties": {
             "tools": {
               "type": "object",
@@ -179,7 +179,7 @@
               "type": "object",
               "required": ["sum"],
               "additionalProperties": false,
-              "description": "Token total: over matching records, sum the listed integer fields (missing or non-integer fields count 0; a record where no listed path resolves never turns an absent total into zero).",
+              "description": "Token total: over matching records, sum the required listed integer fields, subtract the optional listed integer fields, and clamp each record at zero. Missing or non-integer fields count 0; a record where no sum path resolves never turns an absent total into zero.",
               "properties": {
                 "where": {
                   "type": "object",
@@ -191,6 +191,11 @@
                   "minItems": 1,
                   "items": { "type": "string", "minLength": 1 },
                   "description": "Dotted paths to the token counts to add up."
+                },
+                "subtract": {
+                  "type": "array",
+                  "items": { "type": "string", "minLength": 1 },
+                  "description": "Optional dotted paths to subtract from each record's sum before clamping it at zero."
                 }
               }
             },
@@ -352,6 +357,10 @@
       "additionalProperties": false,
       "description": "Native same-session continuation used by scripted multi-turn evals.",
       "properties": {
+        "token_usage_aggregation": {
+          "enum": ["sum", "last"],
+          "description": "How per-turn token totals combine: sum (default) for independent per-turn usage, or last for cumulative native-session usage."
+        },
         "resume_exec_template": {
           "type": "string",
           "minLength": 1,

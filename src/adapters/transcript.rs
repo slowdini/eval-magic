@@ -52,10 +52,11 @@ pub struct TranscriptSummary {
     /// Native conversation/session identifier used to resume the next turn.
     #[serde(default)]
     pub session_id: Option<String>,
-    /// Total token usage (input + output + cache creation/read), as reported by
-    /// the run's terminal `result` event.
+    /// Harness-normalized total token usage, as reported by the persisted
+    /// transcript.
     pub total_tokens: Option<i64>,
-    /// Wall-clock duration, as reported by the run's terminal `result` event.
+    /// Wall-clock duration when the transcript exposes a reliable duration or
+    /// enough timestamps to derive one.
     pub duration_ms: Option<i64>,
     /// Concatenated text blocks of the last assistant message.
     pub final_text: Option<String>,

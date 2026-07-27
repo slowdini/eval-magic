@@ -63,9 +63,18 @@
       "required": ["mean", "stddev", "n"],
       "additionalProperties": false,
       "properties": {
-        "mean": { "type": "number" },
-        "stddev": { "type": "number" },
-        "n": { "type": "integer" }
+        "mean": {
+          "type": "number",
+          "description": "Mean of the available samples; retained as numeric 0 when n is 0 for compatibility."
+        },
+        "stddev": {
+          "type": "number",
+          "description": "Population standard deviation of the available samples; retained as numeric 0 when n is 0."
+        },
+        "n": {
+          "type": "integer",
+          "description": "Number of available samples. For timing metrics, 0 means unavailable, not a measured zero."
+        }
       }
     },
     "conditionSummary": {

@@ -67,7 +67,8 @@ field = "thread_id"
 
 [transcript.extract.tokens]
 where = { type = "turn.completed" }
-sum = ["usage.input_tokens", "usage.output_tokens", "usage.reasoning_output_tokens"]
+sum = ["usage.input_tokens", "usage.output_tokens"]
+subtract = ["usage.cached_input_tokens"]
 
 [transcript.extract.duration]
 timestamp_spread = "timestamp"
@@ -141,6 +142,7 @@ Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each
 '''
 
 [conversation]
+token_usage_aggregation = "last"
 resume_exec_template = '''
 cd <eval-root> && codex --ask-for-approval never exec resume{guard_args}{model_arg} --json \
   --output-last-message <outputs_dir>/final-message.md \

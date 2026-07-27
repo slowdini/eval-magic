@@ -89,7 +89,23 @@ tool invocations: `command_execution`, `file_change`, `web_search`, and MCP item
 `agent_message` is preserved in event order for conversation gating. `transcript_check` matches
 these parsed items. The JSONL exposes **no deterministic skill-tool
 event**, so `transcript_surfaces_skill_invocation()` is false and the `__skill_invoked` meta-check
-uses the LLM-judge fallback. Token accounting excludes cached input tokens.
+uses the LLM-judge fallback.
+
+Codex token totals use its blended workload metric:
+
+```text
+max(input_tokens + output_tokens - cached_input_tokens, 0)
+```
+
+`reasoning_output_tokens` is already a detail of `output_tokens`, so adding it again would double
+count reasoning. Resumed `turn.completed` usage is cumulative for the native thread; the Codex
+descriptor therefore uses the final round's total instead of summing round totals.
+
+Current `codex exec --json` transcripts do not include a native duration or event timestamps, so
+`duration_ms` remains `null`. Aggregate reports the missing sample count; a benchmark statistic
+with `n: 0` is unavailable, not a measured zero. Existing timing artifacts are not migrated
+automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
+them from the preserved transcripts when desired.
 
 ## Write guard
 
