@@ -47,6 +47,17 @@ pub struct ToolVocabulary {
     pub read_tools: Vec<String>,
 }
 
+/// How per-turn token totals combine for a native resumed conversation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TokenUsageAggregation {
+    /// Each turn reports only its own token usage.
+    #[default]
+    Sum,
+    /// Each turn reports cumulative usage for the native session.
+    Last,
+}
+
 /// The behavior that varies by harness. Generic dispatch code depends on this
 /// trait, never on a concrete harness variant. See the module docs for the
 /// baseline-vs-enhancement contract.
@@ -349,6 +360,11 @@ pub trait HarnessAdapter {
     /// continue a captured native session for scripted follow-up turns.
     fn has_conversation_resume(&self) -> bool {
         false
+    }
+
+    /// How transcript token totals combine across resumed conversation turns.
+    fn conversation_token_usage_aggregation(&self) -> TokenUsageAggregation {
+        TokenUsageAggregation::Sum
     }
 
     /// Render one same-session follow-up command. In addition to the usual

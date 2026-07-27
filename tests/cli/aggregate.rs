@@ -445,6 +445,45 @@ fn aggregate_no_warning_when_timing_sources_match() {
     );
 }
 
+/// `aggregate`: incomplete timing samples are explicit, especially `n: 0`,
+/// whose numeric zero mean is retained only for schema compatibility.
+#[test]
+fn aggregate_warns_when_token_or_duration_samples_are_missing() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    write_grading(&iteration_dir, "with_skill", 1.0);
+    write_timing(
+        &iteration_dir,
+        "with_skill",
+        json!({"total_tokens": 100, "duration_ms": null, "source": "transcript"}),
+    );
+    write_grading(&iteration_dir, "without_skill", 1.0);
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    assert_eq!(b["run_summary"]["with_skill"]["total_tokens"]["n"], 1);
+    assert_eq!(b["run_summary"]["with_skill"]["duration_ms"]["n"], 0);
+    assert_eq!(b["run_summary"]["without_skill"]["total_tokens"]["n"], 0);
+    assert_eq!(b["run_summary"]["without_skill"]["duration_ms"]["n"], 0);
+    let warnings = b["validity_warnings"].as_array().unwrap();
+    assert!(warnings.iter().any(|warning| {
+        let warning = warning.as_str().unwrap();
+        warning.contains("condition 'with_skill'")
+            && warning.contains("total_tokens: 1/1")
+            && warning.contains("duration_ms: 0/1")
+            && warning.contains("n: 0 is unavailable, not a measured zero")
+    }));
+    assert!(warnings.iter().any(|warning| {
+        let warning = warning.as_str().unwrap();
+        warning.contains("condition 'without_skill'")
+            && warning.contains("total_tokens: 0/1")
+            && warning.contains("duration_ms: 0/1")
+    }));
+}
+
 /// `aggregate`: plugin-shadow findings surface as validity_warnings.
 #[test]
 fn aggregate_surfaces_plugin_shadow_findings() {

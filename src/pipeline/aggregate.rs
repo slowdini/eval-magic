@@ -63,6 +63,7 @@ fn stats(values: &[f64], dp: i32) -> Stats {
 pub struct Stats {
     pub mean: f64,
     pub stddev: f64,
+    /// Available sample count. `0` means unavailable, not a measured zero.
     pub n: usize,
 }
 
@@ -311,9 +312,10 @@ pub fn aggregate(
             .collect::<Vec<_>>()
             .join(", ");
         validity_warnings.push(format!(
-            "runs mix timing sources ({joined}) — transcript-derived totals include cache \
-             accounting, so the token/duration delta compares two different metrics. Re-record \
-             one side or read the delta as a rough signal only."
+            "runs mix timing sources ({joined}) — completion events and transcript extractors \
+             may use different harness-specific accounting, so the token/duration delta may \
+             compare different metrics. Re-record one side or read the delta as a rough signal \
+             only."
         ));
     }
     let (n_a, n_b) = (
@@ -327,6 +329,16 @@ pub fn aggregate(
         ));
     }
     for cond in &condition_names {
+        let summary = &summaries[cond];
+        let graded_n = summary.pass_rate.n;
+        if summary.total_tokens.n < graded_n || summary.duration_ms.n < graded_n {
+            validity_warnings.push(format!(
+                "condition '{cond}' has incomplete timing samples (total_tokens: {}/{graded_n}; \
+                 duration_ms: {}/{graded_n}) — metric stats and deltas use only available \
+                 samples; n: 0 is unavailable, not a measured zero.",
+                summary.total_tokens.n, summary.duration_ms.n
+            ));
+        }
         if let Some(Some(rate)) = summaries[cond].skill_invocation_rate
             && rate < 1.0
         {

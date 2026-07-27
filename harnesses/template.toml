@@ -99,7 +99,8 @@ label = "{label}"
 ##   [transcript.extract.final_text]  where + field — dotted-path pick, last match wins
 ##   [transcript.extract.assistant_messages] where + field — every matching text in event order
 ##   [transcript.extract.session_id]  where + field — native session id, last match wins
-##   [transcript.extract.tokens]      where + sum — add up the listed integer fields
+##   [transcript.extract.tokens]      where + sum + optional subtract — reduce integer fields,
+##                                    clamping each matching record at zero
 ##   [transcript.extract.duration]    field (millisecond pick) OR timestamp_spread (last minus
 ##                                    first RFC 3339 timestamp)
 ## See docs/byoh.md "The declarative extractor" for the worked Codex-shaped example. A stream
@@ -130,9 +131,13 @@ label = "{label}"
 ## eval-magic fills {session_arg}/{prompt_arg} with shell-quoted values and replaces
 ## <eval-root>/<outputs_dir> per round. The command must resume (not fork) the named session and
 ## write a fresh events file under the round's <outputs_dir>.
+## token_usage_aggregation is "sum" by default. Set it to "last" only when each resumed turn's
+## transcript reports cumulative native-session usage rather than independent per-turn usage.
 ## VERIFY: start one session, recover its id, resume it with a second prompt, and confirm the
-## second transcript identifies the same session.
+## second transcript identifies the same session; compare the two usage reports before choosing
+## an aggregation mode.
 # [conversation]
+# token_usage_aggregation = "sum"
 # resume_exec_template = '{label} run --cd <eval-root> --session {session_arg}{model_arg} {prompt_arg} > <outputs_dir>/{label}-events.jsonl'
 
 ## -------------------------------------------------------------------------------------------

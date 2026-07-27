@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn assembles_multi_turn_run_from_conversation_and_sums_round_timing() {
+fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_duration() {
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     let paths = write_iteration(
@@ -76,6 +76,63 @@ fn assembles_multi_turn_run_from_conversation_and_sums_round_timing() {
         }])
     );
     assert_eq!(run.conversation.unwrap().delivered_followups, 1);
+
+    let timing = read_timing_value(&iter, "clarify", "with_skill");
+    assert_eq!(timing["total_tokens"], 40);
+    assert_eq!(timing["duration_ms"], 60_000);
+    assert_eq!(timing["source"], "transcript");
+}
+
+#[test]
+fn assembles_multi_turn_run_by_summing_independent_claude_round_timing() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "clarify",
+            condition: "with_skill",
+            final_message: None,
+        }],
+    );
+    let conversation_path = iter
+        .join("eval-clarify")
+        .join("with_skill")
+        .join("conversation.json");
+    fs::write(
+        &conversation_path,
+        serde_json::to_string_pretty(&json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
+                {"type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which timezone?"},
+                {"type": "user_message", "ordinal": 2, "round": 2, "text": "US timezones."},
+                {"type": "assistant_message", "ordinal": 3, "round": 2, "text": "Done."}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for round in [1, 2] {
+        let round_dir = paths[0].outputs_dir.join(format!("turn-{round}"));
+        fs::create_dir_all(&round_dir).unwrap();
+        write_claude_events(&round_dir, "unused");
+    }
+    let dispatch_path = iter.join("dispatch.json");
+    let mut dispatch: Value =
+        serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
+    dispatch["tasks"][0]["conversation_path"] =
+        json!(conversation_path.to_string_lossy().to_string());
+    fs::write(
+        &dispatch_path,
+        serde_json::to_string_pretty(&dispatch).unwrap(),
+    )
+    .unwrap();
+
+    let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+    assert_eq!(result.recorded, 1);
+    assert_eq!(result.missing_transcript, 0);
 
     let timing = read_timing_value(&iter, "clarify", "with_skill");
     assert_eq!(timing["total_tokens"], 250);

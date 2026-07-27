@@ -146,8 +146,8 @@ uses the LLM-judge fallback.
 ingest pipeline never calls a parser), exactly one of `parser`/`extract` (validation rejects both
 or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
 equality `where` filters, final and ordered assistant-text picks, a session-id pick, flat
-tool-item mapping, token sum, and duration rule, documented with a worked example in
-[byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
+tool-item mapping, token sum/subtract reduction, and duration rule, documented with a worked
+example in [byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
 (`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
 extract engine's differential test compares against) — a new harness emitting a compatible event
@@ -171,7 +171,8 @@ guardrail-stopped scenario. `ingest` skips an interrupted task with no completio
 silently starting a fresh session would make the canned user response meaningless.
 
 *Descriptor fields:* `[conversation].resume_exec_template`, with required
-`<eval-root>`, `<outputs_dir>`, `{session_arg}`, and `{prompt_arg}` placeholders. It requires
+`<eval-root>`, `<outputs_dir>`, `{session_arg}`, and `{prompt_arg}` placeholders, plus optional
+`token_usage_aggregation` (`sum` by default, `last` for cumulative session reports). It requires
 `dispatch.exec_template` and transcript parsing. Declarative transcript extraction must include
 `assistant_messages` and `session_id`; named built-in parsers provide the same normalized fields.
 

@@ -3,8 +3,8 @@
 //! Codex emits a JSONL event stream;
 //! `item.completed` events whose item type is not an agent message / reasoning /
 //! plan update become ordered [`ToolInvocation`]s. Produces the same
-//! [`TranscriptSummary`] shape as the Claude adapter, but with Codex's token
-//! accounting (excludes cached input tokens).
+//! [`TranscriptSummary`] shape as the Claude adapter, but with Codex's blended
+//! token accounting: non-cached input plus output.
 
 use crate::adapters::TranscriptSummary;
 use crate::adapters::transcript::TranscriptEvent;
@@ -157,10 +157,14 @@ pub fn parse_codex_events_full(jsonl_path: &Path) -> io::Result<TranscriptSummar
 
         if rtype == Some("turn.completed")
             && let Some(usage) = record.get("usage").and_then(Value::as_object)
+            && (usage.contains_key("input_tokens") || usage.contains_key("output_tokens"))
         {
             let get = |k: &str| usage.get(k).and_then(Value::as_i64).unwrap_or(0);
-            let sum = get("input_tokens") + get("output_tokens") + get("reasoning_output_tokens");
-            total_tokens = Some(total_tokens.unwrap_or(0) + sum);
+            let blended = get("input_tokens")
+                .saturating_add(get("output_tokens"))
+                .saturating_sub(get("cached_input_tokens"))
+                .max(0);
+            total_tokens = Some(total_tokens.unwrap_or(0) + blended);
         }
     }
 
@@ -335,8 +339,46 @@ mod tests {
             ])
         );
         assert_eq!(full.final_text, Some("Final.".into()));
-        assert_eq!(full.total_tokens, Some(125)); // cached input excluded
+        assert_eq!(full.total_tokens, Some(45)); // non-cached input plus output
         assert_eq!(full.duration_ms, Some(10_000));
+    }
+
+    #[test]
+    fn reports_codex_blended_usage_without_double_counting_reasoning() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("codex-usage.jsonl");
+        write_jsonl(
+            &path,
+            &[json!({
+                "type": "turn.completed",
+                "usage": {
+                    "input_tokens": 886_850,
+                    "cached_input_tokens": 833_024,
+                    "output_tokens": 10_083,
+                    "reasoning_output_tokens": 6_070
+                }
+            })],
+        );
+
+        let full = parse_codex_events_full(&path).unwrap();
+        assert_eq!(full.total_tokens, Some(63_909));
+        assert_eq!(full.duration_ms, None);
+    }
+
+    #[test]
+    fn turn_without_input_or_output_leaves_tokens_null() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("cached-only-usage.jsonl");
+        write_jsonl(
+            &path,
+            &[json!({
+                "type": "turn.completed",
+                "usage": {"cached_input_tokens": 100}
+            })],
+        );
+
+        let full = parse_codex_events_full(&path).unwrap();
+        assert_eq!(full.total_tokens, None);
     }
 
     #[test]
