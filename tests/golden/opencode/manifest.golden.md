@@ -25,11 +25,11 @@ Parallel dispatch from this iteration directory:
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + "\u0000"' dispatch.json | \
-  xargs -0 -P "$JOBS" -I{} sh -c '
-    eval_root="$(printf "%s" "$1" | cut -f1)"
-    prompt_path="$(printf "%s" "$1" | cut -f2)"
-    outputs_dir="$(printf "%s" "$1" | cut -f3)"
+jq -j '.tasks[] | .eval_root, "\u0000", .dispatch_prompt_path, "\u0000", .outputs_dir, "\u0000"' dispatch.json | \
+  xargs -0 -P "$JOBS" -n 3 sh -c '
+    eval_root="$1"
+    prompt_path="$2"
+    outputs_dir="$3"
     mkdir -p "$outputs_dir"
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
     opencode run --dir "$eval_root" --format json --auto -m model-x \
@@ -37,7 +37,7 @@ jq -j '.tasks[] | [.eval_root, .dispatch_prompt_path, .outputs_dir] | @tsv + "\u
       </dev/null \
       > "$outputs_dir/opencode-events.jsonl" \
       2> "$outputs_dir/opencode-stderr.log"
-  ' sh {}
+  ' sh
 ```
 
 Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/opencode-events.jsonl`.

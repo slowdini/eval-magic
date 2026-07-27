@@ -71,11 +71,19 @@ ignored; a plugin-list failure does not suppress findings from the direct direct
 produce a build-time Codex banner and the backward-compatible `plugin-shadow.json` artifact;
 `aggregate` turns the same report into Codex-specific `benchmark.json` validity warnings.
 
-eval-magic detects but cannot unload these sources. Disable a conflicting installed plugin from
-Codex's `/plugins` UI, or move/rename a conflicting repo, user, or admin skill before dispatch.
-For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve `CODEX_HOME` if
-the dispatch still needs the existing Codex configuration. That does not isolate plugins stored
-under `CODEX_HOME` or repository/admin skills.
+For an installed-plugin collision, add `--disable plugins` to every eval-agent `codex exec`
+invocation, including every resumed turn. It is a global option, so place it before `exec`, for
+example `codex --disable plugins --ask-for-approval never exec ...`. The flag disables installed
+plugins for that invocation; it does not hide skills in repository, user, or admin directories.
+eval-magic does not currently record manually added Codex launch arguments, so
+`plugin-shadow.json` and the aggregate validity warnings retain the preflight finding. If the flag
+was applied consistently, a plugin-source warning is therefore conservative rather than evidence
+that the eval was contaminated.
+
+For a direct skill collision, move or rename the conflicting repo, user, or admin skill before
+dispatch. For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve
+`CODEX_HOME` if the dispatch still needs the existing Codex configuration. That does not isolate
+plugins stored under `CODEX_HOME` or repository/admin skills.
 
 **Known limit:** Codex also ships bundled system skills, but currently exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled

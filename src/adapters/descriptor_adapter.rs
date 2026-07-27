@@ -693,14 +693,16 @@ mod tests {
             })
             .expect("claude judge recipe is wired");
         let expected = r#"Dispatch each judge task from judge-tasks.json with:
+Existing nonempty response files are skipped; delete one to dispatch that judge again.
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv + "\u0000"' judge-tasks.json | \
-  xargs -0 -P "$JOBS" -I{} sh -c '
-    prompt_path="$(printf "%s" "$1" | cut -f1)"
-    response_path="$(printf "%s" "$1" | cut -f2)"
-    model="$(printf "%s" "$1" | cut -f3)"
+jq -j '.tasks[] | .dispatch_prompt_path, "\u0000", .response_path, "\u0000", ("model=" + (.model // "")), "\u0000"' judge-tasks.json | \
+  xargs -0 -P "$JOBS" -n 3 sh -c '
+    prompt_path="$1"
+    response_path="$2"
+    model="${3#model=}"
+    if [ -s "$response_path" ]; then exit 0; fi
     response_base="${response_path%.json}"
     mkdir -p "$(dirname "$response_path")"
     model_arg=""; [ -n "$model" ] && model_arg="--model $model"
@@ -709,7 +711,7 @@ jq -j '.tasks[] | [.dispatch_prompt_path, .response_path, (.model // "")] | @tsv
       </dev/null \
       > "$response_base.claude-events.jsonl" \
       2> "$response_base.claude-stderr.log"
-  ' sh {}
+  ' sh
 ```"#;
         assert_eq!(recipe, expected);
     }
