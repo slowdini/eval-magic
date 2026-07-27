@@ -253,15 +253,25 @@ pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
     report
         .shadowed
         .iter()
-        .map(|source| {
-            format!(
+        .map(|source| match source {
+            ShadowSource::Plugin { .. } => format!(
                 "staged skill '{}' is also provided by {} — each `codex exec` dispatch could \
-                 discover both copies, so with/without results may be contaminated. Isolate the \
-                 live Codex skill source before dispatch (see {}).",
+                     discover both copies. Add `--disable plugins` to every eval-agent `codex \
+                     exec`; eval-magic does not record manual launch arguments, so this retained \
+                     contamination warning is conservative when the flag was applied consistently \
+                     (see {}).",
                 source.skill_name(),
                 source_label(source),
                 ISOLATION_DOC
-            )
+            ),
+            ShadowSource::GlobalSkill { .. } => format!(
+                "staged skill '{}' is also provided by {} — each `codex exec` dispatch could \
+                     discover both copies, so with/without results may be contaminated. Before \
+                     dispatch, move or rename the live repo, user, or admin skill (see {}).",
+                source.skill_name(),
+                source_label(source),
+                ISOLATION_DOC
+            ),
         })
         .collect()
 }
@@ -287,13 +297,38 @@ pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
     lines.extend([
         "  Each `codex exec` dispatch can load both copies, so the with/without".to_string(),
         "  comparison may be contaminated and the control arm may not be skill-absent.".to_string(),
-        "  eval-magic cannot unload a live Codex skill or plugin. Before dispatch:".to_string(),
-        "  1. Disable a conflicting installed plugin from Codex's `/plugins` UI.".to_string(),
-        "  2. Move or rename a conflicting repo, user, or admin `.agents/skills` entry."
-            .to_string(),
-        "  3. For user skills only, use a clean `HOME` while preserving `CODEX_HOME`.".to_string(),
-        format!("  Full mechanics and detection limits: {ISOLATION_DOC}."),
     ]);
+    if report
+        .shadowed
+        .iter()
+        .any(|source| matches!(source, ShadowSource::Plugin { .. }))
+    {
+        lines.extend([
+            "  For plugin collisions, add `--disable plugins` to every eval-agent `codex exec`"
+                .to_string(),
+            "  invocation, including resumed turns. This disables installed plugins for that run,"
+                .to_string(),
+            "  but not repo, user, or admin skill directories.".to_string(),
+            "  Because manual launch arguments are not recorded, the preflight artifact and"
+                .to_string(),
+            "  aggregate warnings remain conservative.".to_string(),
+        ]);
+    }
+    if report
+        .shadowed
+        .iter()
+        .any(|source| matches!(source, ShadowSource::GlobalSkill { .. }))
+    {
+        lines.extend([
+            "  For direct skill collisions, move or rename the conflicting repo, user, or admin"
+                .to_string(),
+            "  `.agents/skills` entry. For user skills only, a clean `HOME` can isolate the source."
+                .to_string(),
+        ]);
+    }
+    lines.push(format!(
+        "  Full mechanics and detection limits: {ISOLATION_DOC}."
+    ));
     lines.join("\n")
 }
 
@@ -431,5 +466,45 @@ mod tests {
         );
 
         assert!(report.shadowed.is_empty());
+    }
+
+    #[test]
+    fn plugin_shadow_guidance_names_runtime_disable_and_conservative_warning() {
+        let report = PluginShadowReport {
+            config_dir: "/codex".into(),
+            shadowed: vec![ShadowSource::Plugin {
+                plugin: "slow-powers@slowdini".into(),
+                skill_name: "mr-review".into(),
+                path: "/codex/plugins/cache/slowdini/slow-powers/1/skills/mr-review".into(),
+            }],
+        };
+
+        let banner = format_shadow_banner(&report);
+        assert!(banner.contains("`--disable plugins`"), "{banner}");
+        assert!(banner.contains("every eval-agent `codex exec`"), "{banner}");
+        assert!(
+            banner.contains("repo, user, or admin skill directories"),
+            "{banner}"
+        );
+        assert!(banner.contains("not recorded"), "{banner}");
+
+        let warning = shadow_validity_warnings(&report).join("\n");
+        assert!(warning.contains("`--disable plugins`"), "{warning}");
+        assert!(warning.contains("conservative"), "{warning}");
+    }
+
+    #[test]
+    fn direct_skill_shadow_guidance_does_not_recommend_plugin_disable() {
+        let report = PluginShadowReport {
+            config_dir: "/codex".into(),
+            shadowed: vec![ShadowSource::GlobalSkill {
+                skill_name: "mr-review".into(),
+                path: "/repo/.agents/skills/mr-review".into(),
+            }],
+        };
+
+        let warning = shadow_validity_warnings(&report).join("\n");
+        assert!(!warning.contains("--disable plugins"), "{warning}");
+        assert!(warning.contains("move or rename"), "{warning}");
     }
 }
