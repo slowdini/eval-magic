@@ -247,11 +247,10 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
 
         for (cond, cond_skill_path, staged_slug) in &conds {
             let cond_dir = ctx.iteration_dir.join(format!("eval-{}", ev.id)).join(cond);
-            // `evals.json` is reloaded unfiltered, so it still lists evals that
-            // `--only`/`--skip` kept out of this iteration. Those never got an
-            // env, and `run_slots` would fabricate a legacy slot for the absent
-            // directory — reporting them as missing data looks like data loss.
-            // `finalize` already guards this way.
+            // `evals.json` is reloaded unfiltered, so evals that `--only`/
+            // `--skip` kept out of this iteration are still listed here with no
+            // directory — and `run_slots` fabricates a legacy slot for an
+            // absent one. `finalize` guards the same way.
             if !cond_dir.exists() {
                 continue;
             }

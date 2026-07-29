@@ -480,6 +480,11 @@ mod tests {
             "git config unset remote.origin.url",
             "git config rename-section remote.origin remote.backup",
             "git config remove-section remote.origin",
+            // Descriptor duplication no longer emits a separator, so it must
+            // not end the Git segment early and hide the subcommand.
+            "git push origin main 2>&1",
+            "git fetch origin >/dev/null 2>&1",
+            "git clone https://example.com/repo.git 2>&1 | tee log.txt",
         ] {
             let denial = classify_bash_with_cwd(command, &roots(), cwd)
                 .unwrap_or_else(|| panic!("expected remote Git denial for {command}"));

@@ -41,8 +41,6 @@ pub(crate) fn run_harness(args: HarnessArgs, harness_file: Option<&str>) -> anyh
             yes,
             probe_timeout,
         } => {
-            // `--harness-file` already names exactly one descriptor, so it is
-            // the target when no positional is given.
             let target = target.as_deref().or(harness_file).ok_or_else(|| {
                 anyhow::anyhow!(
                     "missing lint target: pass a descriptor file path or a registered \
