@@ -26,7 +26,7 @@ const INIT_TEMPLATE: &str = include_str!("../../../harnesses/template.toml");
 /// The `harness init` notes skeleton scaffolded beside the descriptor.
 const INIT_NOTES_TEMPLATE: &str = include_str!("../../../harnesses/template-notes.md");
 
-pub(crate) fn run_harness(args: HarnessArgs) -> anyhow::Result<()> {
+pub(crate) fn run_harness(args: HarnessArgs, harness_file: Option<&str>) -> anyhow::Result<()> {
     match args.command {
         HarnessCommands::Init {
             name,
@@ -40,10 +40,20 @@ pub(crate) fn run_harness(args: HarnessArgs) -> anyhow::Result<()> {
             probe,
             yes,
             probe_timeout,
-        } => run_lint(
-            &target,
-            probe::ProbeOpts::from_flags(probe, yes, probe_timeout),
-        ),
+        } => {
+            // `--harness-file` already names exactly one descriptor, so it is
+            // the target when no positional is given.
+            let target = target.as_deref().or(harness_file).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "missing lint target: pass a descriptor file path or a registered \
+                     harness name, or name the file once with --harness-file"
+                )
+            })?;
+            run_lint(
+                target,
+                probe::ProbeOpts::from_flags(probe, yes, probe_timeout),
+            )
+        }
     }
 }
 

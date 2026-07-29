@@ -209,7 +209,10 @@ pub(crate) enum HarnessCommands {
     /// to cap the run.
     Lint {
         /// Descriptor file path, or a registered harness name.
-        target: String,
+        ///
+        /// Optional when `--harness-file` is passed: that file is then the
+        /// target, since it already names exactly one descriptor.
+        target: Option<String>,
         /// Execute the dispatch exec template with a trivial prompt and verify
         /// final-message recovery (opt-in; costs real CLI usage). See the
         /// subcommand description above for the full contract.
