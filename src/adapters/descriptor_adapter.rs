@@ -12,17 +12,19 @@ use regex::Regex;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
-use super::TranscriptSummary;
 use super::cli_command::{
     render_agent_dispatch_command, render_cli_model_arg, render_judge_dispatch_recipe,
     render_parallel_dispatch_recipe,
 };
-use super::descriptor::{HarnessDescriptor, render_staged_slug, stage_name_error, subst};
+use super::descriptor::{
+    HarnessDescriptor, TranscriptSection, render_staged_slug, stage_name_error, subst,
+};
 use super::harness::{
     CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, ToolVocabulary,
 };
 use super::skill_shadow::PluginShadowReport;
 use super::skills_block::{DEFAULT_HEADER, DEFAULT_ITEM, render_skills_block};
+use super::{PermissionDenial, TranscriptSummary};
 
 /// A [`HarnessAdapter`] backed by a validated [`HarnessDescriptor`].
 #[derive(Debug)]
@@ -224,6 +226,22 @@ impl HarnessAdapter for DescriptorAdapter {
                     self.label()
                 ),
             )),
+        }
+    }
+
+    fn surfaces_permission_denials(&self) -> bool {
+        self.descriptor
+            .transcript
+            .as_ref()
+            .is_some_and(TranscriptSection::surfaces_permission_denials)
+    }
+
+    fn parse_permission_denials(&self, path: &Path) -> io::Result<Vec<PermissionDenial>> {
+        match &self.descriptor.transcript {
+            Some(transcript) => transcript.parse_permission_denials(path),
+            // No transcript table: nothing to read, and no error — a harness
+            // without ingest simply carries no denial signal.
+            None => Ok(Vec::new()),
         }
     }
 

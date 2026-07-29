@@ -13,16 +13,24 @@
 //! without `overwrite`, and `timing.json` is backfill-only — completion-event
 //! numbers captured at dispatch time are never replaced by transcript-derived
 //! ones (whose accounting is harness-specific and may not be comparable 1:1).
+//!
+//! Harnesses whose transcript identifies refused tool calls also get the
+//! iteration-level `permission-denials.json` written here (see
+//! [`crate::pipeline::permission_denials`]); harnesses that cannot detect a
+//! refusal get no file at all, so its absence never reads as "nothing refused".
 
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::adapters::{TranscriptSummary, adapter_for};
-use crate::core::{ConversationEvent, Harness, RunRecord, TimingRecord, TimingSource};
+use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
+use crate::core::{
+    ConversationEvent, ConversationRecord, Harness, RunRecord, TimingRecord, TimingSource,
+};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::write_json;
+use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
 use crate::validation::{SchemaName, validate_against_schema};
 
 mod conversation;
@@ -62,6 +70,12 @@ pub struct RecordRunsResult {
     pub missing_transcript: usize,
     pub skipped_prompt_unread: usize,
     pub skipped_incomplete_conversation: usize,
+    /// Tool calls the harness refused, excluding the write guard's own blocks
+    /// (`guard-denials.json` reports those). Always 0 for a harness whose
+    /// transcript cannot identify a refusal.
+    pub permission_denials: usize,
+    /// How many tasks those denials are spread across.
+    pub permission_denial_tasks: usize,
 }
 
 impl RecordRunsResult {
@@ -110,6 +124,26 @@ impl RecordRunsResult {
         ))
     }
 
+    /// A loud, actionable warning when the harness refused one or more tool
+    /// calls. Nothing failed and nothing was skipped — the agent simply could
+    /// not do what it tried, which commonly turns a run that should have
+    /// executed something into static reasoning. `None` when none were refused.
+    pub fn permission_denial_warning(&self) -> Option<String> {
+        if self.permission_denials == 0 {
+            return None;
+        }
+        let n = self.permission_denials;
+        let plural = if n == 1 { "" } else { "s" };
+        let tasks = self.permission_denial_tasks;
+        let task_plural = if tasks == 1 { "" } else { "s" };
+        Some(format!(
+            "⚠ {n} tool call{plural} across {tasks} task{task_plural} were permission-denied — the \
+             agent's attempt was refused, so its behavior changed and the run may have degraded to \
+             static reasoning. Inspect permission-denials.json before trusting those data points; \
+             `aggregate` also flags them in validity_warnings."
+        ))
+    }
+
     /// Warn when a scripted task never produced its runner-owned completion
     /// artifact. Raw per-turn transcripts are intentionally not ingested
     /// without it because the driver may have failed between turns.
@@ -132,6 +166,7 @@ impl RecordRunsResult {
 /// the existing-record precedence rules.
 pub fn record_runs(
     iteration_dir: &Path,
+    iteration: u32,
     harness: Harness,
     overwrite: bool,
 ) -> Result<RecordRunsResult, PipelineError> {
@@ -148,6 +183,8 @@ pub fn record_runs(
     let tasks = dispatch.tasks.unwrap_or_default();
 
     let mut result = RecordRunsResult::default();
+    let detects_denials = adapter_for(harness).surfaces_permission_denials();
+    let mut denial_tasks: Vec<TaskPermissionDenials> = Vec::new();
     for task in &tasks {
         let conversation = conversation::for_task(task)?;
         if task.conversation_path.is_some() && conversation.is_none() {
@@ -160,6 +197,24 @@ pub fn record_runs(
         };
         if summary.is_none() || !transcripts_complete {
             result.missing_transcript += 1;
+        }
+
+        // Collected before the record/timing skips below: a refused tool call is
+        // worth reporting even for a task that never becomes a graded data point.
+        // (A scripted task missing conversation.json is the one exception — it
+        // returned above, since without it the rounds that ran are unknown.)
+        if detects_denials {
+            let denials = TaskPermissionDenials::new(
+                task.eval_id.clone(),
+                task.condition.clone(),
+                task.run_index,
+                permission_denials_for_task(harness, task, conversation.as_ref()),
+            );
+            if denials.harness_denial_count() > 0 {
+                result.permission_denials += denials.harness_denial_count();
+                result.permission_denial_tasks += 1;
+            }
+            denial_tasks.push(denials);
         }
 
         let run_record_path = Path::new(&task.run_record_path);
@@ -247,6 +302,12 @@ pub fn record_runs(
         }
     }
 
+    // Only written when the harness can actually detect a refusal, so a missing
+    // file always means "not detected" rather than "nothing was refused".
+    if detects_denials {
+        permission_denials::write_report(iteration_dir, iteration, denial_tasks)?;
+    }
+
     Ok(result)
 }
 
@@ -316,6 +377,34 @@ fn transcript_summary_for_task(harness: Harness, task: &DispatchTask) -> Option<
         .ok()
 }
 
+/// The tool calls the harness refused across a task's transcript(s): the
+/// one-shot events file, or every scripted round's, since each round is its own
+/// CLI invocation with its own refusals. A missing or unparseable transcript
+/// contributes nothing — absence of evidence is not a denial.
+fn permission_denials_for_task(
+    harness: Harness,
+    task: &DispatchTask,
+    conversation: Option<&ConversationRecord>,
+) -> Vec<PermissionDenial> {
+    let adapter = adapter_for(harness);
+    let Some(filename) = adapter.cli_events_filename() else {
+        return Vec::new();
+    };
+    let outputs_dir = Path::new(&task.outputs_dir);
+    let paths: Vec<PathBuf> = match conversation {
+        Some(conversation) => (1..=conversation.delivered_followups.saturating_add(1))
+            .map(|round| outputs_dir.join(format!("turn-{round}")).join(&filename))
+            .collect(),
+        None => vec![outputs_dir.join(&filename)],
+    };
+    paths
+        .iter()
+        .filter(|path| path.exists())
+        .filter_map(|path| adapter.parse_permission_denials(path).ok())
+        .flatten()
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +413,7 @@ mod tests {
     use tempfile::TempDir;
 
     mod conversation;
+    mod permission_denials;
 
     fn jsonl(lines: &[Value]) -> String {
         let body = lines
@@ -412,7 +502,7 @@ mod tests {
             "I could not read the prompt file.",
         );
 
-        let result = record_runs(iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result = record_runs(iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
         assert_eq!(result.skipped_prompt_unread, 1);
         assert_eq!(result.recorded, 0);
@@ -449,7 +539,7 @@ mod tests {
             "Done.",
         );
 
-        let result = record_runs(iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result = record_runs(iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
         assert_eq!(result.recorded, 1);
         assert_eq!(result.skipped_prompt_unread, 0);
@@ -580,7 +670,8 @@ mod tests {
         write_claude_events(&paths[0].outputs_dir, "unused");
         write_claude_events(&paths[1].outputs_dir, "unused");
 
-        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 2);
         assert_eq!(result.missing_transcript, 0);
 
@@ -643,7 +734,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
+        let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 2);
 
         for k in [1u32, 2] {
@@ -669,7 +760,7 @@ mod tests {
         );
         write_codex_events(&paths[0].outputs_dir, "Codex final.");
 
-        let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
+        let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 0);
 
@@ -701,7 +792,7 @@ mod tests {
         );
         write_codex_events(&paths[0].outputs_dir, "Closing summary from Codex.");
 
-        let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
+        let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(
             read_run(&iter, "crash", "with_skill").final_message,
@@ -729,7 +820,8 @@ mod tests {
         });
         fs::write(&paths[0].run_record_path, hand_written.to_string()).unwrap();
 
-        let skipped = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let skipped =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(skipped.recorded, 0);
         assert_eq!(skipped.skipped_existing, 1);
         assert_eq!(
@@ -737,7 +829,8 @@ mod tests {
             "Agent-authored."
         );
 
-        let replaced = record_runs(&iter, Harness::resolve("claude-code").unwrap(), true).unwrap();
+        let replaced =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), true).unwrap();
         assert_eq!(replaced.recorded, 1);
         assert_eq!(read_run(&iter, "crash", "with_skill").final_message, "New.");
     }
@@ -761,7 +854,7 @@ mod tests {
         )
         .unwrap();
 
-        record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
         // Agent-captured completion-event timing wins; not overwritten.
         let timing = read_timing_value(&iter, "crash", "with_skill");
@@ -784,7 +877,8 @@ mod tests {
         );
         // No final-message.md, no transcript.
 
-        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 0);
         assert_eq!(result.skipped_no_final_message, 1);
         assert!(!run_exists(&iter, "crash", "with_skill"));
@@ -805,7 +899,8 @@ mod tests {
         );
         // final-message.md exists but no events file is present.
 
-        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 1);
 
@@ -820,7 +915,8 @@ mod tests {
         let root = TempDir::new().unwrap();
         let iter = dirs(&root);
         // Hand-authored/operator runs have no dispatch.json — the manual path owns them.
-        let err = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap_err();
+        let err =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap_err();
         assert!(
             err.to_string().contains("dispatch.json"),
             "error was: {err}"
@@ -892,7 +988,8 @@ mod tests {
         );
         write_claude_events(&paths[0].outputs_dir, "Closing summary.");
 
-        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(result.missing_transcript, 0);
 
@@ -926,7 +1023,8 @@ mod tests {
         );
         write_claude_events(&paths[0].outputs_dir, "Closing summary from claude -p.");
 
-        let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+        let result =
+            record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
         assert_eq!(result.recorded, 1);
         assert_eq!(
             read_run(&iter, "crash", "with_skill").final_message,

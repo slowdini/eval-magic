@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::ToolInvocation;
 
-use super::TranscriptSummary;
 use super::skill_shadow::PluginShadowReport;
+use super::{PermissionDenial, TranscriptSummary};
 
 /// Transcript parsers: turn a captured CLI events file into tool invocations
 /// and a [`super::TranscriptSummary`].
@@ -59,6 +59,25 @@ impl TranscriptParser {
             TranscriptParser::OpencodeEvents => {
                 super::opencode::transcript::parse_opencode_events_full(path)
             }
+        }
+    }
+
+    /// Whether this parser can identify tool calls the harness refused to run.
+    /// Refusals are encoded differently by every CLI, so detection is opt-in per
+    /// parser; the rest report none rather than guessing from result text.
+    pub(crate) fn surfaces_permission_denials(self) -> bool {
+        matches!(self, TranscriptParser::ClaudeStreamJson)
+    }
+
+    /// Parse the refused tool calls out of the captured events file. Empty for
+    /// parsers that don't surface them — see
+    /// [`surfaces_permission_denials`](Self::surfaces_permission_denials).
+    pub(crate) fn parse_permission_denials(self, path: &Path) -> io::Result<Vec<PermissionDenial>> {
+        match self {
+            TranscriptParser::ClaudeStreamJson => {
+                super::claude_code::stream_json::parse_claude_permission_denials(path)
+            }
+            TranscriptParser::CodexItems | TranscriptParser::OpencodeEvents => Ok(Vec::new()),
         }
     }
 }

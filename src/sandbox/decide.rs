@@ -16,6 +16,12 @@ use super::policy::{
     is_write_tool, path_arg, resolve_path,
 };
 
+/// Prefix every guard denial reason carries. Harnesses surface the reason back
+/// to the agent verbatim, so it also reaches the transcript — which is what lets
+/// ingest tell a guard block apart from a harness permission refusal instead of
+/// reporting the same denial twice.
+pub const GUARD_REASON_PREFIX: &str = "eval guard: ";
+
 /// The staged marker file that arms the guard. The guard is a no-op unless this
 /// file exists, is active, and has not expired — so a crashed run that never tore
 /// the hook down can't silently block writes in the user's next interactive
@@ -136,7 +142,7 @@ pub(crate) fn decide_with_cwd(
         {
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: {tool_name} to {p} is outside the eval sandbox (allowed: {})",
+                    "{GUARD_REASON_PREFIX}{tool_name} to {p} is outside the eval sandbox (allowed: {})",
                     roots.join(", ")
                 ),
                 vec![resolve_path(p, invocation_cwd).display().to_string()],
@@ -150,8 +156,8 @@ pub(crate) fn decide_with_cwd(
         if paths.is_empty() {
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: blocked {tool_name} because no patch target path could be \
-                     determined"
+                    "{GUARD_REASON_PREFIX}blocked {tool_name} because no patch target path could \
+                     be determined"
                 ),
                 Vec::new(),
             );
@@ -166,7 +172,7 @@ pub(crate) fn decide_with_cwd(
                 .collect();
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: {tool_name} target {path} is outside the eval sandbox \
+                    "{GUARD_REASON_PREFIX}{tool_name} target {path} is outside the eval sandbox \
                      (allowed: {})",
                     roots.join(", ")
                 ),
@@ -184,7 +190,7 @@ pub(crate) fn decide_with_cwd(
         if let Some(classification) = classify_bash_with_cwd(command, &roots, invocation_cwd) {
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: blocked {tool_name} ({}) — runs outside the eval sandbox",
+                    "{GUARD_REASON_PREFIX}blocked {tool_name} ({}) — runs outside the eval sandbox",
                     classification.reason
                 ),
                 classification.resolved_targets,

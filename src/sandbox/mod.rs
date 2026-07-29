@@ -17,7 +17,7 @@ pub mod policy;
 mod shell_targets;
 
 pub(crate) use decide::marker_is_armed;
-pub use decide::{GuardDecision, GuardMarker, decide};
+pub use decide::{GUARD_REASON_PREFIX, GuardDecision, GuardMarker, decide};
 pub(crate) use guard::GuardDenialRecord;
 pub(crate) use guard::parse_tool_call;
 pub use guard::read_marker;

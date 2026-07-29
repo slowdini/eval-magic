@@ -5,8 +5,8 @@
 //! `timing.json`), raw per-run diff scope, and the skill-invocation determination
 //! per condition; computes mean/stddev and the `a - b` delta; accumulates validity
 //! warnings (mixed timing sources, sub-100% invocation rate, stray-write
-//! violations + live-source reads, guard denials, plugin shadows); and writes
-//! `benchmark.json`.
+//! violations + live-source reads, guard denials, permission-denied tool calls,
+//! plugin shadows); and writes `benchmark.json`.
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -22,6 +22,7 @@ use crate::pipeline::error::PipelineError;
 use crate::pipeline::git_isolation;
 use crate::pipeline::guard_denials::GuardDenialsReport;
 use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::permission_denials;
 use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -354,6 +355,7 @@ pub fn aggregate(
     git_isolation::collect_warnings(iteration_dir, &mut validity_warnings);
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
     collect_guard_denial_warnings(iteration_dir, &mut validity_warnings);
+    permission_denials::collect_warnings(iteration_dir, &mut validity_warnings);
     collect_shadow_warnings(iteration_dir, conditions, &mut validity_warnings);
 
     let has_diff_scopes = diff_scope_by_condition

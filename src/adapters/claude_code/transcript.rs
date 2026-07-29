@@ -126,6 +126,27 @@ pub(crate) fn extract_invocations(records: &[TranscriptRecord]) -> Vec<ToolInvoc
     invocations
 }
 
+/// Stringified `tool_result` content by `tool_use_id`, for callers that need a
+/// tool call's outcome text without walking the content blocks themselves (the
+/// refusal text behind a permission denial).
+pub(crate) fn tool_result_texts(records: &[TranscriptRecord]) -> HashMap<String, String> {
+    let mut texts = HashMap::new();
+    for record in records {
+        if record.record_type.as_deref() != Some("user") {
+            continue;
+        }
+        for block in content_blocks(&record.message) {
+            if block.get("type").and_then(Value::as_str) != Some("tool_result") {
+                continue;
+            }
+            if let Some(id) = block.get("tool_use_id").and_then(Value::as_str) {
+                texts.insert(id.to_string(), stringify_result(block.get("content")));
+            }
+        }
+    }
+    texts
+}
+
 pub(crate) fn extract_events(records: &[TranscriptRecord]) -> Vec<TranscriptEvent> {
     let invocations = extract_invocations(records);
     let mut tool_index = 0usize;
