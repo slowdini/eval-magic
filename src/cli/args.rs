@@ -439,6 +439,11 @@ pub struct RunArgs {
     /// unguarded-harness preflight warning. Unguarded, out-of-bounds writes are
     /// only *detected* after the fact by `detect-stray-writes` (folded into
     /// `ingest`), never blocked.
+    ///
+    /// Dispatches deliberately run with relaxed harness permissions so the
+    /// agent-under-test can actually execute commands, which makes the guard
+    /// the only enforcement boundary. Opting out therefore leaves the dispatch
+    /// with no boundary at all, not merely a weaker one.
     #[arg(long, conflicts_with = "guard")]
     pub no_guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the

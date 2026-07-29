@@ -707,7 +707,7 @@ jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // 
     response_base="${response_path%.json}"
     mkdir -p "$(dirname "$response_path")"
     model_arg=""; [ -n "$model" ] && model_arg="--model $model"
-    cd "/work/iter-1" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \
+    cd "/work/iter-1" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions $model_arg \
       "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
       </dev/null \
       > "$response_base.claude-events.jsonl" \

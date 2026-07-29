@@ -72,19 +72,27 @@ Then run `ingest{target_args} --iteration {iteration} --harness claude-code`.'''
 # --output-last-message, so the final message is recovered from the stream-json
 # `result` event. `</dev/null` detaches stdin so a permission prompt cannot
 # block on a TTY and piped task data cannot become extra prompt context.
+#
+# `--permission-mode bypassPermissions`, not `acceptEdits`: acceptEdits
+# auto-approves file edits but NOT Bash, and with stdin detached there is
+# nobody to approve, so every non-trivial Bash call is auto-denied. That is
+# invisible — nothing fails and the run grades normally — while both arms are
+# silently reduced to static reasoning for any skill whose behavior involves
+# running things. The write guard, not the permission mode, is the boundary
+# (see docs/claude-notes.md → "Permission mode").
 exec_template = '''
-cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \
+cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
   2> <outputs_dir>/claude-stderr.log'''
 parallel_command_template = '''
-    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \
+    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions{model_arg} \
       "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
       </dev/null \
       > "$outputs_dir/claude-events.jsonl" \
       2> "$outputs_dir/claude-stderr.log"'''
-judge_command_template = '    cd "{cwd}" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \'
+judge_command_template = '    cd "{cwd}" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions $model_arg \'
 manifest_template = '''
 After all dispatches (Claude Code):
 
@@ -105,7 +113,7 @@ Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `ou
 
 [conversation]
 resume_exec_template = '''
-cd <eval-root> && claude -p --resume {session_arg} --output-format stream-json --verbose --permission-mode acceptEdits{model_arg} \
+cd <eval-root> && claude -p --resume {session_arg} --output-format stream-json --verbose --permission-mode bypassPermissions{model_arg} \
   {prompt_arg} \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
