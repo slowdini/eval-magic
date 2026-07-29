@@ -30,8 +30,9 @@ Existing nonempty response files are skipped; delete one to dispatch that judge 
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | .dispatch_prompt_path, "\u0000", .response_path, "\u0000", ("model=" + (.model // "")), "\u0000"' judge-tasks.json | \
-  xargs -0 -P "$JOBS" -n 3 sh -c '
+jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // ""))' judge-tasks.json \
+  | tr '\n' '\0' \
+  | xargs -0 -P "$JOBS" -n 3 sh -c '
     prompt_path="$1"
     response_path="$2"
     model="${3#model=}"

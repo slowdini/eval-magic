@@ -26,8 +26,9 @@ Parallel dispatch from this iteration directory:
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | .eval_root, "\u0000", .dispatch_prompt_path, "\u0000", .outputs_dir, "\u0000"' dispatch.json | \
-  xargs -0 -P "$JOBS" -n 3 sh -c '
+jq -r '.tasks[] | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \
+  | tr '\n' '\0' \
+  | xargs -0 -P "$JOBS" -n 3 sh -c '
     eval_root="$1"
     prompt_path="$2"
     outputs_dir="$3"
