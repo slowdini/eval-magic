@@ -196,6 +196,14 @@ pub(crate) fn harness_run_preflight<'a>(
             )
         });
     }
+    if adapter.cli_events_filename().is_some() && !adapter.surfaces_permission_denials() {
+        warnings.push(format!(
+            "--harness {label} cannot tell a permission-denied tool result from an ordinary tool \
+             error — a dispatch whose calls were refused (and so fell back to static reasoning) \
+             will not be flagged in benchmark.json validity_warnings. Read the transcripts before \
+             trusting a run whose evals depend on the agent actually executing something."
+        ));
+    }
     if (opts.agent_model.is_some() || opts.judge_model.is_some())
         && adapter.cli_model_flag().is_none()
     {
@@ -426,6 +434,38 @@ mod tests {
                     .any(|w| w.contains("transcript parser")),
                 "no transcript-parser warning: {:?}",
                 preflight.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_names_the_fallback_when_denials_cannot_be_detected() {
+        // Claude Code reports refusals structurally, so it warns about nothing.
+        // The others cannot, and a silently refused run is invisible without the
+        // signal — so preflight says so once, up front, naming the fallback.
+        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        assert!(
+            !preflight
+                .warnings
+                .iter()
+                .any(|w| w.contains("permission-denied")),
+            "{:?}",
+            preflight.warnings
+        );
+
+        for name in ["codex", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+            let warning = preflight
+                .warnings
+                .iter()
+                .find(|w| w.contains("permission-denied"))
+                .unwrap_or_else(|| panic!("{name}: {:?}", preflight.warnings));
+            assert!(warning.contains(name), "names the harness: {warning}");
+            assert!(
+                warning.contains("validity_warnings"),
+                "names the fallback: {warning}"
             );
         }
     }

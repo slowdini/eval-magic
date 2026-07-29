@@ -15,6 +15,7 @@ mod git_isolation;
 pub mod grade;
 pub(crate) mod guard_denials;
 pub mod io;
+pub(crate) mod permission_denials;
 pub mod record_runs;
 pub mod slots;
 

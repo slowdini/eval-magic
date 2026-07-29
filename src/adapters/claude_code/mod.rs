@@ -52,4 +52,33 @@ mod tests {
         assert_eq!(summary.tool_invocations.len(), 1);
         assert_eq!(summary.tool_invocations[0].name, "Bash");
     }
+
+    #[test]
+    fn claude_parse_permission_denials_reads_the_result_events_refusals() {
+        use serde_json::json;
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("claude-events.jsonl");
+        let lines = [
+            json!({"type": "user", "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "toolu_1", "content": "This command requires approval", "is_error": true}
+            ]}}),
+            json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 12,
+                "permission_denials": [{"tool_name": "Bash", "tool_use_id": "toolu_1", "tool_input": {"command": "bun run repro.ts"}}]}),
+        ];
+        let body = lines
+            .iter()
+            .map(|l| l.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&path, format!("{body}\n")).unwrap();
+
+        let a = adapter_for(Harness::resolve("claude-code").unwrap());
+        let denials = a.parse_permission_denials(&path).unwrap();
+        assert_eq!(denials.len(), 1);
+        assert_eq!(denials[0].tool, "Bash");
+        assert_eq!(
+            denials[0].reason.as_deref(),
+            Some("This command requires approval")
+        );
+    }
 }

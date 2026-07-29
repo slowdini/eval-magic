@@ -23,6 +23,7 @@ pub enum SchemaName {
     Grading,
     StrayWrites,
     GuardDenials,
+    PermissionDenials,
     Benchmark,
     JudgeTasks,
     CommandCheck,
@@ -33,12 +34,13 @@ pub enum SchemaName {
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 11] = [
+    const ALL: [SchemaName; 12] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
         SchemaName::GuardDenials,
+        SchemaName::PermissionDenials,
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
         SchemaName::CommandCheck,
@@ -56,6 +58,7 @@ impl SchemaName {
             SchemaName::Grading => "grading",
             SchemaName::StrayWrites => "stray-writes",
             SchemaName::GuardDenials => "guard-denials",
+            SchemaName::PermissionDenials => "permission-denials",
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
             SchemaName::CommandCheck => "command-check",
@@ -74,6 +77,9 @@ impl SchemaName {
             SchemaName::StrayWrites => include_str!("../../schema/stray-writes.schema.json"),
             SchemaName::GuardDenials => {
                 include_str!("../../schema/guard-denials.schema.json")
+            }
+            SchemaName::PermissionDenials => {
+                include_str!("../../schema/permission-denials.schema.json")
             }
             SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
             SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),

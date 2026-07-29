@@ -61,7 +61,7 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
     )
     .unwrap();
 
-    let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
+    let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
     assert_eq!(result.recorded, 1);
     assert_eq!(result.missing_transcript, 0);
 
@@ -130,7 +130,7 @@ fn assembles_multi_turn_run_by_summing_independent_claude_round_timing() {
     )
     .unwrap();
 
-    let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+    let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
     assert_eq!(result.recorded, 1);
     assert_eq!(result.missing_transcript, 0);
 
@@ -207,7 +207,7 @@ fn skips_multi_turn_run_when_conversation_shows_failed_prompt_read() {
     )
     .unwrap();
 
-    let result = record_runs(&iter, Harness::resolve("claude-code").unwrap(), false).unwrap();
+    let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
 
     assert_eq!(result.skipped_prompt_unread, 1);
     assert_eq!(result.recorded, 0);
@@ -261,7 +261,7 @@ fn does_not_record_partial_timing_when_a_conversation_round_transcript_is_missin
     )
     .unwrap();
 
-    let result = record_runs(&iter, Harness::resolve("codex").unwrap(), false).unwrap();
+    let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
 
     assert_eq!(result.recorded, 1);
     assert_eq!(result.missing_transcript, 1);

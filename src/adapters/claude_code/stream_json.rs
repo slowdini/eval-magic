@@ -7,9 +7,10 @@
 //! with the [`transcript`](super::transcript) record
 //! types. The differences are all in the envelope: there are no per-line
 //! timestamps, and a terminal `result` event carries the authoritative final
-//! text, wall-clock duration, and token usage. `system`, `rate_limit_event`, and
-//! any other non-message events are ignored (they don't deserialize into an
-//! assistant/user record, so the shared extractor skips them).
+//! text, wall-clock duration, token usage, and the tool calls the CLI refused to
+//! run. `system`, `rate_limit_event`, and any other non-message events are
+//! ignored (they don't deserialize into an assistant/user record, so the shared
+//! extractor skips them).
 
 use std::io;
 use std::path::Path;
@@ -19,11 +20,13 @@ use serde_json::Value;
 
 use crate::core::ToolInvocation;
 
-use crate::adapters::TranscriptSummary;
-use crate::adapters::transcript::{TranscriptEvent, read_jsonl};
+use crate::adapters::transcript::{
+    PermissionDenial, TranscriptEvent, TranscriptSummary, read_jsonl,
+};
 
 use super::transcript::{
     TranscriptRecord, UsageRecord, extract_events, extract_invocations, last_assistant_text,
+    tool_result_texts,
 };
 
 /// The terminal `{"type":"result", …}` event of a `-p` stream-json run.
@@ -37,6 +40,42 @@ struct ResultEvent {
     is_error: Option<bool>,
     #[serde(default)]
     usage: Option<UsageRecord>,
+    /// Tool calls the CLI refused to run. Absent on builds that predate the
+    /// field, empty when everything the agent asked for was permitted.
+    #[serde(default)]
+    permission_denials: Vec<DenialEntry>,
+}
+
+/// One refused tool call inside [`ResultEvent::permission_denials`].
+#[derive(Debug, serde::Deserialize)]
+struct DenialEntry {
+    #[serde(default)]
+    tool_name: String,
+    #[serde(default)]
+    tool_use_id: Option<String>,
+    #[serde(default)]
+    tool_input: Option<Value>,
+}
+
+/// Read the stream into records, keeping the terminal `result` event separately.
+/// Lines that don't shape into a record are skipped rather than failing the
+/// parse.
+fn read_stream(
+    path: &Path,
+) -> io::Result<(Vec<Value>, Vec<TranscriptRecord>, Option<ResultEvent>)> {
+    let values = read_jsonl::<Value>(path)?;
+    let mut records: Vec<TranscriptRecord> = Vec::new();
+    let mut result_event: Option<ResultEvent> = None;
+    for value in &values {
+        let Ok(record) = TranscriptRecord::deserialize(value) else {
+            continue;
+        };
+        if record.record_type.as_deref() == Some("result") {
+            result_event = ResultEvent::deserialize(value).ok();
+        }
+        records.push(record);
+    }
+    Ok((values, records, result_event))
 }
 
 /// Parse the event stream into ordered tool invocations. Reuses the shared
@@ -50,19 +89,7 @@ pub fn parse_claude_stream_json(path: &Path) -> io::Result<Vec<ToolInvocation>> 
 /// missing or errored `result` the final text falls back to the last assistant
 /// message's text, and duration/tokens fall back to `None`.
 pub fn parse_claude_stream_json_full(path: &Path) -> io::Result<TranscriptSummary> {
-    let values = read_jsonl::<Value>(path)?;
-    let mut records: Vec<TranscriptRecord> = Vec::new();
-    let mut result_event: Option<ResultEvent> = None;
-    for value in &values {
-        // Skip lines that don't shape into records rather than failing the parse.
-        let Ok(record) = TranscriptRecord::deserialize(value) else {
-            continue;
-        };
-        if record.record_type.as_deref() == Some("result") {
-            result_event = ResultEvent::deserialize(value).ok();
-        }
-        records.push(record);
-    }
+    let (values, records, result_event) = read_stream(path)?;
 
     let total_tokens = result_event
         .as_ref()
@@ -108,6 +135,50 @@ pub fn parse_claude_stream_json_full(path: &Path) -> io::Result<TranscriptSummar
         duration_ms,
         final_text,
     })
+}
+
+/// Parse the tool calls the CLI refused to run. The terminal `result` event
+/// reports them structurally in `permission_denials` — no refusal-text matching
+/// needed — and each entry's refusal reason is recovered from the `tool_result`
+/// block its `tool_use_id` points at. Eval write-guard blocks land here too: the
+/// guard denies through a PreToolUse hook, which Claude Code reports like any
+/// other refusal, so the reason is kept verbatim for the pipeline to attribute.
+///
+/// An absent `permission_denials` field (builds predating it), a run where
+/// nothing was refused, and a run that never reached a `result` event all yield
+/// an empty vec.
+pub fn parse_claude_permission_denials(path: &Path) -> io::Result<Vec<PermissionDenial>> {
+    let (_, records, result_event) = read_stream(path)?;
+    let Some(result_event) = result_event else {
+        return Ok(Vec::new());
+    };
+    if result_event.permission_denials.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let reasons = tool_result_texts(&records);
+    Ok(result_event
+        .permission_denials
+        .iter()
+        .map(|entry| {
+            let mut input_keys = entry
+                .tool_input
+                .as_ref()
+                .and_then(Value::as_object)
+                .map(|input| input.keys().cloned().collect::<Vec<_>>())
+                .unwrap_or_default();
+            input_keys.sort();
+            PermissionDenial {
+                tool: entry.tool_name.clone(),
+                reason: entry
+                    .tool_use_id
+                    .as_deref()
+                    .and_then(|id| reasons.get(id))
+                    .cloned(),
+                input_keys,
+            }
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -266,5 +337,124 @@ mod tests {
         assert_eq!(summary.duration_ms, None);
         assert_eq!(summary.total_tokens, None);
         assert_eq!(summary.final_text, Some("incomplete".into()));
+    }
+
+    #[test]
+    fn permission_denials_carry_tool_refusal_reason_and_sorted_input_keys() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_ok", "name": "Read", "input": {"file_path": "/env/a.txt"}},
+                    {"type": "tool_use", "id": "toolu_no", "name": "Bash", "input": {"command": "TZ='America/Los_Angeles' node -e \"1\"", "description": "shifted clock"}}
+                ]}}),
+                json!({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_ok", "content": "contents", "is_error": false},
+                    {"type": "tool_result", "tool_use_id": "toolu_no", "content": "This command requires approval", "is_error": true}
+                ]}}),
+                json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 12, "usage": usage(),
+                "permission_denials": [
+                    {"tool_name": "Bash", "tool_use_id": "toolu_no", "tool_input": {"command": "TZ='America/Los_Angeles' node -e \"1\"", "description": "shifted clock"}}
+                ]}),
+            ],
+        );
+
+        let denials = super::parse_claude_permission_denials(&path).unwrap();
+        assert_eq!(denials.len(), 1);
+        assert_eq!(denials[0].tool, "Bash");
+        assert_eq!(
+            denials[0].reason.as_deref(),
+            Some("This command requires approval")
+        );
+        assert_eq!(denials[0].input_keys, vec!["command", "description"]);
+    }
+
+    #[test]
+    fn no_permission_denials_when_the_result_event_reports_none() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [
+                    {"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}
+                ]}}),
+                json!({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_1", "content": "a.txt", "is_error": false}
+                ]}}),
+                // A build that predates the field omits it entirely; an allowed
+                // run reports an empty array. Both mean "nothing was refused".
+                json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 12, "usage": usage()}),
+            ],
+        );
+        assert!(
+            super::parse_claude_permission_denials(&path)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn no_permission_denials_when_the_run_never_reached_a_result_event() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(&path, &[json!({"type": "system", "subtype": "init"})]);
+        assert!(
+            super::parse_claude_permission_denials(&path)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn a_denial_without_a_matching_tool_result_keeps_the_tool_and_drops_the_reason() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 12, "usage": usage(),
+                "permission_denials": [
+                    {"tool_name": "Write", "tool_use_id": "toolu_absent", "tool_input": {"file_path": "/tmp/x", "content": "…"}}
+                ]}),
+            ],
+        );
+
+        let denials = super::parse_claude_permission_denials(&path).unwrap();
+        assert_eq!(denials.len(), 1);
+        assert_eq!(denials[0].tool, "Write");
+        assert_eq!(denials[0].reason, None);
+        assert_eq!(denials[0].input_keys, vec!["content", "file_path"]);
+    }
+
+    #[test]
+    fn a_guard_blocked_call_is_reported_with_the_guard_reason_verbatim() {
+        // The eval write guard denies through a PreToolUse hook, which Claude
+        // Code reports in `permission_denials` like any other refusal. Keeping
+        // the reason verbatim is what lets the pipeline attribute it to the
+        // guard instead of double-reporting it.
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                json!({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "toolu_g", "content": "eval guard: Write to /etc/passwd is outside the eval sandbox", "is_error": true}
+                ]}}),
+                json!({"type": "result", "subtype": "success", "is_error": false, "result": "Done", "duration_ms": 12, "usage": usage(),
+                "permission_denials": [
+                    {"tool_name": "Write", "tool_use_id": "toolu_g", "tool_input": {"file_path": "/etc/passwd"}}
+                ]}),
+            ],
+        );
+
+        let denials = super::parse_claude_permission_denials(&path).unwrap();
+        assert_eq!(denials.len(), 1);
+        assert_eq!(
+            denials[0].reason.as_deref(),
+            Some("eval guard: Write to /etc/passwd is outside the eval sandbox")
+        );
     }
 }

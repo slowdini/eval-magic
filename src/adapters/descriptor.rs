@@ -223,6 +223,27 @@ impl TranscriptSection {
             (None, None) => Err(unwired_error()),
         }
     }
+
+    /// Whether the declared tier can identify refused tool calls. Only named
+    /// parsers can: the declarative `extract` tier describes tool calls, not the
+    /// harness's permission model.
+    pub(crate) fn surfaces_permission_denials(&self) -> bool {
+        self.parser
+            .is_some_and(super::capabilities::TranscriptParser::surfaces_permission_denials)
+    }
+
+    /// Parse the refused tool calls out of the events file. Unlike
+    /// [`parse`](Self::parse), a tier without the capability returns an empty vec
+    /// rather than an error — no detection is a supported fallback.
+    pub(crate) fn parse_permission_denials(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Vec<super::PermissionDenial>> {
+        match &self.parser {
+            Some(parser) => parser.parse_permission_denials(path),
+            None => Ok(Vec::new()),
+        }
+    }
 }
 
 fn unwired_error() -> std::io::Error {

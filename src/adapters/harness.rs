@@ -29,8 +29,8 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
-use super::TranscriptSummary;
 use super::skill_shadow::PluginShadowReport;
+use super::{PermissionDenial, TranscriptSummary};
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
@@ -231,6 +231,25 @@ pub trait HarnessAdapter {
     /// which routes the meta-check to the LLM-judge fallback.
     fn transcript_skill_invocation(&self) -> Option<(String, String)> {
         Some(("Skill".to_string(), "skill".to_string()))
+    }
+
+    /// **Enhancement: transcript parser.** Whether this harness's transcript
+    /// identifies tool calls it refused to run. `false` for harnesses whose
+    /// refusals are not distinguishable from ordinary tool errors — `ingest`
+    /// then writes no `permission-denials.json` and `aggregate` raises no
+    /// permission-denial validity warning, so a silently degraded run is only
+    /// visible in the transcripts.
+    fn surfaces_permission_denials(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: transcript parser.** The refused tool calls in a captured
+    /// events file. Unlike [`parse_cli_events`](Self::parse_cli_events) the
+    /// default is an empty vec, not an `Unsupported` error: no detection is a
+    /// supported fallback, and the pipeline treats "none reported" and "cannot
+    /// report" alike rather than failing ingest.
+    fn parse_permission_denials(&self, _path: &Path) -> io::Result<Vec<PermissionDenial>> {
+        Ok(Vec::new())
     }
 
     // ── Enhancement: model flag (defaulted) ──────────────────────────────────
@@ -500,6 +519,31 @@ mod tests {
             adapter_for(Harness::resolve("opencode").unwrap()).transcript_skill_invocation(),
             Some(("skill".to_string(), "name".to_string()))
         );
+    }
+
+    #[test]
+    fn only_claude_surfaces_permission_denials() {
+        // Each harness encodes a refused tool call differently, so detection is
+        // opt-in per parser. Harnesses without it emit nothing rather than
+        // guessing — `aggregate` then raises no permission-denial warning.
+        assert!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_permission_denials()
+        );
+        assert!(!adapter_for(Harness::resolve("codex").unwrap()).surfaces_permission_denials());
+        assert!(!adapter_for(Harness::resolve("opencode").unwrap()).surfaces_permission_denials());
+    }
+
+    #[test]
+    fn harnesses_without_denial_detection_parse_no_denials() {
+        // The fallback is an empty vec, not an error: a run on such a harness
+        // still ingests normally, it just carries no denial signal.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
+        for name in ["codex", "opencode"] {
+            let adapter = adapter_for(Harness::resolve(name).unwrap());
+            assert_eq!(adapter.parse_permission_denials(&path).unwrap(), Vec::new());
+        }
     }
 
     #[test]

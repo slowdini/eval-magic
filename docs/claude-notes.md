@@ -62,6 +62,28 @@ disable it). Override the mode for those hosts with a `--harness-file` descripto
 four `[dispatch]`/`[conversation]` templates; field-level merge means nothing else has to be
 restated.
 
+Relaxing the default closes the common case, not the class — a deny rule, a managed setting, or an
+operator-overridden mode still refuses calls — so refusals are detected and reported rather than
+assumed away (see "Permission denials" below).
+
+## Permission denials
+
+Verified against `claude` **2.1.220**:
+
+- The terminal `result` event carries a structured `permission_denials` array —
+  `{"tool_name","tool_use_id","tool_input"}` per refused call. No refusal-text matching needed.
+- The matching `tool_result` block carries the refusal text with `is_error: true` (e.g.
+  `"This command requires approval"`), recovered by `tool_use_id` as the denial's `reason`.
+- **A `PreToolUse` hook deny also populates `permission_denials`, including under
+  `--permission-mode bypassPermissions`** — probed with a deny hook, whose
+  `permissionDecisionReason` came back as the `tool_result` content. The eval write guard denies
+  exactly that way, so its blocks appear here too and are attributed by the `eval guard: ` reason
+  prefix so `aggregate` does not warn about one denial twice.
+- Builds predating the field simply omit it, which degrades to "no denials reported".
+
+`ingest` turns this into `permission-denials.json` and `aggregate` into one validity warning per
+affected task; see [progressive-enhancements.md](progressive-enhancements.md).
+
 ## Transcript (stream-json)
 
 `outputs/claude-events.jsonl` is the `-p` stream-json stream. `assistant`/`user` events wrap full

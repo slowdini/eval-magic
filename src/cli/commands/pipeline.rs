@@ -157,8 +157,9 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
 /// `dispatch.json`.
 pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::record_runs(&dir, ctx.harness, args.overwrite)?;
+    let iteration = resolve_iteration(&ctx, args.iteration)?;
+    let dir = iteration_dir(&ctx, Some(iteration))?;
+    let result = pipeline::record_runs(&dir, iteration, ctx.harness, args.overwrite)?;
 
     println!(
         "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, skipped (incomplete conversation): {}, missing transcript: {}",
@@ -176,6 +177,9 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         eprintln!("{warning}");
     }
     if let Some(warning) = result.incomplete_conversation_warning() {
+        eprintln!("{warning}");
+    }
+    if let Some(warning) = result.permission_denial_warning() {
         eprintln!("{warning}");
     }
     Ok(())

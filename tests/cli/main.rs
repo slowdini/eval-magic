@@ -19,5 +19,6 @@ mod harness;
 mod harness_init;
 mod init;
 mod package;
+mod permission_denials;
 mod stray_writes;
 mod workspace;

@@ -39,4 +39,4 @@ pub use registry::{
 pub use skill_shadow::{
     PluginShadowReport, ShadowSource, format_shadow_banner, shadow_validity_warnings,
 };
-pub use transcript::TranscriptSummary;
+pub use transcript::{PermissionDenial, TranscriptSummary};

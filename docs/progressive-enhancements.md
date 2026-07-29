@@ -137,6 +137,21 @@ extract primitives, it's a code capability, not a bigger DSL.
 `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
 event — a deterministic `__skill_invoked` meta-check.
 
+**Sub-capability: permission-denied tool results.** A refused tool call is recorded in the
+transcript like any other, so on its own it is invisible: the dispatch exits 0, the run grades
+normally, and a `transcript_check` can match an attempt that never executed. A parser that can tell
+a refusal from an ordinary tool error makes `ingest` write `permission-denials.json` and `aggregate`
+warn once per affected task. *Why harness-specific:* refusals are not a shared shape — Claude Code
+reports them structurally in the terminal `result` event's `permission_denials`, while other CLIs
+collapse them into result text indistinguishable from a tool error, and detecting those by regex
+would invent false positives. *Fallback:* no report and no warning — a run that degraded to static
+reasoning is only visible in the transcripts, which `run` preflight states once naming that
+fallback. *Capability:* carried by `transcript.parser`, not a separate descriptor field — only
+`claude-stream-json` surfaces denials today (`TranscriptParser::surfaces_permission_denials`,
+pinned across harnesses in `src/adapters/harness.rs`). The eval write guard denies through the same
+permission mechanism, so its blocks land in the report as well; they are attributed by the
+`eval guard: ` reason prefix and excluded from the warning so one denial is not reported twice.
+
 *Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
 `command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
 unrecorded, records are assembled from `outputs/final-message.md` or by hand, and the meta-check
