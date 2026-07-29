@@ -37,10 +37,10 @@ pub fn run() -> anyhow::Result<()> {
     if !is_guard_hook {
         crate::adapters::registry::init_registry(cli.harness_file.as_deref().map(Path::new))?;
     }
-    dispatch(cli.command)
+    dispatch(cli.command, cli.harness_file.as_deref())
 }
 
-fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
+fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Result<()> {
     // No subcommand means the default `run` action.
     let command = command.unwrap_or(Commands::Run(RunArgs {
         common: CommonArgs {
@@ -84,7 +84,7 @@ fn dispatch(command: Option<Commands>) -> anyhow::Result<()> {
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         Commands::Grade(args) => run_grade(args),
         Commands::Aggregate(args) => run_aggregate(args),
-        Commands::Harness(args) => run_harness(args),
+        Commands::Harness(args) => run_harness(args, harness_file),
         Commands::Snapshot(args) => run_snapshot(args),
         Commands::Teardown(args) => run_teardown(args),
         Commands::PromoteBaseline(args) => run_promote_baseline(args),

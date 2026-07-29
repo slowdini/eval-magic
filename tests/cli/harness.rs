@@ -210,6 +210,37 @@ fn harness_lint_passes_a_valid_file() {
         .stdout(contains("✓"));
 }
 
+/// `--harness-file` already names exactly one descriptor, so requiring the
+/// same path again as a positional is pure ceremony. With neither, the error
+/// names both ways to supply a target.
+#[test]
+fn harness_lint_falls_back_to_the_harness_file_when_no_target_is_given() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("cool.toml");
+    fs::write(&file, "label = \"cool-custom-harness\"\n").unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .arg("--harness-file")
+        .arg(&file)
+        .args(["harness", "lint"])
+        .assert()
+        .success()
+        .stdout(contains("✓").and(contains("cool.toml")));
+}
+
+#[test]
+fn harness_lint_without_a_target_or_harness_file_explains_both_options() {
+    let tmp = TempDir::new().unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .assert()
+        .failure()
+        .stderr(contains("--harness-file"));
+}
+
 #[test]
 fn harness_lint_reports_schema_violations() {
     let tmp = TempDir::new().unwrap();

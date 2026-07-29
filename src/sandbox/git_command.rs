@@ -268,7 +268,7 @@ pub(super) fn classify_git_commands(
                 }
                 segment.clear();
             }
-            ShellToken::OutputRedirect | ShellToken::InputRedirect => {}
+            ShellToken::OutputRedirect | ShellToken::FdDuplicate | ShellToken::InputRedirect => {}
         }
     }
     classify_git_segment(&segment, lexed.malformed, allowed_roots, invocation_cwd)

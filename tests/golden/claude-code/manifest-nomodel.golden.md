@@ -14,7 +14,7 @@ Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claud
 
 ```bash
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
@@ -25,14 +25,15 @@ Parallel dispatch from this iteration directory:
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | .eval_root, "\u0000", .dispatch_prompt_path, "\u0000", .outputs_dir, "\u0000"' dispatch.json | \
-  xargs -0 -P "$JOBS" -n 3 sh -c '
+jq -r '.tasks[] | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \
+  | tr '\n' '\0' \
+  | xargs -0 -P "$JOBS" -n 3 sh -c '
     eval_root="$1"
     prompt_path="$2"
     outputs_dir="$3"
     mkdir -p "$outputs_dir"
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions \
       "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
       </dev/null \
       > "$outputs_dir/claude-events.jsonl" \
