@@ -10,6 +10,7 @@
 //! placeholders the renderer fills with run-specific values. The generated
 //! `RUNBOOK.md` itself is a workspace artifact and is not version controlled.
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::adapters::{CliDispatchContext, CliJudgeContext, RUNBOOK_TEMPLATE, adapter_for};
@@ -36,6 +37,7 @@ pub(crate) struct RunbookContext<'a> {
     pub target_args: &'a str,
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
 }
 
 /// Render `RUNBOOK.md` for a run: fill the shared runbook template's
@@ -82,6 +84,7 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         target_args: ctx.target_args,
         iteration: ctx.iteration,
         agent_model: ctx.agent_model,
+        agent_env: ctx.agent_env,
     });
     let dispatch_recipe = if ctx.multi_turn_tasks == 0 {
         one_shot_recipe
@@ -175,6 +178,12 @@ fn render(template: &str, vars: &[(&str, &str)]) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+    use std::sync::LazyLock;
+
+    fn empty_env() -> &'static BTreeMap<String, String> {
+        static EMPTY: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
+        &EMPTY
+    }
 
     #[test]
     fn runbook_is_human_followed_cli_recipe() {
@@ -192,6 +201,7 @@ mod tests {
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             guard: false,
             agent_model: Some("gpt-5-mini"),
+            agent_env: empty_env(),
         };
         let book = build_runbook(&ctx);
 
@@ -277,6 +287,7 @@ mod tests {
             target_args: " --skill /tmp/widget-skill",
             guard: false,
             agent_model: None,
+            agent_env: empty_env(),
         });
         assert!(book.contains("eval-magic dispatch-task"));
         assert!(book.contains("conversation.json"));

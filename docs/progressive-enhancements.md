@@ -18,7 +18,11 @@ One-shot evals and judges dispatch through the harness CLI, one subprocess per t
 use `eval-magic dispatch-task`, one subprocess per round while resuming one harness-native session
 and one `eval_root`. The **generated artifacts are the runtime source of truth** for how to
 dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` carrying the exact per-task recipe
-for the selected harness — hand-maintained docs never carry command recipes.
+for the selected harness — hand-maintained docs never carry command recipes. Eval-agent environment
+defaults are harness-independent: `[dispatch.env]` layers merge by key and repeatable
+`run --agent-env KEY=VALUE` entries override them. The resolved map is exported by one-shot and
+scripted recipes and recorded in `conditions.json` / `dispatch.json`; judges and runner-owned
+`command_check` subprocesses remain separate.
 
 ## The baseline contract
 
@@ -325,13 +329,15 @@ carry exact per-task commands (including parallel and judge variants).
 `run` preflight warns naming this limitation when the descriptor declares no `exec_template`
 (`has_dispatch_recipes()`).
 
-*Descriptor fields:* the `[dispatch]` table — `exec_template`, `parallel_command_template`,
+*Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `parallel_command_template`,
 `judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
 `guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
 for eval-agent dispatches; judge commands deliberately render empty `guard_args` because they run
-outside the guarded task envs. The shared jq/xargs parallel and judge scaffolds stay code
-(`src/adapters/cli_command.rs`) with the per-harness command block spliced in. Validation rejects
-a template whose placeholder has no backing field.
+outside the guarded task envs. `env` contains non-secret eval-agent defaults; the shared renderer
+adds sorted, shell-quoted exports to one-shot, parallel, resume, and probe commands. Unset keys
+inherit the host environment and no timezone default is imposed. The shared jq/xargs parallel and
+judge scaffolds stay code (`src/adapters/cli_command.rs`) with the per-harness command block spliced
+in. Validation rejects a template whose placeholder has no backing field.
 
 ## Current support
 

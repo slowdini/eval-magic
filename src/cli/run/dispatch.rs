@@ -2,11 +2,10 @@
 //! [`DispatchTask`] the orchestrator records in `dispatch.json`, plus the
 //! human-readable `dispatch-manifest.md`.
 //!
-//! The prompt mirrors a real session: an optional
-//! `<session-start-context>` (the `--bootstrap` surface), the harness-native
-//! available-skills block, an optional plan-mode `<system-reminder>`, then the
-//! eval task framing.
+//! The prompt mirrors a real session: optional bootstrap and plan-mode context,
+//! the harness-native available-skills block, then the eval task framing.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -379,6 +378,7 @@ pub struct ManifestContext<'a> {
     pub harness: Harness,
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
 }
 
 /// Build the human-readable `dispatch-manifest.md`.
@@ -438,6 +438,7 @@ pub fn build_manifest(
         && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
             guard: context.guard,
             agent_model: context.agent_model,
+            agent_env: context.agent_env,
             one_shot_only: !scripted.is_empty(),
         })
     {

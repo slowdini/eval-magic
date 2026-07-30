@@ -5,6 +5,7 @@
 //! gate and deliver each canned user follow-up, and write an ordered
 //! `conversation.json` completion artifact for ingest.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,7 +21,7 @@ use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::transcript::{TranscriptEvent, TranscriptSummary};
 use crate::core::{
     ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason, DeliverWhen,
-    ScriptedTurn,
+    ScriptedTurn, validate_agent_environment_entry,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -32,6 +33,8 @@ struct DispatchEnvelope {
     guard: bool,
     #[serde(default)]
     agent_model: Option<String>,
+    #[serde(default)]
+    agent_env: BTreeMap<String, String>,
     harness_descriptor: serde_json::Value,
     tasks: Vec<DispatchTask>,
 }
@@ -46,6 +49,14 @@ pub fn command_dispatch_task(
         .with_context(|| format!("failed to read {}", dispatch_path.display()))?;
     let envelope: DispatchEnvelope = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", dispatch_path.display()))?;
+    for (name, value) in &envelope.agent_env {
+        validate_agent_environment_entry(name, value).map_err(|message| {
+            anyhow!(
+                "invalid agent_env in {}: {message}",
+                dispatch_path.display()
+            )
+        })?;
+    }
     let descriptor = finalize_descriptor(
         &envelope.harness_descriptor,
         &format!("{}#harness_descriptor", dispatch_path.display()),
@@ -62,6 +73,7 @@ pub fn command_dispatch_task(
         task,
         envelope.guard,
         envelope.agent_model.as_deref(),
+        &envelope.agent_env,
         overwrite,
     )
 }
@@ -71,6 +83,7 @@ fn run_task(
     task: &DispatchTask,
     guard: bool,
     agent_model: Option<&str>,
+    agent_env: &BTreeMap<String, String>,
     overwrite: bool,
 ) -> anyhow::Result<()> {
     let turns = task
@@ -97,10 +110,10 @@ fn run_task(
         .cli_events_filename()
         .ok_or_else(|| anyhow!("harness declares no transcript events filename"))?;
     let initial_template = adapter
-        .cli_exec_command(guard, agent_model)
+        .cli_exec_command(guard, agent_model, agent_env)
         .ok_or_else(|| anyhow!("harness declares no initial dispatch command"))?;
     let resume_template = adapter
-        .cli_resume_command(guard, agent_model)
+        .cli_resume_command(guard, agent_model, agent_env)
         .ok_or_else(|| anyhow!("harness declares no native conversation resume command"))?;
     if overwrite && conversation_path.exists() {
         fs::remove_file(&conversation_path).with_context(|| {
@@ -129,7 +142,13 @@ fn run_task(
         None,
         1,
     );
-    execute_round(&initial_command, Path::new(eval_root), &first_outputs, 1)?;
+    execute_round(
+        &initial_command,
+        Path::new(eval_root),
+        &first_outputs,
+        agent_env,
+        1,
+    )?;
     let first_summary = parse_round(adapter, &first_outputs, &events_filename, 1)?;
     let session_id = first_summary
         .session_id
@@ -174,7 +193,13 @@ fn run_task(
             Some(&turn.prompt),
             round,
         );
-        execute_round(&command, Path::new(eval_root), &round_outputs, round)?;
+        execute_round(
+            &command,
+            Path::new(eval_root),
+            &round_outputs,
+            agent_env,
+            round,
+        )?;
         let summary = parse_round(adapter, &round_outputs, &events_filename, round)?;
         if let Some(observed) = summary.session_id.as_deref()
             && observed != session_id
@@ -343,6 +368,7 @@ fn execute_round(
     command: &str,
     eval_root: &Path,
     outputs_dir: &Path,
+    agent_env: &BTreeMap<String, String>,
     round: u32,
 ) -> anyhow::Result<()> {
     fs::create_dir_all(outputs_dir)
@@ -351,6 +377,7 @@ fn execute_round(
         .arg("-c")
         .arg(command)
         .current_dir(eval_root)
+        .envs(agent_env)
         .status()
         .with_context(|| format!("failed to start harness command for turn {round}"))?;
     if !status.success() {
@@ -379,6 +406,8 @@ fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> anyhow::Resu
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{append_summary_events, execute_round, unmet_gate};
     use crate::adapters::TranscriptSummary;
     use crate::adapters::cli_command::shell_quote_arg;
@@ -431,7 +460,7 @@ mod tests {
             shell_quote_arg(&events.to_string_lossy())
         );
 
-        execute_round(&command, tmp.path(), &outputs, 1).unwrap();
+        execute_round(&command, tmp.path(), &outputs, &BTreeMap::new(), 1).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(events).unwrap(),

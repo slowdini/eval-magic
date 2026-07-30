@@ -22,6 +22,7 @@
 //! per-harness modules ([`claude_code`](super::claude_code),
 //! [`codex`](super::codex), [`opencode`](super::opencode)).
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -103,6 +104,12 @@ pub trait HarnessAdapter {
     /// writes.
     fn config_dir_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Environment defaults applied only to eval-agent dispatches. Generic run
+    /// orchestration merges `run --agent-env` values over this map.
+    fn dispatch_environment(&self) -> BTreeMap<String, String> {
+        BTreeMap::new()
     }
 
     /// The tool names this harness's guard hook payloads and parsed transcripts
@@ -371,7 +378,12 @@ pub trait HarnessAdapter {
 
     /// Render the harness's one-shot CLI command for a task. Angle-bracket
     /// task paths remain for the caller to substitute.
-    fn cli_exec_command(&self, _guard: bool, _agent_model: Option<&str>) -> Option<String> {
+    fn cli_exec_command(
+        &self,
+        _guard: bool,
+        _agent_model: Option<&str>,
+        _agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         None
     }
 
@@ -389,7 +401,12 @@ pub trait HarnessAdapter {
     /// Render one same-session follow-up command. In addition to the usual
     /// angle-bracket task paths, `{session_arg}` and `{prompt_arg}` remain for
     /// the conversation driver to fill with shell-quoted values.
-    fn cli_resume_command(&self, _guard: bool, _agent_model: Option<&str>) -> Option<String> {
+    fn cli_resume_command(
+        &self,
+        _guard: bool,
+        _agent_model: Option<&str>,
+        _agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         None
     }
 
@@ -427,6 +444,7 @@ pub struct CliDispatchContext<'a> {
     pub target_args: &'a str,
     pub iteration: u32,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
 }
 
 /// Context for rendering a harness's `dispatch-manifest.md` CLI recipe.
@@ -434,6 +452,7 @@ pub struct CliDispatchContext<'a> {
 pub struct CliManifestContext<'a> {
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
     /// Exclude scripted tasks from a mixed suite's one-shot recipe.
     pub one_shot_only: bool,
 }

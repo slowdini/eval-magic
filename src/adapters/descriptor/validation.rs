@@ -5,6 +5,7 @@
 use regex::Regex;
 
 use crate::adapters::guard;
+use crate::core::validate_agent_environment_entry;
 
 use super::{
     DescriptorError, GuardEngine, HarnessDescriptor, render_staged_slug, stage_name_error,
@@ -28,6 +29,12 @@ pub(super) fn validate_descriptor(
             message,
         })
     };
+
+    for (name, value) in &d.dispatch.env {
+        if let Err(message) = validate_agent_environment_entry(name, value) {
+            return fail(format!("dispatch.env: {message}"));
+        }
+    }
 
     // Guard capability and post-arm banner move in lockstep: `--guard` gates
     // on the capability, and an armed guard the user is never told about (or a

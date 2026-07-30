@@ -100,6 +100,8 @@ fn dispatch_task_runs_all_scripted_turns_in_one_native_session() {
             "--harness",
             "codex",
             "--no-guard",
+            "--agent-env",
+            "ROUND_ENV=visible",
         ])
         .assert()
         .success();
@@ -110,6 +112,9 @@ fn dispatch_task_runs_all_scripted_turns_in_one_native_session() {
         r#"#!/bin/sh
 outputs=$1
 mode=$2
+if [ "$ROUND_ENV" != "visible" ]; then
+  exit 43
+fi
 if [ "$mode" != "initial" ] && [ "$4" != "session-1" ]; then
   exit 42
 fi

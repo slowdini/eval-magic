@@ -316,6 +316,14 @@
       "additionalProperties": false,
       "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args} slots) and the prose around them.",
       "properties": {
+        "env": {
+          "type": "object",
+          "description": "Environment defaults applied only to eval-agent dispatches. Later descriptor layers merge by key and run --agent-env overrides them.",
+          "propertyNames": {
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          },
+          "additionalProperties": { "type": "string" }
+        },
         "capture_prefix": {
           "type": "string",
           "minLength": 1,

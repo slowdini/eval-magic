@@ -3,6 +3,7 @@
 //! [`HarnessDescriptor`] and dispatching code-backed features through the
 //! named capabilities in [`super::capabilities`].
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -61,30 +62,46 @@ impl DescriptorAdapter {
 
     /// The single-dispatch command: the exec template with `{model_arg}` /
     /// `{guard_args}` filled for this run. Empty when no template is wired.
-    fn render_exec_command(&self, guard: bool, agent_model: Option<&str>) -> String {
+    fn render_exec_command(
+        &self,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> String {
         let Some(template) = &self.descriptor.dispatch.exec_template else {
             return String::new();
         };
         let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
-        render_agent_dispatch_command(&subst(
-            template,
-            &[
-                ("model_arg", &model_arg),
-                ("guard_args", self.guard_args(guard)),
-            ],
-        ))
+        render_agent_dispatch_command(
+            &subst(
+                template,
+                &[
+                    ("model_arg", &model_arg),
+                    ("guard_args", self.guard_args(guard)),
+                ],
+            ),
+            agent_env,
+        )
     }
 
-    fn render_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+    fn render_resume_command(
+        &self,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         let template = &self.descriptor.conversation.as_ref()?.resume_exec_template;
         let model_arg = render_cli_model_arg(self.model_flag(), agent_model);
-        Some(render_agent_dispatch_command(&subst(
-            template,
-            &[
-                ("model_arg", &model_arg),
-                ("guard_args", self.guard_args(guard)),
-            ],
-        )))
+        Some(render_agent_dispatch_command(
+            &subst(
+                template,
+                &[
+                    ("model_arg", &model_arg),
+                    ("guard_args", self.guard_args(guard)),
+                ],
+            ),
+            agent_env,
+        ))
     }
 
     /// The `{guard_args}` value for this run: the descriptor's fragment when
@@ -127,6 +144,10 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn config_dir_names(&self) -> Vec<String> {
         self.descriptor.config_dirs.clone()
+    }
+
+    fn dispatch_environment(&self) -> BTreeMap<String, String> {
+        self.descriptor.dispatch.env.clone()
     }
 
     fn tool_vocabulary(&self) -> ToolVocabulary {
@@ -329,12 +350,17 @@ impl HarnessAdapter for DescriptorAdapter {
         self.descriptor.dispatch.exec_template.is_some()
     }
 
-    fn cli_exec_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
+    fn cli_exec_command(
+        &self,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         self.descriptor
             .dispatch
             .exec_template
             .as_ref()
-            .map(|_| self.render_exec_command(guard, agent_model))
+            .map(|_| self.render_exec_command(guard, agent_model, agent_env))
     }
 
     fn has_conversation_resume(&self) -> bool {
@@ -349,8 +375,13 @@ impl HarnessAdapter for DescriptorAdapter {
             .unwrap_or_default()
     }
 
-    fn cli_resume_command(&self, guard: bool, agent_model: Option<&str>) -> Option<String> {
-        self.render_resume_command(guard, agent_model)
+    fn cli_resume_command(
+        &self,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        self.render_resume_command(guard, agent_model, agent_env)
     }
 
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
@@ -366,7 +397,7 @@ impl HarnessAdapter for DescriptorAdapter {
                 Some(_) => format!(
                     "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task \
                      with:\n{}\nThen run `{ingest_line}`.",
-                    self.render_exec_command(ctx.guard, ctx.agent_model)
+                    self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env)
                 ),
                 None => format!(
                     "\nNext: read dispatch-manifest.md and dispatch each task through your \
@@ -375,7 +406,7 @@ impl HarnessAdapter for DescriptorAdapter {
                 ),
             };
         };
-        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model);
+        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
         let iteration = ctx.iteration.to_string();
         let model_note = if ctx.agent_model.is_some() {
             self.descriptor.dispatch.model_note.as_deref().unwrap_or("")
@@ -399,7 +430,7 @@ impl HarnessAdapter for DescriptorAdapter {
             // generic recipe section; without either, the manifest's shared
             // header text already covers the baseline handoff.
             self.descriptor.dispatch.exec_template.as_ref()?;
-            let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model);
+            let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
             return Some(
                 format!(
                     "## Dispatch recipe\n\nFrom each task's `eval_root`, dispatch with:\n\
@@ -412,7 +443,7 @@ impl HarnessAdapter for DescriptorAdapter {
                 .collect(),
             );
         };
-        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model);
+        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
         let parallel_recipe = match &self.descriptor.dispatch.parallel_command_template {
             Some(block_template) => {
                 let model_arg = render_cli_model_arg(self.model_flag(), ctx.agent_model);
@@ -425,6 +456,7 @@ impl HarnessAdapter for DescriptorAdapter {
                         ],
                     ),
                     ctx.one_shot_only,
+                    ctx.agent_env,
                 )
             }
             None => String::new(),
@@ -468,13 +500,20 @@ impl HarnessAdapter for DescriptorAdapter {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
     use std::path::Path;
+    use std::sync::LazyLock;
 
     use crate::adapters::harness::{
         CliDispatchContext, CliJudgeContext, CliManifestContext, TokenUsageAggregation,
     };
     use crate::adapters::registry::adapter_for;
     use crate::core::{AvailableSkill, Harness};
+
+    fn empty_env() -> &'static BTreeMap<String, String> {
+        static EMPTY: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
+        &EMPTY
+    }
 
     fn skill(name: &str, description: &str) -> AvailableSkill {
         AvailableSkill {
@@ -490,6 +529,7 @@ mod tests {
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             iteration: 2,
             agent_model,
+            agent_env: empty_env(),
         })
     }
 
@@ -510,6 +550,7 @@ mod tests {
             target_args: " --skill-dir /s --skill x",
             iteration: 3,
             agent_model: None,
+            agent_env: empty_env(),
         });
         assert!(next.contains("cool-cli run"), "{next}");
         assert!(
@@ -522,6 +563,7 @@ mod tests {
             .cli_manifest_section(CliManifestContext {
                 guard: false,
                 agent_model: None,
+                agent_env: empty_env(),
                 one_shot_only: false,
             })
             .expect("an exec template earns a generic manifest recipe")
@@ -544,7 +586,7 @@ mod tests {
                 adapter.label()
             );
             let command = adapter
-                .cli_resume_command(false, Some("test-model"))
+                .cli_resume_command(false, Some("test-model"), empty_env())
                 .expect("built-in resume command");
             assert!(command.contains("<eval-root>"), "{command}");
             assert!(command.contains("<outputs_dir>"), "{command}");
@@ -579,14 +621,17 @@ mod tests {
             Harness::resolve("opencode").unwrap(),
         ] {
             let adapter = adapter_for(harness);
-            let exec = adapter.cli_exec_command(false, None).unwrap();
+            let exec = adapter.cli_exec_command(false, None, empty_env()).unwrap();
             assert!(exec.starts_with(prelude), "{exec}");
-            let resume = adapter.cli_resume_command(false, None).unwrap();
+            let resume = adapter
+                .cli_resume_command(false, None, empty_env())
+                .unwrap();
             assert!(resume.starts_with(prelude), "{resume}");
             let manifest = adapter
                 .cli_manifest_section(CliManifestContext {
                     guard: false,
                     agent_model: None,
+                    agent_env: empty_env(),
                     one_shot_only: false,
                 })
                 .unwrap()
@@ -604,6 +649,7 @@ mod tests {
             target_args: " --skill x",
             iteration: 1,
             agent_model: None,
+            agent_env: empty_env(),
         });
         assert!(next.contains("one-shot CLI"), "{next}");
         assert!(next.contains("outputs/final-message.md"), "{next}");
@@ -616,6 +662,7 @@ mod tests {
                 .cli_manifest_section(CliManifestContext {
                     guard: false,
                     agent_model: None,
+                    agent_env: empty_env(),
                     one_shot_only: false,
                 })
                 .is_none(),
@@ -646,6 +693,7 @@ mod tests {
                 target_args: "",
                 iteration: 2,
                 agent_model: None,
+                agent_env: empty_env(),
             });
         assert!(
             !unguarded.contains("--dangerously-bypass-hook-trust"),

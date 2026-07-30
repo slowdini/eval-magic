@@ -31,6 +31,9 @@ exec_template = '''
 cool-cli run --cd <eval-root>{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly." \
   > <outputs_dir>/final-message.md'''
+
+[dispatch.env]
+TZ = "UTC"
 ```
 
 That run is complete: `run` warns about each enhancement the descriptor doesn't declare (naming the
@@ -88,6 +91,15 @@ session usage on every resumed turn.
 it renders `exec_template` exactly as `run` would and asserts that `outputs/final-message.md` is
 recovered afterwards. See the workflow section below and `harness lint --help`.
 
+`[dispatch.env]` provides non-secret environment defaults for eval-agent subprocesses. Descriptor
+layers merge this table by key; repeatable `run --agent-env KEY=VALUE` entries override the
+resolved descriptor, with the last duplicate CLI entry winning. Values may be empty or contain
+`=`, while names use portable shell identifier syntax. Git routing variables are reserved so they
+cannot escape the task repository. The resolved map is recorded in clear text in
+`conditions.json` and `dispatch.json`, applies to one-shot and scripted rounds, and does not apply
+to judge agents or runner-owned `command_check` assertions. Unset keys inherit the operator's
+environment; eval-magic does not impose a timezone default.
+
 ## Layering and field-level merge
 
 Descriptor files stack in precedence order; **later layers override individual fields** of an
@@ -135,7 +147,7 @@ map as inline comments in its scaffolded template. The short map:
 | Table | Declares | Fallback when absent |
 |-------|----------|----------------------|
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
-| `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
+| `[dispatch]` | exec/parallel/judge/next-steps/manifest templates; eval-agent `env` defaults | generic handoff text; with only `exec_template`, generic recipes are built around it; absent env keys inherit the operator environment |
 | `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
 | `[conversation]` | native `resume_exec_template` using the captured session id; optional token aggregation (`sum` default, `last` for cumulative reports) | no safe fallback: evals declaring `turns` are rejected in run preflight |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
@@ -296,8 +308,9 @@ Then `run --harness <name>` and read the warnings: each one names the fallback c
 of the run, which doubles as your wiring roadmap — declare the enhancement and the warning
 disappears. Close the loop end-to-end before a real dispatch with
 `eval-magic harness lint <name|file> --probe`: it renders `dispatch.exec_template` with a trivial
-prompt in a throwaway temp dir, asks for confirmation, runs the command via `/bin/sh -c` from
-that dir, and verifies `outputs/final-message.md` is recovered (non-empty). It also
+prompt and the resolved `[dispatch.env]` defaults in a throwaway temp dir, asks for confirmation,
+runs the command via `/bin/sh -c` from that dir, and verifies `outputs/final-message.md` is
+recovered (non-empty). It also
 render-only-validates `parallel_command_template` / `judge_command_template` — rendering each
 with stand-in values and reporting any unresolved `{token}` the run would later surface.
 

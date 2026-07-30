@@ -459,6 +459,34 @@ fn harness_lint_probe_recovers_final_message_for_fake_exec_template() {
 }
 
 #[test]
+fn harness_lint_probe_applies_descriptor_agent_environment() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-env.toml");
+    fs::write(
+        &file,
+        r#"
+label = "probe-env"
+
+[dispatch]
+exec_template = '[ "$PROBE_ENV" = "visible" ] && printf "ok\n" > <outputs_dir>/final-message.md'
+
+[dispatch.env]
+PROBE_ENV = "visible"
+"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("✓ live exec template"));
+}
+
+#[test]
 fn harness_lint_probe_runs_against_a_registered_name() {
     let tmp = TempDir::new().unwrap();
     write_project_descriptor(tmp.path(), "probe-ok.toml", PROBE_OK_TOML);
