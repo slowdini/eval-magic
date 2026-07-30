@@ -140,6 +140,13 @@ hide it with the session environment:
 - `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` hides the `.claude` roots only (global + project);
 - `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` hides both `.claude` and `.agents` roots.
 
+When descriptor environment/recipes exclude **every** reported source from every initial and
+resumed dispatch, an overlay may declare `[shadow] isolates_live_sources = true`. Preflight still
+writes every source and the assertion to `plugin-shadow.json`; `run` prints an informational
+notice and `aggregate` omits the shadow validity warnings. The two environment switches above do
+not hide `.opencode` sources, so they cannot justify the assertion when one is reported.
+eval-magic does not inspect or verify the dispatch configuration.
+
 **Known limits:** OpenCode also loads skills from config-declared `skills.paths` directories
 and `skills.urls` (remote-pulled), and matches a singular `.opencode/skill/` directory; the
 preflight does not scan those sources. Verify those cases manually when relevant.

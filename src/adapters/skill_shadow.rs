@@ -1,8 +1,9 @@
 //! Harness-neutral skill-shadow report types and formatters.
 //!
-//! A *shadow* is a staged skill name that is also discoverable from the
-//! operator's live environment, contaminating the with/without comparison.
-//! Detection is harness-specific (each adapter's
+//! A *shadow candidate* is a staged skill name that is also present in the
+//! operator's live environment. Loading that source would contaminate the
+//! with/without comparison; a descriptor can separately assert that dispatches
+//! isolate every detected source. Detection is harness-specific (each adapter's
 //! [`detect_shadowed_skills`](crate::adapters::HarnessAdapter::detect_shadowed_skills)
 //! decides what "discoverable" means); the report shape is shared. These
 //! default renderers retain the original Claude wording for backward
@@ -49,6 +50,40 @@ impl ShadowSource {
 pub struct PluginShadowReport {
     pub config_dir: String,
     pub shadowed: Vec<ShadowSource>,
+}
+
+/// The persisted `plugin-shadow.json` envelope. The flattened report preserves
+/// the legacy artifact shape; the isolation assertion is additive and absent
+/// from artifacts produced without it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) struct PluginShadowArtifact {
+    #[serde(flatten)]
+    pub report: PluginShadowReport,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub isolates_live_sources: bool,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Informational build-time notice for a report whose resolved descriptor
+/// asserts that every detected live source is isolated from dispatches.
+pub(crate) fn format_isolated_shadow_notice(report: &PluginShadowReport) -> String {
+    let count = report.shadowed.len();
+    let finding = if count == 1 { "finding" } else { "findings" };
+    [
+        String::new(),
+        format!("ℹ Skill-shadow notice: preflight detected {count} live-source {finding}."),
+        "  The resolved descriptor declares `[shadow] isolates_live_sources = true`, so"
+            .to_string(),
+        "  the findings remain in plugin-shadow.json as informational provenance and".to_string(),
+        "  will not become benchmark.json validity_warnings. eval-magic does not verify"
+            .to_string(),
+        "  this assertion; it must cover every initial and resumed eval-agent dispatch."
+            .to_string(),
+    ]
+    .join("\n")
 }
 
 /// One `validity_warnings` line per shadowed skill (for benchmark.json).
@@ -127,6 +162,44 @@ mod tests {
                 path: "/p".into(),
             }],
         }
+    }
+
+    #[test]
+    fn legacy_shadow_artifact_defaults_to_undeclared_isolation() {
+        let artifact: PluginShadowArtifact = serde_json::from_value(serde_json::json!({
+            "config_dir": "/x",
+            "shadowed": [{
+                "kind": "plugin",
+                "plugin": "slow-powers@slowdini",
+                "skill_name": "mr-review",
+                "path": "/x/plugin/skills/mr-review"
+            }]
+        }))
+        .unwrap();
+
+        assert!(!artifact.isolates_live_sources);
+        assert_eq!(artifact.report.shadowed.len(), 1);
+        assert!(
+            serde_json::to_value(&artifact)
+                .unwrap()
+                .get("isolates_live_sources")
+                .is_none(),
+            "false keeps the legacy artifact shape"
+        );
+    }
+
+    #[test]
+    fn declared_isolation_is_serialized_with_the_shadow_report() {
+        let artifact = PluginShadowArtifact {
+            report: sample_report(),
+            isolates_live_sources: true,
+        };
+        let value = serde_json::to_value(&artifact).unwrap();
+        assert_eq!(value["isolates_live_sources"], true);
+        assert_eq!(
+            value["shadowed"][0]["skill_name"],
+            "verification-before-completion"
+        );
     }
 
     #[test]

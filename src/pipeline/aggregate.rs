@@ -15,7 +15,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::adapters::{PluginShadowReport, adapter_for, shadow_validity_warnings};
+use crate::adapters::skill_shadow::PluginShadowArtifact;
+use crate::adapters::{adapter_for, shadow_validity_warnings};
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
@@ -483,9 +484,13 @@ fn collect_shadow_warnings(
     let Ok(raw) = fs::read_to_string(iteration_dir.join("plugin-shadow.json")) else {
         return;
     };
-    let Ok(report) = serde_json::from_str::<PluginShadowReport>(&raw) else {
+    let Ok(artifact) = serde_json::from_str::<PluginShadowArtifact>(&raw) else {
         return;
     };
+    if artifact.isolates_live_sources {
+        return;
+    }
+    let report = artifact.report;
     let rendered = conditions.harness.map_or_else(
         || shadow_validity_warnings(&report),
         |harness| adapter_for(harness).shadow_validity_warnings(&report),

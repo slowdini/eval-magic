@@ -103,6 +103,17 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
 }
 
 #[test]
+fn aggregate_help_documents_declared_shadow_isolation() {
+    skill_eval()
+        .args(["aggregate", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("plugin-shadow.json"))
+        .stdout(contains("isolates_live_sources"))
+        .stdout(contains("validity_warnings"));
+}
+
+#[test]
 fn help_documents_guard_denial_artifacts_and_privacy() {
     skill_eval()
         .args(["run", "--help"])

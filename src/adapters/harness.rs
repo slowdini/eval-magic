@@ -323,16 +323,24 @@ pub trait HarnessAdapter {
 
     /// **Enhancement: shadow preflight.** Detect staged skill names that are
     /// also discoverable from the operator's live environment (e.g. Claude
-    /// Code's enabled plugins or global skills dir), which contaminates the
-    /// with/without comparison. `scan_root` is a real staged env root — its
-    /// project-local settings participate in detection. `None` when the
-    /// harness has no shadow preflight (the default) or nothing is shadowed.
+    /// Code's enabled plugins or global skills dir), which could contaminate
+    /// the with/without comparison unless dispatches isolate the source.
+    /// `scan_root` is a real staged env root — its project-local settings
+    /// participate in detection. `None` when the harness has no shadow
+    /// preflight (the default) or nothing is shadowed.
     fn detect_shadowed_skills(
         &self,
         _scan_root: &Path,
         _staged_skill_names: &[&str],
     ) -> Option<PluginShadowReport> {
         None
+    }
+
+    /// **Enhancement: shadow preflight.** Whether the resolved descriptor
+    /// asserts that every live source the preflight can report is excluded
+    /// from every eval-agent dispatch. The default preserves warning behavior.
+    fn isolates_live_sources(&self) -> bool {
+        false
     }
 
     /// **Enhancement: shadow preflight.** Format the runner banner for a

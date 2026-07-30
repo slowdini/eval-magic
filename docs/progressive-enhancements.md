@@ -290,16 +290,24 @@ silently unguarded.
 Claude Code loads enabled plugins and its global skills dir. Codex loads repository-ancestor,
 user, and admin skill directories plus enabled installed plugins. OpenCode loads project and
 global `.opencode`, `.claude`, and `.agents` skill dirs — including skills installed for other
-harnesses. A logical eval skill present in any such source contaminates the with/without
-comparison even when the staged copy uses a unique slug.
+harnesses. A logical eval skill present in any such source can contaminate the with/without
+comparison when dispatches load that source, even when the staged copy uses a unique slug.
 
 *What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
-iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
+iteration dir), which `aggregate` folds into `benchmark.json` validity warnings. When the resolved
+descriptor declares `isolates_live_sources = true`, the scan and artifact are retained, but the
+banner becomes an informational notice and `aggregate` omits the findings from validity warnings.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
 environment is clean; the operator must check any harness-native global discovery sources.
 
-*Descriptor fields:* the `[shadow]` table — `preflight`.
+*Descriptor fields:* the `[shadow]` table — `preflight`, plus optional
+`isolates_live_sources` (false by default). The latter is an unverified operator assertion that
+every reported source is excluded from every initial and resumed eval-agent dispatch. A built-in
+overlay may set it without repeating the inherited preflight; a new harness must still resolve to
+a preflight. It must not be used for partial isolation, and eval-magic never infers it by parsing
+shell templates.
+
 *Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
 `opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
 `src/adapters/skill_shadow.rs`; detection and remediation rendering stay in the harness's

@@ -245,6 +245,50 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
         iteration_dir(&cwd).join("plugin-shadow.json").exists(),
         "preflight detected the project-enabled plugin shadow by scanning the staged env"
     );
+    assert!(
+        read_json(&iteration_dir(&cwd).join("plugin-shadow.json"))
+            .get("isolates_live_sources")
+            .is_none(),
+        "undeclared isolation preserves the legacy artifact shape"
+    );
+}
+
+#[test]
+fn declared_shadow_isolation_records_findings_as_informational_provenance() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let config = tmp.path().join("config");
+    fs::create_dir_all(config.join("skills/mr-review")).unwrap();
+    fs::write(
+        config.join("skills/mr-review/SKILL.md"),
+        "---\nname: mr-review\ndescription: live copy\n---\n",
+    )
+    .unwrap();
+    let overlay = tmp.path().join("isolated.toml");
+    fs::write(
+        &overlay,
+        "label = \"claude-code\"\n\n[shadow]\nisolates_live_sources = true\n",
+    )
+    .unwrap();
+
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .arg("--harness-file")
+        .arg(&overlay)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("Skill-shadow notice"), "{stderr}");
+    assert!(stderr.contains("isolates_live_sources = true"), "{stderr}");
+    assert!(!stderr.contains("Plugin-shadow warning"), "{stderr}");
+
+    let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
+    assert_eq!(artifact["isolates_live_sources"], true);
+    assert_eq!(artifact["shadowed"][0]["skill_name"], "mr-review");
 }
 
 #[test]

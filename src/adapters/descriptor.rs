@@ -327,6 +327,8 @@ pub struct GuardSection {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ShadowSection {
     pub preflight: ShadowPreflight,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub isolates_live_sources: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
@@ -705,6 +707,30 @@ timestamp_spread = "timestamp"
         let shown = toml::to_string(&d).unwrap();
         assert!(shown.contains("[dispatch.env]"), "{shown}");
         assert!(shown.contains("TZ = \"UTC\""), "{shown}");
+    }
+
+    #[test]
+    fn shadow_live_source_isolation_loads_and_reserializes() {
+        let d = load(&format!(
+            "{MINIMAL}\n[shadow]\npreflight = \"claude-plugins\"\n\
+             isolates_live_sources = true\n"
+        ))
+        .unwrap();
+        assert!(
+            d.shadow
+                .as_ref()
+                .expect("shadow section loads")
+                .isolates_live_sources
+        );
+
+        let shown = toml::to_string(&d).unwrap();
+        assert!(shown.contains("isolates_live_sources = true"), "{shown}");
+    }
+
+    #[test]
+    fn shadow_isolation_without_a_resolved_preflight_is_rejected() {
+        let error = err_of("label = \"demo\"\n\n[shadow]\nisolates_live_sources = true\n");
+        assert!(error.contains("preflight"), "{error}");
     }
 
     #[test]
