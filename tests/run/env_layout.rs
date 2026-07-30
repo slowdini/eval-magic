@@ -355,7 +355,7 @@ fn env_contains_only_the_staged_skill_no_repo_leakage() {
 }
 
 #[test]
-fn guard_marker_allowed_roots_cover_meta_above_env() {
+fn guard_marker_scopes_allowed_roots_to_private_env() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -366,16 +366,30 @@ fn guard_marker_allowed_roots_cover_meta_above_env() {
         .assert()
         .success();
 
-    // The guard arms inside each env, but its allowedRoots include the workspace root
-    // above env, so eval-magic can still write meta (benchmark.json, dispatch.json)
-    // into iteration-N/.
-    let marker = read_json(
-        &cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/.slow-powers-eval-guard.json"),
+    // The guard boundary is exactly the private task env. The iteration metadata
+    // tree above it and the host temp directory that contains this test are not
+    // independently writable roots.
+    let env = cli_env_dir(&cwd, "g1", "with_skill");
+    let marker = read_json(&env.join(".claude/skills/.slow-powers-eval-guard.json"));
+    let roots: Vec<String> = marker["allowedRoots"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|root| root.as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(
+        roots,
+        vec![
+            fs::canonicalize(&env)
+                .unwrap()
+                .to_string_lossy()
+                .into_owned()
+        ]
     );
-    let roots = marker["allowedRoots"].as_array().unwrap();
-    let iter = iteration_dir(&cwd);
+
+    let iter = fs::canonicalize(iteration_dir(&cwd)).unwrap();
     assert!(
-        roots.iter().any(|r| iter.starts_with(r.as_str().unwrap())),
-        "allowedRoots {roots:?} must cover the meta tree above env at {iter:?}"
+        !roots.iter().any(|root| iter.starts_with(root)),
+        "allowedRoots {roots:?} must not cover the meta tree above env at {iter:?}"
     );
 }

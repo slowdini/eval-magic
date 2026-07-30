@@ -62,6 +62,17 @@ fn run_help_documents_no_guard() {
 }
 
 #[test]
+fn run_help_documents_task_local_scratch_policy() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("sole allowed write root"))
+        .stdout(contains("<eval-root>/tmp"))
+        .stdout(contains("host temp directories"));
+}
+
+#[test]
 fn run_help_documents_task_git_repository_isolation() {
     skill_eval()
         .args(["run", "--help"])

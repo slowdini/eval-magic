@@ -92,15 +92,18 @@ Live-verified on v1.18.4 (#155):
   file was never created.
 - In an armed env: an in-bounds `write` completed; an out-of-bounds `write` to `/tmp/...` was
   blocked with `"error":"eval guard: write to /tmp/... is outside the eval sandbox (allowed:
-  ...)"`; an out-of-bounds bash redirect (`echo hi > /tmp/...`) was blocked with
+  ...). For temporary or scratch files, use <env>/tmp."`; an out-of-bounds bash redirect
+  (`echo hi > /tmp/...`) was blocked with
   `"error":"eval guard: blocked bash (output redirection to a file) — runs outside the eval
-  sandbox"`; and `eval-magic teardown-guard` printed `🛡 Write guard removed.`, deleted the
-  plugin, pruned `.opencode/plugins/`, and swept the marker.
+  sandbox. For temporary or scratch files, use <env>/tmp."`; and `eval-magic teardown-guard`
+  printed `🛡 Write guard removed.`, deleted the plugin, pruned `.opencode/plugins/`, and swept
+  the marker.
 
 Two boundary notes, shared with the other harnesses' guards:
 
-- The marker's allowed roots are the env root and the **OS temp dir** — a write under `$TMPDIR`
-  is in-bounds by design.
+- The marker's sole allowed root is the private task env on every host. Host temp locations such
+  as `/tmp` and `$TMPDIR` remain out of bounds; dispatch prompts direct scratch work to
+  `<env>/tmp/` instead without rewriting `TMPDIR`, `TMP`, or `TEMP`.
 - Bash coverage is the shared heuristic denylist (installs, git mutations, redirects, config-dir
   tampering): a bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
   detection of those is `detect-stray-writes`' job, same as claude/codex.
