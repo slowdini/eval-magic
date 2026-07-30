@@ -75,15 +75,20 @@ For an installed-plugin collision, add `--disable plugins` to every eval-agent `
 invocation, including every resumed turn. It is a global option, so place it before `exec`, for
 example `codex --disable plugins --ask-for-approval never exec ...`. The flag disables installed
 plugins for that invocation; it does not hide skills in repository, user, or admin directories.
-eval-magic does not currently record manually added Codex launch arguments, so
-`plugin-shadow.json` and the aggregate validity warnings retain the preflight finding. If the flag
-was applied consistently, a plugin-source warning is therefore conservative rather than evidence
-that the eval was contaminated.
+By default, `plugin-shadow.json` and aggregate validity warnings retain the preflight finding
+because eval-magic cannot observe manually added launch arguments.
 
 For a direct skill collision, move or rename the conflicting repo, user, or admin skill before
 dispatch. For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve
 `CODEX_HOME` if the dispatch still needs the existing Codex configuration. That does not isolate
 plugins stored under `CODEX_HOME` or repository/admin skills.
+
+When a descriptor overlay excludes **every** reported source from every initial and resumed
+dispatch, it may declare `[shadow] isolates_live_sources = true`. Preflight and
+`plugin-shadow.json` remain as auditable provenance, while `run` prints an informational notice
+and `aggregate` omits the shadow validity warnings. `--disable plugins` alone justifies the
+assertion only when every finding is plugin-sourced; it does not cover a direct skill finding.
+eval-magic does not inspect the recipes or otherwise verify the assertion.
 
 **Known limit:** Codex also ships bundled system skills, but currently exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled

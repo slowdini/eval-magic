@@ -332,6 +332,13 @@ impl HarnessAdapter for DescriptorAdapter {
             .and_then(|s| s.preflight.detect(scan_root, staged_skill_names))
     }
 
+    fn isolates_live_sources(&self) -> bool {
+        self.descriptor
+            .shadow
+            .as_ref()
+            .is_some_and(|shadow| shadow.isolates_live_sources)
+    }
+
     fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
         self.descriptor.shadow.as_ref().map_or_else(
             || super::skill_shadow::format_shadow_banner(report),
@@ -570,6 +577,22 @@ mod tests {
             .join("\n");
         assert!(manifest.contains("cool-cli run"), "{manifest}");
         assert!(manifest.contains("final-message.md"), "{manifest}");
+    }
+
+    #[test]
+    fn descriptor_exposes_declared_live_source_isolation() {
+        use crate::adapters::harness::HarnessAdapter;
+
+        let default = adapter_from(
+            "label = \"default-shadow\"\n\n[shadow]\npreflight = \"claude-plugins\"\n",
+        );
+        assert!(!default.isolates_live_sources());
+
+        let isolated = adapter_from(
+            "label = \"isolated-shadow\"\n\n[shadow]\npreflight = \"claude-plugins\"\n\
+             isolates_live_sources = true\n",
+        );
+        assert!(isolated.isolates_live_sources());
     }
 
     #[test]

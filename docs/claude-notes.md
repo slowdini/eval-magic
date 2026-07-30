@@ -121,6 +121,12 @@ remediation options (also printed inline in the banner):
 Project-local staged skills are independent of installed plugins, so they still load and the
 meta-check still resolves the slug under all three options.
 
+When a descriptor overlay applies one of these remedies to every initial and resumed dispatch, it
+may declare `[shadow] isolates_live_sources = true`. Preflight still detects and writes every
+source to `plugin-shadow.json`, along with the assertion, but `run` prints an informational notice
+and `aggregate` omits the findings from `validity_warnings`. eval-magic does not verify the claim
+or inspect the dispatch templates; do not declare it if any reported source remains discoverable.
+
 ## Write guard
 
 A guarded run (the guard auto-arms; `--guard`/`--no-guard` make it explicit) merges a

@@ -655,11 +655,12 @@ pub(crate) enum Commands {
     /// pass-rate / duration / token stats per condition, the delta,
     /// `validity_warnings` (including incomplete timing sample counts, one per
     /// task in `guard-denials.json`, and one per task in
-    /// `permission-denials.json` whose refusals were not the guard's own), and
-    /// raw per-run files/lines/hunks from
-    /// `diff-scope.json`. A timing metric with `n: 0` is unavailable, not a
-    /// measured zero. The top-level `diff_scope` field is omitted for compatible
-    /// older iterations that predate metric capture.
+    /// `permission-denials.json` whose refusals were not the guard's own, plus
+    /// findings in `plugin-shadow.json` unless it records the resolved
+    /// descriptor's `isolates_live_sources = true` assertion), and raw per-run
+    /// files/lines/hunks from `diff-scope.json`. A timing metric with `n: 0` is
+    /// unavailable, not a measured zero. The top-level `diff_scope` field is
+    /// omitted for compatible older iterations that predate metric capture.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///

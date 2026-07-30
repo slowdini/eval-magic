@@ -690,6 +690,31 @@ armed_message = "x"
     }
 
     #[test]
+    fn harness_file_may_only_declare_inherited_shadow_isolation() {
+        let mut sources = embedded_sources();
+        sources.push(src(
+            Layer::HarnessFile,
+            "isolation.toml",
+            "label = \"claude-code\"\n\n[shadow]\nisolates_live_sources = true\n",
+        ));
+
+        let built = build_registry(sources).expect("partial shadow overlay merges");
+        let entry = built
+            .entries
+            .iter()
+            .find(|entry| entry.label == "claude-code")
+            .unwrap();
+        assert_eq!(
+            entry.value.pointer("/shadow/preflight"),
+            Some(&serde_json::json!("claude-plugins"))
+        );
+        assert_eq!(
+            entry.value.pointer("/shadow/isolates_live_sources"),
+            Some(&serde_json::json!(true))
+        );
+    }
+
+    #[test]
     fn embedded_layer_provenance_distinguishes_built_ins_from_user_only_harnesses() {
         let mut sources = embedded_sources();
         sources.push(src(

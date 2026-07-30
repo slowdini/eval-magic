@@ -153,7 +153,7 @@ map as inline comments in its scaffolded template. The short map:
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
-| `[shadow]` | `preflight` (named capability) | no shadow report — correct for harnesses that load nothing global |
+| `[shadow]` | `preflight` (named capability); optional `isolates_live_sources` assertion | no shadow report — correct for harnesses that load nothing global |
 | `[guard]` | **built-ins only** — see below | `detect-stray-writes` audits after the fact |
 
 ### Named capabilities: real code for free
@@ -171,6 +171,24 @@ you get the full feature from configuration alone:
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.
 - `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.
 - `shadow.preflight = "opencode-skills"` — the OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
+
+`shadow.isolates_live_sources = true` is not a capability and does not change the scan. It is an
+unverified operator assertion that every source the selected preflight can report is excluded from
+every initial and resumed eval-agent dispatch. Detected sources remain in `plugin-shadow.json`,
+which records the assertion, and `run` prints an informational notice instead of a warning;
+`aggregate` then omits those findings from `validity_warnings`. Do not set it for partial isolation.
+eval-magic deliberately does not inspect shell templates for known flags.
+
+A built-in overlay may declare only the assertion and inherit the preflight capability:
+
+```toml
+label = "claude-code"
+
+[shadow]
+isolates_live_sources = true
+```
+
+A new harness still has to declare `preflight` in its fully resolved descriptor.
 
 For example, a harness that logs Codex-compatible item JSONL gets full transcript ingest — parsed
 tool invocations, `transcript_check` grading, the works — with:
