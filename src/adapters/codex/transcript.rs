@@ -6,16 +6,49 @@
 //! [`TranscriptSummary`] shape as the Claude adapter, but with Codex's blended
 //! token accounting: non-cached input plus output.
 
-use crate::adapters::TranscriptSummary;
 use crate::adapters::transcript::TranscriptEvent;
 use crate::adapters::transcript::read_jsonl;
+use crate::adapters::{PermissionDenial, TranscriptSummary};
 use crate::core::ToolInvocation;
 use serde_json::{Map, Value};
+use std::fs;
 use std::io;
 use std::path::Path;
 
 const NON_TOOL_ITEMS: [&str; 3] = ["agent_message", "reasoning", "plan_update"];
 const ARG_OMIT_KEYS: [&str; 6] = ["id", "type", "status", "output", "result", "error"];
+
+fn permission_denial(tool: &str, reason: &str) -> PermissionDenial {
+    PermissionDenial {
+        tool: tool.into(),
+        reason: Some(reason.into()),
+        input_keys: vec!["command".into()],
+    }
+}
+
+fn parse_permission_denial_line(line: &str) -> Option<PermissionDenial> {
+    if !line.contains(" ERROR codex_core::tools::router: error=") {
+        return None;
+    }
+
+    if let Some(hook_output) = line.split_once("Command blocked by PreToolUse hook: ") {
+        let (reason, command) = hook_output.1.split_once(". Command: ")?;
+        let tool = if command.starts_with("*** Begin Patch") {
+            "apply_patch"
+        } else {
+            "Bash"
+        };
+        return Some(permission_denial(tool, reason));
+    }
+
+    let rejected = line.split_once("Rejected(\\\"")?.1.split_once("\\\")")?.0;
+    let reason = if rejected == "approval required by policy, but AskForApproval is set to Never" {
+        rejected
+    } else {
+        rejected.rsplit_once(" rejected: ")?.1
+    };
+    Some(permission_denial("Bash", reason))
+}
 
 fn stringify_value(v: &Value) -> String {
     match v {
@@ -112,6 +145,27 @@ pub fn parse_codex_events(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation>> 
     Ok(extract_invocations(&read_jsonl::<Value>(jsonl_path)?))
 }
 
+/// Parse permission denials from the stderr capture beside a Codex event stream.
+pub fn parse_codex_permission_denials(jsonl_path: &Path) -> io::Result<Vec<PermissionDenial>> {
+    let Some(filename) = jsonl_path.file_name().and_then(|name| name.to_str()) else {
+        return Ok(Vec::new());
+    };
+    let Some(prefix) = filename.strip_suffix("events.jsonl") else {
+        return Ok(Vec::new());
+    };
+    let stderr_path = jsonl_path.with_file_name(format!("{prefix}stderr.log"));
+    let stderr = match fs::read_to_string(stderr_path) {
+        Ok(stderr) => stderr,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+
+    Ok(stderr
+        .lines()
+        .filter_map(parse_permission_denial_line)
+        .collect())
+}
+
 fn parse_millis(s: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(s)
         .ok()
@@ -182,6 +236,10 @@ pub fn parse_codex_events_full(jsonl_path: &Path) -> io::Result<TranscriptSummar
         final_text,
     })
 }
+
+#[cfg(test)]
+#[path = "transcript/permission_denials_tests.rs"]
+mod permission_denials_tests;
 
 #[cfg(test)]
 mod tests {

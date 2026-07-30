@@ -141,20 +141,23 @@ extract primitives, it's a code capability, not a bigger DSL.
 `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
 event — a deterministic `__skill_invoked` meta-check.
 
-**Sub-capability: permission-denied tool results.** A refused tool call is recorded in the
-transcript like any other, so on its own it is invisible: the dispatch exits 0, the run grades
-normally, and a `transcript_check` can match an attempt that never executed. A parser that can tell
-a refusal from an ordinary tool error makes `ingest` write `permission-denials.json` and `aggregate`
-warn once per affected task. *Why harness-specific:* refusals are not a shared shape — Claude Code
-reports them structurally in the terminal `result` event's `permission_denials`, while other CLIs
-collapse them into result text indistinguishable from a tool error, and detecting those by regex
-would invent false positives. *Fallback:* no report and no warning — a run that degraded to static
-reasoning is only visible in the transcripts, which `run` preflight states once naming that
-fallback. *Capability:* carried by `transcript.parser`, not a separate descriptor field — only
-`claude-stream-json` surfaces denials today (`TranscriptParser::surfaces_permission_denials`,
-pinned across harnesses in `src/adapters/harness.rs`). The eval write guard denies through the same
-permission mechanism, so its blocks land in the report as well; they are attributed by the
-`eval guard: ` reason prefix and excluded from the warning so one denial is not reported twice.
+**Sub-capability: permission-denied tool results.** A refused tool call can be reported in the
+event stream or a paired harness capture while the overall dispatch still exits 0. On its own that
+is easy to miss: the run grades normally and may degrade to static reasoning. A parser that can
+distinguish a refusal from an ordinary tool error makes `ingest` write
+`permission-denials.json` and `aggregate` warn once per affected task. *Why harness-specific:*
+refusals are not a shared shape — Claude Code reports them in the terminal `result` event's
+structured `permission_denials`, while Codex reports pre-execution router rejections and
+`PreToolUse` hook blocks in the stderr capture beside its JSONL. The Codex parser recognizes only
+those structural records; ordinary failed command events, including ambiguous DNS and OS-process
+failures, remain unclassified rather than creating false positives. *Fallback:* no report and no
+warning — a run that degraded to static reasoning is only visible in the raw captures, which
+`run` preflight states once naming that fallback. *Capability:* carried by `transcript.parser`,
+not a separate descriptor field — `claude-stream-json` and `codex-items` surface denials
+(`TranscriptParser::surfaces_permission_denials`, pinned across harnesses in
+`src/adapters/harness.rs`). The eval write guard denies through the same permission mechanism, so
+its blocks land in the report as well; they are attributed by the `eval guard: ` reason prefix and
+excluded from the warning so one denial is not reported twice.
 
 *Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
 `command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
@@ -166,11 +169,12 @@ ingest pipeline never calls a parser), exactly one of `parser`/`extract` (valida
 or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
 equality `where` filters, final and ordered assistant-text picks, a session-id pick, flat
 tool-item mapping, token sum/subtract reduction, and duration rule, documented with a worked
-example in [byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
+example in [byoh.md](byoh.md).
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
-(`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
-extract engine's differential test compares against) — a new harness emitting a compatible event
-stream reuses one with zero code.
+(`claude-stream-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
+captures reuses one with zero code. The built-in Codex descriptor uses `codex-items` because its
+permission signal must correlate the JSONL path with the sibling stderr capture; the extract
+engine retains a differential test for the JSONL-only summary behavior.
 The tool names the transcript yields must be declared in `[tools]` (see the write-guard
 enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
 combination.

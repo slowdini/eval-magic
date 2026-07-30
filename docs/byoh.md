@@ -163,9 +163,12 @@ is a **named capability** a descriptor references. If your harness emits a compa
 you get the full feature from configuration alone:
 
 - `transcript.parser = "claude-stream-json"` — Claude Code `-p --output-format stream-json` events.
-  Also the only parser that surfaces **permission-denied tool calls** (from the terminal `result`
-  event's `permission_denials`), which drives `permission-denials.json` and its validity warning.
-- `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL.
+  It surfaces **permission-denied tool calls** from the terminal `result` event's
+  `permission_denials`, which drives `permission-denials.json` and its validity warning.
+- `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL plus
+  structural tool-router rejections and `PreToolUse` blocks from the sibling `*-stderr.log`
+  capture. The events filename must end in `events.jsonl` so the parser can derive that sibling.
+  Ordinary failed command events are intentionally not treated as permission denials.
 - `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish` events.
 - `staging.slug_capability = "opencode"` — OpenCode's sanitizing slug rules.
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.

@@ -14,6 +14,7 @@ mod byoh;
 mod claude_cli;
 mod codex;
 mod codex_guard;
+mod codex_permission_denials;
 mod command_check;
 mod conversation;
 mod diff_scope;

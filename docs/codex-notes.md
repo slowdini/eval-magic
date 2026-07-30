@@ -13,7 +13,7 @@ references:
 | File | What's in it |
 |------|--------------|
 | `harnesses/codex.toml` | the descriptor — every declarative value + capability references |
-| `transcript.rs` | `item.completed` event-stream parsing (`codex-items`) |
+| `transcript.rs` | `item.completed` event parsing plus paired-stderr denial detection (`codex-items`) |
 | `skill_shadow.rs` | repo/user/admin/plugin skill collision scan (`codex-skills`) + reporting |
 
 The write guard has no per-harness code: the descriptor's `[guard]` block (hook file, matcher,
@@ -119,6 +119,25 @@ Current `codex exec --json` transcripts do not include a native duration or even
 with `n: 0` is unavailable, not a measured zero. Existing timing artifacts are not migrated
 automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
 them from the preserved transcripts when desired.
+
+### Permission denials
+
+Some pre-execution refusals never become Codex JSONL items. The `codex-items` parser therefore
+derives `codex-stderr.log` from `codex-events.jsonl` (and the equivalent paired filenames in
+scripted-turn directories) and recognizes two structural Codex tool-router forms:
+
+- `exec_command` `Rejected(...)` records for approval-required policy and explicit deny rules;
+- `Command blocked by PreToolUse hook` records for `Bash` and patch-shaped `apply_patch` calls.
+
+The report stores `input_keys: ["command"]` but never the command or patch body. Explicit-rule
+command echoes and hook `. Command: ...` payloads are stripped from the reason; the
+`eval guard: ` prefix remains exact so aggregate can attribute guard blocks without warning
+twice. A missing stderr capture, unrelated/malformed lines, and ordinary JSONL command failures
+produce no denial. In particular, DNS and OS-process failures are indistinguishable from normal
+tool failures and are intentionally left unclassified to avoid false positives.
+
+These forms were verified against `codex-cli 0.146.0` on 2026-07-30. Re-check the parser fixtures
+when Codex changes its stderr logging shape.
 
 ## Write guard
 

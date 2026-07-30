@@ -440,34 +440,34 @@ mod tests {
 
     #[test]
     fn preflight_names_the_fallback_when_denials_cannot_be_detected() {
-        // Claude Code reports refusals structurally, so it warns about nothing.
-        // The others cannot, and a silently refused run is invisible without the
-        // signal — so preflight says so once, up front, naming the fallback.
-        let (_t, ctx) = ctx_for(Harness::resolve("claude-code").unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        assert!(
-            !preflight
-                .warnings
-                .iter()
-                .any(|w| w.contains("permission-denied")),
-            "{:?}",
-            preflight.warnings
-        );
-
-        for name in ["codex", "opencode"] {
+        // Claude Code and Codex report refusals structurally, so they warn about
+        // nothing. OpenCode cannot, so preflight names the fallback once.
+        for name in ["claude-code", "codex"] {
             let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
             let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-            let warning = preflight
-                .warnings
-                .iter()
-                .find(|w| w.contains("permission-denied"))
-                .unwrap_or_else(|| panic!("{name}: {:?}", preflight.warnings));
-            assert!(warning.contains(name), "names the harness: {warning}");
             assert!(
-                warning.contains("validity_warnings"),
-                "names the fallback: {warning}"
+                !preflight
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("permission-denied")),
+                "{name}: {:?}",
+                preflight.warnings
             );
         }
+
+        let name = "opencode";
+        let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+        let warning = preflight
+            .warnings
+            .iter()
+            .find(|w| w.contains("permission-denied"))
+            .unwrap_or_else(|| panic!("{name}: {:?}", preflight.warnings));
+        assert!(warning.contains(name), "names the harness: {warning}");
+        assert!(
+            warning.contains("validity_warnings"),
+            "names the fallback: {warning}"
+        );
     }
 
     #[test]
