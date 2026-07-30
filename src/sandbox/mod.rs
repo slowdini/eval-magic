@@ -27,6 +27,10 @@ pub use policy::{classify_bash, is_shell_tool, is_under, is_under_any, is_write_
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Conventional task-local directory named in dispatch prompts and actionable
+/// guard denials for temporary and scratch work.
+pub(crate) const TASK_SCRATCH_DIR: &str = "tmp";
+
 /// Current wall clock in epoch milliseconds. chrono ships without its `clock`
 /// feature (it parses timestamps but never reads the clock), so the time comes
 /// from `std::time`. Shared by the guard's expiry check and marker stamping.

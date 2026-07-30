@@ -87,10 +87,12 @@ If it does not load as an OpenCode skill, read the skill from `/work/staged/widg
 Available fixture files:
   - /work/fixtures/input.txt
 Task environment: /work/task
+Task-local scratch directory: /work/task/tmp
 Framework output directory: /work/outputs
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
+- Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
 - Use the framework output directory only for framework artifacts.
 - After completing the task, write your final user-facing response to /work/outputs/final-message.md.
 - Do not write outside the task environment.
@@ -113,10 +115,12 @@ No skill is loaded. Respond as you naturally would.
 Available fixture files:
   - /work/fixtures/input.txt
 Task environment: /work/task-b
+Task-local scratch directory: /work/task-b/tmp
 Framework output directory: /work/outputs-b
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
+- Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
 - Use the framework output directory only for framework artifacts.
 - After completing the task, write your final user-facing response to /work/outputs-b/final-message.md.
 - Do not write outside the task environment.

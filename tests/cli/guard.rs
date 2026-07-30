@@ -165,7 +165,7 @@ fn guard_deny_verdict_bytes_are_stable() {
             "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\
              \"permissionDecision\":\"deny\",\"permissionDecisionReason\":\
              \"eval guard: Write to /etc/passwd is outside the eval sandbox \
-             (allowed: /work/env)\"}}",
+             (allowed: /work/env). For temporary or scratch files, use /work/env/tmp.\"}}",
         );
 }
 
@@ -339,7 +339,8 @@ fn guard_hook_opencode_block_verdict_bytes_are_stable() {
         .success()
         .stdout(
             "{\"decision\":\"block\",\"reason\":\"eval guard: write to /etc/passwd is \
-             outside the eval sandbox (allowed: /work/env)\"}",
+             outside the eval sandbox (allowed: /work/env). For temporary or scratch files, use \
+             /work/env/tmp.\"}",
         );
 }
 

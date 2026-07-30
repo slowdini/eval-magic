@@ -394,8 +394,10 @@ pub struct RunArgs {
     ///
     /// The guard is a harness-native `PreToolUse` hook that *blocks* subagent
     /// writes/installs outside the isolated run env (the agent-under-test's cwd)
-    /// while dispatches run. Its allowed roots are the env plus the OS temp dir, so
-    /// the guard boundary matches the same env that isolates the agent's reads.
+    /// while dispatches run. The task env is its sole allowed write root; host temp
+    /// directories are out of bounds. Dispatch prompts name `<eval-root>/tmp` as
+    /// the task-local scratch directory (create it when needed); eval-magic does
+    /// not rewrite `TMPDIR`, `TMP`, or `TEMP`.
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,

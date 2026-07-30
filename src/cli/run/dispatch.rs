@@ -215,7 +215,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     task_lines.push(String::new());
     task_lines.push(fixtures_block);
     if let Some(eval_root) = opts.eval_root {
-        task_lines.push(format!("Task environment: {eval_root}"));
+        task_lines.push(super::scratch::context(eval_root));
     }
     task_lines.push(format!("Framework output directory: {}", opts.outputs_dir));
     task_lines.push(String::new());
@@ -224,6 +224,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         "- Work normally on the task: you may edit existing files and create new files inside the task environment."
             .to_string(),
     );
+    super::scratch::push_instruction(&mut task_lines, opts.eval_root);
     task_lines
         .push("- Use the framework output directory only for framework artifacts.".to_string());
     task_lines.push(format!(

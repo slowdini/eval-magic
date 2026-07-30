@@ -23,6 +23,7 @@ mod golden_tests;
 pub mod grouping;
 pub mod orchestrate;
 pub mod runbook;
+mod scratch;
 pub mod staging;
 pub mod steps;
 mod util;
