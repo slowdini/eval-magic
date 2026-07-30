@@ -147,13 +147,17 @@ is easy to miss: the run grades normally and may degrade to static reasoning. A 
 distinguish a refusal from an ordinary tool error makes `ingest` write
 `permission-denials.json` and `aggregate` warn once per affected task. *Why harness-specific:*
 refusals are not a shared shape — Claude Code reports them in the terminal `result` event's
-structured `permission_denials`, while Codex reports pre-execution router rejections and
-`PreToolUse` hook blocks in the stderr capture beside its JSONL. The Codex parser recognizes only
-those structural records; ordinary failed command events, including ambiguous DNS and OS-process
-failures, remain unclassified rather than creating false positives. *Fallback:* no report and no
-warning — a run that degraded to static reasoning is only visible in the raw captures, which
-`run` preflight states once naming that fallback. *Capability:* carried by `transcript.parser`,
-not a separate descriptor field — `claude-stream-json` and `codex-items` surface denials
+structured `permission_denials`, Codex reports pre-execution router rejections and `PreToolUse`
+hook blocks in the stderr capture beside its JSONL, and OpenCode records a refusal as an ordinary
+`tool_use` event with `part.state.status:"error"` whose `state.error` is the string OpenCode itself
+authors at its permission layer (a fixed `PermissionDeniedError`/`PermissionRejectedError` prefix,
+or the shared `eval guard: ` reason for a guard block). Each parser recognizes only its harness's
+own refusal strings; ordinary failed tool calls — including ambiguous DNS and OS-process failures,
+and OpenCode tool-body errors like `oldString not found` — remain unclassified rather than creating
+false positives. *Fallback:* no report and no warning — a run that degraded to static reasoning is
+only visible in the raw captures, which `run` preflight states once naming that fallback.
+*Capability:* carried by `transcript.parser`, not a separate descriptor field —
+`claude-stream-json`, `codex-items`, and `opencode-events` surface denials
 (`TranscriptParser::surfaces_permission_denials`, pinned across harnesses in
 `src/adapters/harness.rs`). The eval write guard denies through the same permission mechanism, so
 its blocks land in the report as well; they are attributed by the `eval guard: ` reason prefix and

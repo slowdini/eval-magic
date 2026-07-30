@@ -47,6 +47,17 @@ fn write_claude_events(outputs_dir: &Path, final_text: &str) {
     fs::write(outputs_dir.join("claude-events.jsonl"), jsonl(&lines)).unwrap();
 }
 
+/// An `opencode run --format json` events fixture: a final `text` part and a
+/// `step_finish` carrying token usage (input 1 + output 1 + reasoning 0). Tokens
+/// sum to 2, matching the codex/claude base fixtures' minimal shape.
+fn write_opencode_events(outputs_dir: &Path, final_text: &str) {
+    let lines = vec![
+        json!({"type": "text", "timestamp": 1_000, "sessionID": "ses_1", "part": {"id": "p1", "type": "text", "text": final_text}}),
+        json!({"type": "step_finish", "timestamp": 2_000, "sessionID": "ses_1", "part": {"id": "p2", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}),
+    ];
+    fs::write(outputs_dir.join("opencode-events.jsonl"), jsonl(&lines)).unwrap();
+}
+
 /// A `claude -p` events fixture where the agent reads its dispatch prompt:
 /// a `Read` tool call whose `input.file_path` is `prompt_path`, a
 /// `tool_result` carrying `read_result` (the file content on success, an

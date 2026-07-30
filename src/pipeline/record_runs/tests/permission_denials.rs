@@ -28,6 +28,35 @@ fn write_codex_stderr_with_denial(outputs_dir: &Path, reason: &str) {
     .unwrap();
 }
 
+/// OpenCode records a refusal as a `tool_use` event whose `state.error` carries
+/// the refusal explanation. `error` is the full `state.error` string; `tool`
+/// and `input` shape the refused call (input *keys* only reach the report).
+fn write_opencode_events_with_denial(
+    outputs_dir: &Path,
+    error: &str,
+    tool: &str,
+    input: serde_json::Value,
+) {
+    let lines = vec![
+        json!({"type": "text", "timestamp": 1_000, "sessionID": "ses_1", "part": {"id": "p1", "type": "text", "text": "Verified by reasoning."}}),
+        json!({"type": "step_finish", "timestamp": 2_000, "sessionID": "ses_1", "part": {"id": "p2", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}),
+        json!({
+            "type": "tool_use", "timestamp": 1_500, "sessionID": "ses_1",
+            "part": {
+                "id": "pt_1", "sessionID": "ses_1", "messageID": "msg_1", "type": "tool", "callID": "c_1",
+                "tool": tool,
+                "state": {"status": "error", "input": input, "error": error, "time": {"start": 1_400, "end": 1_500}}
+            }
+        }),
+    ];
+    fs::write(outputs_dir.join("opencode-events.jsonl"), jsonl(&lines)).unwrap();
+}
+
+/// The fixed prefix OpenCode's `PermissionDeniedError` emits before its ruleset
+/// JSON — matches the parser constant so this test breaks if the marker drifts.
+const OPENCODE_DENY_RULE_PREFIX: &str =
+    "The user has specified a rule which prevents you from using this specific tool call.";
+
 fn read_permission_denials(iteration_dir: &Path) -> Value {
     let raw = fs::read_to_string(iteration_dir.join("permission-denials.json")).unwrap();
     serde_json::from_str(&raw).unwrap()
@@ -169,9 +198,10 @@ fn codex_guard_blocks_are_attributed_and_not_counted_as_harness_refusals() {
 }
 
 #[test]
-fn no_permission_denials_artifact_for_a_harness_that_cannot_detect_them() {
-    // Absence of the file means "not detected", never "zero denials" — so it
-    // is not written at all rather than written empty.
+fn opencode_writes_a_zero_denial_report_when_nothing_was_refused() {
+    // OpenCode now detects denials, so "detected and nothing refused" writes a
+    // zero-denial report (the file's presence means "detected"); absence of the
+    // file would now mean "not detected", never "zero denials".
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     let paths = write_iteration(
@@ -182,17 +212,90 @@ fn no_permission_denials_artifact_for_a_harness_that_cannot_detect_them() {
             final_message: Some("Fixed it."),
         }],
     );
-    fs::write(
-        paths[0].outputs_dir.join("opencode-events.jsonl"),
-        concat!(
-            r#"{"type":"text","timestamp":1000,"sessionID":"ses_1","part":{"id":"p1","type":"text","text":"Fixed it."}}"#,
-            "\n"
-        ),
-    )
-    .unwrap();
+    write_opencode_events(&paths[0].outputs_dir, "Fixed it.");
 
     record_runs(&iter, 1, Harness::resolve("opencode").unwrap(), false).unwrap();
-    assert!(!iter.join("permission-denials.json").exists());
+    let report = read_permission_denials(&iter);
+    assert_eq!(report["iteration"], 1);
+    assert_eq!(report["total_denials"], 0);
+    assert_eq!(report["tasks"], serde_json::json!([]));
+}
+
+#[test]
+fn collects_opencode_permission_denials_from_the_event_stream() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "tz-bug",
+            condition: "with_skill",
+            final_message: Some("Verified by reasoning."),
+        }],
+    );
+    write_opencode_events_with_denial(
+        &paths[0].outputs_dir,
+        &format!(
+            "{OPENCODE_DENY_RULE_PREFIX} Here are some of the relevant rules \
+            [{{\"permission\":\"bash\",\"pattern\":\"pwd\",\"action\":\"deny\"}}]"
+        ),
+        "bash",
+        json!({"command": "pwd"}),
+    );
+
+    let result = record_runs(&iter, 2, Harness::resolve("opencode").unwrap(), false).unwrap();
+
+    assert_eq!(result.recorded, 1);
+    assert_eq!(result.permission_denials, 1);
+    assert_eq!(result.permission_denial_tasks, 1);
+    let report = read_permission_denials(&iter);
+    assert_eq!(report["iteration"], 2);
+    assert_eq!(report["total_denials"], 1);
+    assert_eq!(report["tasks"][0]["denials"][0]["tool"], "bash");
+    // The ruleset is stripped to the fixed refusal prefix.
+    assert_eq!(
+        report["tasks"][0]["denials"][0]["reason"],
+        OPENCODE_DENY_RULE_PREFIX
+    );
+    assert_eq!(
+        report["tasks"][0]["denials"][0]["input_keys"],
+        json!(["command"])
+    );
+    assert_eq!(report["tasks"][0]["guard_attributed_count"], 0);
+}
+
+#[test]
+fn opencode_guard_blocks_are_attributed_and_not_counted_as_harness_refusals() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "tz-bug",
+            condition: "with_skill",
+            final_message: Some("Done."),
+        }],
+    );
+    write_opencode_events_with_denial(
+        &paths[0].outputs_dir,
+        "eval guard: write to /tmp/x is outside the eval sandbox",
+        "edit",
+        json!({"filePath": "/tmp/x", "oldString": "a", "newString": "b"}),
+    );
+
+    let result = record_runs(&iter, 1, Harness::resolve("opencode").unwrap(), false).unwrap();
+    assert_eq!(result.permission_denials, 0);
+    assert_eq!(result.permission_denial_tasks, 0);
+
+    let report = read_permission_denials(&iter);
+    assert_eq!(report["total_denials"], 1);
+    assert_eq!(report["tasks"][0]["guard_attributed_count"], 1);
+    assert_eq!(report["tasks"][0]["denials"][0]["guard_attributed"], true);
+    // input *keys* only — the file body never reaches the report.
+    assert_eq!(
+        report["tasks"][0]["denials"][0]["input_keys"],
+        json!(["filePath", "newString", "oldString"])
+    );
 }
 
 #[test]
@@ -357,6 +460,70 @@ fn codex_permission_denials_accumulate_across_every_scripted_round() {
     .unwrap();
 
     let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
+    assert_eq!(result.recorded, 1);
+    assert_eq!(result.permission_denials, 2);
+    assert_eq!(result.permission_denial_tasks, 1);
+
+    let report = read_permission_denials(&iter);
+    assert_eq!(report["total_denials"], 2);
+    assert_eq!(report["tasks"][0]["denial_count"], 2);
+}
+
+#[test]
+fn opencode_permission_denials_accumulate_across_every_scripted_round() {
+    // Each scripted round is its own `opencode run` with its own events file, so
+    // a refusal in any round must be picked up — not just the last one's.
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "clarify",
+            condition: "with_skill",
+            final_message: None,
+        }],
+    );
+    let conversation_path = iter
+        .join("eval-clarify")
+        .join("with_skill")
+        .join("conversation.json");
+    fs::write(
+        &conversation_path,
+        serde_json::to_string_pretty(&json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
+                {"type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which timezone?"},
+                {"type": "user_message", "ordinal": 2, "round": 2, "text": "US timezones."},
+                {"type": "assistant_message", "ordinal": 3, "round": 2, "text": "Done."}
+            ]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for round in [1, 2] {
+        let round_dir = paths[0].outputs_dir.join(format!("turn-{round}"));
+        fs::create_dir_all(&round_dir).unwrap();
+        write_opencode_events_with_denial(
+            &round_dir,
+            &format!("{OPENCODE_DENY_RULE_PREFIX} Here are some of the relevant rules []"),
+            "bash",
+            json!({"command": "pwd"}),
+        );
+    }
+    let dispatch_path = iter.join("dispatch.json");
+    let mut dispatch: Value =
+        serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
+    dispatch["tasks"][0]["conversation_path"] =
+        json!(conversation_path.to_string_lossy().to_string());
+    fs::write(
+        &dispatch_path,
+        serde_json::to_string_pretty(&dispatch).unwrap(),
+    )
+    .unwrap();
+
+    let result = record_runs(&iter, 1, Harness::resolve("opencode").unwrap(), false).unwrap();
     assert_eq!(result.recorded, 1);
     assert_eq!(result.permission_denials, 2);
     assert_eq!(result.permission_denial_tasks, 1);
