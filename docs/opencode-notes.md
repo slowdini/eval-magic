@@ -113,6 +113,44 @@ surface), so each tool call spawns one `eval-magic guard-hook`. Classification s
 arbiter, and tools outside the write/patch/shell vocabulary fall through to allow in
 milliseconds — the same fail-open-per-call posture as the other engines.
 
+## Permission denials
+
+OpenCode has no dedicated refusal channel: a tool call the harness refuses to run is recorded as
+an ordinary `tool_use` event whose `part.state.status` is `"error"` and whose `state.error` carries
+the refusal explanation. The `opencode-events` parser tells a refusal from an ordinary tool error by
+the *content* of that string, which OpenCode itself authors at the permission layer — before the
+tool body runs — so matching it is not guessing from arbitrary result text:
+
+- An **explicit deny rule** (the operator `permission` config matching the call) throws
+  `PermissionDeniedError` with the fixed prefix
+  `The user has specified a rule which prevents you from using this specific tool call.` followed by
+  the operator's rule list as JSON. The parser drops that ruleset tail and keeps the prefix as the
+  reason.
+- A **headless reject** (an approval ask with nobody to approve it; or reject-with-feedback) throws
+  `PermissionRejectedError`/`PermissionCorrectedError` with the prefix
+  `The user rejected permission to use this specific tool call`. The parser normalizes both to the
+  one canonical sentence and drops any user feedback. This path is unreachable in-eval (the dispatch
+  recipe runs `--auto`, so asks auto-approve), but is recognized for robustness.
+- The **eval write guard** throws the shared `eval guard: <reason>` string (the plugin throws the
+  verdict's `reason` verbatim, see "Write guard" below); the parser keeps it verbatim so the
+  pipeline can attribute it via the `eval guard: ` prefix and leave it to the guard's own warning
+  rather than reporting it twice.
+
+The report stores the refused input's *keys* — sorted, never values — so a refused `edit`/`write`
+cannot spill a file body and a refused `apply_patch` cannot spill its patch. Ordinary tool errors
+(a bash `command not found`, an `edit` `oldString not found`, DNS and OS-process failures) never
+match those OpenCode-authored prefixes and are therefore not classified as permission denials.
+
+A note on tool *visibility*: when an operator rule denies a tool with pattern `"*"` and action
+`"deny"`, OpenCode removes that tool from the offered toolset entirely — the agent has no `bash`
+to call and emits no event, so there is nothing to record. Pattern-specific denies (which keep the
+tool visible so a matching call throws `PermissionDeniedError`) are what the parser captures; a
+globally-denied tool is simply absent from the transcript.
+
+These shapes were verified against `opencode v1.18.10` on 2026-07-30 by capturing
+`opencode run --format json --auto` under a `permission.bash` deny rule. Re-check the parser
+fixtures if OpenCode changes its permission-error wording.
+
 ## Isolating from live skills
 
 Every `opencode run` discovers skills well beyond the eval env. Before dispatch, the

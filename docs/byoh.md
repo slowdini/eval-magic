@@ -169,7 +169,12 @@ you get the full feature from configuration alone:
   structural tool-router rejections and `PreToolUse` blocks from the sibling `*-stderr.log`
   capture. The events filename must end in `events.jsonl` so the parser can derive that sibling.
   Ordinary failed command events are intentionally not treated as permission denials.
-- `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish` events.
+- `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish`
+  events. It surfaces **permission-denied tool calls** by recognizing OpenCode's own permission-layer
+  error strings on a `tool_use` event's `state.error` (an explicit deny rule's
+  `PermissionDeniedError` prefix, a headless reject's `PermissionRejectedError` prefix, or the
+  shared `eval guard: ` reason for a guard block), which drives `permission-denials.json` and its
+  validity warning. Ordinary tool-body errors are intentionally not treated as permission denials.
 - `staging.slug_capability = "opencode"` — OpenCode's sanitizing slug rules.
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.
 - `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.

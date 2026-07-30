@@ -23,5 +23,6 @@ mod git_isolation;
 mod grouping;
 mod lifecycle;
 mod opencode;
+mod opencode_permission_denials;
 mod runbook;
 mod staging;

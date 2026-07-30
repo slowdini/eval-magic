@@ -11,11 +11,23 @@
 //! the envelope timestamps.
 
 use crate::adapters::TranscriptSummary;
-use crate::adapters::transcript::{TranscriptEvent, read_jsonl};
+use crate::adapters::transcript::{PermissionDenial, TranscriptEvent, read_jsonl};
 use crate::core::ToolInvocation;
+use crate::sandbox::GUARD_REASON_PREFIX;
 use serde_json::Value;
 use std::io;
 use std::path::Path;
+
+/// The stable prefix OpenCode's `PermissionDeniedError` always emits before
+/// appending the operator's rule list as JSON. The ruleset is operator config,
+/// not the refusal explanation, so the parser drops it.
+const DENY_RULE_PREFIX: &str =
+    "The user has specified a rule which prevents you from using this specific tool call.";
+/// Common prefix of `PermissionRejectedError` (headless auto-reject) and
+/// `PermissionCorrectedError` (reject with feedback); reached only when an
+/// approval ask is not auto-approved, which never happens under the dispatch
+/// recipe's `--auto`, but is recognized for robustness.
+const REJECT_PREFIX: &str = "The user rejected permission to use this specific tool call";
 
 fn extract_invocations(records: &[Value]) -> Vec<ToolInvocation> {
     let mut invocations = Vec::new();
@@ -103,6 +115,79 @@ pub fn parse_opencode_events(jsonl_path: &Path) -> io::Result<Vec<ToolInvocation
     Ok(extract_invocations(&read_jsonl::<Value>(jsonl_path)?))
 }
 
+/// Parse the tool calls the CLI refused to run from an OpenCode event stream.
+///
+/// OpenCode has no dedicated refusal channel: a refused call lands as a
+/// `tool_use` event with `part.state.status == "error"` whose `error` string
+/// OpenCode itself authors at the permission layer (before the tool body
+/// runs). An explicit deny rule throws `PermissionDeniedError` with the fixed
+/// [`DENY_RULE_PREFIX`]; a headless reject (or reject-with-feedback) throws
+/// `PermissionRejectedError`/`PermissionCorrectedError` with [`REJECT_PREFIX`];
+/// and the eval write guard throws the shared `eval guard: ` reason. Ordinary
+/// tool errors never produce those strings, so matching the prefixes is not
+/// guessing from result text. The ruleset JSON and any correction feedback are
+/// stripped from the reason; the guard reason is kept verbatim so the pipeline
+/// can attribute it via [`GUARD_REASON_PREFIX`]. Records the refused input's
+/// *keys*, never its values.
+pub fn parse_opencode_permission_denials(jsonl_path: &Path) -> io::Result<Vec<PermissionDenial>> {
+    let records = match read_jsonl::<Value>(jsonl_path) {
+        Ok(records) => records,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(error),
+    };
+    Ok(records
+        .iter()
+        .filter_map(permission_denial_from_event)
+        .collect())
+}
+
+fn permission_denial_from_event(record: &Value) -> Option<PermissionDenial> {
+    if record.get("type").and_then(Value::as_str) != Some("tool_use") {
+        return None;
+    }
+    let part = record.get("part").and_then(Value::as_object)?;
+    let tool = part.get("tool").and_then(Value::as_str)?;
+    let state = part.get("state").and_then(Value::as_object)?;
+    if state.get("status").and_then(Value::as_str) != Some("error") {
+        return None;
+    }
+    let error = state.get("error").and_then(Value::as_str)?;
+    let reason = refusal_reason(error)?;
+    let mut input_keys: Vec<String> = state
+        .get("input")
+        .and_then(Value::as_object)
+        .map(|input| input.keys().cloned().collect::<Vec<_>>())
+        .unwrap_or_default();
+    input_keys.sort();
+    Some(PermissionDenial {
+        tool: tool.to_string(),
+        reason: Some(reason),
+        input_keys,
+    })
+}
+
+/// Normalize a tool-error string into the refusal reason, or `None` if it is an
+/// ordinary tool error rather than a permission refusal.
+fn refusal_reason(error: &str) -> Option<String> {
+    // The eval write guard throws the shared reason verbatim — keep it so the
+    // pipeline can attribute it (same prefix both sides match against).
+    if error.starts_with(GUARD_REASON_PREFIX) {
+        return Some(error.to_string());
+    }
+    // An explicit deny rule appends the operator's rule list as JSON; that is
+    // operator config, not the refusal explanation, so only the fixed prefix
+    // is kept.
+    if error.starts_with(DENY_RULE_PREFIX) {
+        return Some(DENY_RULE_PREFIX.to_string());
+    }
+    // A headless reject, with or without user feedback, normalizes to the same
+    // canonical sentence.
+    if error.starts_with(REJECT_PREFIX) {
+        return Some(format!("{REJECT_PREFIX}."));
+    }
+    None
+}
+
 /// Parse an OpenCode `--format json` event stream into a full
 /// [`TranscriptSummary`].
 pub fn parse_opencode_events_full(jsonl_path: &Path) -> io::Result<TranscriptSummary> {
@@ -167,6 +252,10 @@ pub fn parse_opencode_events_full(jsonl_path: &Path) -> io::Result<TranscriptSum
         final_text,
     })
 }
+
+#[cfg(test)]
+#[path = "transcript/permission_denials_tests.rs"]
+mod permission_denials_tests;
 
 #[cfg(test)]
 mod tests {

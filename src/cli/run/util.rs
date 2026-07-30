@@ -439,10 +439,12 @@ mod tests {
     }
 
     #[test]
-    fn preflight_names_the_fallback_when_denials_cannot_be_detected() {
-        // Claude Code and Codex report refusals structurally, so they warn about
-        // nothing. OpenCode cannot, so preflight names the fallback once.
-        for name in ["claude-code", "codex"] {
+    fn preflight_does_not_warn_when_denials_can_be_detected() {
+        // All three built-in parsers report refusals structurally, so none of
+        // them carry the fallback warning. The preflight fallback branch stays
+        // defensive for a future harness whose parser cannot tell a refusal
+        // from an ordinary tool error.
+        for name in ["claude-code", "codex", "opencode"] {
             let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
             let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
             assert!(
@@ -454,20 +456,6 @@ mod tests {
                 preflight.warnings
             );
         }
-
-        let name = "opencode";
-        let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
-        let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
-        let warning = preflight
-            .warnings
-            .iter()
-            .find(|w| w.contains("permission-denied"))
-            .unwrap_or_else(|| panic!("{name}: {:?}", preflight.warnings));
-        assert!(warning.contains(name), "names the harness: {warning}");
-        assert!(
-            warning.contains("validity_warnings"),
-            "names the fallback: {warning}"
-        );
     }
 
     #[test]

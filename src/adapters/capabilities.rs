@@ -68,7 +68,9 @@ impl TranscriptParser {
     pub(crate) fn surfaces_permission_denials(self) -> bool {
         matches!(
             self,
-            TranscriptParser::ClaudeStreamJson | TranscriptParser::CodexItems
+            TranscriptParser::ClaudeStreamJson
+                | TranscriptParser::CodexItems
+                | TranscriptParser::OpencodeEvents
         )
     }
 
@@ -84,7 +86,9 @@ impl TranscriptParser {
             TranscriptParser::CodexItems => {
                 super::codex::transcript::parse_codex_permission_denials(path)
             }
-            TranscriptParser::OpencodeEvents => Ok(Vec::new()),
+            TranscriptParser::OpencodeEvents => {
+                super::opencode::transcript::parse_opencode_permission_denials(path)
+            }
         }
     }
 }

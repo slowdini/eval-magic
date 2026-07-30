@@ -549,26 +549,40 @@ mod tests {
     }
 
     #[test]
-    fn claude_and_codex_surface_permission_denials() {
+    fn claude_codex_and_opencode_surface_permission_denials() {
         // Each harness encodes a refused tool call differently, so detection is
-        // opt-in per parser. Harnesses without it emit nothing rather than
+        // opt-in per parser. Every built-in parser detects today; a future
+        // harness whose transcript cannot distinguish a refusal from an ordinary
+        // tool error leaves the default `false` and reports nothing rather than
         // guessing — `aggregate` then raises no permission-denial warning.
         assert!(
             adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_permission_denials()
         );
         assert!(adapter_for(Harness::resolve("codex").unwrap()).surfaces_permission_denials());
-        assert!(!adapter_for(Harness::resolve("opencode").unwrap()).surfaces_permission_denials());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).surfaces_permission_denials());
     }
 
     #[test]
-    fn harnesses_without_denial_detection_parse_no_denials() {
-        // The fallback is an empty vec, not an error: a run on such a harness
-        // still ingests normally, it just carries no denial signal.
+    fn a_deny_less_transcript_parses_no_denials_for_every_detecting_harness() {
+        // "None reported" is a supported, distinguishable outcome — not an
+        // error. Each detecting parser, given a transcript whose tool calls all
+        // completed or failed for ordinary (non-permission) reasons, yields an
+        // empty vec; the per-parser suites cover the false-positive guard.
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("events.jsonl");
         std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
-        let adapter = adapter_for(Harness::resolve("opencode").unwrap());
-        assert_eq!(adapter.parse_permission_denials(&path).unwrap(), Vec::new());
+        for harness in Harness::known() {
+            let adapter = adapter_for(harness);
+            assert!(
+                adapter.surfaces_permission_denials(),
+                "{harness:?} should detect"
+            );
+            assert_eq!(
+                adapter.parse_permission_denials(&path).unwrap(),
+                Vec::new(),
+                "{harness:?} reported a denial from a denial-less transcript"
+            );
+        }
     }
 
     #[test]
