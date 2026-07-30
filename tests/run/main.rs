@@ -9,6 +9,7 @@
 
 mod helpers;
 
+mod agent_env;
 mod byoh;
 mod claude_cli;
 mod codex;

@@ -53,6 +53,9 @@ EXAMPLES:
   # use --judge-model unless an individual llm_judge assertion sets model.
   eval-magic run --harness codex --agent-model gpt-5-mini --judge-model gpt-5
 
+  # Reproduce an agent-side environment condition (recorded in run artifacts)
+  eval-magic run --agent-env TZ=America/Los_Angeles
+
   # OpenCode harness: stages under `.opencode/skills/`; dispatch per RUNBOOK.md
   # with `opencode run` (stdin detached), then ingest reads each task's
   # outputs/opencode-events.jsonl

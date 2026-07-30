@@ -11,6 +11,7 @@
 //! sibling [`super::staging`] / [`super::dispatch`] modules, and the small
 //! stateless helpers in [`super::util`].
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
@@ -48,6 +49,8 @@ pub struct RunOptions<'a> {
     /// Operator-declared models + label, persisted into `conditions.json` for
     /// provenance (the runner cannot observe them itself).
     pub agent_model: Option<&'a str>,
+    /// Resolved descriptor defaults plus run-level agent environment overrides.
+    pub agent_env: BTreeMap<String, String>,
     pub judge_model: Option<&'a str>,
     pub label: Option<&'a str>,
 }
@@ -264,6 +267,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
             target_args: &target_args,
             iteration,
             agent_model: opts.agent_model,
+            agent_env: &opts.agent_env,
         })
     );
 }

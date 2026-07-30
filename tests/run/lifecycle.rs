@@ -342,6 +342,7 @@ fn omitted_models_and_label_are_absent_from_conditions() {
     assert!(conditions.get("agent_model").is_none());
     assert!(conditions.get("judge_model").is_none());
     assert!(conditions.get("label").is_none());
+    assert!(conditions.get("agent_env").is_none());
 }
 
 #[test]

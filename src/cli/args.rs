@@ -482,6 +482,17 @@ pub struct RunArgs {
     /// the value is persisted to `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub agent_model: Option<String>,
+    /// Environment override for eval-agent dispatches (`KEY=VALUE`, repeatable).
+    ///
+    /// Descriptor defaults from `[dispatch.env]` apply first; repeated CLI
+    /// entries override them by key, with the last occurrence winning. Values
+    /// may be empty and may contain `=`. The resolved map is recorded in
+    /// `conditions.json` and `dispatch.json`, so do not use this flag for
+    /// secrets. This does not affect judge agents or runner-owned
+    /// `command_check` assertions. Unset keys keep inheriting the operator's
+    /// environment.
+    #[arg(long, value_name = "KEY=VALUE")]
+    pub agent_env: Vec<String>,
     /// Default judge model for emitted judge tasks.
     ///
     /// `grade` writes this into `judge-tasks.json` for judge tasks that do not

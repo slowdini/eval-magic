@@ -73,6 +73,13 @@ label = "{label}"
 ## guard_args (guard-only args spliced at {guard_args}) and model_note (sentence spliced at
 ## {model_note}) are niche — see the schema; guard_args only matters to guarded built-ins.
 
+## [dispatch.env] declares non-secret defaults for eval-agent subprocesses. Descriptor layers
+## merge keys; repeatable run --agent-env KEY=VALUE flags override them. Resolved values are
+## recorded in conditions.json and dispatch.json, and do not affect judges or command_check.
+## Unset keys inherit the operator environment; eval-magic supplies no timezone default.
+# [dispatch.env]
+# TZ = "UTC"
+
 ## -------------------------------------------------------------------------------------------
 ## [tools] — the harness's tool-name vocabulary by role, spelled exactly as its transcripts and
 ## hook payloads spell them (the stray-writes audit classifies invocations by these names).

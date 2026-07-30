@@ -14,7 +14,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, bail};
 use regex::Regex;
 
-use crate::adapters::cli_command::{render_cli_model_arg, shell_quote_arg};
+use crate::adapters::cli_command::{
+    render_agent_dispatch_command, render_cli_model_arg, shell_quote_arg,
+};
 use crate::adapters::descriptor::{HarnessDescriptor, subst};
 
 /// Options carried from the parsed `--probe` flags into [`run_probe`].
@@ -189,6 +191,7 @@ pub(crate) fn run_probe(
     let model_flag = descriptor.model.as_ref().map(|m| m.flag.as_str());
     let parallel_template = descriptor.dispatch.parallel_command_template.clone();
     let judge_template = descriptor.dispatch.judge_command_template.clone();
+    let agent_env = descriptor.dispatch.env.clone();
     let model_arg = render_cli_model_arg(model_flag, None);
     let guard_args = "";
 
@@ -205,13 +208,16 @@ pub(crate) fn run_probe(
 
     let eval_root_str = eval_root.to_string_lossy();
     let prompt_path_str = prompt_path.to_string_lossy();
-    let command = render_probe_exec(
-        exec_template,
-        &eval_root_str,
-        &prompt_path_str,
-        &outputs_dir,
-        &model_arg,
-        guard_args,
+    let command = render_agent_dispatch_command(
+        &render_probe_exec(
+            exec_template,
+            &eval_root_str,
+            &prompt_path_str,
+            &outputs_dir,
+            &model_arg,
+            guard_args,
+        ),
+        &agent_env,
     );
 
     // Banner + confirm on stderr so it precedes the ✓/✗ result lines, which

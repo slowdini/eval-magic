@@ -12,6 +12,8 @@
 //! cross-harness adapter tests, so user-supplied descriptor files inherit the
 //! same checks.
 
+use std::collections::BTreeMap;
+
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
@@ -329,6 +331,8 @@ pub struct ShadowSection {
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct DispatchSection {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture_prefix: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -367,7 +371,8 @@ fn token_usage_aggregation_is_sum(value: &TokenUsageAggregation) -> bool {
 impl DispatchSection {
     /// True when no dispatch field is set.
     pub fn is_empty(&self) -> bool {
-        self.capture_prefix.is_none()
+        self.env.is_empty()
+            && self.capture_prefix.is_none()
             && self.guard_args.is_none()
             && self.model_note.is_none()
             && self.next_steps_template.is_none()
@@ -689,6 +694,30 @@ timestamp_spread = "timestamp"
     }
 
     #[test]
+    fn dispatch_environment_loads_and_reserializes() {
+        let d = load(&format!(
+            "{MINIMAL}\n[dispatch.env]\nTZ = \"UTC\"\nEMPTY = \"\"\n"
+        ))
+        .unwrap();
+        assert_eq!(d.dispatch.env["TZ"], "UTC");
+        assert_eq!(d.dispatch.env["EMPTY"], "");
+
+        let shown = toml::to_string(&d).unwrap();
+        assert!(shown.contains("[dispatch.env]"), "{shown}");
+        assert!(shown.contains("TZ = \"UTC\""), "{shown}");
+    }
+
+    #[test]
+    fn dispatch_environment_rejects_unsafe_names_and_git_routing() {
+        for name in ["BAD-NAME", "GIT_DIR", "GIT_WORK_TREE"] {
+            let error = err_of(&format!(
+                "{MINIMAL}\n[dispatch.env]\n\"{name}\" = \"value\"\n"
+            ));
+            assert!(error.contains(name), "{name}: {error}");
+        }
+    }
+
+    #[test]
     fn guarded_descriptor_loads() {
         let d = load(GUARDED).unwrap();
         assert!(d.run.supports_guard);
@@ -785,6 +814,10 @@ flag = "--model"
 
 [dispatch]
 capture_prefix = "demo"
+
+[dispatch.env]
+KEEP = "base"
+TZ = "UTC"
 "#,
         )
         .unwrap();
@@ -795,6 +828,10 @@ config_dirs = [".other"]
 
 [model]
 flag = "--model-x"
+
+[dispatch.env]
+ADDED = "overlay"
+TZ = "America/Los_Angeles"
 "#,
         )
         .unwrap();
@@ -803,6 +840,12 @@ flag = "--model-x"
         // wholesale (no element-wise merge).
         assert_eq!(base["model"]["flag"], "--model-x");
         assert_eq!(base["dispatch"]["capture_prefix"], "demo");
+        assert_eq!(base["dispatch"]["env"]["KEEP"], "base");
+        assert_eq!(base["dispatch"]["env"]["ADDED"], "overlay");
+        assert_eq!(
+            base["dispatch"]["env"]["TZ"], "America/Los_Angeles",
+            "later descriptor layers override environment keys individually"
+        );
         assert_eq!(base["config_dirs"], serde_json::json!([".other"]));
     }
 

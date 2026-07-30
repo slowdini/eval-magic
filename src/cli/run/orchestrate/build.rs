@@ -54,6 +54,7 @@ pub(super) fn write_dispatch(
         run_nonce: Some(r.run_nonce.clone()),
         runs: Some(opts.runs),
         agent_model: opts.agent_model.map(str::to_owned),
+        agent_env: opts.agent_env.clone(),
         judge_model: opts.judge_model.map(str::to_owned),
         label: opts.label.map(str::to_owned),
     };
@@ -237,6 +238,7 @@ pub(super) fn write_dispatch(
                 harness: ctx.harness,
                 guard: opts.guard_armed(),
                 agent_model: opts.agent_model,
+                agent_env: &opts.agent_env,
             },
         ),
     )?;
@@ -263,6 +265,12 @@ pub(super) fn write_dispatch(
         "harness": ctx.harness,
         "tasks": tasks,
     });
+    if !conditions.agent_env.is_empty() {
+        dispatch_json
+            .as_object_mut()
+            .expect("dispatch envelope is an object")
+            .insert("agent_env".to_string(), json!(conditions.agent_env));
+    }
     if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
         let descriptor = crate::adapters::registry::descriptor_value_for(ctx.harness);
         let envelope = dispatch_json
@@ -333,6 +341,7 @@ pub(super) fn write_dispatch(
         target_args: &target_args,
         guard: opts.guard_armed(),
         agent_model: opts.agent_model,
+        agent_env: &opts.agent_env,
     });
     fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
 

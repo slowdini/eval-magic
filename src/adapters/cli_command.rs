@@ -1,6 +1,8 @@
 //! Shared rendering helpers for harness CLI command templates
 //! (Codex's `codex exec`, Claude Code's `claude -p`).
 
+use std::collections::BTreeMap;
+
 use crate::core::GIT_ROUTING_ENV_VARS;
 
 /// POSIX-shell prelude used for every eval-agent process. Task cwd is the
@@ -10,9 +12,25 @@ pub(crate) fn git_environment_prelude() -> String {
 }
 
 /// Prefix one one-shot or resumed eval-agent command with the Git sanitation
-/// prelude. Judge commands intentionally use their separate recipe.
-pub(crate) fn render_agent_dispatch_command(command: &str) -> String {
-    format!("{}\n{command}", git_environment_prelude())
+/// prelude. Configured exports are scoped to a subshell so a copied recipe
+/// cannot leak them into later judge or runner commands.
+pub(crate) fn render_agent_dispatch_command(
+    command: &str,
+    environment: &BTreeMap<String, String>,
+) -> String {
+    if environment.is_empty() {
+        return format!("{}\n{command}", git_environment_prelude());
+    }
+
+    let mut lines = vec!["(".to_string(), git_environment_prelude()];
+    lines.extend(
+        environment
+            .iter()
+            .map(|(name, value)| format!("export {name}={}", shell_quote_arg(value))),
+    );
+    lines.push(command.to_string());
+    lines.push(")".to_string());
+    lines.join("\n")
 }
 
 /// Quote a value for a POSIX shell only when it contains anything outside a
@@ -52,13 +70,17 @@ pub(crate) fn render_cli_model_arg(flag: Option<&str>, model: Option<&str>) -> S
 /// instead, where they do not survive argument passing — jq then emits no
 /// separators and `xargs -0` collapses every field into one bogus dispatch
 /// that exits 0. Paths containing a newline remain unsupported, as before.
-pub(crate) fn render_parallel_dispatch_recipe(command_block: &str, one_shot_only: bool) -> String {
+pub(crate) fn render_parallel_dispatch_recipe(
+    command_block: &str,
+    one_shot_only: bool,
+    environment: &BTreeMap<String, String>,
+) -> String {
     let tasks = if one_shot_only {
         ".tasks[] | select(.turns == null)"
     } else {
         ".tasks[]"
     };
-    [
+    let mut lines = vec![
         "JOBS=${JOBS:-4}".to_string(),
         format!(
             "jq -r '{tasks} | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \\"
@@ -70,10 +92,14 @@ pub(crate) fn render_parallel_dispatch_recipe(command_block: &str, one_shot_only
         "    outputs_dir=\"$3\"".to_string(),
         "    mkdir -p \"$outputs_dir\"".to_string(),
         format!("    {}", git_environment_prelude()),
-        command_block.to_string(),
-        "  ' sh".to_string(),
-    ]
-    .join("\n")
+    ];
+    lines.extend(
+        environment
+            .iter()
+            .map(|(name, value)| format!("    export {name}={}", shell_quote_arg(value))),
+    );
+    lines.extend([command_block.to_string(), "  ' sh".to_string()]);
+    lines.join("\n")
 }
 
 /// Render the shared judge-dispatch recipe: the jq/xargs scaffold over
@@ -118,10 +144,32 @@ pub(crate) fn render_judge_dispatch_recipe(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use super::{
-        render_cli_model_arg, render_judge_dispatch_recipe, render_parallel_dispatch_recipe,
-        shell_quote_arg,
+        render_agent_dispatch_command, render_cli_model_arg, render_judge_dispatch_recipe,
+        render_parallel_dispatch_recipe, shell_quote_arg,
     };
+
+    #[test]
+    fn agent_dispatch_environment_is_sorted_and_shell_quoted() {
+        let env = BTreeMap::from([
+            ("QUOTE".to_string(), "a'b".to_string()),
+            ("EMPTY".to_string(), String::new()),
+            ("MODE".to_string(), "strict mode".to_string()),
+        ]);
+
+        let rendered = render_agent_dispatch_command("agent run", &env);
+
+        assert!(rendered.starts_with("(\nunset GIT_DIR GIT_WORK_TREE"));
+        assert!(rendered.ends_with("agent run\n)"));
+        assert!(
+            rendered.contains(
+                "export EMPTY=\nexport MODE='strict mode'\nexport QUOTE='a'\"'\"'b'\nagent run"
+            ),
+            "{rendered}"
+        );
+    }
 
     #[test]
     fn shell_quote_leaves_safe_values_unquoted() {
@@ -157,7 +205,8 @@ mod tests {
 
     #[test]
     fn parallel_recipe_batches_three_nul_delimited_arguments_without_replacement() {
-        let recipe = render_parallel_dispatch_recipe("    run \"$eval_root\"", false);
+        let recipe =
+            render_parallel_dispatch_recipe("    run \"$eval_root\"", false, &BTreeMap::new());
 
         assert!(recipe.contains(
             "jq -r '.tasks[] | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json"
@@ -183,8 +232,8 @@ mod tests {
     #[test]
     fn recipes_carry_no_nul_escape_for_a_materialiser_to_resolve() {
         for recipe in [
-            render_parallel_dispatch_recipe("    run \"$eval_root\"", false),
-            render_parallel_dispatch_recipe("    run \"$eval_root\"", true),
+            render_parallel_dispatch_recipe("    run \"$eval_root\"", false, &BTreeMap::new()),
+            render_parallel_dispatch_recipe("    run \"$eval_root\"", true, &BTreeMap::new()),
             render_judge_dispatch_recipe("    judge $model_arg \\", "--model", "judge"),
         ] {
             assert!(!recipe.contains("\\u0000"), "{recipe}");
