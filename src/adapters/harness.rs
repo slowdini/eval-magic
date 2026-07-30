@@ -549,14 +549,14 @@ mod tests {
     }
 
     #[test]
-    fn only_claude_surfaces_permission_denials() {
+    fn claude_and_codex_surface_permission_denials() {
         // Each harness encodes a refused tool call differently, so detection is
         // opt-in per parser. Harnesses without it emit nothing rather than
         // guessing — `aggregate` then raises no permission-denial warning.
         assert!(
             adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_permission_denials()
         );
-        assert!(!adapter_for(Harness::resolve("codex").unwrap()).surfaces_permission_denials());
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).surfaces_permission_denials());
         assert!(!adapter_for(Harness::resolve("opencode").unwrap()).surfaces_permission_denials());
     }
 
@@ -567,10 +567,8 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("events.jsonl");
         std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
-        for name in ["codex", "opencode"] {
-            let adapter = adapter_for(Harness::resolve(name).unwrap());
-            assert_eq!(adapter.parse_permission_denials(&path).unwrap(), Vec::new());
-        }
+        let adapter = adapter_for(Harness::resolve("opencode").unwrap());
+        assert_eq!(adapter.parse_permission_denials(&path).unwrap(), Vec::new());
     }
 
     #[test]

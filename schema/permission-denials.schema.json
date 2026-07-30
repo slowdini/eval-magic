@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/permission-denials.schema.json",
   "title": "Permission Denial Report",
-  "description": "Output collected during record-runs from each task's transcript, for harnesses whose transcript identifies tool calls the harness refused to run. Records every refusal, including the eval write guard's own blocks, because each one changed what the agent could do — commonly degrading a run that should have executed something into static reasoning. Lives at <workspace>/iteration-N/permission-denials.json.",
+  "description": "Output collected during record-runs from each task's harness captures, for harnesses that identify tool calls they refused to run. Records every refusal, including the eval write guard's own blocks, because each one changed what the agent could do — commonly degrading a run that should have executed something into static reasoning. Lives at <workspace>/iteration-N/permission-denials.json.",
   "type": "object",
   "required": ["generated", "iteration", "total_denials", "tasks"],
   "additionalProperties": false,
@@ -59,7 +59,7 @@
         "tool": { "type": "string" },
         "reason": {
           "type": "string",
-          "description": "The harness's refusal text, verbatim. Absent when the transcript carries no result for the refused call."
+          "description": "The harness's refusal explanation, normalized to omit echoed command or patch payloads. Absent when the capture carries no explanation for the refused call."
         },
         "input_keys": {
           "type": "array",

@@ -66,18 +66,25 @@ impl TranscriptParser {
     /// Refusals are encoded differently by every CLI, so detection is opt-in per
     /// parser; the rest report none rather than guessing from result text.
     pub(crate) fn surfaces_permission_denials(self) -> bool {
-        matches!(self, TranscriptParser::ClaudeStreamJson)
+        matches!(
+            self,
+            TranscriptParser::ClaudeStreamJson | TranscriptParser::CodexItems
+        )
     }
 
-    /// Parse the refused tool calls out of the captured events file. Empty for
-    /// parsers that don't surface them — see
+    /// Parse refused tool calls associated with the captured events path. A
+    /// parser may correlate sibling captures. Empty for parsers that don't
+    /// surface denials — see
     /// [`surfaces_permission_denials`](Self::surfaces_permission_denials).
     pub(crate) fn parse_permission_denials(self, path: &Path) -> io::Result<Vec<PermissionDenial>> {
         match self {
             TranscriptParser::ClaudeStreamJson => {
                 super::claude_code::stream_json::parse_claude_permission_denials(path)
             }
-            TranscriptParser::CodexItems | TranscriptParser::OpencodeEvents => Ok(Vec::new()),
+            TranscriptParser::CodexItems => {
+                super::codex::transcript::parse_codex_permission_denials(path)
+            }
+            TranscriptParser::OpencodeEvents => Ok(Vec::new()),
         }
     }
 }

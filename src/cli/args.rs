@@ -602,13 +602,13 @@ pub(crate) enum Commands {
     /// timing carries `"source": "transcript"`. Use `--overwrite` to regenerate
     /// records and timing after extractor accounting changes. Folded into `ingest`.
     ///
-    /// For harnesses whose transcript identifies a refused tool call (claude-code
-    /// today) it also writes `permission-denials.json` and warns on stderr: the
-    /// dispatch exits 0 either way, so a run the harness refused — and which
-    /// therefore fell back to static reasoning — is otherwise invisible.
-    /// `aggregate` lifts one validity warning per affected task from that file.
-    /// No file is written for a harness that cannot detect a refusal, so its
-    /// absence never reads as "nothing was refused".
+    /// For harnesses whose captures identify a refused tool call (Claude Code
+    /// and Codex today), it also writes `permission-denials.json` and warns on
+    /// stderr: the dispatch can exit 0 either way, so a run the harness refused
+    /// — and which therefore fell back to static reasoning — is otherwise
+    /// invisible. `aggregate` lifts one validity warning per affected task from
+    /// that file. No file is written for a harness that cannot detect a refusal,
+    /// so its absence never reads as "nothing was refused".
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///

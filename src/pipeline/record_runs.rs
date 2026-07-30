@@ -14,7 +14,7 @@
 //! numbers captured at dispatch time are never replaced by transcript-derived
 //! ones (whose accounting is harness-specific and may not be comparable 1:1).
 //!
-//! Harnesses whose transcript identifies refused tool calls also get the
+//! Harnesses whose captures identify refused tool calls also get the
 //! iteration-level `permission-denials.json` written here (see
 //! [`crate::pipeline::permission_denials`]); harnesses that cannot detect a
 //! refusal get no file at all, so its absence never reads as "nothing refused".

@@ -1,9 +1,9 @@
-//! Collection of per-task transcript permission denials into the iteration
-//! artifact.
+//! Collection of per-task permission denials from harness captures into the
+//! iteration artifact.
 //!
-//! A refused tool call still appears in the transcript, so nothing downstream can
-//! tell "the agent ran the repro" from "the agent tried and was refused" — the
-//! dispatch exits 0 and the run grades normally. This report is that signal.
+//! A harness can report a refused tool call while the dispatch still exits 0
+//! and the run grades normally. This report preserves that otherwise easy-to-miss
+//! signal.
 //!
 //! Guard blocks land here too: harnesses report the write guard's PreToolUse
 //! denial like any other refusal. They are recorded but attributed, so

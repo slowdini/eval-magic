@@ -234,9 +234,9 @@ impl TranscriptSection {
             .is_some_and(super::capabilities::TranscriptParser::surfaces_permission_denials)
     }
 
-    /// Parse the refused tool calls out of the events file. Unlike
-    /// [`parse`](Self::parse), a tier without the capability returns an empty vec
-    /// rather than an error — no detection is a supported fallback.
+    /// Parse refused tool calls associated with the events path. Unlike
+    /// [`parse`](Self::parse), a tier without the capability returns an empty
+    /// vec rather than an error — no detection is a supported fallback.
     pub(crate) fn parse_permission_denials(
         &self,
         path: &std::path::Path,
