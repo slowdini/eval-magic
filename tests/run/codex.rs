@@ -427,7 +427,14 @@ fn codex_no_stage_supports_bootstrap() {
 #[test]
 fn codex_warns_when_user_skill_shadows_staged_skill() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+      { "id": "e1", "prompt": "p1", "expected_output": "o", "files": ["a.txt"] },
+      { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"],
+        "isolation": "isolated" }
+    ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    fs::write(skill_dir.join("mr-review/evals/a.txt"), "a").unwrap();
+    fs::write(skill_dir.join("mr-review/evals/b.txt"), "b").unwrap();
     let fake_home = tmp.path().join("home");
     let live_skill = fake_home.join(".agents/skills/different-folder");
     fs::create_dir_all(&live_skill).unwrap();
@@ -446,15 +453,34 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
         .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
         .assert()
         .success()
-        .stderr(contains("Codex skill-shadow warning"))
-        .stderr(contains("codex exec"))
-        .stderr(contains("docs/codex-notes.md"));
+        .stderr(contains("Skill-shadow preflight"))
+        .stderr(contains("comparison invalid"))
+        .stderr(contains("Move or rename"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(report["shadowed"][0]["kind"], "global-skill");
-    assert_eq!(report["shadowed"][0]["skill_name"], "mr-review");
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["findings"][0]["skill_name"], "mr-review");
+    assert_eq!(report["findings"][0]["role"], "subject");
+    let sources = report["findings"][0]["sources"].as_array().unwrap();
+    let live = sources
+        .iter()
+        .find(|source| source["origin"] == "live")
+        .unwrap();
+    assert_eq!(live["kind"], "skill");
+    assert_eq!(live["root"]["namespace"], "agents");
     assert_eq!(
-        report["shadowed"][0]["path"],
+        live["discovery_path"],
         live_skill.to_string_lossy().as_ref()
     );
+    let appearances = live["appearances"].as_array().unwrap();
+    assert_eq!(
+        appearances.len(),
+        4,
+        "every group/condition cell is scanned"
+    );
+    assert!(appearances.iter().any(|cell| {
+        cell["group"] == "g2"
+            && cell["condition"] == "without_skill"
+            && cell["eval_ids"] == serde_json::json!(["e2"])
+    }));
 }

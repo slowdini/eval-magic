@@ -25,6 +25,7 @@ mod build;
 mod envs;
 mod git;
 mod resolve;
+mod shadow_preflight;
 mod stage;
 
 /// Run options parsed from the `run` subcommand flags (everything beyond the
@@ -147,7 +148,7 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
-    build::post_build(ctx, opts, &resolved)?;
+    build::post_build(ctx, opts, &resolved, &staged)?;
     print_next_steps(ctx, opts, &resolved, num_tasks);
     Ok(())
 }

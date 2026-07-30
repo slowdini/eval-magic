@@ -15,9 +15,9 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-use crate::adapters::skill_shadow::{PluginShadowReport, ShadowSource};
-
-const ISOLATION_DOC: &str = "docs/codex-notes.md → \"Isolating from live skills and plugins\"";
+use crate::adapters::skill_shadow::{
+    PluginShadowReport, ShadowNamespace, ShadowRelation, ShadowRoot, ShadowRootScope, ShadowSource,
+};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,7 +101,11 @@ fn frontmatter_name(skill_md: &Path) -> Option<String> {
     None
 }
 
-fn direct_skill_sources(dir: &Path) -> Vec<ShadowSource> {
+fn direct_skill_sources(
+    dir: &Path,
+    scope: ShadowRootScope,
+    namespace: ShadowNamespace,
+) -> Vec<ShadowSource> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -113,10 +117,21 @@ fn direct_skill_sources(dir: &Path) -> Vec<ShadowSource> {
                 return None;
             }
             let skill_name = frontmatter_name(&path.join("SKILL.md"))?;
-            Some(ShadowSource::GlobalSkill {
+            Some(ShadowSource::live_skill(
                 skill_name,
-                path: path.to_string_lossy().into_owned(),
-            })
+                &path,
+                ShadowRoot {
+                    scope,
+                    namespace,
+                    plugin: None,
+                    path: dir.to_string_lossy().into_owned(),
+                    relation: ShadowRelation::Native,
+                },
+                format!(
+                    "Move or rename the conflicting skill directory '{}' before dispatch.",
+                    path.display()
+                ),
+            ))
         })
         .collect()
 }
@@ -162,29 +177,45 @@ fn plugin_skill_sources(codex_home: &Path, raw: Option<&str>) -> Vec<ShadowSourc
             .join(&plugin.name)
             .join(&plugin.version)
             .join("skills");
-        for source in direct_skill_sources(&skills_dir) {
-            if let ShadowSource::GlobalSkill { skill_name, path } = source {
-                out.push(ShadowSource::Plugin {
-                    plugin: label.clone(),
-                    skill_name,
-                    path,
-                });
+        let Ok(entries) = fs::read_dir(&skills_dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
             }
+            let Some(skill_name) = frontmatter_name(&path.join("SKILL.md")) else {
+                continue;
+            };
+            out.push(ShadowSource::live_plugin(
+                label.clone(),
+                skill_name.clone(),
+                skill_name,
+                &path,
+                ShadowRoot {
+                    scope: ShadowRootScope::Global,
+                    namespace: ShadowNamespace::Plugin,
+                    plugin: Some(label.clone()),
+                    path: skills_dir.to_string_lossy().into_owned(),
+                    relation: ShadowRelation::Native,
+                },
+                format!(
+                    "Add '--disable plugins' to every Codex dispatch to disable plugin '{label}'."
+                ),
+            ));
         }
     }
     out
 }
 
 fn sort_and_dedup(sources: &mut Vec<ShadowSource>) {
-    sources.sort_by_key(|source| match source {
-        ShadowSource::Plugin {
-            plugin,
-            skill_name,
-            path,
-        } => format!("plugin\0{plugin}\0{skill_name}\0{path}"),
-        ShadowSource::GlobalSkill { skill_name, path } => {
-            format!("skill\0{skill_name}\0{path}")
-        }
+    sources.sort_by(|a, b| {
+        (&a.plugin, &a.skill_name, &a.discovery_path).cmp(&(
+            &b.plugin,
+            &b.skill_name,
+            &b.discovery_path,
+        ))
     });
     sources.dedup();
 }
@@ -198,25 +229,37 @@ fn detect_with_sources(
     plugin_json: Option<&str>,
 ) -> PluginShadowReport {
     let staged: HashSet<&str> = staged_skill_names.iter().copied().collect();
-    let mut dirs = repository_skill_dirs(scan_root);
-    dirs.push(home.join(".agents/skills"));
-    dirs.push(admin_skills.to_path_buf());
-
     let mut seen_dirs = HashSet::new();
     let mut shadowed = Vec::new();
-    for dir in dirs {
+    for dir in repository_skill_dirs(scan_root) {
         if seen_dirs.insert(dir.clone()) {
-            shadowed.extend(direct_skill_sources(&dir));
+            shadowed.extend(direct_skill_sources(
+                &dir,
+                ShadowRootScope::Project,
+                ShadowNamespace::Agents,
+            ));
         }
+    }
+    let user_skills = home.join(".agents/skills");
+    if seen_dirs.insert(user_skills.clone()) {
+        shadowed.extend(direct_skill_sources(
+            &user_skills,
+            ShadowRootScope::Global,
+            ShadowNamespace::Agents,
+        ));
+    }
+    if seen_dirs.insert(admin_skills.to_path_buf()) {
+        shadowed.extend(direct_skill_sources(
+            admin_skills,
+            ShadowRootScope::Admin,
+            ShadowNamespace::Codex,
+        ));
     }
     shadowed.extend(plugin_skill_sources(codex_home, plugin_json));
     shadowed.retain(|source| staged.contains(source.skill_name()));
     sort_and_dedup(&mut shadowed);
 
-    PluginShadowReport {
-        config_dir: codex_home.to_string_lossy().into_owned(),
-        shadowed,
-    }
+    PluginShadowReport::from_sources(codex_home.to_string_lossy(), shadowed)
 }
 
 /// Detect logical eval skill names that Codex can also load from live sources.
@@ -235,106 +278,23 @@ pub fn shadow_preflight(
         Path::new("/etc/codex/skills"),
         plugin_json.as_deref(),
     );
-    (!report.shadowed.is_empty()).then_some(report)
+    (!report.is_empty()).then_some(report)
 }
 
-fn source_label(source: &ShadowSource) -> String {
-    match source {
-        ShadowSource::Plugin { plugin, .. } => format!("enabled Codex plugin '{plugin}'"),
-        ShadowSource::GlobalSkill { path, .. } => {
-            let parent = Path::new(path).parent().unwrap_or_else(|| Path::new(path));
-            format!("Codex skill directory '{}'", parent.display())
-        }
-    }
-}
-
-/// One Codex-specific `validity_warnings` line per shadowed skill.
+/// Compatibility entry point; v2 warnings are rendered by the shared policy.
 pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
-    report
-        .shadowed
-        .iter()
-        .map(|source| match source {
-            ShadowSource::Plugin { .. } => format!(
-                "staged skill '{}' is also provided by {} — each `codex exec` dispatch could \
-                     discover both copies. Add `--disable plugins` to every eval-agent `codex \
-                     exec`; eval-magic does not record manual launch arguments, so this retained \
-                     contamination warning is conservative when the flag was applied consistently \
-                     (see {}).",
-                source.skill_name(),
-                source_label(source),
-                ISOLATION_DOC
-            ),
-            ShadowSource::GlobalSkill { .. } => format!(
-                "staged skill '{}' is also provided by {} — each `codex exec` dispatch could \
-                     discover both copies, so with/without results may be contaminated. Before \
-                     dispatch, move or rename the live repo, user, or admin skill (see {}).",
-                source.skill_name(),
-                source_label(source),
-                ISOLATION_DOC
-            ),
-        })
-        .collect()
+    crate::adapters::skill_shadow::shadow_validity_warnings(report)
 }
 
-/// Codex-specific build-time banner. Empty when nothing is shadowed.
+/// Compatibility entry point; v2 banners are rendered by the shared policy.
 pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
-    if report.shadowed.is_empty() {
-        return String::new();
-    }
-    let mut lines = vec![
-        String::new(),
-        "⚠ Codex skill-shadow warning: skills staged for this eval are ALSO discoverable"
-            .to_string(),
-        "  from your live Codex environment:".to_string(),
-    ];
-    for source in &report.shadowed {
-        lines.push(format!(
-            "  • {} — {}",
-            source.skill_name(),
-            source_label(source)
-        ));
-    }
-    lines.extend([
-        "  Each `codex exec` dispatch can load both copies, so the with/without".to_string(),
-        "  comparison may be contaminated and the control arm may not be skill-absent.".to_string(),
-    ]);
-    if report
-        .shadowed
-        .iter()
-        .any(|source| matches!(source, ShadowSource::Plugin { .. }))
-    {
-        lines.extend([
-            "  For plugin collisions, add `--disable plugins` to every eval-agent `codex exec`"
-                .to_string(),
-            "  invocation, including resumed turns. This disables installed plugins for that run,"
-                .to_string(),
-            "  but not repo, user, or admin skill directories.".to_string(),
-            "  Because manual launch arguments are not recorded, the preflight artifact and"
-                .to_string(),
-            "  aggregate warnings remain conservative.".to_string(),
-        ]);
-    }
-    if report
-        .shadowed
-        .iter()
-        .any(|source| matches!(source, ShadowSource::GlobalSkill { .. }))
-    {
-        lines.extend([
-            "  For direct skill collisions, move or rename the conflicting repo, user, or admin"
-                .to_string(),
-            "  `.agents/skills` entry. For user skills only, a clean `HOME` can isolate the source."
-                .to_string(),
-        ]);
-    }
-    lines.push(format!(
-        "  Full mechanics and detection limits: {ISOLATION_DOC}."
-    ));
-    lines.join("\n")
+    crate::adapters::skill_shadow::format_shadow_banner(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::skill_shadow::ShadowSourceKind;
     use serde_json::json;
     use tempfile::TempDir;
 
@@ -371,11 +331,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(matches!(
-            &report.shadowed[0],
-            ShadowSource::GlobalSkill { path, .. } if path.ends_with("different-folder")
-        ));
+        assert_eq!(report.source_count(), 1);
+        assert_eq!(report.source(0).kind, ShadowSourceKind::Skill);
+        assert!(
+            report
+                .source(0)
+                .discovery_path
+                .ends_with("different-folder")
+        );
     }
 
     #[test]
@@ -415,12 +378,11 @@ mod tests {
             Some(&plugin_json),
         );
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(matches!(
-            &report.shadowed[0],
-            ShadowSource::Plugin { plugin, skill_name, .. }
-                if plugin == "slow-powers@slowdini" && skill_name == "mr-review"
-        ));
+        assert_eq!(report.source_count(), 1);
+        let source = report.source(0);
+        assert_eq!(source.kind, ShadowSourceKind::Plugin);
+        assert_eq!(source.plugin.as_deref(), Some("slow-powers@slowdini"));
+        assert_eq!(source.skill_name, "mr-review");
     }
 
     #[test]
@@ -438,11 +400,8 @@ mod tests {
             Some("not json"),
         );
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(matches!(
-            report.shadowed[0],
-            ShadowSource::GlobalSkill { .. }
-        ));
+        assert_eq!(report.source_count(), 1);
+        assert_eq!(report.source(0).kind, ShadowSourceKind::Skill);
     }
 
     #[test]
@@ -465,46 +424,64 @@ mod tests {
             None,
         );
 
-        assert!(report.shadowed.is_empty());
+        assert!(report.is_empty());
     }
 
     #[test]
     fn plugin_shadow_guidance_names_runtime_disable_and_conservative_warning() {
-        let report = PluginShadowReport {
-            config_dir: "/codex".into(),
-            shadowed: vec![ShadowSource::Plugin {
-                plugin: "slow-powers@slowdini".into(),
-                skill_name: "mr-review".into(),
-                path: "/codex/plugins/cache/slowdini/slow-powers/1/skills/mr-review".into(),
-            }],
-        };
+        let skill_path = Path::new("/codex/plugins/cache/slowdini/slow-powers/1/skills/mr-review");
+        let report = PluginShadowReport::from_sources(
+            "/codex",
+            vec![ShadowSource::live_plugin(
+                "slow-powers@slowdini",
+                "mr-review",
+                "mr-review",
+                skill_path,
+                ShadowRoot {
+                    scope: ShadowRootScope::Global,
+                    namespace: ShadowNamespace::Plugin,
+                    plugin: Some("slow-powers@slowdini".into()),
+                    path: skill_path.parent().unwrap().display().to_string(),
+                    relation: ShadowRelation::Native,
+                },
+                "Add '--disable plugins' to every Codex dispatch.",
+            )],
+        );
 
         let banner = format_shadow_banner(&report);
-        assert!(banner.contains("`--disable plugins`"), "{banner}");
-        assert!(banner.contains("every eval-agent `codex exec`"), "{banner}");
-        assert!(
-            banner.contains("repo, user, or admin skill directories"),
-            "{banner}"
-        );
-        assert!(banner.contains("not recorded"), "{banner}");
+        assert!(banner.contains("--disable plugins"), "{banner}");
+        assert!(banner.contains("slow-powers@slowdini"), "{banner}");
+        assert!(banner.contains("remediation"), "{banner}");
 
         let warning = shadow_validity_warnings(&report).join("\n");
-        assert!(warning.contains("`--disable plugins`"), "{warning}");
-        assert!(warning.contains("conservative"), "{warning}");
+        assert!(warning.contains("--disable plugins"), "{warning}");
+        assert!(warning.contains("comparison invalid"), "{warning}");
     }
 
     #[test]
     fn direct_skill_shadow_guidance_does_not_recommend_plugin_disable() {
-        let report = PluginShadowReport {
-            config_dir: "/codex".into(),
-            shadowed: vec![ShadowSource::GlobalSkill {
-                skill_name: "mr-review".into(),
-                path: "/repo/.agents/skills/mr-review".into(),
-            }],
-        };
+        let skill_path = Path::new("/repo/.agents/skills/mr-review");
+        let report = PluginShadowReport::from_sources(
+            "/codex",
+            vec![ShadowSource::live_skill(
+                "mr-review",
+                skill_path,
+                ShadowRoot {
+                    scope: ShadowRootScope::Project,
+                    namespace: ShadowNamespace::Agents,
+                    plugin: None,
+                    path: "/repo/.agents/skills".into(),
+                    relation: ShadowRelation::Native,
+                },
+                "Move or rename the conflicting skill directory.",
+            )],
+        );
 
         let warning = shadow_validity_warnings(&report).join("\n");
         assert!(!warning.contains("--disable plugins"), "{warning}");
-        assert!(warning.contains("move or rename"), "{warning}");
+        assert!(
+            warning.to_lowercase().contains("move or rename"),
+            "{warning}"
+        );
     }
 }

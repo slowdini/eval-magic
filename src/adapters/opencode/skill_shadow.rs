@@ -14,13 +14,14 @@
 //! and unreadable/malformed skills are ignored while all other roots continue
 //! to be scanned.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
-use crate::adapters::skill_shadow::{PluginShadowReport, ShadowSource};
-
-const ISOLATION_DOC: &str = "docs/opencode-notes.md → \"Isolating from live skills\"";
+use crate::adapters::skill_shadow::{
+    PluginShadowReport, ShadowNamespace, ShadowRelation, ShadowRoot, ShadowRootScope, ShadowSource,
+};
 
 fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name)
@@ -69,7 +70,11 @@ fn frontmatter_name(skill_md: &Path) -> Option<String> {
     None
 }
 
-fn direct_skill_sources(dir: &Path) -> Vec<ShadowSource> {
+fn direct_skill_sources(
+    dir: &Path,
+    scope: ShadowRootScope,
+    namespace: ShadowNamespace,
+) -> Vec<ShadowSource> {
     let Ok(entries) = fs::read_dir(dir) else {
         return Vec::new();
     };
@@ -81,19 +86,50 @@ fn direct_skill_sources(dir: &Path) -> Vec<ShadowSource> {
                 return None;
             }
             let skill_name = frontmatter_name(&path.join("SKILL.md"))?;
-            Some(ShadowSource::GlobalSkill {
+            let relation = if namespace == ShadowNamespace::Opencode {
+                ShadowRelation::Native
+            } else {
+                ShadowRelation::CrossHarness
+            };
+            let remediation = match namespace {
+                ShadowNamespace::Claude => format!(
+                    "Set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 for every dispatch, or move '{}'.",
+                    path.display()
+                ),
+                ShadowNamespace::Agents => format!(
+                    "Set OPENCODE_DISABLE_EXTERNAL_SKILLS=1 for every dispatch, or move '{}'.",
+                    path.display()
+                ),
+                _ => format!(
+                    "Move or rename the conflicting skill directory '{}'.",
+                    path.display()
+                ),
+            };
+            Some(ShadowSource::live_skill(
                 skill_name,
-                path: path.to_string_lossy().into_owned(),
-            })
+                &path,
+                ShadowRoot {
+                    scope,
+                    namespace,
+                    plugin: None,
+                    path: dir.to_string_lossy().into_owned(),
+                    relation,
+                },
+                remediation,
+            ))
         })
         .collect()
 }
 
 /// The three project skill dirs OpenCode checks at each level of the
 /// up-from-cwd walk.
-const PROJECT_SKILL_DIRS: [&str; 3] = [".opencode/skills", ".claude/skills", ".agents/skills"];
+const PROJECT_SKILL_DIRS: [(&str, ShadowNamespace); 3] = [
+    (".opencode/skills", ShadowNamespace::Opencode),
+    (".claude/skills", ShadowNamespace::Claude),
+    (".agents/skills", ShadowNamespace::Agents),
+];
 
-fn repository_skill_dirs(scan_root: &Path) -> Vec<PathBuf> {
+fn repository_skill_dirs(scan_root: &Path) -> Vec<(PathBuf, ShadowNamespace, ShadowRootScope)> {
     let Some(repo_root) = scan_root
         .ancestors()
         .find(|path| path.join(".git").exists())
@@ -111,8 +147,8 @@ fn repository_skill_dirs(scan_root: &Path) -> Vec<PathBuf> {
     // skills dir holds the intentional staged copies.
     let mut cursor = scan_root.parent();
     while let Some(path) = cursor {
-        for sub in PROJECT_SKILL_DIRS {
-            dirs.push(path.join(sub));
+        for (sub, namespace) in PROJECT_SKILL_DIRS {
+            dirs.push((path.join(sub), namespace, ShadowRootScope::Project));
         }
         if path == repo_root {
             break;
@@ -128,14 +164,34 @@ fn global_skill_dirs(
     home: &Path,
     xdg_config_home: Option<&Path>,
     opencode_config_dir: Option<&Path>,
-) -> Vec<PathBuf> {
-    let mut dirs = vec![default_config_dir(home, xdg_config_home).join("skills")];
+) -> Vec<(PathBuf, ShadowNamespace, ShadowRootScope)> {
+    let mut dirs = vec![(
+        default_config_dir(home, xdg_config_home).join("skills"),
+        ShadowNamespace::Opencode,
+        ShadowRootScope::Global,
+    )];
     if let Some(dir) = opencode_config_dir {
-        dirs.push(dir.join("skills"));
+        dirs.push((
+            dir.join("skills"),
+            ShadowNamespace::Opencode,
+            ShadowRootScope::Global,
+        ));
     }
-    dirs.push(home.join(".opencode/skills"));
-    dirs.push(home.join(".claude/skills"));
-    dirs.push(home.join(".agents/skills"));
+    dirs.push((
+        home.join(".opencode/skills"),
+        ShadowNamespace::Opencode,
+        ShadowRootScope::Global,
+    ));
+    dirs.push((
+        home.join(".claude/skills"),
+        ShadowNamespace::Claude,
+        ShadowRootScope::Global,
+    ));
+    dirs.push((
+        home.join(".agents/skills"),
+        ShadowNamespace::Agents,
+        ShadowRootScope::Global,
+    ));
     dirs
 }
 
@@ -147,15 +203,12 @@ fn default_config_dir(home: &Path, xdg_config_home: Option<&Path>) -> PathBuf {
 }
 
 fn sort_and_dedup(sources: &mut Vec<ShadowSource>) {
-    sources.sort_by_key(|source| match source {
-        ShadowSource::Plugin {
-            plugin,
-            skill_name,
-            path,
-        } => format!("plugin\0{plugin}\0{skill_name}\0{path}"),
-        ShadowSource::GlobalSkill { skill_name, path } => {
-            format!("skill\0{skill_name}\0{path}")
-        }
+    sources.sort_by(|a, b| {
+        (&a.plugin, &a.skill_name, &a.discovery_path).cmp(&(
+            &b.plugin,
+            &b.skill_name,
+            &b.discovery_path,
+        ))
     });
     sources.dedup();
 }
@@ -177,20 +230,18 @@ fn detect_with_sources(
 
     let mut seen_dirs = HashSet::new();
     let mut shadowed = Vec::new();
-    for dir in dirs {
+    for (dir, namespace, scope) in dirs {
         if seen_dirs.insert(dir.clone()) {
-            shadowed.extend(direct_skill_sources(&dir));
+            shadowed.extend(direct_skill_sources(&dir, scope, namespace));
         }
     }
     shadowed.retain(|source| staged.contains(source.skill_name()));
     sort_and_dedup(&mut shadowed);
 
-    PluginShadowReport {
-        config_dir: default_config_dir(home, xdg_config_home)
-            .to_string_lossy()
-            .into_owned(),
+    PluginShadowReport::from_sources(
+        default_config_dir(home, xdg_config_home).to_string_lossy(),
         shadowed,
-    }
+    )
 }
 
 /// Detect logical eval skill names that OpenCode can also load from live
@@ -207,75 +258,92 @@ pub fn shadow_preflight(
         env_path("XDG_CONFIG_HOME").as_deref(),
         env_path("OPENCODE_CONFIG_DIR").as_deref(),
     );
-    (!report.shadowed.is_empty()).then_some(report)
+    (!report.is_empty()).then_some(report)
 }
 
-fn source_label(source: &ShadowSource) -> String {
-    match source {
-        ShadowSource::Plugin { plugin, .. } => format!("enabled plugin '{plugin}'"),
-        ShadowSource::GlobalSkill { path, .. } => {
-            let parent = Path::new(path).parent().unwrap_or_else(|| Path::new(path));
-            format!("skill directory '{}'", parent.display())
+fn collect_debug_skill_locations(
+    value: &serde_json::Value,
+    inherited_name: Option<&str>,
+    locations: &mut BTreeMap<String, String>,
+) {
+    match value {
+        serde_json::Value::Array(values) => {
+            for value in values {
+                collect_debug_skill_locations(value, None, locations);
+            }
         }
+        serde_json::Value::Object(object) => {
+            let name = object
+                .get("name")
+                .and_then(serde_json::Value::as_str)
+                .or(inherited_name);
+            let location = object
+                .get("location")
+                .or_else(|| object.get("path"))
+                .and_then(serde_json::Value::as_str);
+            if let (Some(name), Some(location)) = (name, location) {
+                locations.insert(name.to_string(), location.to_string());
+            }
+            if let Some(skills) = object.get("skills") {
+                collect_debug_skill_locations(skills, None, locations);
+            }
+            for (key, value) in object {
+                if matches!(key.as_str(), "name" | "location" | "path" | "skills") {
+                    continue;
+                }
+                if value.is_object() || value.is_array() {
+                    collect_debug_skill_locations(value, Some(key), locations);
+                }
+            }
+        }
+        _ => {}
     }
 }
 
-/// One OpenCode-specific `validity_warnings` line per shadowed skill.
+fn debug_skill_locations(raw: &str) -> Option<BTreeMap<String, String>> {
+    let value = serde_json::from_str(raw).ok()?;
+    let mut locations = BTreeMap::new();
+    collect_debug_skill_locations(&value, None, &mut locations);
+    Some(locations)
+}
+
+pub(crate) fn resolve_sources(scan_root: &Path, sources: &mut [ShadowSource]) {
+    let has_duplicate_runtime_id = sources.iter().enumerate().any(|(index, source)| {
+        sources[index + 1..]
+            .iter()
+            .any(|other| other.runtime_id == source.runtime_id)
+    });
+    if !has_duplicate_runtime_id {
+        crate::adapters::skill_shadow::resolve_from_selected_paths(sources, &BTreeMap::new());
+        return;
+    }
+
+    let locations = Command::new("opencode")
+        .args(["debug", "skill"])
+        .current_dir(scan_root)
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .and_then(|raw| debug_skill_locations(&raw))
+        .unwrap_or_default();
+    crate::adapters::skill_shadow::resolve_from_selected_paths(sources, &locations);
+}
+
+/// Compatibility entry point; v2 warnings are rendered by the shared policy.
 pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
-    report
-        .shadowed
-        .iter()
-        .map(|source| {
-            format!(
-                "staged skill '{}' is also provided by {} — each `opencode run` dispatch could \
-                 discover both copies, so with/without results may be contaminated. Isolate the \
-                 live skill source before dispatch (see {}).",
-                source.skill_name(),
-                source_label(source),
-                ISOLATION_DOC
-            )
-        })
-        .collect()
+    crate::adapters::skill_shadow::shadow_validity_warnings(report)
 }
 
-/// OpenCode-specific build-time banner. Empty when nothing is shadowed.
+/// Compatibility entry point; v2 banners are rendered by the shared policy.
 pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
-    if report.shadowed.is_empty() {
-        return String::new();
-    }
-    let mut lines = vec![
-        String::new(),
-        "⚠ OpenCode skill-shadow warning: skills staged for this eval are ALSO discoverable"
-            .to_string(),
-        "  from your live environment:".to_string(),
-    ];
-    for source in &report.shadowed {
-        lines.push(format!(
-            "  • {} — {}",
-            source.skill_name(),
-            source_label(source)
-        ));
-    }
-    lines.extend([
-        "  Each `opencode run` dispatch discovers project and global .opencode, .claude,"
-            .to_string(),
-        "  and .agents skill dirs, so it can load both copies — the with/without".to_string(),
-        "  comparison may be contaminated and the control arm may not be skill-absent.".to_string(),
-        "  eval-magic cannot unload a live skill. Before dispatch:".to_string(),
-        "  1. Move or rename the conflicting skill directory.".to_string(),
-        "  2. For a .claude-root collision only: run the dispatch with".to_string(),
-        "     OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1.".to_string(),
-        "  3. For a .claude or .agents collision: OPENCODE_DISABLE_EXTERNAL_SKILLS=1".to_string(),
-        "     hides both cross-harness roots.".to_string(),
-        format!("  Full mechanics and detection limits: {ISOLATION_DOC}."),
-    ]);
-    lines.join("\n")
+    crate::adapters::skill_shadow::format_shadow_banner(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::skill_shadow::ShadowSource;
+    use crate::adapters::skill_shadow::ShadowSourceKind;
     use std::fs;
     use std::path::{Path, PathBuf};
     use tempfile::TempDir;
@@ -303,6 +371,16 @@ mod tests {
         detect_with_sources(scan_root, &["target-skill"], home, None, None)
     }
 
+    fn assert_source_path_ends(report: &PluginShadowReport, suffix: &str) {
+        assert_eq!(report.source_count(), 1);
+        assert_eq!(report.source(0).kind, ShadowSourceKind::Skill);
+        assert!(
+            report.source(0).discovery_path.ends_with(suffix),
+            "{:?}",
+            report.source(0)
+        );
+    }
+
     #[test]
     fn project_opencode_root_detects_collision() {
         let tmp = TempDir::new().unwrap();
@@ -311,10 +389,9 @@ mod tests {
 
         let report = detect(&scan_root, &tmp.path().join("home"));
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.namespace, ShadowNamespace::Opencode);
+        assert_eq!(report.source(0).root.scope, ShadowRootScope::Project);
     }
 
     #[test]
@@ -325,10 +402,9 @@ mod tests {
 
         let report = detect(&scan_root, &tmp.path().join("home"));
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.namespace, ShadowNamespace::Claude);
+        assert_eq!(report.source(0).root.relation, ShadowRelation::CrossHarness);
     }
 
     #[test]
@@ -339,10 +415,8 @@ mod tests {
 
         let report = detect(&scan_root, &tmp.path().join("home"));
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.namespace, ShadowNamespace::Agents);
     }
 
     #[test]
@@ -356,10 +430,8 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.scope, ShadowRootScope::Global);
     }
 
     #[test]
@@ -370,10 +442,8 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.namespace, ShadowNamespace::Claude);
     }
 
     #[test]
@@ -384,10 +454,8 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.namespace, ShadowNamespace::Agents);
     }
 
     #[test]
@@ -398,10 +466,8 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("live-copy"))
-        );
+        assert_source_path_ends(&report, "live-copy");
+        assert_eq!(report.source(0).root.namespace, ShadowNamespace::Opencode);
     }
 
     #[test]
@@ -417,10 +483,7 @@ mod tests {
 
         let report = detect(&scan_root, &tmp.path().join("home"));
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("inside-worktree"))
-        );
+        assert_source_path_ends(&report, "inside-worktree");
     }
 
     #[test]
@@ -435,7 +498,7 @@ mod tests {
 
         let report = detect(&scan_root, &tmp.path().join("home"));
 
-        assert!(report.shadowed.is_empty());
+        assert!(report.is_empty());
     }
 
     #[test]
@@ -457,7 +520,7 @@ mod tests {
             Some(&override_dir),
         );
 
-        assert_eq!(report.shadowed.len(), 2);
+        assert_eq!(report.source_count(), 2);
     }
 
     #[test]
@@ -474,10 +537,7 @@ mod tests {
 
         let report = detect_with_sources(tmp.path(), &["target-skill"], &home, Some(&xdg), None);
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert!(
-            matches!(&report.shadowed[0], ShadowSource::GlobalSkill { path, .. } if path.ends_with("xdg-copy"))
-        );
+        assert_source_path_ends(&report, "xdg-copy");
     }
 
     #[test]
@@ -491,7 +551,7 @@ mod tests {
         let report =
             detect_with_sources(tmp.path(), &["target-skill"], &home, None, Some(&default));
 
-        assert_eq!(report.shadowed.len(), 1);
+        assert_eq!(report.source_count(), 1);
     }
 
     #[test]
@@ -505,8 +565,8 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert_eq!(report.shadowed.len(), 1);
-        assert_eq!(report.shadowed[0].skill_name(), "target-skill");
+        assert_eq!(report.source_count(), 1);
+        assert_eq!(report.source(0).skill_name(), "target-skill");
     }
 
     #[test]
@@ -522,7 +582,7 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert!(report.shadowed.is_empty());
+        assert!(report.is_empty());
     }
 
     #[test]
@@ -533,24 +593,33 @@ mod tests {
 
         let report = detect(tmp.path(), &home);
 
-        assert!(report.shadowed.is_empty());
+        assert!(report.is_empty());
     }
 
     fn sample_report() -> PluginShadowReport {
-        PluginShadowReport {
-            config_dir: "/home/u/.config/opencode".into(),
-            shadowed: vec![ShadowSource::GlobalSkill {
-                skill_name: "target-skill".into(),
-                path: "/home/u/.claude/skills/target-skill".into(),
-            }],
-        }
+        let path = Path::new("/home/u/.claude/skills/target-skill");
+        PluginShadowReport::from_sources(
+            "/home/u/.config/opencode",
+            vec![ShadowSource::live_skill(
+                "target-skill",
+                path,
+                ShadowRoot {
+                    scope: ShadowRootScope::Global,
+                    namespace: ShadowNamespace::Claude,
+                    plugin: None,
+                    path: "/home/u/.claude/skills".into(),
+                    relation: ShadowRelation::CrossHarness,
+                },
+                "Set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 for every dispatch.",
+            )],
+        )
     }
 
     #[test]
     fn banner_is_empty_when_nothing_shadowed() {
         let empty = PluginShadowReport {
             config_dir: "/x".into(),
-            shadowed: vec![],
+            findings: vec![],
         };
         assert_eq!(format_shadow_banner(&empty), "");
     }
@@ -560,16 +629,12 @@ mod tests {
         let banner = format_shadow_banner(&sample_report());
         assert!(banner.contains("target-skill"), "{banner}");
         assert!(banner.contains(".claude/skills"), "{banner}");
-        assert!(banner.contains("opencode run"), "{banner}");
         assert!(
             banner.contains("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"),
             "banner names the .claude-root kill switch: {banner}"
         );
-        assert!(
-            banner.contains("OPENCODE_DISABLE_EXTERNAL_SKILLS"),
-            "banner names the external-roots kill switch: {banner}"
-        );
-        assert!(banner.contains("docs/opencode-notes.md"), "{banner}");
+        assert!(banner.contains("cross-harness"), "{banner}");
+        assert!(banner.contains("comparison invalid"), "{banner}");
     }
 
     #[test]
@@ -578,8 +643,23 @@ mod tests {
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("target-skill"));
         assert!(warnings[0].contains(".claude/skills"));
-        assert!(warnings[0].contains("opencode run"));
-        assert!(warnings[0].to_lowercase().contains("contaminat"));
-        assert!(warnings[0].contains("docs/opencode-notes.md"));
+        assert!(warnings[0].contains("comparison invalid"));
+        assert!(warnings[0].contains("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"));
+    }
+
+    #[test]
+    fn debug_skill_output_maps_runtime_ids_to_selected_locations() {
+        let locations = debug_skill_locations(
+            r#"[
+              {"name":"helper","location":"/repo/.agents/skills/helper/SKILL.md"},
+              {"name":"other","location":"/repo/.opencode/skills/other/SKILL.md"}
+            ]"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            locations.get("helper").map(String::as_str),
+            Some("/repo/.agents/skills/helper/SKILL.md")
+        );
     }
 }

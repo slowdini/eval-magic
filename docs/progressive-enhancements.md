@@ -301,10 +301,15 @@ global `.opencode`, `.claude`, and `.agents` skill dirs — including skills ins
 harnesses. A logical eval skill present in any such source can contaminate the with/without
 comparison when dispatches load that source, even when the staged copy uses a unique slug.
 
-*What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
-iteration dir), which `aggregate` folds into `benchmark.json` validity warnings. When the resolved
-descriptor declares `isolates_live_sources = true`, the scan and artifact are retained, but the
-banner becomes an informational notice and `aggregate` omits the findings from validity warnings.
+*What it unlocks:* a build-time contamination warning (shared banner + schema-v2
+`plugin-shadow.json` in the iteration dir), which `aggregate` folds into `benchmark.json`
+validity warnings. The runner scans every matrix environment and the shared policy groups scanner
+facts by logical skill, records live/staged sources and affected cells, and assigns role-aware
+severity. Subject and asymmetric sibling collisions invalidate the comparison; symmetric sibling
+collisions warn. When the resolved descriptor declares `isolates_live_sources = true`, the scan,
+intrinsic severity, and artifact are retained, but the banner becomes an informational notice and
+`aggregate` omits the findings from validity warnings. Historical unversioned artifacts remain
+readable.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
 environment is clean; the operator must check any harness-native global discovery sources.
@@ -318,10 +323,12 @@ shell templates.
 
 *Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
 `opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
-`src/adapters/skill_shadow.rs`; detection and remediation rendering stay in the harness's
-module tree. Both scans are best-effort: Codex's does not enumerate bundled system skills (no
-stable listing exists), and OpenCode's does not scan config-declared `skills.paths`/`skills.urls`
-sources.
+`src/adapters/skill_shadow.rs`. Harness modules emit discovery/root/remediation facts; grouping,
+severity, artifact serialization, the banner, and aggregate warnings are shared. The capability
+also selects a shared resolution policy (precedence or coexistence), with OpenCode's selected path
+obtained from a best-effort `opencode debug skill` probe only for duplicate runtime IDs. Codex's
+scan does not enumerate bundled system skills (no stable listing exists), and OpenCode's does not
+scan config-declared `skills.paths`/`skills.urls` sources.
 
 ### Plan-mode context
 

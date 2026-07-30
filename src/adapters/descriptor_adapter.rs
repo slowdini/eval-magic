@@ -23,7 +23,7 @@ use super::descriptor::{
 use super::harness::{
     CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, ToolVocabulary,
 };
-use super::skill_shadow::PluginShadowReport;
+use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::skills_block::{DEFAULT_HEADER, DEFAULT_ITEM, render_skills_block};
 use super::{PermissionDenial, TranscriptSummary};
 
@@ -339,18 +339,12 @@ impl HarnessAdapter for DescriptorAdapter {
             .is_some_and(|shadow| shadow.isolates_live_sources)
     }
 
-    fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
-        self.descriptor.shadow.as_ref().map_or_else(
-            || super::skill_shadow::format_shadow_banner(report),
-            |shadow| shadow.preflight.format_banner(report),
-        )
-    }
-
-    fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
-        self.descriptor.shadow.as_ref().map_or_else(
-            || super::skill_shadow::shadow_validity_warnings(report),
-            |shadow| shadow.preflight.validity_warnings(report),
-        )
+    fn resolve_shadow_sources(&self, scan_root: &Path, sources: &mut [ShadowSource]) {
+        if let Some(shadow) = &self.descriptor.shadow {
+            shadow.preflight.resolve(scan_root, sources);
+        } else {
+            super::skill_shadow::resolve_as_coexisting(sources);
+        }
     }
 
     fn has_dispatch_recipes(&self) -> bool {

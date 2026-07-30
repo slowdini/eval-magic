@@ -10,7 +10,6 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::adapters::adapter_for;
-use crate::adapters::skill_shadow::{PluginShadowArtifact, format_isolated_shadow_notice};
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
@@ -356,6 +355,7 @@ pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
     r: &Resolved,
+    staged: &Staged,
 ) -> Result<(), RunError> {
     // Every private task env this run staged. Computed once and
     // reused below to arm the guard in each env and to point the plugin-shadow
@@ -399,29 +399,7 @@ pub(super) fn post_build(
     // runner-owned baseline with no inherited history or remotes.
     super::git::initialize_task_repositories(r)?;
 
-    // Shadow preflight: a staged skill name also present in the operator's live
-    // environment could contaminate the run unless dispatches isolate that
-    // source. Scan the first staged env, not `ctx.stage_root` — project-local
-    // settings must be read from a real staged task env.
-    let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
-    names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
-    let scan_root = targets
-        .first()
-        .map(|t| t.root.as_path())
-        .unwrap_or(ctx.stage_root.as_path());
-    let adapter = adapter_for(ctx.harness);
-    if let Some(report) = adapter.detect_shadowed_skills(scan_root, &names) {
-        let artifact = PluginShadowArtifact {
-            report,
-            isolates_live_sources: adapter.isolates_live_sources(),
-        };
-        write_json(&r.iteration_dir.join("plugin-shadow.json"), &artifact)?;
-        if artifact.isolates_live_sources {
-            eprintln!("{}", format_isolated_shadow_notice(&artifact.report));
-        } else {
-            eprintln!("{}", adapter.format_shadow_banner(&artifact.report));
-        }
-    }
+    super::shadow_preflight::run(ctx, opts, r, staged, &targets)?;
     crate::pipeline::capture_iteration_baselines(&r.iteration_dir)
         .map_err(|error| RunError::msg(error.to_string()))?;
     Ok(())

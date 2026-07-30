@@ -105,9 +105,13 @@ tool resolves the staged directory name directly: the frontmatter `name:` is **n
 Each `claude -p` dispatch loads the user/global plugins and skills from its Claude config. The
 staging slug prevents an on-disk collision but not runtime discovery — an installed plugin exposing
 a same-named skill is discoverable in *both* arms, so the control arm is not truly skill-absent.
-`plugin_shadow.rs` detects this at build time and surfaces it as the shadow banner plus
-`benchmark.json` `validity_warnings`; the runner can detect but never unload a live plugin. The
-remediation options (also printed inline in the banner):
+`plugin_shadow.rs` detects this in every comparison environment. The shared shadow policy records
+one finding per logical skill in schema-v2 `plugin-shadow.json`, including every affected cell,
+canonical/discovery paths, source-specific remediation, and the runtime identifier the agent sees.
+Claude plugin skills use their namespaced `<plugin>:<skill>` runtime ID, while direct global and
+staged skills retain the logical name; direct duplicates record user-before-project precedence.
+The shared banner and `benchmark.json` `validity_warnings` consume the same report. The runner can
+detect but never unload a live plugin. The remediation options (also printed inline in the banner):
 
 - **Drop user-scope plugins, keep auth:** add `--setting-sources project,local` to the dispatch.
   User-scope `enabledPlugins` isn't loaded; auth is unaffected.

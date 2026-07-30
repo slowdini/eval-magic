@@ -187,6 +187,12 @@ which records the assertion, and `run` prints an informational notice instead of
 `aggregate` then omits those findings from `validity_warnings`. Do not set it for partial isolation.
 eval-magic deliberately does not inspect shell templates for known flags.
 
+All named preflights feed the same schema-v2 report policy and renderer; a descriptor does not need
+harness-specific reporting code. The artifact groups sources by logical skill and records roles,
+intrinsic severity, discovery roots, logical versus runtime names, live/staged paths, affected
+matrix cells, resolution, and source-specific remediation. `aggregate` also accepts the historical
+unversioned `shadowed` shape.
+
 A built-in overlay may declare only the assertion and inherit the preflight capability:
 
 ```toml

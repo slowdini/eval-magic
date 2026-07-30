@@ -13,6 +13,8 @@ use super::super::grouping::Group;
 /// One environment directory to stage for a run.
 pub(super) struct EnvTarget {
     pub root: PathBuf,
+    /// Stable comparison group identifier used in report appearances.
+    pub group_id: String,
     /// `(condition name, that condition's skill path)` staged into this env —
     /// exactly one per env.
     pub conditions: Vec<(&'static str, Option<String>)>,
@@ -72,6 +74,7 @@ pub(super) fn env_targets(input: &EnvLayoutInput) -> Vec<EnvTarget> {
                     .into_iter()
                     .map(move |run_index| EnvTarget {
                         root: task_env_root_for_run(input.iteration_dir, &g.id, cond, run_index),
+                        group_id: g.id.clone(),
                         conditions: vec![(cond, skill.clone())],
                         eval_ids: g.eval_ids.clone(),
                     })
@@ -136,6 +139,8 @@ mod tests {
         let without = &targets[1];
         assert_eq!(without.conditions, vec![("without_skill", None)]);
         // Each env only holds its group's evals.
+        assert_eq!(targets[0].group_id, "g1");
+        assert_eq!(targets[2].group_id, "g2");
         assert_eq!(targets[0].eval_ids, vec!["e1"]);
         assert_eq!(targets[2].eval_ids, vec!["e2"]);
     }

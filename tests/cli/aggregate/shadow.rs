@@ -50,7 +50,7 @@ fn aggregate_surfaces_plugin_shadow_findings() {
     }));
 }
 
-/// `aggregate`: shadow warnings use the recorded harness's remediation.
+/// `aggregate`: v2 findings carry their own source-specific remediation.
 #[test]
 fn aggregate_uses_codex_shadow_remediation() {
     use serde_json::json;
@@ -77,9 +77,29 @@ fn aggregate_uses_codex_shadow_remediation() {
     fs::write(
         iteration_dir.join("plugin-shadow.json"),
         serde_json::to_string(&json!({
+            "schema_version": 2,
             "config_dir": "/home/u/.codex",
-            "shadowed": [{"kind": "global-skill", "skill_name": "mr-review",
-                "path": "/home/u/.agents/skills/mr-review"}],
+            "findings": [{
+                "skill_name": "mr-review",
+                "role": "subject",
+                "severity": "comparison-invalid",
+                "sources": [{
+                    "kind": "plugin",
+                    "origin": "live",
+                    "skill_name": "mr-review",
+                    "runtime_id": "mr-review",
+                    "plugin": "slow-powers@slowdini",
+                    "discovery_path": "/home/u/.codex/plugins/mr-review",
+                    "root": {
+                        "scope": "global",
+                        "namespace": "plugin",
+                        "plugin": "slow-powers@slowdini",
+                        "path": "/home/u/.codex/plugins",
+                        "relation": "native"
+                    },
+                    "remediation": "Add '--disable plugins' to every Codex dispatch."
+                }]
+            }],
         }))
         .unwrap(),
     )
@@ -91,11 +111,13 @@ fn aggregate_uses_codex_shadow_remediation() {
     let warns = b["validity_warnings"].as_array().unwrap();
     assert!(warns.iter().any(|w| {
         let s = w.as_str().unwrap();
-        s.contains("mr-review") && s.contains("codex exec") && s.contains("Codex")
+        s.contains("mr-review")
+            && s.contains("--disable plugins")
+            && s.contains("comparison invalid")
     }));
 }
 
-/// `aggregate`: shadow warnings use the recorded harness's remediation.
+/// `aggregate`: v2 cross-harness findings retain exact remediation.
 #[test]
 fn aggregate_uses_opencode_shadow_remediation() {
     use serde_json::json;
@@ -122,9 +144,28 @@ fn aggregate_uses_opencode_shadow_remediation() {
     fs::write(
         iteration_dir.join("plugin-shadow.json"),
         serde_json::to_string(&json!({
+            "schema_version": 2,
             "config_dir": "/home/u/.config/opencode",
-            "shadowed": [{"kind": "global-skill", "skill_name": "mr-review",
-                "path": "/home/u/.claude/skills/mr-review"}],
+            "findings": [{
+                "skill_name": "mr-review",
+                "role": "subject",
+                "severity": "comparison-invalid",
+                "sources": [{
+                    "kind": "skill",
+                    "origin": "live",
+                    "skill_name": "mr-review",
+                    "runtime_id": "mr-review",
+                    "discovery_path": "/home/u/.claude/skills/mr-review",
+                    "root": {
+                        "scope": "global",
+                        "namespace": "claude",
+                        "path": "/home/u/.claude/skills",
+                        "relation": "cross-harness"
+                    },
+                    "remediation":
+                        "Set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 for every dispatch."
+                }]
+            }],
         }))
         .unwrap(),
     )
@@ -137,9 +178,8 @@ fn aggregate_uses_opencode_shadow_remediation() {
     assert!(warns.iter().any(|w| {
         let s = w.as_str().unwrap();
         s.contains("mr-review")
-            && s.contains("opencode run")
-            && s.contains("docs/opencode-notes.md")
-            && s.to_lowercase().contains("contaminat")
+            && s.contains("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS")
+            && s.contains("cross-harness")
     }));
 }
 

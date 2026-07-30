@@ -362,15 +362,23 @@ fn opencode_warns_when_live_skill_shadows_staged_skill() {
         .args(["--skill", "mr-review", "--harness", "opencode", "--dry-run"])
         .assert()
         .success()
-        .stderr(contains("OpenCode skill-shadow warning"))
-        .stderr(contains("opencode run"))
-        .stderr(contains("docs/opencode-notes.md"));
+        .stderr(contains("Skill-shadow preflight"))
+        .stderr(contains("cross-harness"))
+        .stderr(contains("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(report["shadowed"][0]["kind"], "global-skill");
-    assert_eq!(report["shadowed"][0]["skill_name"], "mr-review");
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["findings"][0]["skill_name"], "mr-review");
+    let sources = report["findings"][0]["sources"].as_array().unwrap();
+    let live = sources
+        .iter()
+        .find(|source| source["origin"] == "live")
+        .unwrap();
+    assert_eq!(live["kind"], "skill");
+    assert_eq!(live["root"]["namespace"], "claude");
+    assert_eq!(live["root"]["relation"], "cross-harness");
     assert_eq!(
-        report["shadowed"][0]["path"],
+        live["discovery_path"],
         live_skill.to_string_lossy().as_ref()
     );
 }

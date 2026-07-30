@@ -30,7 +30,7 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
-use super::skill_shadow::PluginShadowReport;
+use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, TranscriptSummary};
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
@@ -343,16 +343,20 @@ pub trait HarnessAdapter {
         false
     }
 
-    /// **Enhancement: shadow preflight.** Format the runner banner for a
-    /// report. The default preserves the original Claude-oriented rendering
-    /// for third-party adapters and older artifacts.
+    /// **Enhancement: shadow preflight.** Resolve duplicate runtime ids for one
+    /// concrete comparison cell. The generic fallback records coexistence.
+    fn resolve_shadow_sources(&self, _scan_root: &Path, sources: &mut [ShadowSource]) {
+        super::skill_shadow::resolve_as_coexisting(sources);
+    }
+
+    /// **Enhancement: shadow preflight.** Format the shared runner banner for
+    /// a report.
     fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
         super::skill_shadow::format_shadow_banner(report)
     }
 
-    /// **Enhancement: shadow preflight.** Format aggregate validity warnings
-    /// for a report. The default preserves the original Claude-oriented
-    /// rendering for third-party adapters and older artifacts.
+    /// **Enhancement: shadow preflight.** Format shared aggregate validity
+    /// warnings for a report.
     fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
         super::skill_shadow::shadow_validity_warnings(report)
     }
