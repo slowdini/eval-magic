@@ -173,8 +173,8 @@ The hook invokes the hidden `guard-codex` subcommand
 
 ## Running inside Codex itself
 
-`eval-magic run --harness codex` from a Codex session writes `.agents/skills` (and, when the
-guard is armed, `.codex/hooks.json`). Those project-local Codex config paths are protected by Codex's
-default workspace-write sandbox, so the runner may need approval/escalation or an external
-terminal invocation. That approval is Codex's own permission boundary, not something eval-magic
-bypasses.
+User-facing guidance lives in the README's Harnesses section ("Running inside Codex itself")
+and in `run --guard --help`: staging writes `.agents/skills`, guarded runs also write
+`.codex/hooks.json`, and Codex's default workspace-write sandbox protects those paths, so the
+runner may need approval/escalation or an external terminal invocation. Keep the public text in
+sync when this changes.

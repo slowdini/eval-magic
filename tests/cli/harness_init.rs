@@ -206,6 +206,30 @@ fn harness_init_template_prompts_for_verified_values() {
     }
 }
 
+/// The scaffolded template lands in user projects, so its authoring-guide
+/// pointers name the embedded docs topic — not a repo-relative path a
+/// binary-only user cannot open.
+#[test]
+fn harness_init_template_points_at_embedded_docs() {
+    let tmp = TempDir::new().unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "init", "cool-cli"])
+        .assert()
+        .success();
+
+    let descriptor = fs::read_to_string(descriptor_path(tmp.path())).unwrap();
+    assert!(
+        descriptor.contains("eval-magic docs byoh"),
+        "descriptor template should point at the embedded docs topic"
+    );
+    assert!(
+        !descriptor.contains("docs/byoh.md"),
+        "descriptor template must not point at the repo-relative byoh path"
+    );
+}
+
 #[test]
 fn harness_init_help_documents_the_scaffold_workflow() {
     skill_eval()
@@ -215,7 +239,7 @@ fn harness_init_help_documents_the_scaffold_workflow() {
         .stdout(
             contains("lint-clean")
                 .and(contains("overlay"))
-                .and(contains("docs/byoh.md"))
+                .and(contains("eval-magic docs byoh"))
                 .and(contains("--force"))
                 .and(contains("guess")),
         );

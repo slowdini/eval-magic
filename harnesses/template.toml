@@ -12,8 +12,8 @@
 ##   - Re-lint after every edit:  eval-magic harness lint .eval-magic/harnesses/{label}.toml
 ##
 ## References: `eval-magic harness show claude-code` prints the richest wired descriptor;
-## schema/harness-descriptor.schema.json is the field-by-field reference; docs/byoh.md is the
-## authoring guide (layering, named capabilities, upstreaming).
+## schema/harness-descriptor.schema.json is the field-by-field reference; `eval-magic docs byoh`
+## prints the authoring guide (layering, named capabilities, upstreaming).
 
 ## `label` is the only required field: this file alone registers a baseline harness — runs fall
 ## back to --no-stage (each SKILL.md inlined into its dispatch prompt), llm_judge carries the
@@ -110,10 +110,11 @@ label = "{label}"
 ##                                    clamping each matching record at zero
 ##   [transcript.extract.duration]    field (millisecond pick) OR timestamp_spread (last minus
 ##                                    first RFC 3339 timestamp)
-## See docs/byoh.md "The declarative extractor" for the worked Codex-shaped example. A stream
-## that needs more than these primitives (keyed cross-event joins, content coercion) is a
-## named-parser code contribution (one capability per PR — see docs/byoh.md "Upstreaming your
-## descriptor"); leave this table commented and llm_judge carries the grading meanwhile.
+## See `eval-magic docs byoh` "The declarative extractor" for the worked Codex-shaped example.
+## A stream that needs more than these primitives (keyed cross-event joins, content coercion) is
+## a named-parser code contribution (one capability per PR — see `eval-magic docs byoh`
+## "Upstreaming your descriptor"); leave this table commented and llm_judge carries the grading
+## meanwhile.
 ## VERIFY: capture a real events file and check its line shapes against the reader you declare —
 ## an unknown parser name fails the schema gate listing the allowed values. Leave
 ## surfaces_skill_invocation false unless you verified the stream yields a deterministic
@@ -212,11 +213,11 @@ label = "{label}"
 ## run.supports_guard = true) because the write guard fails open — a mistyped block would
 ## silently disarm it. Unguarded runs fall back to the detect-stray-writes audit (guarded
 ## built-ins arm the guard automatically; --no-guard opts out). Guard support is a built-in,
-## one-capability-per-PR contribution: see docs/byoh.md "The guard restriction" and
-## docs/progressive-enhancements.md.
+## one-capability-per-PR contribution: see `eval-magic docs byoh` "The guard restriction" and
+## docs/progressive-enhancements.md in the eval-magic repo.
 
 ## -------------------------------------------------------------------------------------------
-## Before opening a PR (docs/byoh.md "Upstreaming your descriptor"):
+## Before opening a PR (`eval-magic docs byoh` "Upstreaming your descriptor"):
 ##   1. eval-magic harness lint .eval-magic/harnesses/{label}.toml — all checks pass.
 ##   2. A real smoke eval: eval-magic run --harness {label}, dispatch the tasks, then ingest and
 ##      finalize — the preflight warnings name the fallback carrying anything not declared.

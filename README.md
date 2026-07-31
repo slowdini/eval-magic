@@ -388,6 +388,8 @@ This table is the source of truth for per-harness enhancement support:
 
 Most missing enhancements degrade fidelity without blocking the run: without native staging, `--no-stage` inlines each `SKILL.md`; without transcript ingest, transcript checks grade as unverifiable and tokens/duration go unrecorded; without a model flag, models are provenance only; without a write guard or shadow preflight, the post-run audit and operator checks carry those responsibilities; without dispatch recipes, the runbook carries generic handoff guidance. Conversation resume is deliberately stricter: an eval that declares `turns` is rejected during preflight when its harness has no `[conversation]` capability, because sending canned replies into unrelated fresh sessions would produce misleading data.
 
+**Running inside Codex itself:** invoking `eval-magic run --harness codex` from a Codex session writes `.agents/skills` (and `.codex/hooks.json` when the write guard arms). Codex's default workspace-write sandbox protects those project-local config paths, so the runner may need approval/escalation or an invocation from an external terminal. That approval is Codex's own permission boundary, not something eval-magic bypasses.
+
 Per-harness implementation notes for developers wiring features live in [docs/claude-notes.md](docs/claude-notes.md), [docs/codex-notes.md](docs/codex-notes.md), and [docs/opencode-notes.md](docs/opencode-notes.md).
 
 ## Documentation
@@ -395,9 +397,11 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 | Where | What's in it |
 |-------|--------------|
 | `eval-magic --help` / `eval-magic <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
-| [docs/byoh.md](docs/byoh.md) | Bring your own harness: the `harness init` scaffold, authoring a descriptor file for an unknown harness, layering/merge rules, named capabilities, the `harness list`/`show`/`lint` workflow, and upstreaming a descriptor as a data-only PR |
+| `eval-magic docs <topic>` | The reference docs embedded in the binary — version-matched to the install and readable offline: `guide` (this README) and `byoh` (the BYOH authoring guide). Bare `eval-magic docs` lists topics |
+| [docs/byoh.md](docs/byoh.md) | Bring your own harness: the `harness init` scaffold, authoring a descriptor file for an unknown harness, layering/merge rules, named capabilities, the `harness list`/`show`/`lint` workflow, and upstreaming a descriptor as a data-only PR (also printable as `eval-magic docs byoh`) |
 | [docs/progressive-enhancements.md](docs/progressive-enhancements.md) | Development doc: the harness baseline-vs-enhancement contract — what each enhancement unlocks, why it needs harness-specific code, and its fallback |
 | [docs/claude-notes.md](docs/claude-notes.md) / [docs/codex-notes.md](docs/codex-notes.md) / [docs/opencode-notes.md](docs/opencode-notes.md) | Development docs: per-harness implementation notes for working on eval-magic's harness support |
+| [docs/README.md](docs/README.md) | Development doc: the documentation placement policy — what ships in the binary vs. stays internal |
 | [GitHub issues](https://github.com/slowdini/eval-magic/issues) | Planned features and known limitations |
 
 ## Bundled assets
