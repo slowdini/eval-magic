@@ -181,16 +181,23 @@ pub(crate) enum HarnessCommands {
     },
     /// Validate a descriptor file, or every layer of a registered harness.
     ///
-    /// A file target runs the full load pipeline with one ✓/✗ line per check:
-    /// TOML syntax + schema (unknown fields, bad capability names), the
-    /// user-layer restrictions (`[guard]` and `run.supports_guard = true` stay
-    /// built-in-only; unguarded runs fall back to the detect-stray-writes
-    /// audit), and the cross-field invariants — merged onto the registered
-    /// harness with the same `label` when one exists, so a partial override is
-    /// checked against its real merge target. A name target re-lints every
-    /// discovered layer file strictly, surfacing descriptors that registry
-    /// initialization skipped with a warning. Exits non-zero when any check
-    /// fails.
+    /// Descriptor file targets are linted as user-supplied by default and run
+    /// the full load pipeline with one ✓/✗ line per check: TOML syntax + schema
+    /// (unknown fields, bad capability names), the user-layer restrictions
+    /// (`[guard]` and `run.supports_guard = true` stay built-in-only; unguarded
+    /// runs fall back to the detect-stray-writes audit), and the cross-field
+    /// invariants — merged onto the registered harness with the same `label`
+    /// when one exists, so a partial override is checked against its real merge
+    /// target. A name target re-lints every discovered layer file strictly,
+    /// preserving each source's actual layer and surfacing descriptors that
+    /// registry initialization skipped with a warning. Exits non-zero when any
+    /// check fails.
+    ///
+    /// For eval-magic developers checking an on-disk built-in source before a
+    /// rebuild, `--as-builtin` skips only the user-layer restriction. It requires
+    /// a positional file target, cannot be combined with `--harness-file`, and
+    /// does not change registry loading; user-supplied descriptors remain unable
+    /// to register built-in-only guard data.
     ///
     /// With `--probe`, and only after every static check passes, also exercises
     /// the descriptor end-to-end: renders `dispatch.exec_template` with a
@@ -213,6 +220,15 @@ pub(crate) enum HarnessCommands {
         /// Optional when `--harness-file` is passed: that file is then the
         /// target, since it already names exactly one descriptor.
         target: Option<String>,
+        /// Treat a descriptor file as a built-in source for this lint only.
+        ///
+        /// Skips the user-layer restriction so eval-magic developers can check
+        /// an edited source under `harnesses/` without rebuilding first. Schema
+        /// and cross-field invariant checks still run. This does not change
+        /// registry loading, requires a positional file target, and cannot be
+        /// combined with `--harness-file`.
+        #[arg(long, requires = "target")]
+        as_builtin: bool,
         /// Execute the dispatch exec template with a trivial prompt and verify
         /// final-message recovery (opt-in; costs real CLI usage). See the
         /// subcommand description above for the full contract.

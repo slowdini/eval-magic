@@ -37,6 +37,7 @@ pub(crate) fn run_harness(args: HarnessArgs, harness_file: Option<&str>) -> anyh
         HarnessCommands::Show { name } => run_show(&name),
         HarnessCommands::Lint {
             target,
+            as_builtin,
             probe,
             yes,
             probe_timeout,
@@ -49,6 +50,7 @@ pub(crate) fn run_harness(args: HarnessArgs, harness_file: Option<&str>) -> anyh
             })?;
             run_lint(
                 target,
+                as_builtin,
                 probe::ProbeOpts::from_flags(probe, yes, probe_timeout),
             )
         }
@@ -122,7 +124,7 @@ fn run_init_scaffold(name: &str, stdout: bool, force: bool) -> anyhow::Result<()
     );
     println!("Scaffolded notes skeleton:     {}", notes_path.display());
     println!();
-    lint_file(&descriptor_path, None)?;
+    lint_file(&descriptor_path, false, None)?;
     println!();
     println!("Next:");
     println!("  1. Fill in verified values — follow the template's comments; never guess a flag");
@@ -191,13 +193,23 @@ fn run_show(name: &str) -> anyhow::Result<()> {
 /// Lint a descriptor file, or every discovered layer of a registered name.
 /// When `probe_opts` is `Some`, run the live dispatch probe after the static
 /// checks pass — see [`probe::run_probe`].
-fn run_lint(target: &str, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Result<()> {
+fn run_lint(
+    target: &str,
+    as_builtin: bool,
+    probe_opts: Option<probe::ProbeOpts>,
+) -> anyhow::Result<()> {
     let looks_like_path = target.contains(std::path::MAIN_SEPARATOR)
         || target.ends_with(".toml")
         || Path::new(target).is_file();
     if looks_like_path {
-        lint_file(Path::new(target), probe_opts)
+        lint_file(Path::new(target), as_builtin, probe_opts)
     } else {
+        if as_builtin {
+            bail!(
+                "--as-builtin requires a descriptor file path; registered harness names already \
+                 preserve source layers"
+            );
+        }
         lint_name(target, probe_opts)
     }
 }
@@ -205,8 +217,24 @@ fn run_lint(target: &str, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Resul
 /// Run one descriptor file through the full load pipeline, reporting each
 /// check as a ✓/✗ line (the `validate` idiom). When `probe_opts` is `Some`,
 /// run the live dispatch probe after every static check passes.
-fn lint_file(path: &Path, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Result<()> {
+fn lint_file(
+    path: &Path,
+    as_builtin: bool,
+    probe_opts: Option<probe::ProbeOpts>,
+) -> anyhow::Result<()> {
     let display = path.display();
+    if as_builtin {
+        println!(
+            "ℹ linting file in built-in source mode: {display}; this lint-only mode does not \
+             change registry loading"
+        );
+    } else {
+        println!(
+            "ℹ linting file as a user-supplied descriptor: {display}; use `--as-builtin` for an \
+             on-disk built-in source, or `eval-magic harness lint <name>` for the compiled-in \
+             descriptor"
+        );
+    }
     let toml_src = fs::read_to_string(path).with_context(|| format!("cannot read {display}"))?;
     let mut failed = 0usize;
 
@@ -227,11 +255,15 @@ fn lint_file(path: &Path, probe_opts: Option<probe::ProbeOpts>) -> anyhow::Resul
     let mut resolved: Option<HarnessDescriptor> = None;
 
     if let Some(value) = &value {
-        match check_user_layer_restrictions(value, &display.to_string()) {
-            Ok(()) => println!("✓ user-layer restrictions ([guard] stays built-in-only)"),
-            Err(e) => {
-                eprintln!("✗ {e}");
-                failed += 1;
+        if as_builtin {
+            println!("✓ built-in source mode (user-layer restrictions skipped)");
+        } else {
+            match check_user_layer_restrictions(value, &display.to_string()) {
+                Ok(()) => println!("✓ user-layer restrictions ([guard] stays built-in-only)"),
+                Err(e) => {
+                    eprintln!("✗ {e}");
+                    failed += 1;
+                }
             }
         }
 
