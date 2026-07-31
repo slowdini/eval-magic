@@ -91,8 +91,8 @@ fn run_init_scaffold(name: &str, stdout: bool, force: bool) -> anyhow::Result<()
     if let Some(info) = harness_info().find(|info| info.label == name) {
         eprintln!(
             "note: '{name}' is already registered ({}) — this file will overlay it \
-             field-by-field (docs/byoh.md \"Layering\"); pick a new name for a new harness, \
-             or start an overlay from `eval-magic harness show {name}`.",
+             field-by-field (eval-magic docs byoh — \"Layering\"); pick a new name for a \
+             new harness, or start an overlay from `eval-magic harness show {name}`.",
             layer_chain(&info)
         );
     }
@@ -138,7 +138,8 @@ fn run_init_scaffold(name: &str, stdout: bool, force: bool) -> anyhow::Result<()
         "  3. Smoke eval: eval-magic run --harness {name}  (dispatch, then ingest + finalize)"
     );
     println!(
-        "  4. Upstreaming the proven descriptor: docs/byoh.md \"Upstreaming your descriptor\"."
+        "  4. Upstreaming the proven descriptor: eval-magic docs byoh — \"Upstreaming your \
+         descriptor\"."
     );
     Ok(())
 }

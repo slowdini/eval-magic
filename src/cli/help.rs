@@ -62,7 +62,7 @@ EXAMPLES:
   eval-magic run --harness opencode
   eval-magic ingest --harness opencode
 
-  # Bring your own harness (docs/byoh.md): scaffold a commented descriptor +
+  # Bring your own harness (eval-magic docs byoh): scaffold a commented descriptor +
   # notes skeleton into .eval-magic/harnesses/, fill in verified values, lint, run
   eval-magic harness init cool-custom-harness
   eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml

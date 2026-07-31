@@ -86,6 +86,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         Commands::Grade(args) => run_grade(args),
         Commands::Aggregate(args) => run_aggregate(args),
         Commands::Harness(args) => run_harness(args, harness_file),
+        Commands::Docs { topic } => run_docs(topic),
         Commands::Snapshot(args) => run_snapshot(args),
         Commands::Teardown(args) => run_teardown(args),
         Commands::PromoteBaseline(args) => run_promote_baseline(args),

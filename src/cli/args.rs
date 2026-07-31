@@ -137,7 +137,7 @@ pub(crate) enum HarnessCommands {
     /// field-by-field, so the file overlays the registered harness instead of
     /// defining a new one. The `[guard]` table is never scaffolded —
     /// user-supplied descriptors may not declare it. The authoring guide is
-    /// docs/byoh.md; its "Upstreaming your descriptor" section covers
+    /// `eval-magic docs byoh`; its "Upstreaming your descriptor" section covers
     /// contributing the finished descriptor.
     Init {
         /// Label for the new harness (kebab-case, e.g. `cool-cli`); becomes
@@ -691,6 +691,17 @@ pub(crate) enum Commands {
     /// `--harness`. `list` surveys the registry, `show` prints one resolved
     /// descriptor, and `lint` validates a descriptor file or registered name.
     Harness(HarnessArgs),
+    /// Print an embedded reference doc, or list the available topics.
+    ///
+    /// The user-facing reference docs ship inside the binary — version-matched
+    /// to the installed release and readable offline. `guide` is the complete
+    /// operating guide (the README); `byoh` is the bring-your-own-harness
+    /// descriptor authoring guide. Development docs for working on eval-magic
+    /// itself stay in the repository's `docs/` directory.
+    Docs {
+        /// Topic to print (bare `docs` lists the available topics).
+        topic: Option<String>,
+    },
     /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
     /// hook as `eval-magic guard <marker>`, not by users; hidden from help.
     #[command(hide = true)]
