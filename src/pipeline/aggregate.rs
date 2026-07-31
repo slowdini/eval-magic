@@ -16,7 +16,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::adapters::skill_shadow::PluginShadowArtifact;
-use crate::adapters::{adapter_for, shadow_validity_warnings};
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
@@ -478,7 +477,7 @@ fn collect_stray_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
 /// Add plugin-shadow validity warnings. A malformed report is ignored.
 fn collect_shadow_warnings(
     iteration_dir: &Path,
-    conditions: &ConditionsRecord,
+    _conditions: &ConditionsRecord,
     warnings: &mut Vec<String>,
 ) {
     let Ok(raw) = fs::read_to_string(iteration_dir.join("plugin-shadow.json")) else {
@@ -490,12 +489,7 @@ fn collect_shadow_warnings(
     if artifact.isolates_live_sources {
         return;
     }
-    let report = artifact.report;
-    let rendered = conditions.harness.map_or_else(
-        || shadow_validity_warnings(&report),
-        |harness| adapter_for(harness).shadow_validity_warnings(&report),
-    );
-    warnings.extend(rendered);
+    warnings.extend(artifact.validity_warnings());
 }
 
 #[cfg(test)]

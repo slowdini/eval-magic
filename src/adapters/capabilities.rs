@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::ToolInvocation;
 
-use super::skill_shadow::PluginShadowReport;
+use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, TranscriptSummary};
 
 /// Transcript parsers: turn a captured CLI events file into tool invocations
@@ -154,28 +154,14 @@ impl ShadowPreflight {
         }
     }
 
-    /// Render the harness-specific build-time warning for a shadow report.
-    pub(crate) fn format_banner(self, report: &PluginShadowReport) -> String {
+    /// Resolve duplicate runtime ids using the harness's declared preflight
+    /// capability. Report grouping and severity remain harness-neutral.
+    pub(crate) fn resolve(self, scan_root: &Path, sources: &mut [ShadowSource]) {
         match self {
-            ShadowPreflight::ClaudePlugins => super::skill_shadow::format_shadow_banner(report),
-            ShadowPreflight::CodexSkills => {
-                super::codex::skill_shadow::format_shadow_banner(report)
-            }
+            ShadowPreflight::ClaudePlugins => super::skill_shadow::resolve_by_precedence(sources),
+            ShadowPreflight::CodexSkills => super::skill_shadow::resolve_as_coexisting(sources),
             ShadowPreflight::OpencodeSkills => {
-                super::opencode::skill_shadow::format_shadow_banner(report)
-            }
-        }
-    }
-
-    /// Render harness-specific aggregate validity warnings for a report.
-    pub(crate) fn validity_warnings(self, report: &PluginShadowReport) -> Vec<String> {
-        match self {
-            ShadowPreflight::ClaudePlugins => super::skill_shadow::shadow_validity_warnings(report),
-            ShadowPreflight::CodexSkills => {
-                super::codex::skill_shadow::shadow_validity_warnings(report)
-            }
-            ShadowPreflight::OpencodeSkills => {
-                super::opencode::skill_shadow::shadow_validity_warnings(report)
+                super::opencode::skill_shadow::resolve_sources(scan_root, sources)
             }
         }
     }

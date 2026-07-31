@@ -169,9 +169,13 @@ The `.claude`/`.agents` roots are a cross-harness contamination vector: a skill 
 Claude Code or Codex is visible to OpenCode sessions by default. Direct skill directories are
 matched by the `name:` in `SKILL.md` frontmatter, not the folder name. Missing directories and
 malformed skills are ignored; a failure in one root never suppresses findings from the others.
-Findings produce a build-time OpenCode banner and the backward-compatible `plugin-shadow.json`
-artifact; `aggregate` turns the same report into OpenCode-specific `benchmark.json` validity
-warnings.
+The scan runs in every comparison environment. Schema-v2 `plugin-shadow.json` records native versus
+cross-harness roots, canonical and discovery paths, logical and runtime names, every affected
+cell, and per-source remediation. When live and staged sources share a runtime ID, preflight runs
+`opencode debug skill` from that environment and records the selected versus shadowed path; a
+failed or unparseable probe remains `unknown` rather than guessing. Unique runtime IDs need no
+probe and are `selected`. The shared banner and `aggregate` validity warnings render this same
+report; historical unversioned artifacts remain readable.
 
 eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
 set the kill switches below on the operator's behalf — parity with a real user session matters.

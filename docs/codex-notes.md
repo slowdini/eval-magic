@@ -67,9 +67,12 @@ preflight compares each logical eval skill name with:
 
 Direct skill directories are matched by the `name:` in `SKILL.md` frontmatter, not the folder
 name. Missing directories, malformed skills, and unavailable or invalid plugin-list output are
-ignored; a plugin-list failure does not suppress findings from the direct directories. Findings
-produce a build-time Codex banner and the backward-compatible `plugin-shadow.json` artifact;
-`aggregate` turns the same report into Codex-specific `benchmark.json` validity warnings.
+ignored; a plugin-list failure does not suppress findings from the direct directories. The scan
+runs in every comparison environment. Schema-v2 `plugin-shadow.json` records project/user/admin or
+plugin roots, canonical and discovery paths, logical and runtime names, every affected cell, and
+per-source remediation. Codex can expose same-name skills together, so duplicate runtime IDs are
+recorded as `coexisting`. The shared banner and `aggregate` validity warnings render this same
+report; historical unversioned artifacts remain readable.
 
 For an installed-plugin collision, add `--disable plugins` to every eval-agent `codex exec`
 invocation, including every resumed turn. It is a global option, so place it before `exec`, for

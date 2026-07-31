@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eval-magic.dev/schema/plugin-shadow.schema.json",
+  "title": "Plugin shadow report",
+  "description": "Versioned provenance for live and staged skill sources that can affect an eval comparison.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "config_dir", "findings"],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "config_dir": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    },
+    "isolates_live_sources": {
+      "type": "boolean"
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["skill_name", "role", "severity", "sources"],
+      "properties": {
+        "skill_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "enum": ["subject", "sibling"]
+        },
+        "severity": {
+          "enum": ["warning", "comparison-invalid"]
+        },
+        "sources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/source"
+          }
+        }
+      }
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "origin",
+        "skill_name",
+        "runtime_id",
+        "discovery_path",
+        "root"
+      ],
+      "properties": {
+        "kind": {
+          "enum": ["skill", "plugin"]
+        },
+        "origin": {
+          "enum": ["live", "staged"]
+        },
+        "skill_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "runtime_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "plugin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "discovery_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "canonical_path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "root": {
+          "$ref": "#/$defs/root"
+        },
+        "appearances": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/appearance"
+          }
+        },
+        "remediation": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "root": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scope", "namespace", "path", "relation"],
+      "properties": {
+        "scope": {
+          "enum": ["project", "global", "admin", "unknown"]
+        },
+        "namespace": {
+          "enum": ["opencode", "claude", "agents", "codex", "plugin", "unknown"]
+        },
+        "plugin": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "relation": {
+          "enum": ["native", "cross-harness", "unknown"]
+        }
+      }
+    },
+    "appearance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["group", "condition", "eval_ids", "resolution"],
+      "properties": {
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "eval_ids": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "resolution": {
+          "enum": ["selected", "shadowed", "coexisting", "unknown"]
+        },
+        "precedence_rank": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    }
+  }
+}
