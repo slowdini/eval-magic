@@ -41,6 +41,22 @@ use commands::*;
 /// subcommand, and return its result. Called by the binary entry point.
 pub fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
+    let lint_as_builtin = match &cli.command {
+        Some(Commands::Harness(args)) => matches!(
+            &args.command,
+            args::HarnessCommands::Lint {
+                as_builtin: true,
+                ..
+            }
+        ),
+        _ => false,
+    };
+    if lint_as_builtin && cli.harness_file.is_some() {
+        anyhow::bail!(
+            "--as-builtin cannot be used with --harness-file; pass the descriptor as the lint \
+             target instead"
+        );
+    }
     // The hidden guard hooks fire on every PreToolUse in a dispatched session
     // and only ever need the embedded descriptors — skip layered discovery so
     // a broken user descriptor can't add noise or latency per tool call (the

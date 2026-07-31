@@ -9,6 +9,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
+mod lint_modes;
+
 /// Write `<root>/.eval-magic/harnesses/<file>` with the given TOML.
 fn write_project_descriptor(root: &Path, file: &str, contents: &str) {
     let dir = root.join(".eval-magic").join("harnesses");
@@ -620,17 +622,4 @@ fn harness_lint_probe_does_not_run_after_static_checks_fail() {
         .assert()
         .failure()
         .stderr(contains("mystery").and(contains("About to execute").not()));
-}
-
-#[test]
-fn harness_lint_help_lists_the_probe_flags() {
-    skill_eval()
-        .args(["harness", "lint", "--help"])
-        .assert()
-        .success()
-        .stdout(
-            contains("--probe")
-                .and(contains("--yes"))
-                .and(contains("--probe-timeout")),
-        );
 }
