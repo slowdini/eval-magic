@@ -6,8 +6,9 @@
 `src/lib.rs` and submodules such as `cli/`, `pipeline/`, `sandbox/`, `validation/`, and
 `workspace/`. JSON schemas are tracked in `schema/`, harness descriptors (plus embedded harness
 assets such as the OpenCode write-guard plugin template) in `harnesses/`, shared
-prompt profiles in `profiles/`, and development docs (the harness enhancement contract,
-per-harness notes) in `docs/`. Integration
+prompt profiles in `profiles/`, and docs in `docs/` — user-facing `byoh.md` ships embedded in the
+binary (the `eval-magic docs byoh` topic), the rest are internal development docs (the harness
+enhancement contract, per-harness notes); `docs/README.md` holds the placement policy. Integration
 tests are split by surface area under `tests/cli/` and `tests/run/`; unit tests usually live
 beside the module they exercise.
 
@@ -23,7 +24,11 @@ beside the module they exercise.
 ## Documentation is a first-class citizen
 
 CLI `--help` docs are the primary way that usage is discovered. Any new feature that has
-user-facing elements must be thoroughly described in the shipped documentation.
+user-facing elements must be thoroughly described in the shipped documentation. Shipped means the
+`--help` tree plus the reference topics embedded in the binary and printable via
+`eval-magic docs <topic>` (topics are registered in `src/cli/commands/docs.rs`; shipped output
+references them as `eval-magic docs <topic>`, never repo-relative paths). What belongs where is
+governed by `docs/README.md`.
 
 ## Coding Style & Naming Conventions
 

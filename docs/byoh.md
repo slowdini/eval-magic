@@ -4,7 +4,9 @@
 > required — a harness declares its capabilities in a TOML descriptor file, and every capability it
 > *doesn't* declare degrades to a documented fallback with a warning, never a rejection. The
 > baseline-vs-enhancement contract behind this is
-> [progressive-enhancements.md](progressive-enhancements.md).
+> [progressive-enhancements.md](progressive-enhancements.md). Printed from the binary via
+> `eval-magic docs byoh`, this guide's relative links resolve in the
+> [eval-magic repository](https://github.com/slowdini/eval-magic).
 
 ## The five-minute version
 
