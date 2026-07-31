@@ -157,8 +157,9 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
 /// `dispatch.json`.
 pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
-    let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::record_runs(&dir, ctx.harness, args.overwrite)?;
+    let iteration = resolve_iteration(&ctx, args.iteration)?;
+    let dir = iteration_dir(&ctx, Some(iteration))?;
+    let result = pipeline::record_runs(&dir, iteration, ctx.harness, args.overwrite)?;
 
     println!(
         "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, skipped (incomplete conversation): {}, missing transcript: {}",
@@ -176,6 +177,9 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
         eprintln!("{warning}");
     }
     if let Some(warning) = result.incomplete_conversation_warning() {
+        eprintln!("{warning}");
+    }
+    if let Some(warning) = result.permission_denial_warning() {
         eprintln!("{warning}");
     }
     Ok(())
@@ -207,6 +211,10 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
         pipeline::detect_stray_writes_report(&dir, iteration, &ctx.skill_subdir, &repo_root)?;
     println!("Wrote {}", dir.join("stray-writes.json").display());
     println!("Wrote {}", dir.join("guard-denials.json").display());
+
+    for notice in &report.notices {
+        eprintln!("⚠ {notice}");
+    }
 
     if report.guard_denials > 0 {
         eprintln!(
@@ -294,6 +302,9 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
 
     if args.finalize {
         let s = pipeline::finalize(&gctx)?;
+        for w in &s.warnings {
+            eprintln!("⚠ {w}");
+        }
         println!(
             "\nFinalized: {} substantive assertion(s) graded, {} skill-invocation meta-check(s) graded, {} transcript_check unverifiable (empty tool_invocations).",
             s.total_graded, s.total_meta_graded, s.total_unverifiable
@@ -308,6 +319,9 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
         println!("\nNext: eval-magic aggregate{target_args} --iteration {iteration}");
     } else {
         let diffs = pipeline::measure_iteration_diff_scopes(&dir)?;
+        for w in &diffs.warnings {
+            eprintln!("⚠ {w}");
+        }
         println!(
             "Diff scope: {} measured, {} reused, {} missing baseline, {} shared environment",
             diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
@@ -321,6 +335,9 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             );
         }
         let s = pipeline::emit_judge_tasks(&gctx)?;
+        for w in &s.warnings {
+            eprintln!("⚠ {w}");
+        }
         println!("Wrote {}", dir.join("judge-tasks.json").display());
         println!(
             "Judge tasks: {} ({} skill-invocation meta-judge(s))",
@@ -355,6 +372,9 @@ pub(crate) fn run_aggregate(args: CommonArgs) -> anyhow::Result<()> {
 
     let benchmark = pipeline::aggregate(&dir, &conditions)?;
     println!("Wrote {}", dir.join("benchmark.json").display());
+    for w in &benchmark.warnings {
+        eprintln!("⚠ {w}");
+    }
     if benchmark.missing_gradings > 0 {
         eprintln!(
             "note: {} grading.json file(s) were missing — benchmark is incomplete.",

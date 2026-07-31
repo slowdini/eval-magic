@@ -8,14 +8,21 @@
 //! To regenerate after an intentional output change:
 //! `GOLDEN_BLESS=1 cargo test golden_` — then review the fixture diff.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use crate::adapters::{CliDispatchContext, CliJudgeContext, adapter_for};
 use crate::core::{AvailableSkill, Harness, Mode};
 
 use super::dispatch::{DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest};
 use super::runbook::{RunbookContext, build_runbook};
+
+fn empty_env() -> &'static BTreeMap<String, String> {
+    static EMPTY: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
+    &EMPTY
+}
 
 fn golden_path(rel: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -111,6 +118,7 @@ fn render_manifest(harness: Harness, guard: bool, agent_model: Option<&str>) -> 
             harness,
             guard,
             agent_model,
+            agent_env: empty_env(),
         },
     )
 }
@@ -133,6 +141,7 @@ fn golden_runbook_per_harness() {
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
             guard: true,
             agent_model: Some("model-x"),
+            agent_env: empty_env(),
         });
         assert_golden(&format!("{label}/runbook.golden.md"), &book);
     }
@@ -249,6 +258,7 @@ fn golden_opencode_next_steps_with_and_without_model() {
                 target_args: " --skill-dir /tmp/skills --skill widget-skill",
                 iteration: 2,
                 agent_model,
+                agent_env: empty_env(),
             });
         assert_golden(rel, &steps);
     }

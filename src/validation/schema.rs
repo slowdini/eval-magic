@@ -23,28 +23,32 @@ pub enum SchemaName {
     Grading,
     StrayWrites,
     GuardDenials,
+    PermissionDenials,
     Benchmark,
     JudgeTasks,
     CommandCheck,
     DiffScope,
     HarnessDescriptor,
     Conversation,
+    PluginShadow,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 11] = [
+    const ALL: [SchemaName; 13] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
         SchemaName::StrayWrites,
         SchemaName::GuardDenials,
+        SchemaName::PermissionDenials,
         SchemaName::Benchmark,
         SchemaName::JudgeTasks,
         SchemaName::CommandCheck,
         SchemaName::DiffScope,
         SchemaName::HarnessDescriptor,
         SchemaName::Conversation,
+        SchemaName::PluginShadow,
     ];
 
     /// The schema's kebab-case name, as used in error messages and the on-disk
@@ -56,12 +60,14 @@ impl SchemaName {
             SchemaName::Grading => "grading",
             SchemaName::StrayWrites => "stray-writes",
             SchemaName::GuardDenials => "guard-denials",
+            SchemaName::PermissionDenials => "permission-denials",
             SchemaName::Benchmark => "benchmark",
             SchemaName::JudgeTasks => "judge-tasks",
             SchemaName::CommandCheck => "command-check",
             SchemaName::DiffScope => "diff-scope",
             SchemaName::HarnessDescriptor => "harness-descriptor",
             SchemaName::Conversation => "conversation",
+            SchemaName::PluginShadow => "plugin-shadow",
         }
     }
 
@@ -75,6 +81,9 @@ impl SchemaName {
             SchemaName::GuardDenials => {
                 include_str!("../../schema/guard-denials.schema.json")
             }
+            SchemaName::PermissionDenials => {
+                include_str!("../../schema/permission-denials.schema.json")
+            }
             SchemaName::Benchmark => include_str!("../../schema/benchmark.schema.json"),
             SchemaName::JudgeTasks => include_str!("../../schema/judge-tasks.schema.json"),
             SchemaName::CommandCheck => {
@@ -85,6 +94,7 @@ impl SchemaName {
                 include_str!("../../schema/harness-descriptor.schema.json")
             }
             SchemaName::Conversation => include_str!("../../schema/conversation.schema.json"),
+            SchemaName::PluginShadow => include_str!("../../schema/plugin-shadow.schema.json"),
         }
     }
 }
@@ -277,6 +287,43 @@ mod tests {
             result.is_ok(),
             "command_check grading should validate: {result:?}"
         );
+    }
+
+    #[test]
+    fn validates_v2_plugin_shadow_artifacts() {
+        let artifact = json!({
+            "schema_version": 2,
+            "config_dir": "/home/u/.config/opencode",
+            "findings": [{
+                "skill_name": "mr-review",
+                "role": "subject",
+                "severity": "comparison-invalid",
+                "sources": [{
+                    "kind": "skill",
+                    "origin": "live",
+                    "skill_name": "mr-review",
+                    "runtime_id": "mr-review",
+                    "discovery_path": "/home/u/.claude/skills/mr-review",
+                    "root": {
+                        "scope": "global",
+                        "namespace": "claude",
+                        "path": "/home/u/.claude/skills",
+                        "relation": "cross-harness"
+                    },
+                    "appearances": [{
+                        "group": "g1",
+                        "condition": "without_skill",
+                        "eval_ids": ["e1"],
+                        "resolution": "selected"
+                    }],
+                    "remediation": "Disable external skills."
+                }]
+            }]
+        });
+
+        let result: Result<Value, _> =
+            validate_against_schema(SchemaName::PluginShadow, &artifact, "plugin-shadow.json");
+        assert!(result.is_ok(), "{result:?}");
     }
 
     #[test]

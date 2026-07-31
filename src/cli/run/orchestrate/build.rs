@@ -13,6 +13,7 @@ use crate::adapters::adapter_for;
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
+use super::super::RunError;
 use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, get_skill_description,
 };
@@ -20,10 +21,10 @@ use super::super::fixtures::fixture_pairs;
 use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
-use super::super::{RunError, write_json};
 use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_indices};
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
+use crate::core::fs::write_json;
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.
@@ -54,6 +55,7 @@ pub(super) fn write_dispatch(
         run_nonce: Some(r.run_nonce.clone()),
         runs: Some(opts.runs),
         agent_model: opts.agent_model.map(str::to_owned),
+        agent_env: opts.agent_env.clone(),
         judge_model: opts.judge_model.map(str::to_owned),
         label: opts.label.map(str::to_owned),
     };
@@ -237,6 +239,7 @@ pub(super) fn write_dispatch(
                 harness: ctx.harness,
                 guard: opts.guard_armed(),
                 agent_model: opts.agent_model,
+                agent_env: &opts.agent_env,
             },
         ),
     )?;
@@ -263,6 +266,12 @@ pub(super) fn write_dispatch(
         "harness": ctx.harness,
         "tasks": tasks,
     });
+    if !conditions.agent_env.is_empty() {
+        dispatch_json
+            .as_object_mut()
+            .expect("dispatch envelope is an object")
+            .insert("agent_env".to_string(), json!(conditions.agent_env));
+    }
     if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
         let descriptor = crate::adapters::registry::descriptor_value_for(ctx.harness);
         let envelope = dispatch_json
@@ -333,6 +342,7 @@ pub(super) fn write_dispatch(
         target_args: &target_args,
         guard: opts.guard_armed(),
         agent_model: opts.agent_model,
+        agent_env: &opts.agent_env,
     });
     fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
 
@@ -346,6 +356,7 @@ pub(super) fn post_build(
     ctx: &RunContext,
     opts: &RunOptions,
     r: &Resolved,
+    staged: &Staged,
 ) -> Result<(), RunError> {
     // Every private task env this run staged. Computed once and
     // reused below to arm the guard in each env and to point the plugin-shadow
@@ -389,21 +400,7 @@ pub(super) fn post_build(
     // runner-owned baseline with no inherited history or remotes.
     super::git::initialize_task_repositories(r)?;
 
-    // Shadow preflight: a staged skill name also discoverable from the operator's
-    // live environment contaminates the run. Scan the first staged env, not
-    // `ctx.stage_root` — project-local settings must be read from a real staged
-    // task env.
-    let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
-    names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
-    let scan_root = targets
-        .first()
-        .map(|t| t.root.as_path())
-        .unwrap_or(ctx.stage_root.as_path());
-    let adapter = adapter_for(ctx.harness);
-    if let Some(report) = adapter.detect_shadowed_skills(scan_root, &names) {
-        write_json(&r.iteration_dir.join("plugin-shadow.json"), &report)?;
-        eprintln!("{}", adapter.format_shadow_banner(&report));
-    }
+    super::shadow_preflight::run(ctx, opts, r, staged, &targets)?;
     crate::pipeline::capture_iteration_baselines(&r.iteration_dir)
         .map_err(|error| RunError::msg(error.to_string()))?;
     Ok(())

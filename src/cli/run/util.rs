@@ -196,6 +196,14 @@ pub(crate) fn harness_run_preflight<'a>(
             )
         });
     }
+    if adapter.cli_events_filename().is_some() && !adapter.surfaces_permission_denials() {
+        warnings.push(format!(
+            "--harness {label} cannot tell a permission-denied tool result from an ordinary tool \
+             error — a dispatch whose calls were refused (and so fell back to static reasoning) \
+             will not be flagged in benchmark.json validity_warnings. Read the transcripts before \
+             trusting a run whose evals depend on the agent actually executing something."
+        ));
+    }
     if (opts.agent_model.is_some() || opts.judge_model.is_some())
         && adapter.cli_model_flag().is_none()
     {
@@ -425,6 +433,26 @@ mod tests {
                     .iter()
                     .any(|w| w.contains("transcript parser")),
                 "no transcript-parser warning: {:?}",
+                preflight.warnings
+            );
+        }
+    }
+
+    #[test]
+    fn preflight_does_not_warn_when_denials_can_be_detected() {
+        // All three built-in parsers report refusals structurally, so none of
+        // them carry the fallback warning. The preflight fallback branch stays
+        // defensive for a future harness whose parser cannot tell a refusal
+        // from an ordinary tool error.
+        for name in ["claude-code", "codex", "opencode"] {
+            let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
+            let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
+            assert!(
+                !preflight
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("permission-denied")),
+                "{name}: {:?}",
                 preflight.warnings
             );
         }

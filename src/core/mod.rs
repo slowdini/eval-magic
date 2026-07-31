@@ -10,11 +10,14 @@
 
 pub mod capabilities;
 pub mod context;
+pub mod fs;
 pub mod runtime;
 pub mod types;
 
 pub use capabilities::HarnessRunCapabilities;
 pub use context::{ContextError, DetectInput, Harness, RunContext, detect_run_context};
-pub(crate) use runtime::{GIT_ROUTING_ENV_VARS, clear_git_environment};
+pub(crate) use runtime::{
+    GIT_ROUTING_ENV_VARS, clear_git_environment, validate_agent_environment_entry,
+};
 pub use runtime::{GitOutput, run_git};
 pub use types::*;

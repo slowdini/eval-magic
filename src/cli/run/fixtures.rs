@@ -8,7 +8,8 @@ use std::path::Path;
 
 use crate::core::{AssertionCommandCheck, Eval};
 
-use super::{RunError, copy_entry};
+use super::RunError;
+use crate::core::fs::copy_entry_materialized;
 
 /// Cross-eval claims on env-relative fixture destinations: `dest → (eval_id, source)`.
 /// Used when a planned group contains multiple evals; canonical diff-scope runs
@@ -132,7 +133,7 @@ pub fn copy_fixtures(
             if let Some(parent) = dst.parent() {
                 fs::create_dir_all(parent)?;
             }
-            copy_entry(Path::new(source), &dst)?;
+            copy_entry_materialized(Path::new(source), &dst)?;
         }
         copied.push(dest.clone());
     }

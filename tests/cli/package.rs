@@ -72,6 +72,8 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "Cargo.toml",
         "LICENSE",
         "README.md",
+        // Embedded by `eval-magic docs` — the binary build breaks without it.
+        "docs/byoh.md",
         "schema/evals.schema.json",
         "schema/harness-descriptor.schema.json",
         "profiles/shared/plan-mode.md",

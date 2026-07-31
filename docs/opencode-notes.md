@@ -92,15 +92,18 @@ Live-verified on v1.18.4 (#155):
   file was never created.
 - In an armed env: an in-bounds `write` completed; an out-of-bounds `write` to `/tmp/...` was
   blocked with `"error":"eval guard: write to /tmp/... is outside the eval sandbox (allowed:
-  ...)"`; an out-of-bounds bash redirect (`echo hi > /tmp/...`) was blocked with
+  ...). For temporary or scratch files, use <env>/tmp."`; an out-of-bounds bash redirect
+  (`echo hi > /tmp/...`) was blocked with
   `"error":"eval guard: blocked bash (output redirection to a file) — runs outside the eval
-  sandbox"`; and `eval-magic teardown-guard` printed `🛡 Write guard removed.`, deleted the
-  plugin, pruned `.opencode/plugins/`, and swept the marker.
+  sandbox. For temporary or scratch files, use <env>/tmp."`; and `eval-magic teardown-guard`
+  printed `🛡 Write guard removed.`, deleted the plugin, pruned `.opencode/plugins/`, and swept
+  the marker.
 
 Two boundary notes, shared with the other harnesses' guards:
 
-- The marker's allowed roots are the env root and the **OS temp dir** — a write under `$TMPDIR`
-  is in-bounds by design.
+- The marker's sole allowed root is the private task env on every host. Host temp locations such
+  as `/tmp` and `$TMPDIR` remain out of bounds; dispatch prompts direct scratch work to
+  `<env>/tmp/` instead without rewriting `TMPDIR`, `TMP`, or `TEMP`.
 - Bash coverage is the shared heuristic denylist (installs, git mutations, redirects, config-dir
   tampering): a bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
   detection of those is `detect-stray-writes`' job, same as claude/codex.
@@ -109,6 +112,44 @@ One hook-shape caveat: `tool.execute.before` fires for *every* tool (OpenCode ha
 surface), so each tool call spawns one `eval-magic guard-hook`. Classification stays in the
 arbiter, and tools outside the write/patch/shell vocabulary fall through to allow in
 milliseconds — the same fail-open-per-call posture as the other engines.
+
+## Permission denials
+
+OpenCode has no dedicated refusal channel: a tool call the harness refuses to run is recorded as
+an ordinary `tool_use` event whose `part.state.status` is `"error"` and whose `state.error` carries
+the refusal explanation. The `opencode-events` parser tells a refusal from an ordinary tool error by
+the *content* of that string, which OpenCode itself authors at the permission layer — before the
+tool body runs — so matching it is not guessing from arbitrary result text:
+
+- An **explicit deny rule** (the operator `permission` config matching the call) throws
+  `PermissionDeniedError` with the fixed prefix
+  `The user has specified a rule which prevents you from using this specific tool call.` followed by
+  the operator's rule list as JSON. The parser drops that ruleset tail and keeps the prefix as the
+  reason.
+- A **headless reject** (an approval ask with nobody to approve it; or reject-with-feedback) throws
+  `PermissionRejectedError`/`PermissionCorrectedError` with the prefix
+  `The user rejected permission to use this specific tool call`. The parser normalizes both to the
+  one canonical sentence and drops any user feedback. This path is unreachable in-eval (the dispatch
+  recipe runs `--auto`, so asks auto-approve), but is recognized for robustness.
+- The **eval write guard** throws the shared `eval guard: <reason>` string (the plugin throws the
+  verdict's `reason` verbatim, see "Write guard" below); the parser keeps it verbatim so the
+  pipeline can attribute it via the `eval guard: ` prefix and leave it to the guard's own warning
+  rather than reporting it twice.
+
+The report stores the refused input's *keys* — sorted, never values — so a refused `edit`/`write`
+cannot spill a file body and a refused `apply_patch` cannot spill its patch. Ordinary tool errors
+(a bash `command not found`, an `edit` `oldString not found`, DNS and OS-process failures) never
+match those OpenCode-authored prefixes and are therefore not classified as permission denials.
+
+A note on tool *visibility*: when an operator rule denies a tool with pattern `"*"` and action
+`"deny"`, OpenCode removes that tool from the offered toolset entirely — the agent has no `bash`
+to call and emits no event, so there is nothing to record. Pattern-specific denies (which keep the
+tool visible so a matching call throws `PermissionDeniedError`) are what the parser captures; a
+globally-denied tool is simply absent from the transcript.
+
+These shapes were verified against `opencode v1.18.10` on 2026-07-30 by capturing
+`opencode run --format json --auto` under a `permission.bash` deny rule. Re-check the parser
+fixtures if OpenCode changes its permission-error wording.
 
 ## Isolating from live skills
 
@@ -128,9 +169,13 @@ The `.claude`/`.agents` roots are a cross-harness contamination vector: a skill 
 Claude Code or Codex is visible to OpenCode sessions by default. Direct skill directories are
 matched by the `name:` in `SKILL.md` frontmatter, not the folder name. Missing directories and
 malformed skills are ignored; a failure in one root never suppresses findings from the others.
-Findings produce a build-time OpenCode banner and the backward-compatible `plugin-shadow.json`
-artifact; `aggregate` turns the same report into OpenCode-specific `benchmark.json` validity
-warnings.
+The scan runs in every comparison environment. Schema-v2 `plugin-shadow.json` records native versus
+cross-harness roots, canonical and discovery paths, logical and runtime names, every affected
+cell, and per-source remediation. When live and staged sources share a runtime ID, preflight runs
+`opencode debug skill` from that environment and records the selected versus shadowed path; a
+failed or unparseable probe remains `unknown` rather than guessing. Unique runtime IDs need no
+probe and are `selected`. The shared banner and `aggregate` validity warnings render this same
+report; historical unversioned artifacts remain readable.
 
 eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
 set the kill switches below on the operator's behalf — parity with a real user session matters.
@@ -139,6 +184,13 @@ hide it with the session environment:
 
 - `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` hides the `.claude` roots only (global + project);
 - `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` hides both `.claude` and `.agents` roots.
+
+When descriptor environment/recipes exclude **every** reported source from every initial and
+resumed dispatch, an overlay may declare `[shadow] isolates_live_sources = true`. Preflight still
+writes every source and the assertion to `plugin-shadow.json`; `run` prints an informational
+notice and `aggregate` omits the shadow validity warnings. The two environment switches above do
+not hide `.opencode` sources, so they cannot justify the assertion when one is reported.
+eval-magic does not inspect or verify the dispatch configuration.
 
 **Known limits:** OpenCode also loads skills from config-declared `skills.paths` directories
 and `skills.urls` (remote-pulled), and matches a singular `.opencode/skill/` directory; the

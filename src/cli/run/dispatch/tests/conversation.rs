@@ -23,6 +23,7 @@ fn manifest_routes_scripted_tasks_through_the_conversation_driver() {
             harness: Harness::resolve("codex").unwrap(),
             guard: false,
             agent_model: None,
+            agent_env: &Default::default(),
         },
     );
     assert!(manifest.contains("eval-magic dispatch-task"));
@@ -59,6 +60,7 @@ fn mixed_manifest_filters_scripted_tasks_out_of_the_one_shot_recipe() {
             harness: Harness::resolve("codex").unwrap(),
             guard: false,
             agent_model: None,
+            agent_env: &Default::default(),
         },
     );
 

@@ -236,6 +236,46 @@ fn codex_redirection_scanner_allows_literal_targets_inside_hook_cwd() {
     }
 }
 
+/// `2>&1` and friends duplicate a file descriptor — they never open a file, so
+/// they must not read as output redirection. Agents use these reflexively.
+#[test]
+fn codex_redirection_scanner_allows_file_descriptor_duplication() {
+    for command in [
+        "git status 2>&1 | head -20",
+        "printf done >&2",
+        "printf done 1>&2",
+        "printf done >&-",
+        "printf done > final-message.md 2>&1",
+        "printf done | tee final-message.md 2>&1",
+    ] {
+        assert_eq!(
+            codex_bash_verdict(command),
+            None,
+            "fd duplication should be allowed: {command}"
+        );
+    }
+}
+
+/// The null device and the standard streams are not meaningful write targets.
+#[test]
+fn codex_redirection_scanner_allows_non_file_devices() {
+    for command in [
+        "ls fixtures 2>/dev/null",
+        "find . -type f 2>/dev/null | head -50",
+        "printf done >/dev/null 2>&1",
+        "printf done > /dev/stdout",
+        "printf done > /dev/stderr",
+        "printf done > /dev/fd/1",
+        "printf done | tee /dev/null",
+    ] {
+        assert_eq!(
+            codex_bash_verdict(command),
+            None,
+            "non-file device should be allowed: {command}"
+        );
+    }
+}
+
 #[test]
 fn codex_redirection_scanner_denies_outside_dynamic_and_malformed_targets() {
     for command in [
@@ -248,6 +288,17 @@ fn codex_redirection_scanner_denies_outside_dynamic_and_malformed_targets() {
         "printf done > \"$OUT\"",
         "printf done > ${OUT}",
         "printf done > \"unterminated",
+        // A dynamic target stays denied even when an fd duplication follows it:
+        // nothing resolved, so nothing was proven in bounds.
+        "printf done > \"$OUT\" 2>&1",
+        // Only the null device itself is exempt — not every path under /dev,
+        // and not a path that merely starts with the same bytes.
+        "printf done > /dev/nullx",
+        "printf done > /dev/sda",
+        // `..` is popped during resolution, so a /dev prefix cannot launder an
+        // out-of-bounds target.
+        "printf done > /dev/../etc/passwd",
+        "printf done 2>/etc/err.log",
     ] {
         let out = codex_bash_verdict(command)
             .unwrap_or_else(|| panic!("unsafe target should be denied: {command}"));

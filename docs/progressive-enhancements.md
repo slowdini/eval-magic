@@ -18,7 +18,11 @@ One-shot evals and judges dispatch through the harness CLI, one subprocess per t
 use `eval-magic dispatch-task`, one subprocess per round while resuming one harness-native session
 and one `eval_root`. The **generated artifacts are the runtime source of truth** for how to
 dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` carrying the exact per-task recipe
-for the selected harness — hand-maintained docs never carry command recipes.
+for the selected harness — hand-maintained docs never carry command recipes. Eval-agent environment
+defaults are harness-independent: `[dispatch.env]` layers merge by key and repeatable
+`run --agent-env KEY=VALUE` entries override them. The resolved map is exported by one-shot and
+scripted recipes and recorded in `conditions.json` / `dispatch.json`; judges and runner-owned
+`command_check` subprocesses remain separate.
 
 ## The baseline contract
 
@@ -137,6 +141,28 @@ extract primitives, it's a code capability, not a bigger DSL.
 `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
 event — a deterministic `__skill_invoked` meta-check.
 
+**Sub-capability: permission-denied tool results.** A refused tool call can be reported in the
+event stream or a paired harness capture while the overall dispatch still exits 0. On its own that
+is easy to miss: the run grades normally and may degrade to static reasoning. A parser that can
+distinguish a refusal from an ordinary tool error makes `ingest` write
+`permission-denials.json` and `aggregate` warn once per affected task. *Why harness-specific:*
+refusals are not a shared shape — Claude Code reports them in the terminal `result` event's
+structured `permission_denials`, Codex reports pre-execution router rejections and `PreToolUse`
+hook blocks in the stderr capture beside its JSONL, and OpenCode records a refusal as an ordinary
+`tool_use` event with `part.state.status:"error"` whose `state.error` is the string OpenCode itself
+authors at its permission layer (a fixed `PermissionDeniedError`/`PermissionRejectedError` prefix,
+or the shared `eval guard: ` reason for a guard block). Each parser recognizes only its harness's
+own refusal strings; ordinary failed tool calls — including ambiguous DNS and OS-process failures,
+and OpenCode tool-body errors like `oldString not found` — remain unclassified rather than creating
+false positives. *Fallback:* no report and no warning — a run that degraded to static reasoning is
+only visible in the raw captures, which `run` preflight states once naming that fallback.
+*Capability:* carried by `transcript.parser`, not a separate descriptor field —
+`claude-stream-json`, `codex-items`, and `opencode-events` surface denials
+(`TranscriptParser::surfaces_permission_denials`, pinned across harnesses in
+`src/adapters/harness.rs`). The eval write guard denies through the same permission mechanism, so
+its blocks land in the report as well; they are attributed by the `eval guard: ` reason prefix and
+excluded from the warning so one denial is not reported twice.
+
 *Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
 `command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
 unrecorded, records are assembled from `outputs/final-message.md` or by hand, and the meta-check
@@ -147,11 +173,12 @@ ingest pipeline never calls a parser), exactly one of `parser`/`extract` (valida
 or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
 equality `where` filters, final and ordered assistant-text picks, a session-id pick, flat
 tool-item mapping, token sum/subtract reduction, and duration rule, documented with a worked
-example in [byoh.md](byoh.md) — the built-in `codex` descriptor ingests through it.
+example in [byoh.md](byoh.md).
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
-(`claude-stream-json`, `opencode-events`; `codex-items` is the reference implementation the
-extract engine's differential test compares against) — a new harness emitting a compatible event
-stream reuses one with zero code.
+(`claude-stream-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
+captures reuses one with zero code. The built-in Codex descriptor uses `codex-items` because its
+permission signal must correlate the JSONL path with the sibling stderr capture; the extract
+engine retains a differential test for the JSONL-only summary behavior.
 The tool names the transcript yields must be declared in `[tools]` (see the write-guard
 enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
 combination.
@@ -271,22 +298,37 @@ silently unguarded.
 Claude Code loads enabled plugins and its global skills dir. Codex loads repository-ancestor,
 user, and admin skill directories plus enabled installed plugins. OpenCode loads project and
 global `.opencode`, `.claude`, and `.agents` skill dirs — including skills installed for other
-harnesses. A logical eval skill present in any such source contaminates the with/without
-comparison even when the staged copy uses a unique slug.
+harnesses. A logical eval skill present in any such source can contaminate the with/without
+comparison when dispatches load that source, even when the staged copy uses a unique slug.
 
-*What it unlocks:* a build-time contamination warning (banner + `plugin-shadow.json` in the
-iteration dir), which `aggregate` folds into `benchmark.json` validity warnings.
+*What it unlocks:* a build-time contamination warning (shared banner + schema-v2
+`plugin-shadow.json` in the iteration dir), which `aggregate` folds into `benchmark.json`
+validity warnings. The runner scans every matrix environment and the shared policy groups scanner
+facts by logical skill, records live/staged sources and affected cells, and assigns role-aware
+severity. Subject and asymmetric sibling collisions invalidate the comparison; symmetric sibling
+collisions warn. When the resolved descriptor declares `isolates_live_sources = true`, the scan,
+intrinsic severity, and artifact are retained, but the banner becomes an informational notice and
+`aggregate` omits the findings from validity warnings. Historical unversioned artifacts remain
+readable.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
 environment is clean; the operator must check any harness-native global discovery sources.
 
-*Descriptor fields:* the `[shadow]` table — `preflight`.
+*Descriptor fields:* the `[shadow]` table — `preflight`, plus optional
+`isolates_live_sources` (false by default). The latter is an unverified operator assertion that
+every reported source is excluded from every initial and resumed eval-agent dispatch. A built-in
+overlay may set it without repeating the inherited preflight; a new harness must still resolve to
+a preflight. It must not be used for partial isolation, and eval-magic never infers it by parsing
+shell templates.
+
 *Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
 `opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
-`src/adapters/skill_shadow.rs`; detection and remediation rendering stay in the harness's
-module tree. Both scans are best-effort: Codex's does not enumerate bundled system skills (no
-stable listing exists), and OpenCode's does not scan config-declared `skills.paths`/`skills.urls`
-sources.
+`src/adapters/skill_shadow.rs`. Harness modules emit discovery/root/remediation facts; grouping,
+severity, artifact serialization, the banner, and aggregate warnings are shared. The capability
+also selects a shared resolution policy (precedence or coexistence), with OpenCode's selected path
+obtained from a best-effort `opencode debug skill` probe only for duplicate runtime IDs. Codex's
+scan does not enumerate bundled system skills (no stable listing exists), and OpenCode's does not
+scan config-declared `skills.paths`/`skills.urls` sources.
 
 ### Plan-mode context
 
@@ -310,13 +352,15 @@ carry exact per-task commands (including parallel and judge variants).
 `run` preflight warns naming this limitation when the descriptor declares no `exec_template`
 (`has_dispatch_recipes()`).
 
-*Descriptor fields:* the `[dispatch]` table — `exec_template`, `parallel_command_template`,
+*Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `parallel_command_template`,
 `judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
 `guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
 for eval-agent dispatches; judge commands deliberately render empty `guard_args` because they run
-outside the guarded task envs. The shared jq/xargs parallel and judge scaffolds stay code
-(`src/adapters/cli_command.rs`) with the per-harness command block spliced in. Validation rejects
-a template whose placeholder has no backing field.
+outside the guarded task envs. `env` contains non-secret eval-agent defaults; the shared renderer
+adds sorted, shell-quoted exports to one-shot, parallel, resume, and probe commands. Unset keys
+inherit the host environment and no timezone default is imposed. The shared jq/xargs parallel and
+judge scaffolds stay code (`src/adapters/cli_command.rs`) with the per-harness command block spliced
+in. Validation rejects a template whose placeholder has no backing field.
 
 ## Current support
 

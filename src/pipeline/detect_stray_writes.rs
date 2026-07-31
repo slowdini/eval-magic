@@ -19,10 +19,11 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
+use crate::core::fs::write_json;
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::guard_denials::collect_guard_denials;
-use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
 use crate::sandbox::policy::classify_bash_with_cwd;
 use crate::sandbox::{is_shell_tool, is_under, is_write_tool, path_arg};
@@ -268,6 +269,14 @@ pub struct StrayWritesReport {
     /// separate guard-denials.json artifact.
     #[serde(skip)]
     pub guard_denials: usize,
+    /// Operator-facing detail about runs the stage could not fully classify
+    /// (e.g. no `eval_root` in `dispatch.json`). Named `notices` rather than
+    /// `warnings` because in this module "warning" already means a stray-write
+    /// finding of warning severity (see [`Totals::warnings`] and
+    /// [`RunReport::warnings`]). In-memory only; the CLI prints these so the
+    /// stage itself stays silent.
+    #[serde(skip)]
+    pub notices: Vec<String>,
 }
 
 /// `dispatch.json` fields the report builder reads (task-environment boundary).
@@ -320,6 +329,7 @@ pub fn detect_stray_writes_report(
         live_source_reads: 0,
     };
     let mut invocations_inspected = 0usize;
+    let mut notices: Vec<String> = Vec::new();
 
     let mut eval_dirs: Vec<String> = std::fs::read_dir(iteration_dir)?
         .flatten()
@@ -360,10 +370,10 @@ pub fn detect_stray_writes_report(
                             .run_index
                             .map(|k| format!(" run-{k}"))
                             .unwrap_or_default();
-                        eprintln!(
-                            "⚠ {eval_id}/{cond}{run_label}: no eval_root in dispatch.json — \
+                        notices.push(format!(
+                            "{eval_id}/{cond}{run_label}: no eval_root in dispatch.json — \
                              skipping out-of-bounds write classification (boundary unknown)"
-                        );
+                        ));
                         RunFindings::default()
                     }
                 };
@@ -398,6 +408,7 @@ pub fn detect_stray_writes_report(
         runs,
         invocations_inspected,
         guard_denials: guard_denials.total_denials,
+        notices,
     };
 
     let out_path = iteration_dir.join("stray-writes.json");

@@ -26,9 +26,10 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::core::fs::write_json;
 use crate::sandbox::decide::{GuardMarker, decide_with_cwd};
 use crate::sandbox::install::{
-    GUARD_MANIFEST, GUARD_MARKER, iso_millis, write_json, write_manifest, write_marker,
+    GUARD_MANIFEST, GUARD_MARKER, iso_millis, write_manifest, write_marker,
 };
 use crate::sandbox::{GuardDenialRecord, now_ms, parse_tool_call};
 
@@ -427,7 +428,7 @@ mod tests {
     }
 
     #[test]
-    fn marker_scopes_allowed_roots_to_the_env_and_temp_only() {
+    fn marker_scopes_allowed_roots_to_the_env_only() {
         let c = setup();
         install("claude-code", &c.stage_root);
 
@@ -439,12 +440,12 @@ mod tests {
             .map(|r| r.as_str().unwrap().to_string())
             .collect();
 
-        // The guard boundary is the isolated env (stage_root) plus temp — nothing
-        // above it. The parent workspace tree must NOT be an allowed root, or the
-        // agent could write into sibling iterations / the meta dir above `env/`.
+        // The guard boundary is exactly the isolated env (stage_root) — nothing
+        // above it, including the host temp directory. The parent workspace tree
+        // must NOT be an allowed root, or the agent could write into sibling
+        // iterations / the meta dir above `env/`.
         let env = absolutize(&c.stage_root).display().to_string();
-        let temp = absolutize(&std::env::temp_dir()).display().to_string();
-        assert_eq!(roots, vec![env, temp]);
+        assert_eq!(roots, vec![env]);
         assert!(
             !roots.iter().any(|r| r.ends_with(".eval-magic")),
             "workspace_root must not be an allowed root: {roots:?}"
@@ -565,7 +566,8 @@ mod tests {
             "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\
              \"permissionDecision\":\"deny\",\"permissionDecisionReason\":\
              \"eval guard: Write to /etc/passwd is outside the eval sandbox \
-             (allowed: /work/.eval-magic)\"}}"
+             (allowed: /work/.eval-magic). For temporary or scratch files, use \
+             /work/.eval-magic/tmp.\"}}"
         );
 
         let payload =
@@ -916,7 +918,8 @@ export const SlowPowersEvalGuard = async () => {
         assert_eq!(
             verdict("opencode", payload, Some(marker())).expect("should block"),
             "{\"decision\":\"block\",\"reason\":\"eval guard: write to /etc/passwd is \
-             outside the eval sandbox (allowed: /work/.eval-magic)\"}"
+             outside the eval sandbox (allowed: /work/.eval-magic). For temporary or scratch \
+             files, use /work/.eval-magic/tmp.\"}"
         );
     }
 

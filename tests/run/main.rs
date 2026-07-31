@@ -9,10 +9,12 @@
 
 mod helpers;
 
+mod agent_env;
 mod byoh;
 mod claude_cli;
 mod codex;
 mod codex_guard;
+mod codex_permission_denials;
 mod command_check;
 mod conversation;
 mod diff_scope;
@@ -21,5 +23,6 @@ mod git_isolation;
 mod grouping;
 mod lifecycle;
 mod opencode;
+mod opencode_permission_denials;
 mod runbook;
 mod staging;

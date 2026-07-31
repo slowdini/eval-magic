@@ -28,6 +28,32 @@ pub(crate) fn clear_git_environment(command: &mut Command) {
     }
 }
 
+/// Validate one environment override that must work in both a POSIX-shell
+/// recipe and a directly spawned scripted round.
+pub(crate) fn validate_agent_environment_entry(name: &str, value: &str) -> Result<(), String> {
+    let mut chars = name.chars();
+    let portable_name = chars
+        .next()
+        .is_some_and(|first| first == '_' || first.is_ascii_alphabetic())
+        && chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric());
+    if !portable_name {
+        return Err(format!(
+            "agent environment variable name {name:?} must match [A-Za-z_][A-Za-z0-9_]*"
+        ));
+    }
+    if GIT_ROUTING_ENV_VARS.contains(&name) {
+        return Err(format!(
+            "agent environment variable {name:?} is reserved so dispatches stay inside the task repository"
+        ));
+    }
+    if value.contains('\0') {
+        return Err(format!(
+            "agent environment variable {name:?} value must not contain NUL"
+        ));
+    }
+    Ok(())
+}
+
 /// Outcome of a git invocation.
 ///
 /// `status` is `None` when git could not be spawned at all (e.g. ENOENT, a
@@ -103,5 +129,22 @@ mod tests {
         );
         assert_eq!(res.status, None);
         assert!(String::from_utf8_lossy(&res.stderr).contains("No such file or directory"));
+    }
+
+    #[test]
+    fn agent_environment_validation_accepts_portable_names_and_empty_values() {
+        assert!(validate_agent_environment_entry("TZ", "UTC").is_ok());
+        assert!(validate_agent_environment_entry("_EMPTY", "").is_ok());
+        assert!(validate_agent_environment_entry("MODE_2", "a=b").is_ok());
+    }
+
+    #[test]
+    fn agent_environment_validation_rejects_unsafe_names_values_and_git_routing() {
+        for name in ["", "9TZ", "BAD-NAME", "GIT_DIR", "GIT_WORK_TREE"] {
+            let error = validate_agent_environment_entry(name, "value").unwrap_err();
+            assert!(error.contains(name), "{name:?}: {error}");
+        }
+        let error = validate_agent_environment_entry("TZ", "bad\0value").unwrap_err();
+        assert!(error.contains("NUL"), "{error}");
     }
 }

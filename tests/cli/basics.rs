@@ -62,6 +62,17 @@ fn run_help_documents_no_guard() {
 }
 
 #[test]
+fn run_help_documents_task_local_scratch_policy() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("sole allowed write root"))
+        .stdout(contains("<eval-root>/tmp"))
+        .stdout(contains("host temp directories"));
+}
+
+#[test]
 fn run_help_documents_task_git_repository_isolation() {
     skill_eval()
         .args(["run", "--help"])
@@ -100,6 +111,17 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
             .stdout(contains("files"))
             .stdout(contains("lines"));
     }
+}
+
+#[test]
+fn aggregate_help_documents_declared_shadow_isolation() {
+    skill_eval()
+        .args(["aggregate", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("plugin-shadow.json"))
+        .stdout(contains("isolates_live_sources"))
+        .stdout(contains("validity_warnings"));
 }
 
 #[test]

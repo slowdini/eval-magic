@@ -22,6 +22,7 @@
 //! per-harness modules ([`claude_code`](super::claude_code),
 //! [`codex`](super::codex), [`opencode`](super::opencode)).
 
+use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -29,8 +30,8 @@ use std::time::Duration;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
-use super::TranscriptSummary;
-use super::skill_shadow::PluginShadowReport;
+use super::skill_shadow::{PluginShadowReport, ShadowSource};
+use super::{PermissionDenial, TranscriptSummary};
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
@@ -103,6 +104,12 @@ pub trait HarnessAdapter {
     /// writes.
     fn config_dir_names(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Environment defaults applied only to eval-agent dispatches. Generic run
+    /// orchestration merges `run --agent-env` values over this map.
+    fn dispatch_environment(&self) -> BTreeMap<String, String> {
+        BTreeMap::new()
     }
 
     /// The tool names this harness's guard hook payloads and parsed transcripts
@@ -233,6 +240,25 @@ pub trait HarnessAdapter {
         Some(("Skill".to_string(), "skill".to_string()))
     }
 
+    /// **Enhancement: transcript parser.** Whether this harness's transcript
+    /// identifies tool calls it refused to run. `false` for harnesses whose
+    /// refusals are not distinguishable from ordinary tool errors — `ingest`
+    /// then writes no `permission-denials.json` and `aggregate` raises no
+    /// permission-denial validity warning, so a silently degraded run is only
+    /// visible in the transcripts.
+    fn surfaces_permission_denials(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: transcript parser.** The refused tool calls in a captured
+    /// events file. Unlike [`parse_cli_events`](Self::parse_cli_events) the
+    /// default is an empty vec, not an `Unsupported` error: no detection is a
+    /// supported fallback, and the pipeline treats "none reported" and "cannot
+    /// report" alike rather than failing ingest.
+    fn parse_permission_denials(&self, _path: &Path) -> io::Result<Vec<PermissionDenial>> {
+        Ok(Vec::new())
+    }
+
     // ── Enhancement: model flag (defaulted) ──────────────────────────────────
     // Fallback without it: `--agent-model` / `--judge-model` are recorded as
     // provenance only; dispatches run on the harness's default model.
@@ -297,10 +323,11 @@ pub trait HarnessAdapter {
 
     /// **Enhancement: shadow preflight.** Detect staged skill names that are
     /// also discoverable from the operator's live environment (e.g. Claude
-    /// Code's enabled plugins or global skills dir), which contaminates the
-    /// with/without comparison. `scan_root` is a real staged env root — its
-    /// project-local settings participate in detection. `None` when the
-    /// harness has no shadow preflight (the default) or nothing is shadowed.
+    /// Code's enabled plugins or global skills dir), which could contaminate
+    /// the with/without comparison unless dispatches isolate the source.
+    /// `scan_root` is a real staged env root — its project-local settings
+    /// participate in detection. `None` when the harness has no shadow
+    /// preflight (the default) or nothing is shadowed.
     fn detect_shadowed_skills(
         &self,
         _scan_root: &Path,
@@ -309,16 +336,27 @@ pub trait HarnessAdapter {
         None
     }
 
-    /// **Enhancement: shadow preflight.** Format the runner banner for a
-    /// report. The default preserves the original Claude-oriented rendering
-    /// for third-party adapters and older artifacts.
+    /// **Enhancement: shadow preflight.** Whether the resolved descriptor
+    /// asserts that every live source the preflight can report is excluded
+    /// from every eval-agent dispatch. The default preserves warning behavior.
+    fn isolates_live_sources(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: shadow preflight.** Resolve duplicate runtime ids for one
+    /// concrete comparison cell. The generic fallback records coexistence.
+    fn resolve_shadow_sources(&self, _scan_root: &Path, sources: &mut [ShadowSource]) {
+        super::skill_shadow::resolve_as_coexisting(sources);
+    }
+
+    /// **Enhancement: shadow preflight.** Format the shared runner banner for
+    /// a report.
     fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
         super::skill_shadow::format_shadow_banner(report)
     }
 
-    /// **Enhancement: shadow preflight.** Format aggregate validity warnings
-    /// for a report. The default preserves the original Claude-oriented
-    /// rendering for third-party adapters and older artifacts.
+    /// **Enhancement: shadow preflight.** Format shared aggregate validity
+    /// warnings for a report.
     fn shadow_validity_warnings(&self, report: &PluginShadowReport) -> Vec<String> {
         super::skill_shadow::shadow_validity_warnings(report)
     }
@@ -352,7 +390,12 @@ pub trait HarnessAdapter {
 
     /// Render the harness's one-shot CLI command for a task. Angle-bracket
     /// task paths remain for the caller to substitute.
-    fn cli_exec_command(&self, _guard: bool, _agent_model: Option<&str>) -> Option<String> {
+    fn cli_exec_command(
+        &self,
+        _guard: bool,
+        _agent_model: Option<&str>,
+        _agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         None
     }
 
@@ -370,7 +413,12 @@ pub trait HarnessAdapter {
     /// Render one same-session follow-up command. In addition to the usual
     /// angle-bracket task paths, `{session_arg}` and `{prompt_arg}` remain for
     /// the conversation driver to fill with shell-quoted values.
-    fn cli_resume_command(&self, _guard: bool, _agent_model: Option<&str>) -> Option<String> {
+    fn cli_resume_command(
+        &self,
+        _guard: bool,
+        _agent_model: Option<&str>,
+        _agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
         None
     }
 
@@ -408,6 +456,7 @@ pub struct CliDispatchContext<'a> {
     pub target_args: &'a str,
     pub iteration: u32,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
 }
 
 /// Context for rendering a harness's `dispatch-manifest.md` CLI recipe.
@@ -415,6 +464,7 @@ pub struct CliDispatchContext<'a> {
 pub struct CliManifestContext<'a> {
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
     /// Exclude scripted tasks from a mixed suite's one-shot recipe.
     pub one_shot_only: bool,
 }
@@ -500,6 +550,43 @@ mod tests {
             adapter_for(Harness::resolve("opencode").unwrap()).transcript_skill_invocation(),
             Some(("skill".to_string(), "name".to_string()))
         );
+    }
+
+    #[test]
+    fn claude_codex_and_opencode_surface_permission_denials() {
+        // Each harness encodes a refused tool call differently, so detection is
+        // opt-in per parser. Every built-in parser detects today; a future
+        // harness whose transcript cannot distinguish a refusal from an ordinary
+        // tool error leaves the default `false` and reports nothing rather than
+        // guessing — `aggregate` then raises no permission-denial warning.
+        assert!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_permission_denials()
+        );
+        assert!(adapter_for(Harness::resolve("codex").unwrap()).surfaces_permission_denials());
+        assert!(adapter_for(Harness::resolve("opencode").unwrap()).surfaces_permission_denials());
+    }
+
+    #[test]
+    fn a_deny_less_transcript_parses_no_denials_for_every_detecting_harness() {
+        // "None reported" is a supported, distinguishable outcome — not an
+        // error. Each detecting parser, given a transcript whose tool calls all
+        // completed or failed for ordinary (non-permission) reasons, yields an
+        // empty vec; the per-parser suites cover the false-positive guard.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
+        for harness in Harness::known() {
+            let adapter = adapter_for(harness);
+            assert!(
+                adapter.surfaces_permission_denials(),
+                "{harness:?} should detect"
+            );
+            assert_eq!(
+                adapter.parse_permission_denials(&path).unwrap(),
+                Vec::new(),
+                "{harness:?} reported a denial from a denial-less transcript"
+            );
+        }
     }
 
     #[test]

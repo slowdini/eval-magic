@@ -9,6 +9,8 @@ use std::fs;
 use std::path::Path;
 use tempfile::TempDir;
 
+mod lint_modes;
+
 /// Write `<root>/.eval-magic/harnesses/<file>` with the given TOML.
 fn write_project_descriptor(root: &Path, file: &str, contents: &str) {
     let dir = root.join(".eval-magic").join("harnesses");
@@ -208,6 +210,37 @@ fn harness_lint_passes_a_valid_file() {
         .assert()
         .success()
         .stdout(contains("✓"));
+}
+
+/// `--harness-file` already names exactly one descriptor, so requiring the
+/// same path again as a positional is pure ceremony. With neither, the error
+/// names both ways to supply a target.
+#[test]
+fn harness_lint_falls_back_to_the_harness_file_when_no_target_is_given() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("cool.toml");
+    fs::write(&file, "label = \"cool-custom-harness\"\n").unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .arg("--harness-file")
+        .arg(&file)
+        .args(["harness", "lint"])
+        .assert()
+        .success()
+        .stdout(contains("✓").and(contains("cool.toml")));
+}
+
+#[test]
+fn harness_lint_without_a_target_or_harness_file_explains_both_options() {
+    let tmp = TempDir::new().unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .assert()
+        .failure()
+        .stderr(contains("--harness-file"));
 }
 
 #[test]
@@ -428,6 +461,34 @@ fn harness_lint_probe_recovers_final_message_for_fake_exec_template() {
 }
 
 #[test]
+fn harness_lint_probe_applies_descriptor_agent_environment() {
+    let tmp = TempDir::new().unwrap();
+    let file = tmp.path().join("probe-env.toml");
+    fs::write(
+        &file,
+        r#"
+label = "probe-env"
+
+[dispatch]
+exec_template = '[ "$PROBE_ENV" = "visible" ] && printf "ok\n" > <outputs_dir>/final-message.md'
+
+[dispatch.env]
+PROBE_ENV = "visible"
+"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(tmp.path())
+        .args(["harness", "lint"])
+        .arg(&file)
+        .args(["--probe", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("✓ live exec template"));
+}
+
+#[test]
 fn harness_lint_probe_runs_against_a_registered_name() {
     let tmp = TempDir::new().unwrap();
     write_project_descriptor(tmp.path(), "probe-ok.toml", PROBE_OK_TOML);
@@ -561,17 +622,4 @@ fn harness_lint_probe_does_not_run_after_static_checks_fail() {
         .assert()
         .failure()
         .stderr(contains("mystery").and(contains("About to execute").not()));
-}
-
-#[test]
-fn harness_lint_help_lists_the_probe_flags() {
-    skill_eval()
-        .args(["harness", "lint", "--help"])
-        .assert()
-        .success()
-        .stdout(
-            contains("--probe")
-                .and(contains("--yes"))
-                .and(contains("--probe-timeout")),
-        );
 }

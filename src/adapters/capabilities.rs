@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::ToolInvocation;
 
-use super::TranscriptSummary;
-use super::skill_shadow::PluginShadowReport;
+use super::skill_shadow::{PluginShadowReport, ShadowSource};
+use super::{PermissionDenial, TranscriptSummary};
 
 /// Transcript parsers: turn a captured CLI events file into tool invocations
 /// and a [`super::TranscriptSummary`].
@@ -58,6 +58,36 @@ impl TranscriptParser {
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events_full(path),
             TranscriptParser::OpencodeEvents => {
                 super::opencode::transcript::parse_opencode_events_full(path)
+            }
+        }
+    }
+
+    /// Whether this parser can identify tool calls the harness refused to run.
+    /// Refusals are encoded differently by every CLI, so detection is opt-in per
+    /// parser; the rest report none rather than guessing from result text.
+    pub(crate) fn surfaces_permission_denials(self) -> bool {
+        matches!(
+            self,
+            TranscriptParser::ClaudeStreamJson
+                | TranscriptParser::CodexItems
+                | TranscriptParser::OpencodeEvents
+        )
+    }
+
+    /// Parse refused tool calls associated with the captured events path. A
+    /// parser may correlate sibling captures. Empty for parsers that don't
+    /// surface denials — see
+    /// [`surfaces_permission_denials`](Self::surfaces_permission_denials).
+    pub(crate) fn parse_permission_denials(self, path: &Path) -> io::Result<Vec<PermissionDenial>> {
+        match self {
+            TranscriptParser::ClaudeStreamJson => {
+                super::claude_code::stream_json::parse_claude_permission_denials(path)
+            }
+            TranscriptParser::CodexItems => {
+                super::codex::transcript::parse_codex_permission_denials(path)
+            }
+            TranscriptParser::OpencodeEvents => {
+                super::opencode::transcript::parse_opencode_permission_denials(path)
             }
         }
     }
@@ -124,28 +154,14 @@ impl ShadowPreflight {
         }
     }
 
-    /// Render the harness-specific build-time warning for a shadow report.
-    pub(crate) fn format_banner(self, report: &PluginShadowReport) -> String {
+    /// Resolve duplicate runtime ids using the harness's declared preflight
+    /// capability. Report grouping and severity remain harness-neutral.
+    pub(crate) fn resolve(self, scan_root: &Path, sources: &mut [ShadowSource]) {
         match self {
-            ShadowPreflight::ClaudePlugins => super::skill_shadow::format_shadow_banner(report),
-            ShadowPreflight::CodexSkills => {
-                super::codex::skill_shadow::format_shadow_banner(report)
-            }
+            ShadowPreflight::ClaudePlugins => super::skill_shadow::resolve_by_precedence(sources),
+            ShadowPreflight::CodexSkills => super::skill_shadow::resolve_as_coexisting(sources),
             ShadowPreflight::OpencodeSkills => {
-                super::opencode::skill_shadow::format_shadow_banner(report)
-            }
-        }
-    }
-
-    /// Render harness-specific aggregate validity warnings for a report.
-    pub(crate) fn validity_warnings(self, report: &PluginShadowReport) -> Vec<String> {
-        match self {
-            ShadowPreflight::ClaudePlugins => super::skill_shadow::shadow_validity_warnings(report),
-            ShadowPreflight::CodexSkills => {
-                super::codex::skill_shadow::shadow_validity_warnings(report)
-            }
-            ShadowPreflight::OpencodeSkills => {
-                super::opencode::skill_shadow::shadow_validity_warnings(report)
+                super::opencode::skill_shadow::resolve_sources(scan_root, sources)
             }
         }
     }

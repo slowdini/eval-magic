@@ -137,7 +137,7 @@ pub(crate) enum HarnessCommands {
     /// field-by-field, so the file overlays the registered harness instead of
     /// defining a new one. The `[guard]` table is never scaffolded —
     /// user-supplied descriptors may not declare it. The authoring guide is
-    /// docs/byoh.md; its "Upstreaming your descriptor" section covers
+    /// `eval-magic docs byoh`; its "Upstreaming your descriptor" section covers
     /// contributing the finished descriptor.
     Init {
         /// Label for the new harness (kebab-case, e.g. `cool-cli`); becomes
@@ -181,16 +181,23 @@ pub(crate) enum HarnessCommands {
     },
     /// Validate a descriptor file, or every layer of a registered harness.
     ///
-    /// A file target runs the full load pipeline with one ✓/✗ line per check:
-    /// TOML syntax + schema (unknown fields, bad capability names), the
-    /// user-layer restrictions (`[guard]` and `run.supports_guard = true` stay
-    /// built-in-only; unguarded runs fall back to the detect-stray-writes
-    /// audit), and the cross-field invariants — merged onto the registered
-    /// harness with the same `label` when one exists, so a partial override is
-    /// checked against its real merge target. A name target re-lints every
-    /// discovered layer file strictly, surfacing descriptors that registry
-    /// initialization skipped with a warning. Exits non-zero when any check
-    /// fails.
+    /// Descriptor file targets are linted as user-supplied by default and run
+    /// the full load pipeline with one ✓/✗ line per check: TOML syntax + schema
+    /// (unknown fields, bad capability names), the user-layer restrictions
+    /// (`[guard]` and `run.supports_guard = true` stay built-in-only; unguarded
+    /// runs fall back to the detect-stray-writes audit), and the cross-field
+    /// invariants — merged onto the registered harness with the same `label`
+    /// when one exists, so a partial override is checked against its real merge
+    /// target. A name target re-lints every discovered layer file strictly,
+    /// preserving each source's actual layer and surfacing descriptors that
+    /// registry initialization skipped with a warning. Exits non-zero when any
+    /// check fails.
+    ///
+    /// For eval-magic developers checking an on-disk built-in source before a
+    /// rebuild, `--as-builtin` skips only the user-layer restriction. It requires
+    /// a positional file target, cannot be combined with `--harness-file`, and
+    /// does not change registry loading; user-supplied descriptors remain unable
+    /// to register built-in-only guard data.
     ///
     /// With `--probe`, and only after every static check passes, also exercises
     /// the descriptor end-to-end: renders `dispatch.exec_template` with a
@@ -209,7 +216,19 @@ pub(crate) enum HarnessCommands {
     /// to cap the run.
     Lint {
         /// Descriptor file path, or a registered harness name.
-        target: String,
+        ///
+        /// Optional when `--harness-file` is passed: that file is then the
+        /// target, since it already names exactly one descriptor.
+        target: Option<String>,
+        /// Treat a descriptor file as a built-in source for this lint only.
+        ///
+        /// Skips the user-layer restriction so eval-magic developers can check
+        /// an edited source under `harnesses/` without rebuilding first. Schema
+        /// and cross-field invariant checks still run. This does not change
+        /// registry loading, requires a positional file target, and cannot be
+        /// combined with `--harness-file`.
+        #[arg(long, requires = "target")]
+        as_builtin: bool,
         /// Execute the dispatch exec template with a trivial prompt and verify
         /// final-message recovery (opt-in; costs real CLI usage). See the
         /// subcommand description above for the full contract.
@@ -391,8 +410,10 @@ pub struct RunArgs {
     ///
     /// The guard is a harness-native `PreToolUse` hook that *blocks* subagent
     /// writes/installs outside the isolated run env (the agent-under-test's cwd)
-    /// while dispatches run. Its allowed roots are the env plus the OS temp dir, so
-    /// the guard boundary matches the same env that isolates the agent's reads.
+    /// while dispatches run. The task env is its sole allowed write root; host temp
+    /// directories are out of bounds. Dispatch prompts name `<eval-root>/tmp` as
+    /// the task-local scratch directory (create it when needed); eval-magic does
+    /// not rewrite `TMPDIR`, `TMP`, or `TEMP`.
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
@@ -436,6 +457,11 @@ pub struct RunArgs {
     /// unguarded-harness preflight warning. Unguarded, out-of-bounds writes are
     /// only *detected* after the fact by `detect-stray-writes` (folded into
     /// `ingest`), never blocked.
+    ///
+    /// Dispatches deliberately run with relaxed harness permissions so the
+    /// agent-under-test can actually execute commands, which makes the guard
+    /// the only enforcement boundary. Opting out therefore leaves the dispatch
+    /// with no boundary at all, not merely a weaker one.
     #[arg(long, conflicts_with = "guard")]
     pub no_guard: bool,
     /// Stage the skill-under-test under this verbatim name instead of the
@@ -474,6 +500,17 @@ pub struct RunArgs {
     /// the value is persisted to `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub agent_model: Option<String>,
+    /// Environment override for eval-agent dispatches (`KEY=VALUE`, repeatable).
+    ///
+    /// Descriptor defaults from `[dispatch.env]` apply first; repeated CLI
+    /// entries override them by key, with the last occurrence winning. Values
+    /// may be empty and may contain `=`. The resolved map is recorded in
+    /// `conditions.json` and `dispatch.json`, so do not use this flag for
+    /// secrets. This does not affect judge agents or runner-owned
+    /// `command_check` assertions. Unset keys keep inheriting the operator's
+    /// environment.
+    #[arg(long, value_name = "KEY=VALUE")]
+    pub agent_env: Vec<String>,
     /// Default judge model for emitted judge tasks.
     ///
     /// `grade` writes this into `judge-tasks.json` for judge tasks that do not
@@ -580,6 +617,14 @@ pub(crate) enum Commands {
     /// Never clobbers existing records without `--overwrite`; transcript-derived
     /// timing carries `"source": "transcript"`. Use `--overwrite` to regenerate
     /// records and timing after extractor accounting changes. Folded into `ingest`.
+    ///
+    /// For harnesses whose captures identify a refused tool call (Claude Code
+    /// and Codex today), it also writes `permission-denials.json` and warns on
+    /// stderr: the dispatch can exit 0 either way, so a run the harness refused
+    /// — and which therefore fell back to static reasoning — is otherwise
+    /// invisible. `aggregate` lifts one validity warning per affected task from
+    /// that file. No file is written for a harness that cannot detect a refusal,
+    /// so its absence never reads as "nothing was refused".
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///
@@ -626,11 +671,17 @@ pub(crate) enum Commands {
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
     /// pass-rate / duration / token stats per condition, the delta,
-    /// `validity_warnings` (including incomplete timing sample counts and one per
-    /// task in `guard-denials.json`), and raw per-run files/lines/hunks from
-    /// `diff-scope.json`. A timing metric with `n: 0` is unavailable, not a
-    /// measured zero. The top-level `diff_scope` field is omitted for compatible
-    /// older iterations that predate metric capture.
+    /// `validity_warnings` (including incomplete timing sample counts, one per
+    /// task in `guard-denials.json`, and one per task in
+    /// `permission-denials.json` whose refusals were not the guard's own, plus
+    /// grouped findings in schema-v2 `plugin-shadow.json` (legacy unversioned
+    /// reports remain readable) unless it records the resolved descriptor's
+    /// `isolates_live_sources = true` assertion), and raw per-run files/lines/hunks
+    /// from `diff-scope.json`. Shadow findings retain their intrinsic warning or
+    /// comparison-invalid severity, per-cell appearances, resolution, and
+    /// remediation. A timing metric with `n: 0` is unavailable, not a measured
+    /// zero. The top-level `diff_scope` field is omitted for compatible older
+    /// iterations that predate metric capture.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///
@@ -656,6 +707,17 @@ pub(crate) enum Commands {
     /// `--harness`. `list` surveys the registry, `show` prints one resolved
     /// descriptor, and `lint` validates a descriptor file or registered name.
     Harness(HarnessArgs),
+    /// Print an embedded reference doc, or list the available topics.
+    ///
+    /// The user-facing reference docs ship inside the binary — version-matched
+    /// to the installed release and readable offline. `guide` is the complete
+    /// operating guide (the README); `byoh` is the bring-your-own-harness
+    /// descriptor authoring guide. Development docs for working on eval-magic
+    /// itself stay in the repository's `docs/` directory.
+    Docs {
+        /// Topic to print (bare `docs` lists the available topics).
+        topic: Option<String>,
+    },
     /// Internal PreToolUse hook entry point. Invoked by the installed write-guard
     /// hook as `eval-magic guard <marker>`, not by users; hidden from help.
     #[command(hide = true)]

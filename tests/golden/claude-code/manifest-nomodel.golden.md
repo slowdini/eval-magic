@@ -14,7 +14,7 @@ Run one fresh `claude -p` per task from the env dir (`cd <eval-root>` — `claud
 
 ```bash
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
@@ -25,14 +25,15 @@ Parallel dispatch from this iteration directory:
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | .eval_root, "\u0000", .dispatch_prompt_path, "\u0000", .outputs_dir, "\u0000"' dispatch.json | \
-  xargs -0 -P "$JOBS" -n 3 sh -c '
+jq -r '.tasks[] | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \
+  | tr '\n' '\0' \
+  | xargs -0 -P "$JOBS" -n 3 sh -c '
     eval_root="$1"
     prompt_path="$2"
     outputs_dir="$3"
     mkdir -p "$outputs_dir"
     unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits \
+    cd "$eval_root" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions \
       "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
       </dev/null \
       > "$outputs_dir/claude-events.jsonl" \
@@ -80,10 +81,12 @@ If the Skill tool cannot resolve that identifier, read the skill from `/work/sta
 Available fixture files:
   - /work/fixtures/input.txt
 Task environment: /work/task
+Task-local scratch directory: /work/task/tmp
 Framework output directory: /work/outputs
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
+- Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
 - Use the framework output directory only for framework artifacts.
 - After completing the task, write your final user-facing response to /work/outputs/final-message.md.
 - Do not write outside the task environment.
@@ -106,10 +109,12 @@ No skill is loaded. Respond as you naturally would.
 Available fixture files:
   - /work/fixtures/input.txt
 Task environment: /work/task-b
+Task-local scratch directory: /work/task-b/tmp
 Framework output directory: /work/outputs-b
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
+- Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
 - Use the framework output directory only for framework artifacts.
 - After completing the task, write your final user-facing response to /work/outputs-b/final-message.md.
 - Do not write outside the task environment.

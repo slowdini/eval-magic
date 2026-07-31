@@ -92,6 +92,39 @@ fn guard_allows_in_bounds_write() {
         .stdout("");
 }
 
+/// Shell idioms agents reach for reflexively — `2>&1` duplicates a descriptor
+/// and `/dev/null` names a stream — open no file, so the guard must let them
+/// through end to end rather than costing the dispatch a retry.
+#[test]
+fn guard_allows_fd_duplication_and_the_null_device() {
+    let tmp = TempDir::new().unwrap();
+    let workspace = tmp.path().join(".eval-magic");
+    fs::create_dir_all(&workspace).unwrap();
+    let marker = write_armed_marker(tmp.path(), &workspace);
+
+    for command in [
+        "ls fixtures 2>/dev/null",
+        "git status 2>&1 | head -20",
+        "find . -type f 2>/dev/null | head -50",
+        "printf done > out.txt 2>&1",
+    ] {
+        let out = skill_eval()
+            .arg("guard")
+            .arg(&marker)
+            .write_stdin(format!(
+                r#"{{ "tool_name": "Bash", "cwd": "{}", "tool_input": {{ "command": "{command}" }} }}"#,
+                workspace.display()
+            ))
+            .assert()
+            .success();
+        let stdout = String::from_utf8_lossy(&out.get_output().stdout).into_owned();
+        assert!(
+            stdout.is_empty(),
+            "{command} should be allowed, got: {stdout}"
+        );
+    }
+}
+
 #[test]
 fn guard_codex_subcommand_blocks_with_codex_verdict_shape() {
     let tmp = TempDir::new().unwrap();
@@ -132,7 +165,7 @@ fn guard_deny_verdict_bytes_are_stable() {
             "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\
              \"permissionDecision\":\"deny\",\"permissionDecisionReason\":\
              \"eval guard: Write to /etc/passwd is outside the eval sandbox \
-             (allowed: /work/env)\"}}",
+             (allowed: /work/env). For temporary or scratch files, use /work/env/tmp.\"}}",
         );
 }
 
@@ -306,7 +339,8 @@ fn guard_hook_opencode_block_verdict_bytes_are_stable() {
         .success()
         .stdout(
             "{\"decision\":\"block\",\"reason\":\"eval guard: write to /etc/passwd is \
-             outside the eval sandbox (allowed: /work/env)\"}",
+             outside the eval sandbox (allowed: /work/env). For temporary or scratch files, use \
+             /work/env/tmp.\"}",
         );
 }
 

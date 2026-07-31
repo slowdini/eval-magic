@@ -2,11 +2,10 @@
 //! [`DispatchTask`] the orchestrator records in `dispatch.json`, plus the
 //! human-readable `dispatch-manifest.md`.
 //!
-//! The prompt mirrors a real session: an optional
-//! `<session-start-context>` (the `--bootstrap` surface), the harness-native
-//! available-skills block, an optional plan-mode `<system-reminder>`, then the
-//! eval task framing.
+//! The prompt mirrors a real session: optional bootstrap and plan-mode context,
+//! the harness-native available-skills block, then the eval task framing.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
@@ -216,7 +215,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     task_lines.push(String::new());
     task_lines.push(fixtures_block);
     if let Some(eval_root) = opts.eval_root {
-        task_lines.push(format!("Task environment: {eval_root}"));
+        task_lines.push(super::scratch::context(eval_root));
     }
     task_lines.push(format!("Framework output directory: {}", opts.outputs_dir));
     task_lines.push(String::new());
@@ -225,6 +224,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         "- Work normally on the task: you may edit existing files and create new files inside the task environment."
             .to_string(),
     );
+    super::scratch::push_instruction(&mut task_lines, opts.eval_root);
     task_lines
         .push("- Use the framework output directory only for framework artifacts.".to_string());
     task_lines.push(format!(
@@ -379,6 +379,7 @@ pub struct ManifestContext<'a> {
     pub harness: Harness,
     pub guard: bool,
     pub agent_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
 }
 
 /// Build the human-readable `dispatch-manifest.md`.
@@ -438,6 +439,7 @@ pub fn build_manifest(
         && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
             guard: context.guard,
             agent_model: context.agent_model,
+            agent_env: context.agent_env,
             one_shot_only: !scripted.is_empty(),
         })
     {

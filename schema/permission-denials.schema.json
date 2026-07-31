@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slow-powers.dev/schemas/permission-denials.schema.json",
+  "title": "Permission Denial Report",
+  "description": "Output collected during record-runs from each task's harness captures, for harnesses that identify tool calls they refused to run. Records every refusal, including the eval write guard's own blocks, because each one changed what the agent could do — commonly degrading a run that should have executed something into static reasoning. Lives at <workspace>/iteration-N/permission-denials.json.",
+  "type": "object",
+  "required": ["generated", "iteration", "total_denials", "tasks"],
+  "additionalProperties": false,
+  "properties": {
+    "generated": { "type": "string", "description": "ISO timestamp" },
+    "iteration": { "type": "integer", "minimum": 1 },
+    "total_denials": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Every refusal across all tasks, guard-attributed ones included."
+    },
+    "tasks": {
+      "type": "array",
+      "description": "One entry per (eval, condition, optional run index) with at least one refused tool call.",
+      "items": {
+        "type": "object",
+        "required": [
+          "eval_id",
+          "condition",
+          "denial_count",
+          "guard_attributed_count",
+          "denials"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "eval_id": { "type": "string" },
+          "condition": { "type": "string" },
+          "run_index": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based run index within the (eval, condition) cell; absent for single-run cells."
+          },
+          "denial_count": { "type": "integer", "minimum": 1 },
+          "guard_attributed_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "How many of this task's denials were the eval write guard's own blocks, which guard-denials.json already reports with resolved targets. Subtract from denial_count for the refusals aggregate warns about."
+          },
+          "denials": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "$ref": "#/definitions/denial" }
+          }
+        }
+      }
+    }
+  },
+  "definitions": {
+    "denial": {
+      "type": "object",
+      "required": ["tool", "input_keys", "guard_attributed"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": { "type": "string" },
+        "reason": {
+          "type": "string",
+          "description": "The harness's refusal explanation, normalized to omit echoed command or patch payloads. Absent when the capture carries no explanation for the refused call."
+        },
+        "input_keys": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string" },
+          "description": "Keys of the refused tool input. Values are deliberately omitted so a refused write cannot spill file contents into the report."
+        },
+        "guard_attributed": {
+          "type": "boolean",
+          "description": "True when the reason identifies this as an eval write-guard block rather than a harness permission refusal."
+        }
+      }
+    }
+  }
+}

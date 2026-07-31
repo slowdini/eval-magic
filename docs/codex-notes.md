@@ -13,7 +13,7 @@ references:
 | File | What's in it |
 |------|--------------|
 | `harnesses/codex.toml` | the descriptor — every declarative value + capability references |
-| `transcript.rs` | `item.completed` event-stream parsing (`codex-items`) |
+| `transcript.rs` | `item.completed` event parsing plus paired-stderr denial detection (`codex-items`) |
 | `skill_shadow.rs` | repo/user/admin/plugin skill collision scan (`codex-skills`) + reporting |
 
 The write guard has no per-harness code: the descriptor's `[guard]` block (hook file, matcher,
@@ -67,23 +67,31 @@ preflight compares each logical eval skill name with:
 
 Direct skill directories are matched by the `name:` in `SKILL.md` frontmatter, not the folder
 name. Missing directories, malformed skills, and unavailable or invalid plugin-list output are
-ignored; a plugin-list failure does not suppress findings from the direct directories. Findings
-produce a build-time Codex banner and the backward-compatible `plugin-shadow.json` artifact;
-`aggregate` turns the same report into Codex-specific `benchmark.json` validity warnings.
+ignored; a plugin-list failure does not suppress findings from the direct directories. The scan
+runs in every comparison environment. Schema-v2 `plugin-shadow.json` records project/user/admin or
+plugin roots, canonical and discovery paths, logical and runtime names, every affected cell, and
+per-source remediation. Codex can expose same-name skills together, so duplicate runtime IDs are
+recorded as `coexisting`. The shared banner and `aggregate` validity warnings render this same
+report; historical unversioned artifacts remain readable.
 
 For an installed-plugin collision, add `--disable plugins` to every eval-agent `codex exec`
 invocation, including every resumed turn. It is a global option, so place it before `exec`, for
 example `codex --disable plugins --ask-for-approval never exec ...`. The flag disables installed
 plugins for that invocation; it does not hide skills in repository, user, or admin directories.
-eval-magic does not currently record manually added Codex launch arguments, so
-`plugin-shadow.json` and the aggregate validity warnings retain the preflight finding. If the flag
-was applied consistently, a plugin-source warning is therefore conservative rather than evidence
-that the eval was contaminated.
+By default, `plugin-shadow.json` and aggregate validity warnings retain the preflight finding
+because eval-magic cannot observe manually added launch arguments.
 
 For a direct skill collision, move or rename the conflicting repo, user, or admin skill before
 dispatch. For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve
 `CODEX_HOME` if the dispatch still needs the existing Codex configuration. That does not isolate
 plugins stored under `CODEX_HOME` or repository/admin skills.
+
+When a descriptor overlay excludes **every** reported source from every initial and resumed
+dispatch, it may declare `[shadow] isolates_live_sources = true`. Preflight and
+`plugin-shadow.json` remain as auditable provenance, while `run` prints an informational notice
+and `aggregate` omits the shadow validity warnings. `--disable plugins` alone justifies the
+assertion only when every finding is plugin-sourced; it does not cover a direct skill finding.
+eval-magic does not inspect the recipes or otherwise verify the assertion.
 
 **Known limit:** Codex also ships bundled system skills, but currently exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled
@@ -114,6 +122,25 @@ Current `codex exec --json` transcripts do not include a native duration or even
 with `n: 0` is unavailable, not a measured zero. Existing timing artifacts are not migrated
 automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
 them from the preserved transcripts when desired.
+
+### Permission denials
+
+Some pre-execution refusals never become Codex JSONL items. The `codex-items` parser therefore
+derives `codex-stderr.log` from `codex-events.jsonl` (and the equivalent paired filenames in
+scripted-turn directories) and recognizes two structural Codex tool-router forms:
+
+- `exec_command` `Rejected(...)` records for approval-required policy and explicit deny rules;
+- `Command blocked by PreToolUse hook` records for `Bash` and patch-shaped `apply_patch` calls.
+
+The report stores `input_keys: ["command"]` but never the command or patch body. Explicit-rule
+command echoes and hook `. Command: ...` payloads are stripped from the reason; the
+`eval guard: ` prefix remains exact so aggregate can attribute guard blocks without warning
+twice. A missing stderr capture, unrelated/malformed lines, and ordinary JSONL command failures
+produce no denial. In particular, DNS and OS-process failures are indistinguishable from normal
+tool failures and are intentionally left unclassified to avoid false positives.
+
+These forms were verified against `codex-cli 0.146.0` on 2026-07-30. Re-check the parser fixtures
+when Codex changes its stderr logging shape.
 
 ## Write guard
 
@@ -146,8 +173,8 @@ The hook invokes the hidden `guard-codex` subcommand
 
 ## Running inside Codex itself
 
-`eval-magic run --harness codex` from a Codex session writes `.agents/skills` (and, when the
-guard is armed, `.codex/hooks.json`). Those project-local Codex config paths are protected by Codex's
-default workspace-write sandbox, so the runner may need approval/escalation or an external
-terminal invocation. That approval is Codex's own permission boundary, not something eval-magic
-bypasses.
+User-facing guidance lives in the README's Harnesses section ("Running inside Codex itself")
+and in `run --guard --help`: staging writes `.agents/skills`, guarded runs also write
+`.codex/hooks.json`, and Codex's default workspace-write sandbox protects those paths, so the
+runner may need approval/escalation or an external terminal invocation. Keep the public text in
+sync when this changes.

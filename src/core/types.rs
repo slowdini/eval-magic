@@ -203,6 +203,10 @@ pub struct ConditionsRecord {
     /// the agent itself, so it cannot observe this).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_model: Option<String>,
+    /// Resolved descriptor defaults plus run-level overrides applied only to
+    /// eval-agent dispatches.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub agent_env: BTreeMap<String, String>,
     /// Operator-declared judge model (provenance, like `agent_model`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge_model: Option<String>,
@@ -543,6 +547,7 @@ mod tests {
             run_nonce: None,
             runs: None,
             agent_model: None,
+            agent_env: BTreeMap::new(),
             judge_model: None,
             label: None,
         };

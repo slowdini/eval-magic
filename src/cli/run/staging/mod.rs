@@ -20,7 +20,8 @@ use crate::core::Harness;
 use crate::pipeline::io::now_iso8601;
 use crate::workspace::SNAPSHOT_META;
 
-use super::{RunError, copy_dir_recursive, copy_entry, write_json};
+use super::RunError;
+use crate::core::fs::{copy_entry_materialized, write_json};
 
 /// Prefix for the conspicuous staged-skill slug. The prefix scan in
 /// [`cleanup_staged_skills`] keys on it to remove staged dirs.
@@ -191,7 +192,7 @@ pub fn stage_skill_for_harness(opts: &StageSkillOpts) -> Result<String, RunError
             {
                 continue;
             }
-            copy_entry(&assets_dir.join(&name), &skill_dir.join(&name))?;
+            copy_entry_materialized(&assets_dir.join(&name), &skill_dir.join(&name))?;
         }
     }
     Ok(slug)
@@ -235,7 +236,7 @@ pub fn register_staged_skill_for_cleanup(
         preexisting: false,
         backup_path: None,
     });
-    write_json(&manifest_path, &manifest)
+    Ok(write_json(&manifest_path, &manifest)?)
 }
 
 /// Stage every non-test sibling skill (each `<name>/` with a `SKILL.md`, minus
@@ -284,7 +285,7 @@ pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, 
             // crate so it stays out of the shipped binary.
             let backup_root = make_backup_root()?;
             let backup_path = backup_root.join(&name);
-            copy_dir_recursive(&dst_dir, &backup_path)?;
+            copy_entry_materialized(&dst_dir, &backup_path)?;
             fs::remove_dir_all(&dst_dir)?;
             entry.backup_path = Some(backup_path.display().to_string());
         }
@@ -296,7 +297,7 @@ pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, 
             if child.file_name() == "evals" {
                 continue;
             }
-            copy_entry(&child.path(), &dst_dir.join(child.file_name()))?;
+            copy_entry_materialized(&child.path(), &dst_dir.join(child.file_name()))?;
         }
 
         manifest.created_entries.push(entry);
@@ -359,7 +360,7 @@ pub fn cleanup_staged_skills(repo_root: &Path, harness: Harness) -> Result<(), R
             && let Some(backup) = e.backup_path.as_deref().map(Path::new)
             && backup.exists()
         {
-            copy_dir_recursive(backup, &target)?;
+            copy_entry_materialized(backup, &target)?;
             if let Some(parent) = backup.parent() {
                 fs::remove_dir_all(parent)?;
             }

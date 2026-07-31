@@ -37,6 +37,8 @@ pub use registry::{
     all_tool_vocabulary,
 };
 pub use skill_shadow::{
-    PluginShadowReport, ShadowSource, format_shadow_banner, shadow_validity_warnings,
+    PluginShadowReport, ShadowAppearance, ShadowFinding, ShadowNamespace, ShadowRelation,
+    ShadowResolution, ShadowRoot, ShadowRootScope, ShadowSeverity, ShadowSkillRole, ShadowSource,
+    ShadowSourceKind, ShadowSourceOrigin, format_shadow_banner, shadow_validity_warnings,
 };
-pub use transcript::TranscriptSummary;
+pub use transcript::{PermissionDenial, TranscriptSummary};

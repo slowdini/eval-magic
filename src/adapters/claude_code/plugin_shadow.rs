@@ -15,7 +15,9 @@ use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::skill_shadow::{PluginShadowReport, ShadowSource};
+use crate::adapters::skill_shadow::{
+    PluginShadowReport, ShadowNamespace, ShadowRelation, ShadowRoot, ShadowRootScope, ShadowSource,
+};
 
 /// The Claude Code config dir: a non-empty `CLAUDE_CONFIG_DIR` override (passed
 /// in), else `~/.claude`.
@@ -111,11 +113,24 @@ fn enabled_plugin_skills(config_dir: &Path, enabled: &HashMap<String, bool>) -> 
                 continue;
             };
             for (name, path) in skill_folder_names(&Path::new(&install_path).join("skills")) {
-                out.push(ShadowSource::Plugin {
-                    plugin: key.clone(),
-                    skill_name: name,
-                    path: path.to_string_lossy().into_owned(),
-                });
+                let namespace = key.split_once('@').map_or(key.as_str(), |(name, _)| name);
+                let root_path = path.parent().unwrap_or(&path);
+                out.push(ShadowSource::live_plugin(
+                    key.clone(),
+                    name.clone(),
+                    format!("{namespace}:{name}"),
+                    &path,
+                    ShadowRoot {
+                        scope: ShadowRootScope::Global,
+                        namespace: ShadowNamespace::Plugin,
+                        plugin: Some(key.clone()),
+                        path: root_path.to_string_lossy().into_owned(),
+                        relation: ShadowRelation::Native,
+                    },
+                    format!(
+                        "Disable plugin '{key}' in the effective enabledPlugins settings for every dispatch."
+                    ),
+                ));
             }
         }
     }
@@ -124,11 +139,25 @@ fn enabled_plugin_skills(config_dir: &Path, enabled: &HashMap<String, bool>) -> 
 
 /// Skills under the global skills dir (`<config_dir>/skills`).
 fn global_skills(config_dir: &Path) -> Vec<ShadowSource> {
-    skill_folder_names(&config_dir.join("skills"))
+    let root_path = config_dir.join("skills");
+    skill_folder_names(&root_path)
         .into_iter()
-        .map(|(name, path)| ShadowSource::GlobalSkill {
-            skill_name: name,
-            path: path.to_string_lossy().into_owned(),
+        .map(|(name, path)| {
+            ShadowSource::live_skill(
+                name,
+                &path,
+                ShadowRoot {
+                    scope: ShadowRootScope::Global,
+                    namespace: ShadowNamespace::Claude,
+                    plugin: None,
+                    path: root_path.to_string_lossy().into_owned(),
+                    relation: ShadowRelation::Native,
+                },
+                format!(
+                    "Move or rename the conflicting skill directory '{}'.",
+                    path.display()
+                ),
+            )
         })
         .collect()
 }
@@ -155,10 +184,7 @@ pub fn detect_plugin_shadows(
         }
     }
 
-    PluginShadowReport {
-        config_dir: config_dir.to_string_lossy().into_owned(),
-        shadowed,
-    }
+    PluginShadowReport::from_sources(config_dir.to_string_lossy(), shadowed)
 }
 
 /// The build-time preflight: `Some(report)` only when a staged name is
@@ -170,12 +196,13 @@ pub fn shadow_preflight(
     staged_skill_names: &[&str],
 ) -> Option<PluginShadowReport> {
     let report = detect_plugin_shadows(config_dir, cwd, staged_skill_names);
-    (!report.shadowed.is_empty()).then_some(report)
+    (!report.is_empty()).then_some(report)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::skill_shadow::ShadowSourceKind;
     use serde_json::json;
     use std::fs;
     use std::path::{Path, PathBuf};
@@ -265,16 +292,16 @@ mod tests {
         );
 
         let report = detect_plugin_shadows(&config, &cwd, &["verification-before-completion"]);
-        assert_eq!(report.shadowed.len(), 1);
-        match &report.shadowed[0] {
-            ShadowSource::Plugin {
-                plugin, skill_name, ..
-            } => {
-                assert_eq!(plugin, "slow-powers@slowdini");
-                assert_eq!(skill_name, "verification-before-completion");
-            }
-            other => panic!("expected plugin shadow, got {other:?}"),
-        }
+        assert_eq!(report.source_count(), 1);
+        let source = report.source(0);
+        assert_eq!(source.kind, ShadowSourceKind::Plugin);
+        assert_eq!(source.plugin.as_deref(), Some("slow-powers@slowdini"));
+        assert_eq!(source.skill_name, "verification-before-completion");
+        assert_eq!(
+            source.runtime_id,
+            "slow-powers:verification-before-completion"
+        );
+        assert_eq!(source.root.namespace, ShadowNamespace::Plugin);
     }
 
     #[test]
@@ -293,7 +320,7 @@ mod tests {
         );
 
         let report = detect_plugin_shadows(&config, &cwd, &["verification-before-completion"]);
-        assert_eq!(report.shadowed.len(), 0);
+        assert_eq!(report.source_count(), 0);
     }
 
     #[test]
@@ -317,7 +344,7 @@ mod tests {
         );
 
         let report = detect_plugin_shadows(&config, &cwd, &["verification-before-completion"]);
-        assert_eq!(report.shadowed.len(), 0);
+        assert_eq!(report.source_count(), 0);
     }
 
     #[test]
@@ -330,11 +357,11 @@ mod tests {
         );
 
         let report = detect_plugin_shadows(&config, &cwd, &["my-skill"]);
-        assert_eq!(report.shadowed.len(), 1);
-        match &report.shadowed[0] {
-            ShadowSource::GlobalSkill { skill_name, .. } => assert_eq!(skill_name, "my-skill"),
-            other => panic!("expected global-skill shadow, got {other:?}"),
-        }
+        assert_eq!(report.source_count(), 1);
+        let source = report.source(0);
+        assert_eq!(source.kind, ShadowSourceKind::Skill);
+        assert_eq!(source.skill_name, "my-skill");
+        assert_eq!(source.root.namespace, ShadowNamespace::Claude);
     }
 
     #[test]
@@ -346,7 +373,7 @@ mod tests {
         write_settings(&config.join("settings.json"), &[("p@m", true)]);
 
         let report = detect_plugin_shadows(&config, &cwd, &["mine"]);
-        assert_eq!(report.shadowed.len(), 0);
+        assert_eq!(report.source_count(), 0);
     }
 
     #[test]
@@ -354,7 +381,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let (config, cwd) = fresh(&tmp);
         let report = detect_plugin_shadows(&config, &cwd, &["x"]);
-        assert_eq!(report.shadowed.len(), 0);
+        assert_eq!(report.source_count(), 0);
         assert_eq!(report.config_dir, config.to_string_lossy());
     }
 
@@ -374,6 +401,6 @@ mod tests {
             "---\nname: my-skill\n---\n",
         );
         let report = shadow_preflight(&config, &cwd, &["my-skill"]).expect("skill is shadowed");
-        assert_eq!(report.shadowed.len(), 1);
+        assert_eq!(report.source_count(), 1);
     }
 }

@@ -4,6 +4,7 @@
 use crate::helpers::*;
 use predicates::str::contains;
 use std::fs;
+use std::path::Path;
 
 #[test]
 fn claude_dispatch_guidance_uses_claude_p() {
@@ -244,6 +245,52 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
         iteration_dir(&cwd).join("plugin-shadow.json").exists(),
         "preflight detected the project-enabled plugin shadow by scanning the staged env"
     );
+    let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
+    assert_eq!(artifact["schema_version"], 2);
+    assert!(
+        artifact.get("isolates_live_sources").is_none(),
+        "false isolation assertions stay omitted"
+    );
+}
+
+#[test]
+fn declared_shadow_isolation_records_findings_as_informational_provenance() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let config = tmp.path().join("config");
+    fs::create_dir_all(config.join("skills/mr-review")).unwrap();
+    fs::write(
+        config.join("skills/mr-review/SKILL.md"),
+        "---\nname: mr-review\ndescription: live copy\n---\n",
+    )
+    .unwrap();
+    let overlay = tmp.path().join("isolated.toml");
+    fs::write(
+        &overlay,
+        "label = \"claude-code\"\n\n[shadow]\nisolates_live_sources = true\n",
+    )
+    .unwrap();
+
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .arg("--harness-file")
+        .arg(&overlay)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
+        .assert()
+        .success();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("Skill-shadow notice"), "{stderr}");
+    assert!(stderr.contains("isolates_live_sources = true"), "{stderr}");
+    assert!(!stderr.contains("Plugin-shadow warning"), "{stderr}");
+
+    let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
+    assert_eq!(artifact["schema_version"], 2);
+    assert_eq!(artifact["isolates_live_sources"], true);
+    assert_eq!(artifact["findings"][0]["skill_name"], "mr-review");
+    assert_eq!(artifact["findings"][0]["severity"], "comparison-invalid");
 }
 
 #[test]
@@ -313,4 +360,101 @@ fn run_mode_flag_is_rejected() {
         ])
         .assert()
         .failure();
+}
+
+#[test]
+fn claude_ingest_reports_permission_denied_tool_calls() {
+    // #180: a refused tool call still appears in the transcript and the dispatch
+    // still exits 0, so without this report a run that degraded to static
+    // reasoning grades as if it had executed something.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
+        .assert()
+        .success();
+
+    // Simulate the dispatches: the with_skill arm had its repro command refused,
+    // the without_skill arm ran cleanly.
+    let tasks = read_json(&iteration_dir(&cwd).join("dispatch.json"))["tasks"]
+        .as_array()
+        .expect("dispatch.json carries tasks[]")
+        .clone();
+    assert_eq!(tasks.len(), 2, "{tasks:?}");
+    for task in &tasks {
+        let outputs = Path::new(task["outputs_dir"].as_str().unwrap()).to_path_buf();
+        let outputs = if outputs.is_absolute() {
+            outputs
+        } else {
+            cwd.join(outputs)
+        };
+        fs::create_dir_all(&outputs).unwrap();
+        fs::write(outputs.join("final-message.md"), "Reviewed.\n").unwrap();
+        let refused = task["condition"].as_str() == Some("with_skill");
+        let denials = if refused {
+            r#","permission_denials":[{"tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"TZ=UTC bun run repro.ts","description":"repro"}}]"#
+        } else {
+            ""
+        };
+        fs::write(
+            outputs.join("claude-events.jsonl"),
+            format!(
+                concat!(
+                    r#"{{"type":"assistant","message":{{"id":"msg_1","role":"assistant","content":[{{"type":"tool_use","id":"toolu_1","name":"Bash","input":{{"command":"TZ=UTC bun run repro.ts"}}}}]}}}}"#,
+                    "\n",
+                    r#"{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"toolu_1","content":"This command requires approval","is_error":true}}]}}}}"#,
+                    "\n",
+                    r#"{{"type":"result","subtype":"success","is_error":false,"result":"Reviewed.","duration_ms":12,"usage":{{"input_tokens":1,"output_tokens":2,"cache_creation_input_tokens":0,"cache_read_input_tokens":0}}{denials}}}"#,
+                    "\n",
+                ),
+                denials = denials
+            ),
+        )
+        .unwrap();
+    }
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["record-runs", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--workspace-dir"])
+        .arg(cwd.join(".eval-magic"))
+        .args(["--harness", "claude-code", "--iteration", "1"])
+        .assert()
+        .success()
+        .stderr(contains("permission-denied"))
+        .stderr(contains("permission-denials.json"));
+
+    // One task, one refusal — the clean arm contributes nothing.
+    let report = read_json(&iteration_dir(&cwd).join("permission-denials.json"));
+    assert_eq!(report["iteration"], 1, "{report}");
+    assert_eq!(report["total_denials"], 1, "{report}");
+    let reported = report["tasks"].as_array().unwrap();
+    assert_eq!(reported.len(), 1, "{report}");
+    assert_eq!(reported[0]["condition"], "with_skill");
+    assert_eq!(reported[0]["guard_attributed_count"], 0);
+    assert_eq!(reported[0]["denials"][0]["tool"], "Bash");
+    assert_eq!(
+        reported[0]["denials"][0]["reason"],
+        "This command requires approval"
+    );
+    // Privacy-safe like guard-denials.json: keys, never the values.
+    assert_eq!(
+        reported[0]["denials"][0]["input_keys"],
+        serde_json::json!(["command", "description"])
+    );
+
+    // Grading is untouched — both arms still produced run records.
+    for task in &tasks {
+        let record = Path::new(task["run_record_path"].as_str().unwrap()).to_path_buf();
+        let record = if record.is_absolute() {
+            record
+        } else {
+            cwd.join(record)
+        };
+        assert!(record.exists(), "{record:?}");
+    }
 }

@@ -1,25 +1,12 @@
-//! Shared JSON read/write helpers for the pipeline stages.
+//! Shared timestamp helper for the pipeline stages.
 //!
-//! Every stage serializes artifacts the same way: pretty-printed, two-space
-//! indent, one trailing newline. `serde_json`'s `preserve_order` feature keeps
-//! object key order stable so artifacts diff cleanly across runs.
+//! Artifact JSON writing lives in [`crate::core::fs::write_json`] — every stage
+//! serializes the same way (pretty-printed, two-space indent, one trailing
+//! newline), so the writer is shared crate-wide rather than per-module.
 
-use std::fs;
-use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, SecondsFormat};
-use serde::Serialize;
-
-use crate::pipeline::error::PipelineError;
-
-/// Write `value` to `path` as pretty JSON with a trailing newline.
-pub fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), PipelineError> {
-    let mut text = serde_json::to_string_pretty(value)?;
-    text.push('\n');
-    fs::write(path, text)?;
-    Ok(())
-}
 
 /// The current wall clock as `2026-06-08T12:00:00.000Z`, matching JS
 /// `new Date().toISOString()` — the `generated` stamp every report carries.

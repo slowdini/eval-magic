@@ -181,6 +181,231 @@ fn grade_omits_meta_check_for_negative_evals() {
     assert_eq!(meta_eval_ids, vec!["pos-eval"]);
 }
 
+/// `grade` (emit): an eval excluded from the run by `--only`/`--skip` has no
+/// directory in the iteration, so it was never dispatched and must not be
+/// reported as missing data. A condition cell that *does* exist without a
+/// run.json is a real gap and still warns.
+#[test]
+fn grade_warns_for_undispatched_cells_but_not_for_evals_left_out_of_the_run() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let skill_dir = root.join("skill-dir");
+    let skill_sub = skill_dir.join("mr-review");
+    write_skill(
+        &skill_sub,
+        "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
+        &json!({"skill_name": "mr-review", "evals": [
+            {"id": "ran-eval", "prompt": "Fix the failing build.", "expected_output": "debugs",
+             "assertions": [{"id": "a1", "type": "llm_judge", "rubric": "Did it debug?"}]},
+            {"id": "left-out-eval", "prompt": "Add a --verbose flag.", "expected_output": "feature",
+             "assertions": [{"id": "a2", "type": "llm_judge", "rubric": "Did it add the flag?"}]},
+            {"id": "half-ran-eval", "prompt": "Rename the module.", "expected_output": "renames",
+             "assertions": [{"id": "a3", "type": "llm_judge", "rubric": "Did it rename?"}]}
+        ]}),
+    );
+    let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join(".eval-magic")
+        .join("mr-review")
+        .join("iteration-1");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("conditions.json"),
+        serde_json::to_string(&json!({
+            "mode": "new-skill",
+            "conditions": [{"name": "with_skill", "skill_path": skill_md}],
+            "timestamp": "2026-06-08T00:00:00.000Z",
+            "harness": "claude-code",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // `ran-eval` was dispatched and produced a record.
+    let ran_dir = iteration_dir.join("eval-ran-eval").join("with_skill");
+    fs::create_dir_all(&ran_dir).unwrap();
+    fs::write(
+        ran_dir.join("run.json"),
+        serde_json::to_string(&json!({
+            "eval_id": "ran-eval", "condition": "with_skill", "skill_path": skill_md,
+            "prompt": "p", "files": [], "final_message": "done",
+            "tool_invocations": [], "total_tokens": 100, "duration_ms": 1000,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    // `half-ran-eval` has an env but never produced a record — a genuine gap.
+    fs::create_dir_all(iteration_dir.join("eval-half-ran-eval").join("with_skill")).unwrap();
+    // `left-out-eval` has no directory at all — it was filtered out of the run.
+
+    let assert = grade_cmd(&cwd, &skill_dir, None).assert().success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    assert!(
+        !stderr.contains("left-out-eval"),
+        "an eval left out of the run should not be reported as missing data: {stderr}"
+    );
+    assert!(
+        stderr.contains("⚠ missing run.json for half-ran-eval/with_skill"),
+        "a dispatched cell with no run.json is still a real gap, reported under the \
+         standard warning prefix: {stderr}"
+    );
+}
+
+/// A legacy/hand-authored `dispatch.json` task with no `eval_root` has no known
+/// task boundary, so diff-scope can't be measured for it. The count lands in the
+/// summary line; the per-task detail goes to stderr under the standard `⚠ `
+/// prefix.
+#[test]
+fn diff_scope_names_each_unmeasurable_task_on_stderr() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let skill_dir = root.join("skill-dir");
+    let skill_sub = skill_dir.join("mr-review");
+    write_skill(
+        &skill_sub,
+        "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
+        &json!({"skill_name": "mr-review", "evals": [
+            {"id": "e1", "prompt": "Fix the failing build.", "expected_output": "debugs",
+             "assertions": [{"id": "a1", "type": "llm_judge", "rubric": "Did it debug?"}]}
+        ]}),
+    );
+    let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join(".eval-magic")
+        .join("mr-review")
+        .join("iteration-1");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("conditions.json"),
+        serde_json::to_string(&json!({
+            "mode": "new-skill",
+            "conditions": [{"name": "with_skill", "skill_path": skill_md}],
+            "timestamp": "2026-06-08T00:00:00.000Z",
+            "harness": "claude-code",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let cell = iteration_dir.join("eval-e1").join("with_skill");
+    fs::create_dir_all(&cell).unwrap();
+    let run_record_path = cell.join("run.json");
+    fs::write(
+        &run_record_path,
+        serde_json::to_string(&json!({
+            "eval_id": "e1", "condition": "with_skill", "skill_path": skill_md,
+            "prompt": "p", "files": [], "final_message": "done",
+            "tool_invocations": [], "total_tokens": 100, "duration_ms": 1000,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // A dispatch manifest whose task carries no `eval_root` — the pre-task-scoped
+    // layout that diff-scope cannot measure against.
+    fs::write(
+        iteration_dir.join("dispatch.json"),
+        serde_json::to_string(&json!({
+            "tasks": [{
+                "eval_id": "e1",
+                "condition": "with_skill",
+                "run_record_path": run_record_path.to_string_lossy(),
+            }],
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let assert = grade_cmd(&cwd, &skill_dir, None).assert().success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+    let stdout = String::from_utf8_lossy(&assert.get_output().stdout).into_owned();
+
+    assert!(
+        stderr.contains("⚠ e1/with_skill has no eval_root — diff-scope unavailable"),
+        "diff-scope names the unmeasurable task under the standard prefix: {stderr}"
+    );
+    assert!(
+        stdout.contains("1 missing baseline"),
+        "the summary tally still counts it: {stdout}"
+    );
+}
+
+/// A judge task that was emitted but never answered grades as FAIL. The count
+/// lands in the grading artifact; the per-assertion detail (which response file
+/// is missing) goes to stderr under the standard `⚠ ` prefix.
+#[test]
+fn finalize_names_each_missing_judge_response_on_stderr() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let skill_dir = root.join("skill-dir");
+    let skill_sub = skill_dir.join("mr-review");
+    write_skill(
+        &skill_sub,
+        "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
+        &json!({"skill_name": "mr-review", "evals": [
+            {"id": "e1", "prompt": "Fix the failing build.", "expected_output": "debugs",
+             "assertions": [{"id": "a1", "type": "llm_judge", "rubric": "Did it debug?"}]}
+        ]}),
+    );
+    let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join(".eval-magic")
+        .join("mr-review")
+        .join("iteration-1");
+    fs::create_dir_all(&iteration_dir).unwrap();
+    fs::write(
+        iteration_dir.join("conditions.json"),
+        serde_json::to_string(&json!({
+            "mode": "new-skill",
+            "conditions": [{"name": "with_skill", "skill_path": skill_md}],
+            "timestamp": "2026-06-08T00:00:00.000Z",
+            "harness": "claude-code",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    let cell = iteration_dir.join("eval-e1").join("with_skill");
+    fs::create_dir_all(&cell).unwrap();
+    fs::write(
+        cell.join("run.json"),
+        serde_json::to_string(&json!({
+            "eval_id": "e1", "condition": "with_skill", "skill_path": skill_md,
+            "prompt": "p", "files": [], "final_message": "done",
+            "tool_invocations": [], "total_tokens": 100, "duration_ms": 1000,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    // Emit the judge tasks, then finalize without ever writing a judge response.
+    grade_cmd(&cwd, &skill_dir, None).assert().success();
+    let assert = grade_cmd(&cwd, &skill_dir, None)
+        .arg("--finalize")
+        .assert()
+        .success();
+    let stderr = String::from_utf8_lossy(&assert.get_output().stderr).into_owned();
+
+    assert!(
+        stderr.contains("⚠ missing judge response:") && stderr.contains("a1.json"),
+        "finalize names the unanswered judge response under the standard prefix: {stderr}"
+    );
+
+    let grading: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(cell.join("grading.json")).unwrap()).unwrap();
+    assert_eq!(
+        grading["assertion_results"][0]["passed"], false,
+        "the unanswered assertion still grades as FAIL"
+    );
+}
+
 /// `grade` (emit + `--finalize`): each `run-<k>` subdirectory of a condition
 /// cell is graded independently — judge tasks point into the run dir and
 /// grading.json lands beside each run.json.

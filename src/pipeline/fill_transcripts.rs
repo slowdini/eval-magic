@@ -14,9 +14,9 @@ use std::path::Path;
 use serde::Deserialize;
 
 use crate::adapters::adapter_for;
+use crate::core::fs::write_json;
 use crate::core::{ConditionsRecord, Harness, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::write_json;
 use crate::pipeline::slots::{run_key, run_slots};
 use crate::validation::{SchemaName, validate_against_schema};
 

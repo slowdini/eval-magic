@@ -11,6 +11,7 @@
 //! sibling [`super::staging`] / [`super::dispatch`] modules, and the small
 //! stateless helpers in [`super::util`].
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
@@ -24,6 +25,7 @@ mod build;
 mod envs;
 mod git;
 mod resolve;
+mod shadow_preflight;
 mod stage;
 
 /// Run options parsed from the `run` subcommand flags (everything beyond the
@@ -48,6 +50,8 @@ pub struct RunOptions<'a> {
     /// Operator-declared models + label, persisted into `conditions.json` for
     /// provenance (the runner cannot observe them itself).
     pub agent_model: Option<&'a str>,
+    /// Resolved descriptor defaults plus run-level agent environment overrides.
+    pub agent_env: BTreeMap<String, String>,
     pub judge_model: Option<&'a str>,
     pub label: Option<&'a str>,
 }
@@ -144,7 +148,7 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
-    build::post_build(ctx, opts, &resolved)?;
+    build::post_build(ctx, opts, &resolved, &staged)?;
     print_next_steps(ctx, opts, &resolved, num_tasks);
     Ok(())
 }
@@ -264,6 +268,7 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
             target_args: &target_args,
             iteration,
             agent_model: opts.agent_model,
+            agent_env: &opts.agent_env,
         })
     );
 }

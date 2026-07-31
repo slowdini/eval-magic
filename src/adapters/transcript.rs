@@ -29,6 +29,23 @@ pub enum TranscriptEvent {
     },
 }
 
+/// One tool call the harness refused to execute.
+///
+/// Deliberately compact and privacy-safe, like
+/// [`GuardDenialRecord`](crate::sandbox::GuardDenialRecord): input *keys*, never
+/// input values, so a refused `Write` cannot spill a file body into a report.
+/// The refusal `reason` is harness-authored text and often names the refused
+/// command on its own.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PermissionDenial {
+    pub tool: String,
+    /// The harness's refusal text, when it surfaces one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Sorted keys of the refused tool input.
+    pub input_keys: Vec<String>,
+}
+
 /// Read a JSONL file, deserializing each non-blank line as `T` and silently
 /// skipping malformed lines (a partial transcript still yields its parseable
 /// records).

@@ -16,9 +16,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::core::fs::write_json;
 use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::json;
 
 use crate::core::Harness;
@@ -64,29 +64,17 @@ fn absolutize(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// Write `value` as 2-space-pretty JSON with a trailing newline — the stable
-/// on-disk format for every artifact this binary writes.
-pub(crate) fn write_json(path: &Path, value: &Value) -> io::Result<()> {
-    let mut text = serde_json::to_string_pretty(value)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    text.push('\n');
-    fs::write(path, text)
-}
-
-/// The guard's allowed write roots: the isolated env (`stage_root`, the
-/// agent-under-test's cwd) and the OS temp dir. The staged skills dir and the
-/// per-task outputs dir both live *inside* `stage_root`, so a single env root
-/// covers every legitimate agent write. Scoping to the env — not the parent
-/// `.eval-magic/` — keeps the guard boundary identical to the isolation
-/// boundary: the agent can't reach a sibling iteration or the `iteration-N/`
-/// meta tree above its cwd. eval-magic's own above-env writes (e.g.
-/// `benchmark.json`) are not gated here: they run as non-mutating `eval-magic`
-/// subprocesses the guard's Bash classifier passes.
+/// The guard's sole allowed write root: the isolated env (`stage_root`, the
+/// agent-under-test's cwd). The staged skills dir and the per-task outputs dir
+/// both live *inside* `stage_root`, so this root covers every legitimate agent
+/// write. Scoping to the env — not the parent `.eval-magic/` or the host temp
+/// directory — keeps the guard boundary identical to the isolation boundary:
+/// the agent can't reach a sibling iteration or the `iteration-N/` meta tree
+/// above its cwd. eval-magic's own above-env writes (e.g. `benchmark.json`) are
+/// not gated here: they run as non-mutating `eval-magic` subprocesses the
+/// guard's Bash classifier passes.
 fn marker_allowed_roots(stage_root: &Path) -> Vec<String> {
-    vec![
-        absolutize(stage_root).display().to_string(),
-        absolutize(&std::env::temp_dir()).display().to_string(),
-    ]
+    vec![absolutize(stage_root).display().to_string()]
 }
 
 /// Write the guard marker that arms the hook for `stage_root`. The guard is a
@@ -131,11 +119,7 @@ pub(crate) fn write_manifest(
         settings_backup,
         marker_path: marker_path.display().to_string(),
     };
-    write_json(
-        manifest_path,
-        &serde_json::to_value(&manifest)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-    )
+    write_json(manifest_path, &manifest)
 }
 
 /// Disarm the guard: restore the original harness hook file (or delete it if we

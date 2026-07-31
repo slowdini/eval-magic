@@ -17,7 +17,7 @@ pub mod policy;
 mod shell_targets;
 
 pub(crate) use decide::marker_is_armed;
-pub use decide::{GuardDecision, GuardMarker, decide};
+pub use decide::{GUARD_REASON_PREFIX, GuardDecision, GuardMarker, decide};
 pub(crate) use guard::GuardDenialRecord;
 pub(crate) use guard::parse_tool_call;
 pub use guard::read_marker;
@@ -26,6 +26,10 @@ pub use install::{GUARD_MANIFEST, GUARD_MARKER, teardown_guard};
 pub use policy::{classify_bash, is_shell_tool, is_under, is_under_any, is_write_tool, path_arg};
 
 use std::time::{SystemTime, UNIX_EPOCH};
+
+/// Conventional task-local directory named in dispatch prompts and actionable
+/// guard denials for temporary and scratch work.
+pub(crate) const TASK_SCRATCH_DIR: &str = "tmp";
 
 /// Current wall clock in epoch milliseconds. chrono ships without its `clock`
 /// feature (it parses timestamps but never reads the clock), so the time comes

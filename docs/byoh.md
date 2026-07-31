@@ -4,7 +4,9 @@
 > required — a harness declares its capabilities in a TOML descriptor file, and every capability it
 > *doesn't* declare degrades to a documented fallback with a warning, never a rejection. The
 > baseline-vs-enhancement contract behind this is
-> [progressive-enhancements.md](progressive-enhancements.md).
+> [progressive-enhancements.md](progressive-enhancements.md). Printed from the binary via
+> `eval-magic docs byoh`, this guide's relative links resolve in the
+> [eval-magic repository](https://github.com/slowdini/eval-magic).
 
 ## The five-minute version
 
@@ -31,6 +33,9 @@ exec_template = '''
 cool-cli run --cd <eval-root>{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly." \
   > <outputs_dir>/final-message.md'''
+
+[dispatch.env]
+TZ = "UTC"
 ```
 
 That run is complete: `run` warns about each enhancement the descriptor doesn't declare (naming the
@@ -88,6 +93,15 @@ session usage on every resumed turn.
 it renders `exec_template` exactly as `run` would and asserts that `outputs/final-message.md` is
 recovered afterwards. See the workflow section below and `harness lint --help`.
 
+`[dispatch.env]` provides non-secret environment defaults for eval-agent subprocesses. Descriptor
+layers merge this table by key; repeatable `run --agent-env KEY=VALUE` entries override the
+resolved descriptor, with the last duplicate CLI entry winning. Values may be empty or contain
+`=`, while names use portable shell identifier syntax. Git routing variables are reserved so they
+cannot escape the task repository. The resolved map is recorded in clear text in
+`conditions.json` and `dispatch.json`, applies to one-shot and scripted rounds, and does not apply
+to judge agents or runner-owned `command_check` assertions. Unset keys inherit the operator's
+environment; eval-magic does not impose a timezone default.
+
 ## Layering and field-level merge
 
 Descriptor files stack in precedence order; **later layers override individual fields** of an
@@ -135,13 +149,13 @@ map as inline comments in its scaffolded template. The short map:
 | Table | Declares | Fallback when absent |
 |-------|----------|----------------------|
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
-| `[dispatch]` | exec/parallel/judge/next-steps/manifest templates | generic handoff text; with only `exec_template`, generic recipes are built around it |
+| `[dispatch]` | exec/parallel/judge/next-steps/manifest templates; eval-agent `env` defaults | generic handoff text; with only `exec_template`, generic recipes are built around it; absent env keys inherit the operator environment |
 | `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
 | `[conversation]` | native `resume_exec_template` using the captured session id; optional token aggregation (`sum` default, `last` for cumulative reports) | no safe fallback: evals declaring `turns` are rejected in run preflight |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
-| `[shadow]` | `preflight` (named capability) | no shadow report — correct for harnesses that load nothing global |
+| `[shadow]` | `preflight` (named capability); optional `isolates_live_sources` assertion | no shadow report — correct for harnesses that load nothing global |
 | `[guard]` | **built-ins only** — see below | `detect-stray-writes` audits after the fact |
 
 ### Named capabilities: real code for free
@@ -151,12 +165,46 @@ is a **named capability** a descriptor references. If your harness emits a compa
 you get the full feature from configuration alone:
 
 - `transcript.parser = "claude-stream-json"` — Claude Code `-p --output-format stream-json` events.
-- `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL.
-- `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish` events.
+  It surfaces **permission-denied tool calls** from the terminal `result` event's
+  `permission_denials`, which drives `permission-denials.json` and its validity warning.
+- `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL plus
+  structural tool-router rejections and `PreToolUse` blocks from the sibling `*-stderr.log`
+  capture. The events filename must end in `events.jsonl` so the parser can derive that sibling.
+  Ordinary failed command events are intentionally not treated as permission denials.
+- `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish`
+  events. It surfaces **permission-denied tool calls** by recognizing OpenCode's own permission-layer
+  error strings on a `tool_use` event's `state.error` (an explicit deny rule's
+  `PermissionDeniedError` prefix, a headless reject's `PermissionRejectedError` prefix, or the
+  shared `eval guard: ` reason for a guard block), which drives `permission-denials.json` and its
+  validity warning. Ordinary tool-body errors are intentionally not treated as permission denials.
 - `staging.slug_capability = "opencode"` — OpenCode's sanitizing slug rules.
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.
 - `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.
 - `shadow.preflight = "opencode-skills"` — the OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
+
+`shadow.isolates_live_sources = true` is not a capability and does not change the scan. It is an
+unverified operator assertion that every source the selected preflight can report is excluded from
+every initial and resumed eval-agent dispatch. Detected sources remain in `plugin-shadow.json`,
+which records the assertion, and `run` prints an informational notice instead of a warning;
+`aggregate` then omits those findings from `validity_warnings`. Do not set it for partial isolation.
+eval-magic deliberately does not inspect shell templates for known flags.
+
+All named preflights feed the same schema-v2 report policy and renderer; a descriptor does not need
+harness-specific reporting code. The artifact groups sources by logical skill and records roles,
+intrinsic severity, discovery roots, logical versus runtime names, live/staged paths, affected
+matrix cells, resolution, and source-specific remediation. `aggregate` also accepts the historical
+unversioned `shadowed` shape.
+
+A built-in overlay may declare only the assertion and inherit the preflight capability:
+
+```toml
+label = "claude-code"
+
+[shadow]
+isolates_live_sources = true
+```
+
+A new harness still has to declare `preflight` in its fully resolved descriptor.
 
 For example, a harness that logs Codex-compatible item JSONL gets full transcript ingest — parsed
 tool invocations, `transcript_check` grading, the works — with:
@@ -294,8 +342,9 @@ Then `run --harness <name>` and read the warnings: each one names the fallback c
 of the run, which doubles as your wiring roadmap — declare the enhancement and the warning
 disappears. Close the loop end-to-end before a real dispatch with
 `eval-magic harness lint <name|file> --probe`: it renders `dispatch.exec_template` with a trivial
-prompt in a throwaway temp dir, asks for confirmation, runs the command via `/bin/sh -c` from
-that dir, and verifies `outputs/final-message.md` is recovered (non-empty). It also
+prompt and the resolved `[dispatch.env]` defaults in a throwaway temp dir, asks for confirmation,
+runs the command via `/bin/sh -c` from that dir, and verifies `outputs/final-message.md` is
+recovered (non-empty). It also
 render-only-validates `parallel_command_template` / `judge_command_template` — rendering each
 with stand-in values and reporting any unresolved `{token}` the run would later surface.
 

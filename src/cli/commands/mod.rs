@@ -4,6 +4,7 @@
 //! below; the handlers lean on the shared context/iteration helpers in
 //! [`super`] (`crate::cli`).
 
+mod docs;
 mod guard;
 mod harness;
 mod init;
@@ -12,6 +13,7 @@ mod run;
 mod validate;
 mod workspace;
 
+pub(crate) use docs::run_docs;
 pub(crate) use guard::{run_guard, run_guard_codex, run_guard_hook, run_teardown_guard};
 pub(crate) use harness::run_harness;
 pub(crate) use init::run_init;

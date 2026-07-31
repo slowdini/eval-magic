@@ -12,7 +12,7 @@ repo.
 
 Next: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode acceptEdits --model model-x \
+cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --model model-x \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
@@ -30,8 +30,9 @@ Existing nonempty response files are skipped; delete one to dispatch that judge 
 
 ```bash
 JOBS=${JOBS:-4}
-jq -j '.tasks[] | .dispatch_prompt_path, "\u0000", .response_path, "\u0000", ("model=" + (.model // "")), "\u0000"' judge-tasks.json | \
-  xargs -0 -P "$JOBS" -n 3 sh -c '
+jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // ""))' judge-tasks.json \
+  | tr '\n' '\0' \
+  | xargs -0 -P "$JOBS" -n 3 sh -c '
     prompt_path="$1"
     response_path="$2"
     model="${3#model=}"
@@ -39,7 +40,7 @@ jq -j '.tasks[] | .dispatch_prompt_path, "\u0000", .response_path, "\u0000", ("m
     response_base="${response_path%.json}"
     mkdir -p "$(dirname "$response_path")"
     model_arg=""; [ -n "$model" ] && model_arg="--model $model"
-    cd "/work/.eval-magic/widget-skill/iteration-2" && claude -p --output-format stream-json --verbose --permission-mode acceptEdits $model_arg \
+    cd "/work/.eval-magic/widget-skill/iteration-2" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions $model_arg \
       "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
       </dev/null \
       > "$response_base.claude-events.jsonl" \

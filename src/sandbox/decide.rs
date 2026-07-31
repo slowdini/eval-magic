@@ -12,9 +12,15 @@ use serde_json::Value;
 use std::path::Path;
 
 use super::policy::{
-    apply_patch_paths, classify_bash_with_cwd, is_patch_tool, is_shell_tool, is_under_any,
-    is_write_tool, path_arg, resolve_path,
+    OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_with_cwd, is_patch_tool,
+    is_shell_tool, is_under_any, is_write_tool, path_arg, resolve_path,
 };
+
+/// Prefix every guard denial reason carries. Harnesses surface the reason back
+/// to the agent verbatim, so it also reaches the transcript — which is what lets
+/// ingest tell a guard block apart from a harness permission refusal instead of
+/// reporting the same denial twice.
+pub const GUARD_REASON_PREFIX: &str = "eval guard: ";
 
 /// The staged marker file that arms the guard. The guard is a no-op unless this
 /// file exists, is active, and has not expired — so a crashed run that never tore
@@ -79,6 +85,15 @@ impl GuardEvaluation {
     }
 }
 
+fn scratch_hint(roots: &[String]) -> String {
+    roots.first().map_or_else(String::new, |root| {
+        format!(
+            ". For temporary or scratch files, use {}.",
+            Path::new(root).join(super::TASK_SCRATCH_DIR).display()
+        )
+    })
+}
+
 /// True when the marker is active and unexpired at `now_ms` (epoch milliseconds).
 pub(crate) fn marker_is_armed(marker: Option<&GuardMarker>, now_ms: i64) -> bool {
     let Some(marker) = marker else {
@@ -136,8 +151,9 @@ pub(crate) fn decide_with_cwd(
         {
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: {tool_name} to {p} is outside the eval sandbox (allowed: {})",
-                    roots.join(", ")
+                    "{GUARD_REASON_PREFIX}{tool_name} to {p} is outside the eval sandbox (allowed: {}){}",
+                    roots.join(", "),
+                    scratch_hint(&roots),
                 ),
                 vec![resolve_path(p, invocation_cwd).display().to_string()],
             );
@@ -150,8 +166,8 @@ pub(crate) fn decide_with_cwd(
         if paths.is_empty() {
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: blocked {tool_name} because no patch target path could be \
-                     determined"
+                    "{GUARD_REASON_PREFIX}blocked {tool_name} because no patch target path could \
+                     be determined"
                 ),
                 Vec::new(),
             );
@@ -166,9 +182,10 @@ pub(crate) fn decide_with_cwd(
                 .collect();
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: {tool_name} target {path} is outside the eval sandbox \
-                     (allowed: {})",
-                    roots.join(", ")
+                    "{GUARD_REASON_PREFIX}{tool_name} target {path} is outside the eval sandbox \
+                     (allowed: {}){}",
+                    roots.join(", "),
+                    scratch_hint(&roots),
                 ),
                 resolved_targets,
             );
@@ -182,10 +199,15 @@ pub(crate) fn decide_with_cwd(
             .and_then(Value::as_str)
             .unwrap_or("");
         if let Some(classification) = classify_bash_with_cwd(command, &roots, invocation_cwd) {
+            let hint = if classification.reason == OUTPUT_REDIRECTION_REASON {
+                scratch_hint(&roots)
+            } else {
+                String::new()
+            };
             return GuardEvaluation::deny(
                 format!(
-                    "eval guard: blocked {tool_name} ({}) — runs outside the eval sandbox",
-                    classification.reason
+                    "{GUARD_REASON_PREFIX}blocked {tool_name} ({}) — runs outside the eval sandbox{hint}",
+                    classification.reason,
                 ),
                 classification.resolved_targets,
             );
@@ -290,6 +312,22 @@ mod tests {
     }
 
     #[test]
+    fn outside_file_write_points_temporary_work_to_task_scratch() {
+        let d = decide_now(
+            "Write",
+            json!({ "file_path": "/tmp/repro.rs" }),
+            Some(&marker()),
+        );
+
+        assert_eq!(
+            d.reason.unwrap(),
+            "eval guard: Write to /tmp/repro.rs is outside the eval sandbox \
+             (allowed: /work/.eval-magic, /work/.claude/skills). For temporary or scratch files, \
+             use /work/.eval-magic/tmp."
+        );
+    }
+
+    #[test]
     fn denies_an_install_command() {
         let d = decide_now(
             "Bash",
@@ -297,7 +335,9 @@ mod tests {
             Some(&marker()),
         );
         assert!(!d.allow);
-        assert!(d.reason.unwrap().to_lowercase().contains("install"));
+        let reason = d.reason.unwrap();
+        assert!(reason.to_lowercase().contains("install"));
+        assert!(!reason.contains("temporary or scratch"));
     }
 
     #[test]
@@ -308,6 +348,23 @@ mod tests {
             Some(&marker()),
         );
         assert!(d.allow);
+    }
+
+    #[test]
+    fn outside_shell_redirection_points_temporary_work_to_task_scratch() {
+        for command in [
+            "printf done > /tmp/repro.log",
+            "printf done > \"$DYNAMIC_TARGET\"",
+        ] {
+            let d = decide_now("Bash", json!({ "command": command }), Some(&marker()));
+
+            assert!(
+                d.reason
+                    .unwrap()
+                    .ends_with("For temporary or scratch files, use /work/.eval-magic/tmp."),
+                "{command}"
+            );
+        }
     }
 
     #[test]
@@ -375,6 +432,21 @@ mod tests {
         );
         assert!(!d.allow);
         assert!(d.reason.unwrap().contains("apply_patch"));
+    }
+
+    #[test]
+    fn outside_patch_target_points_temporary_work_to_task_scratch() {
+        let d = decide_now(
+            "apply_patch",
+            json!({ "files": ["/tmp/repro.patch"] }),
+            Some(&marker()),
+        );
+
+        assert!(
+            d.reason
+                .unwrap()
+                .ends_with("For temporary or scratch files, use /work/.eval-magic/tmp.")
+        );
     }
 
     #[test]
