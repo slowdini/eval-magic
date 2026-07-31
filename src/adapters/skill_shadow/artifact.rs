@@ -246,17 +246,17 @@ pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
 }
 
 fn legacy_shadow_validity_warnings(sources: &[LegacyShadowSource]) -> Vec<String> {
-    const ISOLATION_DOC: &str = "docs/claude-notes.md → \"Isolating from installed plugins\"";
     sources
         .iter()
         .map(|source| {
             format!(
                 "staged skill '{}' is also provided by {} — each claude -p dispatch could discover \
                  both copies, so with/without results may be contaminated. Isolate each dispatch's \
-                 Claude config (see {}).",
+                 Claude config: add --setting-sources project,local to drop user-scope plugins, \
+                 disable the plugin in enabledPlugins settings, or run under a clean \
+                 CLAUDE_CONFIG_DIR.",
                 source.skill_name(),
                 source.source_label(),
-                ISOLATION_DOC
             )
         })
         .collect()

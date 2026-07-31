@@ -41,13 +41,19 @@ fn aggregate_surfaces_plugin_shadow_findings() {
 
     let b = read_benchmark(&iteration_dir);
     let warns = b["validity_warnings"].as_array().unwrap();
+    // The legacy warning is user-facing output, so its remediation guidance is
+    // self-contained — it must not point at a repository-only development doc a
+    // binary-only user cannot open.
     assert!(warns.iter().any(|w| {
         let s = w.as_str().unwrap();
         s.contains("mr-review")
             && s.to_lowercase().contains("contaminat")
             && s.contains("claude -p")
-            && s.contains("docs/claude-notes.md")
+            && s.contains("--setting-sources project,local")
+            && s.contains("enabledPlugins")
+            && s.contains("CLAUDE_CONFIG_DIR")
     }));
+    assert!(warns.iter().all(|w| !w.as_str().unwrap().contains("docs/")));
 }
 
 /// `aggregate`: v2 findings carry their own source-specific remediation.
