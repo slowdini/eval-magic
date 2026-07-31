@@ -45,6 +45,17 @@ workspace artifacts. Use descriptive test names that state the behavior, for exa
 `snapshot_ref_reads_committed_content`. Run `cargo test` before handing off changes; include
 formatting and clippy checks when touching Rust code.
 
+**Where unit tests live.** An inline `#[cfg(test)] mod tests` at the bottom of the file it exercises
+is the default — most modules use it. Extract only when that module outgrows its file: either to a
+`<module>/tests/` directory of themed submodules (as `pipeline/record_runs/` and `cli/run/staging/`
+do) or to a single `<topic>_tests.rs` sibling (as `adapters/guard/guard_denial_tests.rs` does).
+Extraction is a size decision, not a style preference; don't split a small inline module.
+
+**Where user-facing warnings come from.** Library modules (`pipeline`, `workspace`, `sandbox`,
+`adapters`) never print. They return warning strings on their result struct — `#[serde(skip)]` when
+that struct is also a serialized artifact — and the `cli` handler prints them with the `⚠ ` prefix.
+This keeps warnings testable without capturing stderr and keeps one place deciding how they read.
+
 ## Commit & Pull Request Guidelines
 
 Use concise Conventional Commit-style subjects such as `feat(codex): ...`, `fix(ci): ...`, and

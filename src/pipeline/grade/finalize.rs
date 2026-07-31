@@ -12,13 +12,13 @@ use std::fs;
 use serde::Deserialize;
 
 use crate::adapters::adapter_for;
+use crate::core::fs::write_json;
 use crate::core::{
     Assertion, AssertionResult, Grader, GradingResult, GradingSummary, MetaSummary, RunRecord,
     SKILL_INVOKED_META_ID, ToolInvocation,
 };
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::write_json;
 use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -28,12 +28,16 @@ use super::diff_scope::grade_diff_scope;
 use super::transcript_check::grade_transcript_check_with_context;
 
 /// What finalize graded, for the CLI summary.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct FinalizeSummary {
     pub total_graded: usize,
     pub total_meta_graded: usize,
     pub total_unverifiable: usize,
     pub meta_failures: usize,
+    /// Per-item detail behind the counters above (which judge response was
+    /// missing). Collected here rather than printed so the stage stays silent
+    /// and the CLI owns every user-facing line.
+    pub warnings: Vec<String>,
 }
 
 /// A judge's verdict file. All fields tolerate absence (a sloppy judge response
@@ -123,10 +127,10 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                 let response_path =
                                     judge_responses_dir.join(format!("{}.json", j.id));
                                 if !response_path.exists() {
-                                    eprintln!(
-                                        "warn: missing judge response: {} (assertion will be FAIL)",
+                                    summary.warnings.push(format!(
+                                        "missing judge response: {} (assertion will be FAIL)",
                                         response_path.display()
-                                    );
+                                    ));
                                     assertion_results.push(AssertionResult {
                                         id: j.id.clone(),
                                         passed: false,
@@ -216,10 +220,10 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                             summary.meta_failures += 1;
                         }
                     } else {
-                        eprintln!(
-                            "warn: missing skill-invocation meta response: {}",
+                        summary.warnings.push(format!(
+                            "missing skill-invocation meta response: {}",
                             response_path.display()
-                        );
+                        ));
                         meta_results.push(AssertionResult {
                             id: SKILL_INVOKED_META_ID.to_string(),
                             passed: false,

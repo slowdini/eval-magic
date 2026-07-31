@@ -11,7 +11,8 @@ use crate::core::RunContext;
 
 use super::envs::EnvTarget;
 use super::{Resolved, RunOptions, Staged};
-use crate::cli::run::{RunError, write_json};
+use crate::cli::run::RunError;
+use crate::core::fs::write_json;
 
 pub(super) fn run(
     ctx: &RunContext,

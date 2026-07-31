@@ -25,11 +25,11 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
+use crate::core::fs::write_json;
 use crate::core::{
     ConversationEvent, ConversationRecord, Harness, RunRecord, TimingRecord, TimingSource,
 };
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::write_json;
 use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
 use crate::validation::{SchemaName, validate_against_schema};
 

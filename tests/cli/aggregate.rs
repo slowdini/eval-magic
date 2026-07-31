@@ -255,6 +255,35 @@ fn aggregate_warns_on_uneven_run_counts_across_conditions() {
     );
 }
 
+/// A run slot with no `grading.json` is counted in `missing_gradings`, but the
+/// count alone doesn't say *which* slot. The per-slot detail goes to stderr
+/// under the same `⚠ ` prefix every other eval-magic warning uses — the library
+/// stage collects it, the CLI prints it.
+#[test]
+fn aggregate_names_each_missing_grading_on_stderr() {
+    use predicates::str::contains;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    // `with_skill` is graded; `without_skill` has a cell directory but no
+    // grading.json, so aggregate must name it rather than only tallying it.
+    write_grading(&iteration_dir, "with_skill", 1.0);
+    fs::create_dir_all(iteration_dir.join("eval-e1").join("without_skill")).unwrap();
+
+    agg_cmd(&cwd, &skill_dir)
+        .assert()
+        .success()
+        .stderr(contains("⚠ missing grading for eval-e1/without_skill"));
+
+    assert_eq!(
+        read_benchmark(&iteration_dir)["missing_gradings"]
+            .as_u64()
+            .unwrap(),
+        1,
+        "the tally is unchanged by moving the detail line"
+    );
+}
+
 #[test]
 fn aggregate_warns_when_a_legacy_task_resolves_to_an_ancestor_repository() {
     let (_tmp, root) = canonical_root();

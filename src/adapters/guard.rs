@@ -26,9 +26,10 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use crate::core::fs::write_json;
 use crate::sandbox::decide::{GuardMarker, decide_with_cwd};
 use crate::sandbox::install::{
-    GUARD_MANIFEST, GUARD_MARKER, iso_millis, write_json, write_manifest, write_marker,
+    GUARD_MANIFEST, GUARD_MARKER, iso_millis, write_manifest, write_marker,
 };
 use crate::sandbox::{GuardDenialRecord, now_ms, parse_tool_call};
 

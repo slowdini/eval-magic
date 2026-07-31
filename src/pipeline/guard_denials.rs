@@ -4,8 +4,9 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::core::fs::write_json;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::io::now_iso8601;
 use crate::sandbox::{GUARD_DENIALS_DIR, GUARD_DENIALS_LOG, GuardDenialRecord};
 use crate::validation::{SchemaName, validate_against_schema};
 

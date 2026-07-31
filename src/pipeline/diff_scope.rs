@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use similar::{Algorithm, DiffTag, capture_diff_slices};
 use walkdir::{DirEntry, WalkDir};
 
+use crate::core::fs::{copy_entry, write_json};
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::write_json;
 
 const BASELINE_DIR: &str = "diff-scope-baseline";
 const BASELINE_MANIFEST: &str = "manifest.json";
@@ -55,12 +55,17 @@ struct DispatchTask {
     run_record_path: String,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct DiffScopeSummary {
     pub measured: usize,
     pub reused: usize,
     pub missing_baseline: usize,
     pub shared_environment: usize,
+    /// Per-task detail behind the counters above (which task lacked an
+    /// `eval_root`, a baseline, or had a shared environment). Collected here
+    /// rather than printed so the stage stays silent and the CLI owns every
+    /// user-facing line.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -177,26 +182,26 @@ pub fn measure_iteration_diff_scopes(
             .map(|run| format!("/run-{run}"))
             .unwrap_or_default();
         let Some(eval_root) = task.eval_root.as_deref() else {
-            eprintln!(
-                "warn: {}/{}{run_label} has no eval_root — diff-scope unavailable; rebuild the iteration to capture metrics",
+            summary.warnings.push(format!(
+                "{}/{}{run_label} has no eval_root — diff-scope unavailable; rebuild the iteration to capture metrics",
                 task.eval_id, task.condition
-            );
+            ));
             summary.missing_baseline += 1;
             continue;
         };
         if root_counts.get(eval_root).copied().unwrap_or_default() != 1 {
-            eprintln!(
-                "warn: {}/{}{run_label} shares eval_root with another task — diff-scope unavailable; rebuild the iteration for task-scoped environments",
+            summary.warnings.push(format!(
+                "{}/{}{run_label} shares eval_root with another task — diff-scope unavailable; rebuild the iteration for task-scoped environments",
                 task.eval_id, task.condition
-            );
+            ));
             summary.shared_environment += 1;
             continue;
         }
         if !run_dir.join(BASELINE_DIR).join(BASELINE_MANIFEST).exists() {
-            eprintln!(
-                "warn: {}/{}{run_label} has no pre-dispatch baseline — diff-scope unavailable; rebuild the iteration to capture metrics",
+            summary.warnings.push(format!(
+                "{}/{}{run_label} has no pre-dispatch baseline — diff-scope unavailable; rebuild the iteration to capture metrics",
                 task.eval_id, task.condition
-            );
+            ));
             summary.missing_baseline += 1;
             continue;
         }
@@ -367,36 +372,6 @@ fn relative_key(root: &Path, path: &Path) -> Result<String, PipelineError> {
         .map(|component| component.as_os_str().to_string_lossy())
         .collect::<Vec<_>>()
         .join("/"))
-}
-
-fn copy_entry(source: &Path, destination: &Path) -> Result<(), PipelineError> {
-    let metadata = fs::symlink_metadata(source)?;
-    if metadata.file_type().is_symlink() {
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let target = fs::read_link(source)?;
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(target, destination)?;
-        #[cfg(windows)]
-        if source.metadata().is_ok_and(|metadata| metadata.is_dir()) {
-            std::os::windows::fs::symlink_dir(target, destination)?;
-        } else {
-            std::os::windows::fs::symlink_file(target, destination)?;
-        }
-    } else if metadata.is_dir() {
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            copy_entry(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-    } else {
-        if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::copy(source, destination)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]

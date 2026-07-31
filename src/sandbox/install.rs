@@ -16,9 +16,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use crate::core::fs::write_json;
 use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use serde_json::json;
 
 use crate::core::Harness;
@@ -62,15 +62,6 @@ pub(crate) fn iso_millis(ms: i64) -> String {
 /// allowed-roots list.
 fn absolutize(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
-/// Write `value` as 2-space-pretty JSON with a trailing newline — the stable
-/// on-disk format for every artifact this binary writes.
-pub(crate) fn write_json(path: &Path, value: &Value) -> io::Result<()> {
-    let mut text = serde_json::to_string_pretty(value)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    text.push('\n');
-    fs::write(path, text)
 }
 
 /// The guard's sole allowed write root: the isolated env (`stage_root`, the
@@ -128,11 +119,7 @@ pub(crate) fn write_manifest(
         settings_backup,
         marker_path: marker_path.display().to_string(),
     };
-    write_json(
-        manifest_path,
-        &serde_json::to_value(&manifest)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?,
-    )
+    write_json(manifest_path, &manifest)
 }
 
 /// Disarm the guard: restore the original harness hook file (or delete it if we

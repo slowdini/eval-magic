@@ -1,10 +1,25 @@
-//! CLI surface: command-tree definition and dispatch.
+//! CLI surface: the command tree, its handlers, and the `run` orchestrator.
 //!
 //! A `clap` derive tree owns flag parsing and the generated help.
 //!
-//! The command tree lives in [`args`]; the per-command handlers live in
-//! [`commands`], grouped by concern. This module is the thin coordinator: parse,
-//! dispatch, and the shared context/iteration helpers the handlers reuse.
+//! - [`args`] — the command tree and every flag's doc comment (the primary
+//!   documentation surface); [`help`] holds the long-form worked examples.
+//! - [`commands`] — one thin handler per subcommand, grouped by concern. Each
+//!   maps parsed args onto a library module and renders the result.
+//! - [`run`] — the `run` orchestrator. This is the bulk of the module: staging,
+//!   dispatch-task assembly, and the `ingest`/`finalize` chains. It lives here
+//!   rather than in a library module because it is a CLI-shaped workflow —
+//!   it drives the operator hand-off, not just data transformation — and it
+//!   carries its own unit tests (`run/staging/tests/`, `run/dispatch/tests/`,
+//!   `run/golden_tests.rs`).
+//!
+//! This file itself is the coordinator: parse, dispatch, and the shared
+//! context/iteration helpers the handlers reuse.
+//!
+//! User-facing output is this module's job. Library modules (`pipeline`,
+//! `workspace`, `sandbox`, `adapters`) return warnings on their result structs;
+//! the handlers here print them, prefixed `⚠ ` — so there is exactly one place
+//! that decides how a warning reads.
 
 use std::path::{Path, PathBuf};
 
