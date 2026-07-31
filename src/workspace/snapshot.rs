@@ -12,9 +12,10 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
+use crate::core::fs::{copy_entry_materialized, write_json};
 use crate::core::run_git;
+use crate::workspace::WorkspaceError;
 use crate::workspace::teardown::SNAPSHOT_META;
-use crate::workspace::{WorkspaceError, write_json};
 
 /// Snapshot the skill under `skill_subdir` into
 /// `<workspace_root>/<skill_name>/snapshots/<label>/`. With `reference` set, the
@@ -66,19 +67,18 @@ fn snapshot_from_working_tree(skill_subdir: &Path, dest_dir: &Path) -> Result<()
         }
         let src = entry.path();
         let dst = dest_dir.join(&name);
-        if src.is_dir() {
-            copy_dir_recursive(&src, &dst)?;
-        } else {
-            fs::copy(&src, &dst)?;
-        }
+        // Materialize rather than mirror: this snapshot is the baseline a later
+        // `--mode revision` run compares against, so a symlinked sibling asset
+        // must be frozen, not left tracking the working tree.
+        copy_entry_materialized(&src, &dst)?;
     }
 
     // Record provenance so teardown keeps this (working-tree) snapshot — unlike a
     // ref snapshot, it can't be regenerated from git.
-    write_json(
+    Ok(write_json(
         &dest_dir.join(SNAPSHOT_META),
         &json!({ "source": "working-tree" }),
-    )
+    )?)
 }
 
 /// Materialize the skill (`SKILL.md` + sibling assets, excluding `evals/`) as it
@@ -119,10 +119,10 @@ fn snapshot_from_ref(
         fs::write(&dst, &bytes)?;
     }
 
-    write_json(
+    Ok(write_json(
         &dest_dir.join(SNAPSHOT_META),
         &json!({ "source": "ref", "ref": reference }),
-    )
+    )?)
 }
 
 /// `git show <ref>:./<rel_path>` from `cwd`, returning the raw object bytes (so
@@ -152,22 +152,6 @@ fn git_ls_tree(cwd: &Path, reference: &str) -> Result<Vec<String>, WorkspaceErro
         .filter(|s| !s.is_empty())
         .map(str::to_owned)
         .collect())
-}
-
-/// Recursively copy `src` directory into `dst`.
-fn copy_dir_recursive(src: &Path, dst: &Path) -> Result<(), WorkspaceError> {
-    fs::create_dir_all(dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let from = entry.path();
-        let to = dst.join(entry.file_name());
-        if from.is_dir() {
-            copy_dir_recursive(&from, &to)?;
-        } else {
-            fs::copy(&from, &to)?;
-        }
-    }
-    Ok(())
 }
 
 #[cfg(test)]

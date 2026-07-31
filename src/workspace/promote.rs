@@ -13,10 +13,11 @@ use std::path::{Path, PathBuf};
 use serde::Serialize;
 use serde_json::json;
 
+use crate::core::fs::write_json;
 use crate::core::{ConditionsRecord, Harness, run_git};
 use crate::pipeline::run_slots;
 use crate::workspace::teardown::PROMOTED_MARKER;
-use crate::workspace::{WorkspaceError, now_iso8601, write_json};
+use crate::workspace::{WorkspaceError, now_iso8601};
 
 /// Inputs for [`promote_baseline`]. Borrowed for the duration of the call.
 pub struct PromoteOptions<'a> {

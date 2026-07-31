@@ -13,6 +13,7 @@ use crate::adapters::adapter_for;
 use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
+use super::super::RunError;
 use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, get_skill_description,
 };
@@ -20,10 +21,10 @@ use super::super::fixtures::fixture_pairs;
 use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
-use super::super::{RunError, write_json};
 use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_indices};
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
+use crate::core::fs::write_json;
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.

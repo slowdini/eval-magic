@@ -16,12 +16,13 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::adapters::skill_shadow::PluginShadowArtifact;
+use crate::core::fs::write_json;
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::git_isolation;
 use crate::pipeline::guard_denials::GuardDenialsReport;
-use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::io::now_iso8601;
 use crate::pipeline::permission_denials;
 use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
@@ -101,6 +102,13 @@ pub struct Benchmark {
     pub conditions_compared: Vec<String>,
     pub missing_gradings: usize,
     pub validity_warnings: Vec<String>,
+    /// Operational warnings about *running* the stage (which slot was missing a
+    /// grading), as opposed to [`validity_warnings`](Self::validity_warnings),
+    /// which record threats to the comparison's validity and are part of the
+    /// artifact. In-memory only; the CLI prints these and they never reach
+    /// `benchmark.json`. Mirrors `StrayWritesReport::invocations_inspected`.
+    #[serde(skip)]
+    pub warnings: Vec<String>,
     pub run_summary: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_scope: Option<Value>,
@@ -187,6 +195,7 @@ pub fn aggregate(
     }
 
     let mut missing_gradings = 0usize;
+    let mut warnings: Vec<String> = Vec::new();
     let mut timing_sources: HashSet<String> = HashSet::new();
     let mut diff_scope_by_condition: HashMap<String, Vec<DiffScopeRun>> = condition_names
         .iter()
@@ -231,7 +240,7 @@ pub fn aggregate(
                         .run_index
                         .map(|k| format!("/run-{k}"))
                         .unwrap_or_default();
-                    eprintln!("warn: missing grading for {eval_dir}/{cond}{run}");
+                    warnings.push(format!("missing grading for {eval_dir}/{cond}{run}"));
                     missing_gradings += 1;
                     continue;
                 }
@@ -391,6 +400,7 @@ pub fn aggregate(
         conditions_compared: vec![a.clone(), b.clone()],
         missing_gradings,
         validity_warnings,
+        warnings,
         run_summary: Value::Object(run_summary),
         diff_scope,
         delta,

@@ -8,9 +8,9 @@ use std::process::{Command, ExitStatus};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+use crate::core::fs::{copy_entry_materialized, write_json};
 use crate::core::{Assertion, AssertionCommandCheck, EvalsConfig, clear_git_environment};
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::write_json;
 use crate::validation::{SchemaName, validate_against_schema};
 
 const DIAGNOSTIC_LIMIT: usize = 2 * 1024;
@@ -204,7 +204,7 @@ fn inject_setup_files(
         if let Some(parent) = destination.parent() {
             fs::create_dir_all(parent)?;
         }
-        copy_entry(&source, &destination)?;
+        copy_entry_materialized(&source, &destination)?;
     }
     Ok(())
 }
@@ -220,19 +220,6 @@ fn validate_setup_relative(relative: &str) -> Result<(), PipelineError> {
         return Err(PipelineError::Message(format!(
             "command_check setup path must be relative and stay within the task environment: {relative}"
         )));
-    }
-    Ok(())
-}
-
-fn copy_entry(source: &Path, destination: &Path) -> Result<(), PipelineError> {
-    if fs::metadata(source)?.is_dir() {
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            copy_entry(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-    } else {
-        fs::copy(source, destination)?;
     }
     Ok(())
 }

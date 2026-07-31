@@ -13,9 +13,10 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::json;
 
+use crate::core::fs::write_json;
 use crate::core::{Assertion, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::run_slots;
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -55,13 +56,17 @@ struct JudgeTasksFile {
 }
 
 /// What emission produced, for the CLI summary.
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone)]
 pub struct EmitSummary {
     pub total_tasks: usize,
     pub meta_injected: usize,
     pub meta_code_checked: usize,
     pub skipped_transcript_checks: usize,
     pub skipped_missing: usize,
+    /// Per-item detail behind the counters above (which cell was skipped, and
+    /// why). Collected here rather than printed so the stage stays silent and
+    /// the CLI owns every user-facing line.
+    pub warnings: Vec<String>,
 }
 
 /// True when the transcript shows the harness's skill tool invoked with the
@@ -265,10 +270,10 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                         .run_index
                         .map(|k| format!("/run-{k}"))
                         .unwrap_or_default();
-                    eprintln!(
-                        "warn: missing run.json for {}/{cond}{run} — skipping",
+                    summary.warnings.push(format!(
+                        "missing run.json for {}/{cond}{run} — skipping",
                         ev.id
-                    );
+                    ));
                     if has_assertions {
                         summary.skipped_missing += assertions.len();
                     }

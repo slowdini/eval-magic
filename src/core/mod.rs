@@ -10,6 +10,7 @@
 
 pub mod capabilities;
 pub mod context;
+pub mod fs;
 pub mod runtime;
 pub mod types;
 

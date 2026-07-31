@@ -16,8 +16,9 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::PermissionDenial;
+use crate::core::fs::write_json;
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::io::{now_iso8601, write_json};
+use crate::pipeline::io::now_iso8601;
 use crate::sandbox::GUARD_REASON_PREFIX;
 use crate::validation::{SchemaName, validate_against_schema};
 
