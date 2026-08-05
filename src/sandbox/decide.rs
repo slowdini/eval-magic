@@ -351,6 +351,25 @@ mod tests {
     }
 
     #[test]
+    fn allows_an_in_bounds_redirect_when_heredoc_body_contains_shell_like_syntax() {
+        let d = decide_with_cwd(
+            "Bash",
+            &json!({
+                "command": "mkdir -p tmp && cat > tmp/verify.ts <<'EOF'\n\
+                    const handlers: [string, (body: unknown) => Response][] = [];\n\
+                    git push origin main\n\
+                    EOF\n\
+                    bun run tmp/verify.ts"
+            }),
+            Some(&marker()),
+            now_ms(),
+            Path::new("/work/.eval-magic"),
+        );
+
+        assert!(d.decision.allow, "{:?}", d.decision.reason);
+    }
+
+    #[test]
     fn outside_shell_redirection_points_temporary_work_to_task_scratch() {
         for command in [
             "printf done > /tmp/repro.log",
