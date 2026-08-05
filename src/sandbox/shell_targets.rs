@@ -28,29 +28,86 @@ pub(super) struct LexedShell {
     pub(super) malformed: bool,
 }
 
+struct Heredoc {
+    delimiter: String,
+    strip_tabs: bool,
+}
+
+fn skip_heredoc_bodies(chars: &[char], mut i: usize, heredocs: &[Heredoc]) -> Option<usize> {
+    for heredoc in heredocs {
+        loop {
+            let line_end = chars[i..]
+                .iter()
+                .position(|c| *c == '\n')
+                .map_or(chars.len(), |offset| i + offset);
+            let line = &chars[i..line_end];
+            let line = if heredoc.strip_tabs {
+                &line[line.iter().take_while(|c| **c == '\t').count()..]
+            } else {
+                line
+            };
+
+            if line.iter().copied().eq(heredoc.delimiter.chars()) {
+                i = line_end + usize::from(line_end < chars.len());
+                break;
+            }
+            if line_end == chars.len() {
+                return None;
+            }
+            i = line_end + 1;
+        }
+    }
+    Some(i)
+}
+
 /// Split just enough shell syntax to locate literal output targets. Quotes and
 /// backslash escapes are removed from words; expansion/glob syntax is marked
-/// dynamic so it can be denied without executing a shell.
+/// dynamic so it can be denied without executing a shell. Heredoc bodies are
+/// skipped as data after their declaration line, then lexing resumes after each
+/// terminator.
 pub(super) fn lex_shell(command: &str) -> LexedShell {
     let chars: Vec<char> = command.chars().collect();
     let mut tokens = Vec::new();
     let mut i = 0usize;
     let mut malformed = false;
+    let mut awaiting_heredoc_delimiter = None;
+    let mut heredocs = Vec::new();
 
     while i < chars.len() {
         match chars[i] {
             c if c.is_whitespace() => {
                 if c == '\n' {
                     tokens.push(ShellToken::Separator);
+                    if awaiting_heredoc_delimiter.take().is_some() {
+                        malformed = true;
+                    }
+                    if !heredocs.is_empty() {
+                        i += 1;
+                        match skip_heredoc_bodies(&chars, i, &heredocs) {
+                            Some(after_bodies) => i = after_bodies,
+                            None => {
+                                malformed = true;
+                                i = chars.len();
+                            }
+                        }
+                        heredocs.clear();
+                        continue;
+                    }
                 }
                 i += 1;
             }
             '#' => {
+                if awaiting_heredoc_delimiter.take().is_some() {
+                    malformed = true;
+                }
                 while i < chars.len() && chars[i] != '\n' {
                     i += 1;
                 }
             }
             '>' => {
+                if awaiting_heredoc_delimiter.take().is_some() {
+                    malformed = true;
+                }
                 let mut j = i + 1;
                 if j < chars.len() && matches!(chars[j], '>' | '|') {
                     j += 1;
@@ -67,13 +124,24 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                 }
             }
             '<' => {
+                if awaiting_heredoc_delimiter.take().is_some() {
+                    malformed = true;
+                }
                 tokens.push(ShellToken::InputRedirect);
-                i += 1;
+                let start = i;
                 while i < chars.len() && chars[i] == '<' {
                     i += 1;
                 }
+                if i - start == 2 {
+                    let strip_tabs = chars.get(i) == Some(&'-');
+                    i += usize::from(strip_tabs);
+                    awaiting_heredoc_delimiter = Some(strip_tabs);
+                }
             }
             '|' => {
+                if awaiting_heredoc_delimiter.take().is_some() {
+                    malformed = true;
+                }
                 i += 1;
                 if i < chars.len() && chars[i] == '|' {
                     i += 1;
@@ -83,10 +151,16 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                 }
             }
             ';' => {
+                if awaiting_heredoc_delimiter.take().is_some() {
+                    malformed = true;
+                }
                 tokens.push(ShellToken::Separator);
                 i += 1;
             }
             '&' => {
+                if awaiting_heredoc_delimiter.take().is_some() {
+                    malformed = true;
+                }
                 tokens.push(ShellToken::Separator);
                 i += 1;
                 if i < chars.len() && chars[i] == '&' {
@@ -187,6 +261,12 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                 }
 
                 if started {
+                    if let Some(strip_tabs) = awaiting_heredoc_delimiter.take() {
+                        heredocs.push(Heredoc {
+                            delimiter: value.clone(),
+                            strip_tabs,
+                        });
+                    }
                     tokens.push(ShellToken::Word(ShellWord { value, dynamic }));
                 }
                 if malformed {
@@ -194,6 +274,10 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                 }
             }
         }
+    }
+
+    if awaiting_heredoc_delimiter.is_some() || !heredocs.is_empty() {
+        malformed = true;
     }
 
     LexedShell { tokens, malformed }
@@ -375,113 +459,5 @@ pub(super) fn classify_output_targets(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const ROOTS: [&str; 1] = ["/work/env"];
-
-    fn classify(command: &str) -> Option<BashClassification> {
-        classify_output_targets(command, &ROOTS.map(str::to_string), Path::new("/work/env"))
-    }
-
-    fn tokens(command: &str) -> Vec<ShellToken> {
-        lex_shell(command).tokens
-    }
-
-    fn word(value: &str) -> ShellToken {
-        ShellToken::Word(ShellWord {
-            value: value.to_string(),
-            dynamic: false,
-        })
-    }
-
-    #[test]
-    fn lexer_reads_fd_duplication_as_its_own_token() {
-        assert_eq!(
-            tokens("cmd 2>&1"),
-            vec![word("cmd"), word("2"), ShellToken::FdDuplicate]
-        );
-        assert_eq!(
-            tokens("cmd >&2"),
-            vec![word("cmd"), ShellToken::FdDuplicate]
-        );
-        assert_eq!(
-            tokens("cmd >&-"),
-            vec![word("cmd"), ShellToken::FdDuplicate]
-        );
-    }
-
-    #[test]
-    fn lexer_keeps_treating_ampersand_before_a_redirect_as_file_output() {
-        // `&>file` redirects both streams *to a file* — the leading `&` is a
-        // separator, not part of the redirect operator.
-        assert_eq!(
-            tokens("cmd &>out.txt"),
-            vec![
-                word("cmd"),
-                ShellToken::Separator,
-                ShellToken::OutputRedirect,
-                word("out.txt")
-            ]
-        );
-    }
-
-    #[test]
-    fn lexer_keeps_appending_and_clobbering_redirects_distinct_from_duplication() {
-        assert_eq!(
-            tokens("cmd 2>>log.txt"),
-            vec![
-                word("cmd"),
-                word("2"),
-                ShellToken::OutputRedirect,
-                word("log.txt")
-            ]
-        );
-        assert_eq!(
-            tokens("cmd >|out.txt"),
-            vec![word("cmd"), ShellToken::OutputRedirect, word("out.txt")]
-        );
-    }
-
-    #[test]
-    fn fd_duplication_alone_requests_no_file_output() {
-        assert_eq!(classify("git status 2>&1 | head -20"), None);
-        assert_eq!(classify("printf done >&2"), None);
-    }
-
-    #[test]
-    fn fd_duplication_does_not_poison_an_in_bounds_redirect() {
-        assert_eq!(classify("printf done > out.txt 2>&1"), None);
-    }
-
-    #[test]
-    fn non_file_devices_are_not_recorded_as_targets() {
-        assert_eq!(classify("ls fixtures 2>/dev/null"), None);
-        assert_eq!(classify("printf done >/dev/null 2>&1"), None);
-        assert_eq!(classify("printf done | tee /dev/null"), None);
-    }
-
-    #[test]
-    fn an_out_of_bounds_target_still_denies_alongside_a_duplication() {
-        let denial = classify("printf done > /etc/out.txt 2>&1").expect("should deny");
-        assert_eq!(denial.reason, OUTPUT_REDIRECTION_REASON);
-        assert_eq!(denial.resolved_targets, vec!["/etc/out.txt".to_string()]);
-    }
-
-    #[test]
-    fn a_dynamic_target_still_denies_with_no_resolved_target() {
-        let denial = classify("printf done > \"$OUT\" 2>&1").expect("should deny");
-        assert!(denial.resolved_targets.is_empty());
-    }
-
-    #[test]
-    fn a_dev_prefix_does_not_launder_an_out_of_bounds_target() {
-        for command in [
-            "printf done > /dev/nullx",
-            "printf done > /dev/sda",
-            "printf done > /dev/../etc/passwd",
-        ] {
-            assert!(classify(command).is_some(), "should deny: {command}");
-        }
-    }
-}
+#[path = "shell_targets_tests.rs"]
+mod tests;
