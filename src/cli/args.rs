@@ -597,7 +597,9 @@ pub(crate) enum Commands {
     /// scope is captured before held-out files are injected. Then stops at the
     /// judge hand-off, listing a judge task per `llm_judge` assertion. Requires
     /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
-    /// harness exposes transcripts.
+    /// harness exposes transcripts. When the harness provides a judge recipe, it
+    /// skips existing nonempty responses, prints `N/M verdicts present`, and exits
+    /// nonzero while any are missing; rerun the same recipe to fill the gaps.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.

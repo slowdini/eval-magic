@@ -48,7 +48,9 @@ fn docs_guide_prints_operating_guide() {
         .success()
         .stdout(contains("# eval-magic"))
         .stdout(contains("## Quickstart"))
-        .stdout(contains("## Reading results"));
+        .stdout(contains("## Reading results"))
+        .stdout(contains("verdicts present"))
+        .stdout(contains("exits nonzero"));
 }
 
 /// `docs byoh` prints the embedded bring-your-own-harness authoring guide.
