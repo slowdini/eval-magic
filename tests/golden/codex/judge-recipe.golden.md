@@ -1,5 +1,6 @@
 Dispatch each judge task from judge-tasks.json with:
 Existing nonempty response files are skipped; delete one to dispatch that judge again.
+The final `N/M verdicts present` summary exits nonzero until every task has one.
 
 ```bash
 JOBS=${JOBS:-4}
@@ -19,4 +20,16 @@ jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // 
       > "$response_base.codex-events.jsonl" \
       2> "$response_base.codex-stderr.log"
   ' sh
+judge_dispatch_status=$?
+judge_total=$(jq '.tasks | length' judge-tasks.json)
+judge_present=$(
+  jq -r '.tasks[].response_path' judge-tasks.json \
+    | while IFS= read -r response_path; do
+        if [ -s "$response_path" ]; then printf '%s\n' "$response_path"; fi
+      done \
+    | wc -l \
+    | tr -d '[:space:]'
+)
+printf '%s/%s verdicts present\n' "$judge_present" "$judge_total"
+[ "$judge_dispatch_status" -eq 0 ] && [ "$judge_present" -eq "$judge_total" ]
 ```
