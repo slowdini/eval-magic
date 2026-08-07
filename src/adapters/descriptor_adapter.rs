@@ -25,7 +25,7 @@ use super::harness::{
 };
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::skills_block::{DEFAULT_HEADER, DEFAULT_ITEM, render_skills_block};
-use super::{PermissionDenial, TranscriptSummary};
+use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
 /// A [`HarnessAdapter`] backed by a validated [`HarnessDescriptor`].
 #[derive(Debug)]
@@ -263,6 +263,20 @@ impl HarnessAdapter for DescriptorAdapter {
             // No transcript table: nothing to read, and no error — a harness
             // without ingest simply carries no denial signal.
             None => Ok(Vec::new()),
+        }
+    }
+
+    fn surfaces_session_surface(&self) -> bool {
+        self.descriptor
+            .transcript
+            .as_ref()
+            .is_some_and(TranscriptSection::surfaces_session_surface)
+    }
+
+    fn parse_session_surface(&self, path: &Path) -> io::Result<Option<SessionSurface>> {
+        match &self.descriptor.transcript {
+            Some(transcript) => transcript.parse_session_surface(path),
+            None => Ok(None),
         }
     }
 
