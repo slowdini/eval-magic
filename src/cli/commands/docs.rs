@@ -22,22 +22,36 @@ struct Topic {
 const TOPICS: &[Topic] = &[
     Topic {
         name: "guide",
-        summary: "the complete operating guide: install, the run loop, assertions, reading results",
+        summary: "complete operating guide: install, the run loop, assertions, results",
         body: include_str!("../../../README.md"),
     },
     Topic {
         name: "byoh",
-        summary: "bring your own harness: author a TOML descriptor for a harness eval-magic has never seen",
+        summary: "author a TOML descriptor for a harness eval-magic has never seen",
         body: include_str!("../../../docs/byoh.md"),
+    },
+    Topic {
+        name: "isolation",
+        summary: "isolate dispatches from live/installed skills, and verify it worked",
+        body: include_str!("../../../docs/isolation.md"),
     },
 ];
 
 /// The bare-`docs` listing: one indented `<name>  <summary>` row per topic.
+///
+/// The name column is padded to the longest registered name rather than a
+/// literal width, so adding a topic can't silently misalign the listing — the
+/// first surface a new user reads.
 fn render_topic_list() -> String {
     let mut out =
         String::from("Embedded reference docs — print one with `eval-magic docs <topic>`:\n\n");
+    let width = TOPICS
+        .iter()
+        .map(|topic| topic.name.len())
+        .max()
+        .unwrap_or(0);
     for topic in TOPICS {
-        out.push_str(&format!("  {:<7} {}\n", topic.name, topic.summary));
+        out.push_str(&format!("  {:<width$} {}\n", topic.name, topic.summary));
     }
     out
 }

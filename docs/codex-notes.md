@@ -74,28 +74,24 @@ per-source remediation. Codex can expose same-name skills together, so duplicate
 recorded as `coexisting`. The shared banner and `aggregate` validity warnings render this same
 report; historical unversioned artifacts remain readable.
 
-For an installed-plugin collision, add `--disable plugins` to every eval-agent `codex exec`
-invocation, including every resumed turn. It is a global option, so place it before `exec`, for
-example `codex --disable plugins --ask-for-approval never exec ...`. The flag disables installed
-plugins for that invocation; it does not hide skills in repository, user, or admin directories.
-By default, `plugin-shadow.json` and aggregate validity warnings retain the preflight finding
-because eval-magic cannot observe manually added launch arguments.
-
-For a direct skill collision, move or rename the conflicting repo, user, or admin skill before
-dispatch. For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve
-`CODEX_HOME` if the dispatch still needs the existing Codex configuration. That does not isolate
-plugins stored under `CODEX_HOME` or repository/admin skills.
+`--disable plugins` is a **global** option, so it has to precede `exec` — for example
+`codex --disable plugins --ask-for-approval never exec ...`; codex-cli rejects it after `exec`. By
+default `plugin-shadow.json` and aggregate validity warnings retain the preflight finding because
+eval-magic cannot observe manually added launch arguments. The operator-facing recipes — that flag,
+move-or-rename for a direct skill collision, and the clean-`HOME`/`CODEX_HOME` caveat — are in the
+shipped `eval-magic docs isolation` topic ([isolation.md](isolation.md)).
 
 When a descriptor overlay excludes **every** reported source from every initial and resumed
 dispatch, it may declare `[shadow] isolates_live_sources = true`. Preflight and
 `plugin-shadow.json` remain as auditable provenance, while `run` prints an informational notice
-and `aggregate` omits the shadow validity warnings. `--disable plugins` alone justifies the
-assertion only when every finding is plugin-sourced; it does not cover a direct skill finding.
-eval-magic does not inspect the recipes or otherwise verify the assertion.
+and `aggregate` omits the shadow validity warnings. eval-magic does not inspect the recipes or
+otherwise verify the assertion; the honesty rules, including which Codex remedies can and cannot
+justify it, are in `eval-magic docs isolation`.
 
 **Known limit:** Codex also ships bundled system skills, but currently exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled
-system skill; verify that case manually when relevant.
+system skill; verify that case manually when relevant. (Also stated for operators in
+`eval-magic docs isolation`.)
 
 ## Transcript (`item.completed`)
 

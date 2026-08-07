@@ -93,6 +93,23 @@ duration, and token usage — there are no per-line timestamps. `system`, `rate_
 other non-message events are skipped. The transcript exposes Skill-tool invocations, so the
 `__skill_invoked` meta-check is deterministic here.
 
+The session-opening `{"type":"system","subtype":"init"}` event reports what the dispatch actually
+loaded, which is what `eval-magic docs isolation` steers operators to for verifying isolation.
+Verified against 2.1.220/2.1.223:
+
+- `plugins` is an array of `{name, path, source, version?}`. `source` (`"slow-powers@slowdini"`) is
+  byte-identical to the `enabledPlugins` key `plugin_shadow.rs` scans; `name` (`"slow-powers"`) is
+  the namespace it derives. `version` is absent for some installs.
+- `skills` lists advertised skill ids, built as
+  `skills.filter(s => s.userInvocable !== false).map(s => s.name)`. Plugin skills appear as
+  `<plugin-name>:<skill>` — exactly the `runtime_id` `plugin_shadow.rs` synthesizes. Staged skills
+  appear under their staging *directory* name, not the frontmatter `name:`.
+- **`init` is not the first line.** A capture opens with `subtype: "hook_started"` when a hook is
+  installed, which the guard always is. Anything reading the init record must filter on
+  `subtype == "init"`, not `type == "system"` alone — `parse_claude_stream_json_full`'s `session_id`
+  scan matches only on the latter and happens to be safe because both events carry the same id.
+- Resumed turns (`--resume`) emit their own full `init` event, so per-turn evidence exists.
+
 ## Skill discovery & staging
 
 Staged skills live at `.claude/skills/` in each env; discovery is structural and cwd-relative, and
@@ -113,14 +130,17 @@ staged skills retain the logical name; direct duplicates record user-before-proj
 The shared banner and `benchmark.json` `validity_warnings` consume the same report. The runner can
 detect but never unload a live plugin. The remediation options (also printed inline in the banner):
 
-- **Drop user-scope plugins, keep auth:** add `--setting-sources project,local` to the dispatch.
-  User-scope `enabledPlugins` isn't loaded; auth is unaffected.
-- **Disable the specific plugin:** set `"enabledPlugins": { "<plugin>@<marketplace>": false }` in a
-  settings source the dispatch loads.
-- **Clean config dir (strips everything):** run each dispatch under
-  `CLAUDE_CONFIG_DIR="$(mktemp -d)"`. No installed plugins or global skills load. Auth caveat:
-  OAuth lives in `~/.claude.json`, which a relocated config dir may not carry — set
-  `ANTHROPIC_API_KEY` or re-authenticate once in the fresh dir.
+The three remedies the banner names — `--setting-sources project,local`, a per-plugin
+`"enabledPlugins": { "<plugin>@<marketplace>": false }`, and a clean
+`CLAUDE_CONFIG_DIR="$(mktemp -d)"` — are documented for operators, with the caveat attached to each
+(including the OAuth caveat for a relocated config dir), in the shipped `eval-magic docs isolation`
+topic ([isolation.md](isolation.md)). The per-source strings the banner prints live in
+`plugin_shadow.rs`; keep them consistent with that topic.
+
+`--setting-sources project,local` drops **all** user-scope discovery, not just `enabledPlugins`:
+skills under `<config_dir>/skills` are unloaded too. Verified 2026-08-06 by A/B within one campaign —
+the judge recipe carries no `--setting-sources` and its capture lists both `~/.claude/skills`
+entries and every `<plugin>:<skill>` id, while all 48 isolated eval dispatches list neither.
 
 Project-local staged skills are independent of installed plugins, so they still load and the
 meta-check still resolves the slug under all three options.
@@ -128,8 +148,9 @@ meta-check still resolves the slug under all three options.
 When a descriptor overlay applies one of these remedies to every initial and resumed dispatch, it
 may declare `[shadow] isolates_live_sources = true`. Preflight still detects and writes every
 source to `plugin-shadow.json`, along with the assertion, but `run` prints an informational notice
-and `aggregate` omits the findings from `validity_warnings`. eval-magic does not verify the claim
-or inspect the dispatch templates; do not declare it if any reported source remains discoverable.
+and `aggregate` omits the findings from `validity_warnings`. eval-magic does not verify the claim or
+inspect the dispatch templates. The honesty rules and the per-harness traps are in
+`eval-magic docs isolation`.
 
 ## Write guard
 

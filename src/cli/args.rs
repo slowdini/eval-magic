@@ -557,6 +557,14 @@ pub(crate) enum Commands {
     /// no remotes. The runner owns its root `.git`; task outputs remain ignored,
     /// and rebuilding an explicit iteration resets prior Git history, branches,
     /// and remotes before dispatch.
+    ///
+    /// Before dispatch, a shadow preflight scans every task environment for live
+    /// copies of the staged skills — installed plugins, global and cross-harness
+    /// skill directories — and warns when one could contaminate the comparison. It
+    /// reports what is discoverable, not what a dispatch loaded: eval-magic never
+    /// reads your command templates, so a remedy you applied is invisible to it.
+    /// Isolating each dispatch from those sources, and confirming it worked, is
+    /// `eval-magic docs isolation`.
     Run(RunArgs),
     /// Execute one scripted multi-turn task through its harness CLI.
     ///
@@ -684,6 +692,9 @@ pub(crate) enum Commands {
     /// remediation. A timing metric with `n: 0` is unavailable, not a measured
     /// zero. The top-level `diff_scope` field is omitted for compatible older
     /// iterations that predate metric capture.
+    ///
+    /// Isolating dispatches from the live sources a shadow finding names, and
+    /// confirming it worked, is `eval-magic docs isolation`.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///
@@ -714,8 +725,10 @@ pub(crate) enum Commands {
     /// The user-facing reference docs ship inside the binary — version-matched
     /// to the installed release and readable offline. `guide` is the complete
     /// operating guide (the README); `byoh` is the bring-your-own-harness
-    /// descriptor authoring guide. Development docs for working on eval-magic
-    /// itself stay in the repository's `docs/` directory.
+    /// descriptor authoring guide; `isolation` covers isolating dispatches from
+    /// live and installed skill sources, and verifying it worked. Development
+    /// docs for working on eval-magic itself stay in the repository's `docs/`
+    /// directory.
     Docs {
         /// Topic to print (bare `docs` lists the available topics).
         topic: Option<String>,

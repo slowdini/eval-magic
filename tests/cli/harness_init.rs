@@ -228,6 +228,14 @@ fn harness_init_template_points_at_embedded_docs() {
         !descriptor.contains("docs/byoh.md"),
         "descriptor template must not point at the repo-relative byoh path"
     );
+    assert!(
+        descriptor.contains("eval-magic docs isolation"),
+        "the [shadow] block should point at the embedded isolation topic"
+    );
+    assert!(
+        !descriptor.contains("docs/isolation.md"),
+        "descriptor template must not point at the repo-relative isolation path"
+    );
 }
 
 #[test]

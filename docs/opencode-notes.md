@@ -178,23 +178,22 @@ probe and are `selected`. The shared banner and `aggregate` validity warnings re
 report; historical unversioned artifacts remain readable.
 
 eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
-set the kill switches below on the operator's behalf — parity with a real user session matters.
-Before dispatch, move or rename the conflicting skill directory; or, for a cross-harness root,
-hide it with the session environment:
-
-- `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` hides the `.claude` roots only (global + project);
-- `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` hides both `.claude` and `.agents` roots.
+set the `OPENCODE_DISABLE_*` kill switches on the operator's behalf — parity with a real user
+session matters. The operator-facing recipes — both switches with their exact scopes, and
+move-or-rename as the only remedy for an `.opencode` root — are in the shipped
+`eval-magic docs isolation` topic ([isolation.md](isolation.md)).
 
 When descriptor environment/recipes exclude **every** reported source from every initial and
 resumed dispatch, an overlay may declare `[shadow] isolates_live_sources = true`. Preflight still
 writes every source and the assertion to `plugin-shadow.json`; `run` prints an informational
-notice and `aggregate` omits the shadow validity warnings. The two environment switches above do
-not hide `.opencode` sources, so they cannot justify the assertion when one is reported.
-eval-magic does not inspect or verify the dispatch configuration.
+notice and `aggregate` omits the shadow validity warnings. eval-magic does not inspect or verify
+the dispatch configuration; the honesty rules, including which OpenCode remedies can and cannot
+justify the assertion, are in `eval-magic docs isolation`.
 
 **Known limits:** OpenCode also loads skills from config-declared `skills.paths` directories
 and `skills.urls` (remote-pulled), and matches a singular `.opencode/skill/` directory; the
-preflight does not scan those sources. Verify those cases manually when relevant.
+preflight does not scan those sources. Verify those cases manually when relevant. (Also stated for
+operators in `eval-magic docs isolation`.)
 
 ## Naming rules
 

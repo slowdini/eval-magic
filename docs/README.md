@@ -14,9 +14,10 @@ the installed tool with only what ships in the binary. These rules keep that tru
 2. **Shipped reference topics** — `eval-magic docs <topic>` prints a document embedded in the
    binary (version-matched to the install, readable offline). Topics are registered in
    `src/cli/commands/docs.rs`: `guide` embeds the repository README (the complete operating
-   guide) and `byoh` embeds [byoh.md](byoh.md) (authoring a harness descriptor). Generated
-   per-run docs (`RUNBOOK.md`, `dispatch-manifest.md`) are the runtime dispatch reference and
-   behave like tier 1.
+   guide), `byoh` embeds [byoh.md](byoh.md) (authoring a harness descriptor), and `isolation`
+   embeds [isolation.md](isolation.md) (isolating dispatches from live/installed skill sources,
+   and verifying it). Generated per-run docs (`RUNBOOK.md`, `dispatch-manifest.md`) are the
+   runtime dispatch reference and behave like tier 1.
 3. **Internal development docs** — everything else in this directory:
    [progressive-enhancements.md](progressive-enhancements.md) (the harness
    baseline/enhancement contract) and the per-harness implementation notes
@@ -50,7 +51,8 @@ post-install use, so a docs site would today add a second published surface to k
 little gain. Revisit when any of these become true:
 
 - more than ~4 user-facing reference topics — the bare-`docs` listing stops fitting on a
-  screen;
+  screen (three today: `guide`, `byoh`, `isolation`; each row is kept under 80 columns so the
+  listing stays unwrapped);
 - demand for docs versioned per release;
 - significant human (non-agent) readership needing search and navigation beyond GitHub's
   rendering.

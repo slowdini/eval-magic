@@ -508,6 +508,55 @@ mod tests {
         assert!(warnings[0].contains("comparison invalid"));
     }
 
+    /// Two cached versions of one installed plugin, each shipping the same skill
+    /// — the shape a real plugin cache takes once an upgrade leaves both versions
+    /// on disk. The scan contributes two distinct sources that share a plugin key
+    /// and a remediation.
+    fn report_with_one_plugin_cached_at_two_versions() -> PluginShadowReport {
+        let source_at = |version: &str| ShadowSource {
+            kind: ShadowSourceKind::Plugin,
+            origin: ShadowSourceOrigin::Live,
+            skill_name: "hardening-plans".into(),
+            runtime_id: "slow-powers:hardening-plans".into(),
+            plugin: Some("slow-powers@slowdini".into()),
+            discovery_path: format!("/cache/slow-powers/{version}/skills/hardening-plans"),
+            canonical_path: None,
+            root: ShadowRoot {
+                scope: ShadowRootScope::Global,
+                namespace: ShadowNamespace::Plugin,
+                plugin: Some("slow-powers@slowdini".into()),
+                path: format!("/cache/slow-powers/{version}/skills"),
+                relation: ShadowRelation::Native,
+            },
+            appearances: vec![],
+            remediation: Some(
+                "Disable plugin 'slow-powers@slowdini' in the effective enabledPlugins settings \
+                 for every dispatch."
+                    .into(),
+            ),
+        };
+        PluginShadowReport::from_sources("/x", vec![source_at("0.5.2"), source_at("0.5.4")])
+    }
+
+    #[test]
+    fn duplicate_source_labels_and_remediations_are_deduped_in_validity_warnings() {
+        let warnings = shadow_validity_warnings(&report_with_one_plugin_cached_at_two_versions());
+        assert_eq!(warnings.len(), 1);
+        let warning = &warnings[0];
+        assert_eq!(
+            warning
+                .matches("enabled plugin 'slow-powers@slowdini'")
+                .count(),
+            1,
+            "one plugin cached twice must be named once, not once per cached copy: {warning}"
+        );
+        assert_eq!(
+            warning.matches("Disable plugin").count(),
+            1,
+            "an identical remediation must not repeat: {warning}"
+        );
+    }
+
     #[test]
     fn banner_is_empty_when_nothing_shadowed() {
         let empty = PluginShadowReport {
@@ -524,6 +573,27 @@ mod tests {
         assert!(banner.contains("slow-powers@slowdini"));
         assert!(banner.contains("g1/without_skill"));
         assert!(banner.contains("Disable plugin"));
+    }
+
+    /// The banner and the isolated notice are what an operator reads at the
+    /// moment they hit a shadow finding, so each has to name the topic that
+    /// tells them what to do. Shipped output cites the embedded topic, never a
+    /// repo-relative path a binary-only install cannot open.
+    #[test]
+    fn banner_and_isolated_notice_point_at_the_isolation_topic() {
+        for rendered in [
+            format_shadow_banner(&sample_report()),
+            format_isolated_shadow_notice(&sample_report()),
+        ] {
+            assert!(
+                rendered.contains("eval-magic docs isolation"),
+                "must name the topic that explains the remedy: {rendered}"
+            );
+            assert!(
+                !rendered.contains("docs/isolation.md"),
+                "must not cite a repo path: {rendered}"
+            );
+        }
     }
 
     #[test]
