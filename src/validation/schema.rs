@@ -31,11 +31,12 @@ pub enum SchemaName {
     HarnessDescriptor,
     Conversation,
     PluginShadow,
+    SessionSurface,
 }
 
 impl SchemaName {
     /// Every schema, for building the validator cache.
-    const ALL: [SchemaName; 13] = [
+    const ALL: [SchemaName; 14] = [
         SchemaName::RunRecord,
         SchemaName::Evals,
         SchemaName::Grading,
@@ -49,6 +50,7 @@ impl SchemaName {
         SchemaName::HarnessDescriptor,
         SchemaName::Conversation,
         SchemaName::PluginShadow,
+        SchemaName::SessionSurface,
     ];
 
     /// The schema's kebab-case name, as used in error messages and the on-disk
@@ -68,6 +70,7 @@ impl SchemaName {
             SchemaName::HarnessDescriptor => "harness-descriptor",
             SchemaName::Conversation => "conversation",
             SchemaName::PluginShadow => "plugin-shadow",
+            SchemaName::SessionSurface => "session-surface",
         }
     }
 
@@ -95,6 +98,9 @@ impl SchemaName {
             }
             SchemaName::Conversation => include_str!("../../schema/conversation.schema.json"),
             SchemaName::PluginShadow => include_str!("../../schema/plugin-shadow.schema.json"),
+            SchemaName::SessionSurface => {
+                include_str!("../../schema/session-surface.schema.json")
+            }
         }
     }
 }

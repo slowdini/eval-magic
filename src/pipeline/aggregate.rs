@@ -496,8 +496,25 @@ fn collect_shadow_warnings(
     let Ok(artifact) = serde_json::from_str::<PluginShadowArtifact>(&raw) else {
         return;
     };
-    if artifact.isolates_live_sources {
+    // Evidence outranks the assertion. A declared isolation that transcripts
+    // contradict means the suppressed findings were real, so the contradiction
+    // is reported rather than trusted.
+    let contradicted = artifact
+        .verification
+        .as_ref()
+        .is_some_and(|verification| verification.assertion_contradicted);
+    if artifact.isolates_live_sources && !contradicted {
         return;
+    }
+    if contradicted {
+        warnings.push(
+            "comparison invalid: the resolved harness descriptor declares `[shadow] \
+             isolates_live_sources = true`, but dispatch transcripts show a reported source was \
+             actually loaded — the isolation assertion is false and the suppressed findings are \
+             real. Remove the assertion or fix the isolation, then re-run. See `eval-magic docs \
+             isolation`."
+                .to_string(),
+        );
     }
     warnings.extend(artifact.validity_warnings());
 }

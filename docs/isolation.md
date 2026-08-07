@@ -35,7 +35,7 @@ How eval-magic grades that risk:
 | Question | Answered by | When |
 | --- | --- | --- |
 | *Could* a live copy be discovered from this environment? | the skill-shadow banner + `plugin-shadow.json` | before dispatch |
-| *Did this dispatch actually load one?* | the dispatch's own transcript — see [Verifying isolation](#verifying-isolation) | after the dispatch ran |
+| *Did this dispatch actually load one?* | `resolved_severity` in `plugin-shadow.json`, from each dispatch's own transcript | after `ingest` |
 | Does the remedy I applied actually work? | nothing — eval-magic never reads your command templates or environment | never |
 
 That last row is the one that surprises people. The preflight scans your operator config; it does
@@ -45,8 +45,10 @@ deliberate: a `sh -c` wrapper, a flag built from an environment variable, or a s
 such parse, and a wrong suppression would hide real contamination — a much worse failure than a
 finding you can dismiss.
 
-So the loop is: eval-magic tells you a live copy *exists*, you isolate it, and you confirm from a
-dispatch transcript that it did not load.
+So the loop is: eval-magic tells you a live copy *exists*, you isolate it, and `ingest` confirms from
+each dispatch's transcript whether it actually loaded — on harnesses whose transcripts report that.
+Where they don't (Codex and OpenCode today), the middle row stays unanswerable and the finding
+remains unverified.
 
 ## Recipes by harness
 
@@ -120,9 +122,11 @@ overlay stays this short. What changes: detection still runs and still writes ev
 `plugin-shadow.json`, along with the assertion itself, so the run stays auditable; `run` prints an
 informational notice instead of a warning; and `aggregate` omits the shadow validity warnings.
 
-eval-magic does not check the claim — not from distrust, but because it never inspects your
-command templates (see the third row of the table above). Keeping it honest is yours. **Do not
-declare it when:**
+eval-magic never inspects your command templates, so it cannot tell in advance that the assertion
+holds. Where transcripts report a roster it does the next best thing: `ingest` checks the assertion
+against what the dispatches actually loaded, and a contradiction is reported rather than trusted —
+declaring it falsely gets you a louder warning, not a quieter one. Where they don't, the assertion is
+taken on trust. Either way, keeping it honest is yours. **Do not declare it when:**
 
 - any reported source is still discoverable — partial isolation does not qualify;
 - you have not applied the remedy to the resumed turns of a scripted eval;
@@ -134,9 +138,32 @@ declare it when:**
 
 ## Verifying isolation
 
+### Read eval-magic's own verdict first
+
 Claude Code's `--output-format stream-json` opens each dispatch with a
-`{"type":"system","subtype":"init"}` event that lists what the session really loaded. That event is
-ground truth, per dispatch, and it is already sitting in every events file eval-magic ingests.
+`{"type":"system","subtype":"init"}` event listing what the session really loaded. `ingest` reads it
+for every dispatch and every resumed turn, records the result in `session-surface.json`, and resolves
+each finding in `plugin-shadow.json`:
+
+```bash
+jq -r '.findings[] | "\(.skill_name): \(.resolved_severity // "not verified")"' \
+  <iteration_dir>/plugin-shadow.json
+```
+
+- **`isolated`** — every expected cell reported, and none saw the source. The finding drops out of
+  `benchmark.json`'s `validity_warnings`; it stays in `plugin-shadow.json` as provenance.
+- **`comparison invalid` / `warning`** — either a dispatch actually loaded it, or it could not be
+  settled. `.findings[].sources[].verification` carries the per-cell detail, including an
+  `inconclusive_reason` when presence and absence were indistinguishable.
+- **absent** — never verified: this harness's transcripts carry no roster, or `ingest` has not run.
+
+Refuting requires *every* expected cell to have reported and none to have seen the source.
+Confirming needs only one dispatch that did. A missing transcript never refutes — it leaves the
+finding unverified, so a reporting gap can't be mistaken for isolation.
+
+### Read the raw init event yourself
+
+The same ground truth, if you want to check it directly:
 
 ```bash
 jq 'select(.subtype == "init") | {plugins, skills}' <outputs_dir>/claude-events.jsonl
@@ -160,9 +187,10 @@ jq -r 'select(.subtype == "init") | .skills[]' <outputs_dir>/claude-events.jsonl
   scripted eval gives you one verdict per turn — use it, since resumed turns are exactly where an
   under-applied remedy hides.
 
-Codex and OpenCode transcripts carry no equivalent roster, so there is nothing to read. For those,
-verify by confirming the flag or environment variable appears in every rendered eval-agent command
-in `RUNBOOK.md` and `dispatch-manifest.md`.
+Codex and OpenCode transcripts carry no equivalent roster, so there is nothing to read and no verdict
+to check — their findings stay unverified, and `[shadow] isolates_live_sources` is how you record
+that you isolated them. For those, verify by confirming the flag or environment variable appears in
+every rendered eval-agent command in `RUNBOOK.md` and `dispatch-manifest.md`.
 
 ### `claude plugin list` does not answer this
 

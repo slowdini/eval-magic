@@ -368,9 +368,15 @@ pub trait HarnessAdapter {
     }
 
     /// **Enhancement: shadow preflight.** Format the shared runner banner for
-    /// a report.
+    /// a report. Whether the banner promises a verified verdict follows this
+    /// adapter's own
+    /// [`surfaces_session_surface`](Self::surfaces_session_surface), so a caller
+    /// cannot accidentally claim verification a harness can't deliver.
     fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
-        super::skill_shadow::format_shadow_banner(report)
+        super::skill_shadow::format_shadow_banner_with_verification(
+            report,
+            self.surfaces_session_surface(),
+        )
     }
 
     /// **Enhancement: shadow preflight.** Format shared aggregate validity

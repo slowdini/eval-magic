@@ -5,7 +5,11 @@
   "description": "Versioned provenance for live and staged skill sources that can affect an eval comparison.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "config_dir", "findings"],
+  "required": [
+    "schema_version",
+    "config_dir",
+    "findings"
+  ],
   "properties": {
     "schema_version": {
       "const": 2
@@ -21,23 +25,37 @@
     },
     "isolates_live_sources": {
       "type": "boolean"
+    },
+    "verification": {
+      "$ref": "#/$defs/report_verification"
     }
   },
   "$defs": {
     "finding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["skill_name", "role", "severity", "sources"],
+      "required": [
+        "skill_name",
+        "role",
+        "severity",
+        "sources"
+      ],
       "properties": {
         "skill_name": {
           "type": "string",
           "minLength": 1
         },
         "role": {
-          "enum": ["subject", "sibling"]
+          "enum": [
+            "subject",
+            "sibling"
+          ]
         },
         "severity": {
-          "enum": ["warning", "comparison-invalid"]
+          "enum": [
+            "warning",
+            "comparison-invalid"
+          ]
         },
         "sources": {
           "type": "array",
@@ -45,6 +63,14 @@
           "items": {
             "$ref": "#/$defs/source"
           }
+        },
+        "resolved_severity": {
+          "enum": [
+            "isolated",
+            "warning",
+            "comparison-invalid"
+          ],
+          "description": "Severity after dispatch transcripts are applied. Absent means the finding was never verified, which differs from being verified and found harmless (`isolated`). The sibling `severity` field stays intrinsic and is never rewritten."
         }
       }
     },
@@ -61,10 +87,16 @@
       ],
       "properties": {
         "kind": {
-          "enum": ["skill", "plugin"]
+          "enum": [
+            "skill",
+            "plugin"
+          ]
         },
         "origin": {
-          "enum": ["live", "staged"]
+          "enum": [
+            "live",
+            "staged"
+          ]
         },
         "skill_name": {
           "type": "string",
@@ -98,19 +130,39 @@
         "remediation": {
           "type": "string",
           "minLength": 1
+        },
+        "verification": {
+          "$ref": "#/$defs/source_verification"
         }
       }
     },
     "root": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["scope", "namespace", "path", "relation"],
+      "required": [
+        "scope",
+        "namespace",
+        "path",
+        "relation"
+      ],
       "properties": {
         "scope": {
-          "enum": ["project", "global", "admin", "unknown"]
+          "enum": [
+            "project",
+            "global",
+            "admin",
+            "unknown"
+          ]
         },
         "namespace": {
-          "enum": ["opencode", "claude", "agents", "codex", "plugin", "unknown"]
+          "enum": [
+            "opencode",
+            "claude",
+            "agents",
+            "codex",
+            "plugin",
+            "unknown"
+          ]
         },
         "plugin": {
           "type": "string",
@@ -121,14 +173,23 @@
           "minLength": 1
         },
         "relation": {
-          "enum": ["native", "cross-harness", "unknown"]
+          "enum": [
+            "native",
+            "cross-harness",
+            "unknown"
+          ]
         }
       }
     },
     "appearance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["group", "condition", "eval_ids", "resolution"],
+      "required": [
+        "group",
+        "condition",
+        "eval_ids",
+        "resolution"
+      ],
       "properties": {
         "group": {
           "type": "string",
@@ -146,11 +207,125 @@
           }
         },
         "resolution": {
-          "enum": ["selected", "shadowed", "coexisting", "unknown"]
+          "enum": [
+            "selected",
+            "shadowed",
+            "coexisting",
+            "unknown"
+          ]
         },
         "precedence_rank": {
           "type": "integer",
           "minimum": 0
+        }
+      }
+    },
+    "source_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "cells"
+      ],
+      "properties": {
+        "status": {
+          "$ref": "#/$defs/verification_status"
+        },
+        "cells": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/cell_verification"
+          }
+        }
+      }
+    },
+    "cell_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "group",
+        "condition",
+        "status",
+        "dispatches_with_evidence",
+        "dispatches_without_evidence"
+      ],
+      "properties": {
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "status": {
+          "$ref": "#/$defs/verification_status"
+        },
+        "dispatches_with_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dispatches_without_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "inconclusive_reason": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "verification_status": {
+      "enum": [
+        "confirmed",
+        "refuted",
+        "unverified"
+      ],
+      "description": "`refuted` requires every expected cell to have reported and none to have seen the source; a missing transcript yields `unverified`, never `refuted`."
+    },
+    "report_verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "generated",
+        "harness_reports_session_surface",
+        "dispatches_with_evidence",
+        "dispatches_without_evidence",
+        "refuted_findings",
+        "confirmed_findings",
+        "unverified_findings",
+        "assertion_contradicted"
+      ],
+      "properties": {
+        "generated": {
+          "type": "string"
+        },
+        "harness_reports_session_surface": {
+          "type": "boolean"
+        },
+        "dispatches_with_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "dispatches_without_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "refuted_findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "confirmed_findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unverified_findings": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "assertion_contradicted": {
+          "type": "boolean",
+          "description": "A descriptor declared `isolates_live_sources = true` while evidence shows a reported source loaded anyway."
         }
       }
     }

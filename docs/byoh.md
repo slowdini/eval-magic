@@ -189,12 +189,15 @@ the findings stop reading as defects. Detected sources remain in `plugin-shadow.
 the assertion, and `run` prints an informational notice instead of a warning; `aggregate` then omits
 those findings from `validity_warnings`.
 
-eval-magic does not verify the assertion — not from distrust, but because it deliberately does not
-inspect shell templates for known flags, so a remedy you applied is invisible to it. The honesty
-rules are therefore yours to keep: the assertion must cover *every* reported source and *every*
-dispatch including resumed turns, and partial isolation does not qualify.
+eval-magic deliberately does not inspect shell templates for known flags — it verifies isolation from
+dispatch transcripts instead. When your `[transcript]` parser reports the session's skill/plugin
+roster, `ingest` checks the assertion against what each dispatch actually loaded and `aggregate`
+reports any contradiction, so a false declaration produces a louder warning rather than a quieter
+one. When it cannot (no named parser reports a roster today except Claude Code's stream-json), the
+assertion is taken on trust and the honesty rules are yours to keep: it must cover *every* reported
+source and *every* dispatch including resumed turns, and partial isolation does not qualify.
 `eval-magic docs isolation` has the per-harness recipes, what each one does and does not hide, and
-how to confirm from a dispatch's own transcript that the live source really did not load.
+how to read the verdict.
 
 All named preflights feed the same schema-v2 report policy and renderer; a descriptor does not need
 harness-specific reporting code. The artifact groups sources by logical skill and records roles,

@@ -635,6 +635,17 @@ pub(crate) enum Commands {
     /// invisible. `aggregate` lifts one validity warning per affected task from
     /// that file. No file is written for a harness that cannot detect a refusal,
     /// so its absence never reads as "nothing was refused".
+    ///
+    /// For harnesses whose captures report the session's discoverable skills and
+    /// plugins (Claude Code today), it also writes `session-surface.json` — one
+    /// entry per dispatch and per resumed turn — and uses it to resolve the
+    /// build-time shadow preflight's findings, writing `resolved_severity` back
+    /// into `plugin-shadow.json`. A finding refuted in every expected cell
+    /// becomes `isolated` and raises no validity warning; refuting requires every
+    /// cell to have reported, so a missing transcript leaves it unverified rather
+    /// than isolated. No file is written for a harness that cannot report a
+    /// surface, so its absence never reads as "nothing loaded". See
+    /// `eval-magic docs isolation`.
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///

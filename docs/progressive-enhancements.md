@@ -306,20 +306,46 @@ comparison when dispatches load that source, even when the staged copy uses a un
 validity warnings. The runner scans every matrix environment and the shared policy groups scanner
 facts by logical skill, records live/staged sources and affected cells, and assigns role-aware
 severity. Subject and asymmetric sibling collisions invalidate the comparison; symmetric sibling
-collisions warn. When the resolved descriptor declares `isolates_live_sources = true`, the scan,
-intrinsic severity, and artifact are retained, but the banner becomes an informational notice and
-`aggregate` omits the findings from validity warnings. Historical unversioned artifacts remain
-readable.
+collisions warn. Because the scan runs before dispatch it reports *risk*, so the banner states the
+consequence conditionally; the verdict is settled afterwards by the session-surface sub-capability
+below. When the resolved descriptor declares `isolates_live_sources = true`, the scan, intrinsic
+severity, and artifact are retained, but the banner becomes an informational notice and `aggregate`
+omits the findings from validity warnings. Historical unversioned artifacts remain readable.
+
+### Session surface (sub-capability of the transcript parser)
+
+*Why harness-specific:* only some CLIs announce what a session could discover. Claude Code's
+stream-json opens with a `system`/`init` event carrying `skills` and `plugins`; Codex announces a
+bare `thread_id` on `thread.started` and OpenCode's envelope carries no roster at all.
+
+*What it unlocks:* verified shadow findings. `record-runs` collects each dispatch's reported
+roster — per round, so resumed turns are covered — into `session-surface.json`, then resolves every
+finding to `resolved_severity` in `plugin-shadow.json`. A finding refuted in every expected cell
+becomes `isolated` and produces no validity warning; a confirmed one keeps its severity and names
+the cells; an unsettled one says why. Refuting requires every expected cell to have reported and
+none to have seen the source, so a missing transcript yields `unverified`, never a refutation. The
+intrinsic `severity` is never rewritten. Where the assertion and the evidence disagree, the evidence
+wins and the contradiction is reported.
+
+*Fallback:* no `session-surface.json` is written, every finding stays unverified, and
+`isolates_live_sources` remains the only way to record applied isolation. Absence of the file always
+means "cannot report", never "nothing loaded".
+
+*Descriptor fields:* none — derived from `[transcript] parser`. A declarative `[extract]` tier
+cannot supply it yet.
+
+*Capability:* `TranscriptParser::surfaces_session_surface`, true only for `claude-stream-json`.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
 environment is clean; the operator must check any harness-native global discovery sources.
 
 *Descriptor fields:* the `[shadow]` table — `preflight`, plus optional
-`isolates_live_sources` (false by default). The latter is an unverified operator assertion that
-every reported source is excluded from every initial and resumed eval-agent dispatch. A built-in
-overlay may set it without repeating the inherited preflight; a new harness must still resolve to
-a preflight. It must not be used for partial isolation, and eval-magic never infers it by parsing
-shell templates — the operator-facing recipes and verification procedure are
+`isolates_live_sources` (false by default). The latter records that every reported source is
+excluded from every initial and resumed eval-agent dispatch. It is checked against transcript
+evidence where the harness reports a session surface, and taken on trust where it does not. A
+built-in overlay may set it without repeating the inherited preflight; a new harness must still
+resolve to a preflight. It must not be used for partial isolation, and eval-magic never infers it by
+parsing shell templates — the operator-facing recipes and verification procedure are
 `eval-magic docs isolation`.
 
 *Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or

@@ -454,7 +454,11 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
         .assert()
         .success()
         .stderr(contains("Skill-shadow preflight"))
-        .stderr(contains("comparison invalid"))
+        // Pre-dispatch the banner states the stake conditionally. Codex
+        // transcripts carry no skill/plugin roster, so it also says the verdict
+        // cannot be settled from them rather than promising verification.
+        .stderr(contains("would invalidate the comparison if loaded"))
+        .stderr(contains("do not report the session's skill/plugin surface"))
         .stderr(contains("Move or rename"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
