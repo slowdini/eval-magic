@@ -6,11 +6,11 @@
 `src/lib.rs` and submodules such as `cli/`, `pipeline/`, `sandbox/`, `validation/`, and
 `workspace/`. JSON schemas are tracked in `schema/`, harness descriptors (plus embedded harness
 assets such as the OpenCode write-guard plugin template) in `harnesses/`, shared
-prompt profiles in `profiles/`, and docs in `docs/` — user-facing `byoh.md` ships embedded in the
-binary (the `eval-magic docs byoh` topic), the rest are internal development docs (the harness
-enhancement contract, per-harness notes); `docs/README.md` holds the placement policy. Integration
-tests are split by surface area under `tests/cli/` and `tests/run/`; unit tests usually live
-beside the module they exercise.
+prompt profiles in `profiles/`, and docs in `docs/` — user-facing `byoh.md` and `isolation.md` ship
+embedded in the binary (the `eval-magic docs byoh` and `eval-magic docs isolation` topics), the rest
+are internal development docs (the harness enhancement contract, per-harness notes);
+`docs/README.md` holds the placement policy. Integration tests are split by surface area under
+`tests/cli/` and `tests/run/`; unit tests usually live beside the module they exercise.
 
 ## Build, Test, and Development Commands
 

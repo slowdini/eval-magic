@@ -199,11 +199,13 @@ label = "{label}"
 ## scan), preflight = "codex-skills" (Codex repo/user/admin/plugin scan), and
 ## preflight = "opencode-skills" (OpenCode project/global .opencode/.claude/.agents scan).
 ## Reuse one only when the harness has compatible discovery semantics. Most harnesses leave
-## this table out. `isolates_live_sources = true` is an unverified operator assertion that
+## this table out. `isolates_live_sources = true` records isolation you have ALREADY applied:
 ## EVERY source the preflight reports is excluded from every initial/resumed eval-agent
 ## dispatch. Detection still writes plugin-shadow.json, but the findings become informational
-## provenance instead of validity_warnings. A built-in overlay may set only this field and
-## inherit its preflight; never set it for partial isolation.
+## provenance instead of validity_warnings. eval-magic cannot check this — it never reads your
+## command templates — so set it only after verifying, and never for partial isolation. The
+## per-harness recipes and the verification procedure are `eval-magic docs isolation`.
+## A built-in overlay may set only this field and inherit its preflight.
 # [shadow]
 # preflight = "claude-plugins"
 # isolates_live_sources = false

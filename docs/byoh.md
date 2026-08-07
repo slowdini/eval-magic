@@ -155,7 +155,7 @@ map as inline comments in its scaffolded template. The short map:
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
-| `[shadow]` | `preflight` (named capability); optional `isolates_live_sources` assertion | no shadow report — correct for harnesses that load nothing global |
+| `[shadow]` | `preflight` (named capability); optional `isolates_live_sources` — records isolation you applied (`eval-magic docs isolation`) | no shadow report — correct for harnesses that load nothing global |
 | `[guard]` | **built-ins only** — see below | `detect-stray-writes` audits after the fact |
 
 ### Named capabilities: real code for free
@@ -182,12 +182,19 @@ you get the full feature from configuration alone:
 - `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.
 - `shadow.preflight = "opencode-skills"` — the OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
 
-`shadow.isolates_live_sources = true` is not a capability and does not change the scan. It is an
-unverified operator assertion that every source the selected preflight can report is excluded from
-every initial and resumed eval-agent dispatch. Detected sources remain in `plugin-shadow.json`,
-which records the assertion, and `run` prints an informational notice instead of a warning;
-`aggregate` then omits those findings from `validity_warnings`. Do not set it for partial isolation.
-eval-magic deliberately does not inspect shell templates for known flags.
+`shadow.isolates_live_sources = true` is not a capability and does not change the scan. It is the
+sanctioned way to record isolation you have **already applied**: once every source the selected
+preflight can report is excluded from every initial and resumed eval-agent dispatch, declare it and
+the findings stop reading as defects. Detected sources remain in `plugin-shadow.json`, which records
+the assertion, and `run` prints an informational notice instead of a warning; `aggregate` then omits
+those findings from `validity_warnings`.
+
+eval-magic does not verify the assertion — not from distrust, but because it deliberately does not
+inspect shell templates for known flags, so a remedy you applied is invisible to it. The honesty
+rules are therefore yours to keep: the assertion must cover *every* reported source and *every*
+dispatch including resumed turns, and partial isolation does not qualify.
+`eval-magic docs isolation` has the per-harness recipes, what each one does and does not hide, and
+how to confirm from a dispatch's own transcript that the live source really did not load.
 
 All named preflights feed the same schema-v2 report policy and renderer; a descriptor does not need
 harness-specific reporting code. The artifact groups sources by logical skill and records roles,

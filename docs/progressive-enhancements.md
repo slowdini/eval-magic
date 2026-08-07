@@ -319,7 +319,8 @@ environment is clean; the operator must check any harness-native global discover
 every reported source is excluded from every initial and resumed eval-agent dispatch. A built-in
 overlay may set it without repeating the inherited preflight; a new harness must still resolve to
 a preflight. It must not be used for partial isolation, and eval-magic never infers it by parsing
-shell templates.
+shell templates — the operator-facing recipes and verification procedure are
+`eval-magic docs isolation`.
 
 *Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
 `opencode-skills`). It returns the harness-neutral `PluginShadowReport` from

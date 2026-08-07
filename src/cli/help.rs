@@ -73,4 +73,8 @@ EXAMPLES:
 
   # Inspect the resolved descriptor after layer merging (built-ins included)
   eval-magic harness show claude-code
+
+  # Preflight warned that an installed plugin shadows the staged skill? Per-harness
+  # isolation recipes, and how to verify a dispatch really didn't load the live copy:
+  eval-magic docs isolation
 ";

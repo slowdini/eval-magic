@@ -198,6 +198,7 @@ pub(crate) fn format_isolated_shadow_notice(report: &PluginShadowReport) -> Stri
             .to_string(),
         "  this assertion; it must cover every initial and resumed eval-agent dispatch."
             .to_string(),
+        "  How to confirm it holds: `eval-magic docs isolation`.".to_string(),
     ]
     .join("\n")
 }
@@ -214,6 +215,21 @@ fn source_label(source: &ShadowSource) -> String {
     }
 }
 
+/// Join distinct entries in first-seen order — two cached versions of one
+/// installed plugin yield separate sources sharing a label and a remediation, so
+/// joining verbatim says the same thing twice. Order-preserving rather than
+/// sorted: these strings land in `benchmark.json` and must match the order the
+/// banner prints its sources in.
+fn join_distinct(values: impl Iterator<Item = String>, separator: &str) -> String {
+    let mut distinct: Vec<String> = Vec::new();
+    for value in values {
+        if !distinct.contains(&value) {
+            distinct.push(value);
+        }
+    }
+    distinct.join(separator)
+}
+
 /// One `validity_warnings` entry per grouped logical skill.
 pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
     report
@@ -221,19 +237,21 @@ pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
         .iter()
         .map(|finding| {
             let severity = severity_label(finding.severity);
-            let sources = finding
-                .sources
-                .iter()
-                .filter(|source| source.origin == ShadowSourceOrigin::Live)
-                .map(source_label)
-                .collect::<Vec<_>>()
-                .join(", ");
-            let remediation = finding
-                .sources
-                .iter()
-                .filter_map(|source| source.remediation.as_deref())
-                .collect::<Vec<_>>()
-                .join(" ");
+            let sources = join_distinct(
+                finding
+                    .sources
+                    .iter()
+                    .filter(|source| source.origin == ShadowSourceOrigin::Live)
+                    .map(source_label),
+                ", ",
+            );
+            let remediation = join_distinct(
+                finding
+                    .sources
+                    .iter()
+                    .filter_map(|source| source.remediation.clone()),
+                " ",
+            );
             format!(
                 "{severity}: staged {} skill '{}' is also discoverable from {sources}. {remediation}",
                 role_label(finding.role),
@@ -311,6 +329,11 @@ pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
         }
     }
     lines.push("  See plugin-shadow.json for canonical paths and full provenance.".to_string());
+    lines.push(
+        "  Per-harness isolation recipes, and how to verify one worked: \
+         `eval-magic docs isolation`."
+            .to_string(),
+    );
     lines.join("\n")
 }
 
