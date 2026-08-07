@@ -246,6 +246,26 @@ impl TranscriptSection {
             None => Ok(Vec::new()),
         }
     }
+
+    /// Whether this section's parser reports the session's skill/plugin surface.
+    /// A declarative `[extract]` tier cannot supply it yet, so only a named parser
+    /// answers true.
+    pub(crate) fn surfaces_session_surface(&self) -> bool {
+        self.parser
+            .is_some_and(super::capabilities::TranscriptParser::surfaces_session_surface)
+    }
+
+    /// Parse the session's skill/plugin surface. A tier without the capability
+    /// returns `None` — no evidence, which never refutes a shadow finding.
+    pub(crate) fn parse_session_surface(
+        &self,
+        path: &std::path::Path,
+    ) -> std::io::Result<Option<super::SessionSurface>> {
+        match &self.parser {
+            Some(parser) => parser.parse_session_surface(path),
+            None => Ok(None),
+        }
+    }
 }
 
 fn unwired_error() -> std::io::Error {

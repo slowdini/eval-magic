@@ -31,7 +31,7 @@ use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
-use super::{PermissionDenial, TranscriptSummary};
+use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
@@ -259,6 +259,24 @@ pub trait HarnessAdapter {
         Ok(Vec::new())
     }
 
+    /// **Enhancement: transcript parser.** Whether this harness's transcript
+    /// reports the skills and plugins the session could actually discover.
+    /// `false` for harnesses whose captures carry no such roster — `ingest` then
+    /// writes no `session-surface.json` and shadow findings stay unverified,
+    /// leaving `[shadow] isolates_live_sources` as the operator's only way to
+    /// record that a dispatch was isolated.
+    fn surfaces_session_surface(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: transcript parser.** The skill/plugin surface one captured
+    /// events file reports. `Ok(None)` means the capture says nothing knowable;
+    /// only a `Some` with an empty roster can refute a live-source finding, so
+    /// the default is `None` rather than an empty surface.
+    fn parse_session_surface(&self, _path: &Path) -> io::Result<Option<SessionSurface>> {
+        Ok(None)
+    }
+
     // ── Enhancement: model flag (defaulted) ──────────────────────────────────
     // Fallback without it: `--agent-model` / `--judge-model` are recorded as
     // provenance only; dispatches run on the harness's default model.
@@ -350,9 +368,15 @@ pub trait HarnessAdapter {
     }
 
     /// **Enhancement: shadow preflight.** Format the shared runner banner for
-    /// a report.
+    /// a report. Whether the banner promises a verified verdict follows this
+    /// adapter's own
+    /// [`surfaces_session_surface`](Self::surfaces_session_surface), so a caller
+    /// cannot accidentally claim verification a harness can't deliver.
     fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
-        super::skill_shadow::format_shadow_banner(report)
+        super::skill_shadow::format_shadow_banner_with_verification(
+            report,
+            self.surfaces_session_surface(),
+        )
     }
 
     /// **Enhancement: shadow preflight.** Format shared aggregate validity
@@ -585,6 +609,41 @@ mod tests {
                 adapter.parse_permission_denials(&path).unwrap(),
                 Vec::new(),
                 "{harness:?} reported a denial from a denial-less transcript"
+            );
+        }
+    }
+
+    #[test]
+    fn only_claude_code_reports_a_session_surface_today() {
+        // Claude Code's stream-json opens with an `init` event listing the
+        // session's skills and loaded plugins. Codex reports only `thread_id` on
+        // `thread.started`, and OpenCode's envelope carries no roster at all, so
+        // neither can supply this evidence and their shadow findings stay
+        // unverified rather than being wrongly refuted.
+        assert!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_session_surface(),
+            "claude-code's init event carries the surface"
+        );
+        for harness in ["codex", "opencode"] {
+            assert!(
+                !adapter_for(Harness::resolve(harness).unwrap()).surfaces_session_surface(),
+                "{harness} transcripts carry no skill/plugin roster"
+            );
+        }
+    }
+
+    #[test]
+    fn a_surface_less_transcript_parses_to_none_for_every_harness() {
+        // No roster in the capture must read as "no evidence" (`None`), never as
+        // an empty surface — an empty surface would refute a live-source finding.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
+        for harness in Harness::known() {
+            assert_eq!(
+                adapter_for(harness).parse_session_surface(&path).unwrap(),
+                None,
+                "{harness:?} invented a surface from a roster-less transcript"
             );
         }
     }

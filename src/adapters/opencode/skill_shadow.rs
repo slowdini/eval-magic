@@ -634,7 +634,13 @@ mod tests {
             "banner names the .claude-root kill switch: {banner}"
         );
         assert!(banner.contains("cross-harness"), "{banner}");
-        assert!(banner.contains("comparison invalid"), "{banner}");
+        // Pre-dispatch the banner states the stake in the conditional, not a
+        // verdict: nothing has run, so nothing is invalid yet.
+        assert!(
+            banner.contains("would invalidate the comparison if loaded"),
+            "{banner}"
+        );
+        assert!(!banner.contains("[comparison invalid]"), "{banner}");
     }
 
     #[test]

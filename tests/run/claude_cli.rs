@@ -4,7 +4,7 @@
 use crate::helpers::*;
 use predicates::str::contains;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[test]
 fn claude_dispatch_guidance_uses_claude_p() {
@@ -291,6 +291,130 @@ fn declared_shadow_isolation_records_findings_as_informational_provenance() {
     assert_eq!(artifact["isolates_live_sources"], true);
     assert_eq!(artifact["findings"][0]["skill_name"], "mr-review");
     assert_eq!(artifact["findings"][0]["severity"], "comparison-invalid");
+}
+
+/// The preflight has not dispatched anything yet, so it must not convict the
+/// run. This is the surface that made issue #207 expensive: a correctly-isolated
+/// campaign was told its comparison was invalid before a single task ran.
+#[test]
+fn the_shadow_preflight_banner_does_not_assert_a_verdict_before_dispatch() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let config = tmp.path().join("config");
+    fs::create_dir_all(config.join("skills/mr-review")).unwrap();
+    fs::write(
+        config.join("skills/mr-review/SKILL.md"),
+        "---\nname: mr-review\ndescription: live copy\n---\n",
+    )
+    .unwrap();
+
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
+        .assert()
+        .success();
+
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    assert!(stderr.contains("Skill-shadow preflight"), "{stderr}");
+    assert!(
+        stderr.contains("would invalidate the comparison if loaded"),
+        "the stake is stated conditionally: {stderr}"
+    );
+    assert!(
+        !stderr.contains("[comparison invalid]"),
+        "no verdict before any dispatch ran: {stderr}"
+    );
+    assert!(
+        stderr.contains("`ingest` records what each dispatch actually loaded"),
+        "Claude Code can settle this from transcripts, and should say so: {stderr}"
+    );
+}
+
+/// End-to-end for issue #207: captures reporting an empty plugin list refute the
+/// finding, and the `comparison invalid` warning disappears from the benchmark.
+///
+/// The collision is plugin-sourced, mirroring the campaign that produced the
+/// ticket. That matters: a plugin skill is advertised as `<plugin>:<skill>`,
+/// which can never be confused with the staged copy, so the transcript is
+/// decisive. A *global skill* collision shares the staged runtime id and is
+/// correctly inconclusive instead — covered in the verification policy tests.
+#[test]
+fn ingest_refutes_a_shadow_finding_when_dispatches_report_an_empty_surface() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let config = tmp.path().join("config");
+    let install = config.join("plugins/cache/shadowplug__test");
+    fs::create_dir_all(install.join("skills/mr-review")).unwrap();
+    fs::write(
+        install.join("skills/mr-review/SKILL.md"),
+        "---\nname: mr-review\ndescription: live copy\n---\n",
+    )
+    .unwrap();
+    fs::write(
+        config.join("plugins/installed_plugins.json"),
+        format!(
+            "{{\"version\":2,\"plugins\":{{\"shadowplug@test\":[{{\"installPath\":{:?}}}]}}}}",
+            install.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    fs::write(
+        config.join("settings.json"),
+        "{\"enabledPlugins\":{\"shadowplug@test\":true}}",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .env("CLAUDE_CONFIG_DIR", &config)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
+        .assert()
+        .success();
+
+    let iteration = iteration_dir(&cwd);
+    let dispatch = read_json(&iteration.join("dispatch.json"));
+    // Every dispatch reports an init event whose rosters are empty: the live
+    // `mr-review` copy was not discoverable from any of them.
+    for task in dispatch["tasks"].as_array().unwrap() {
+        let outputs = PathBuf::from(task["outputs_dir"].as_str().unwrap());
+        fs::create_dir_all(&outputs).unwrap();
+        fs::write(
+            outputs.join("claude-events.jsonl"),
+            "{\"type\":\"system\",\"subtype\":\"hook_started\"}\n\
+             {\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\
+              \"plugins\":[],\"skills\":[]}\n\
+             {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\
+              \"result\":\"done\",\"duration_ms\":5,\"usage\":{\"input_tokens\":1,\
+              \"output_tokens\":1}}\n",
+        )
+        .unwrap();
+    }
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["record-runs", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "claude-code"])
+        .assert()
+        .success();
+
+    let surface = read_json(&iteration.join("session-surface.json"));
+    assert!(surface["tasks_with_evidence"].as_u64().unwrap() > 0);
+    assert_eq!(surface["tasks_without_evidence"], 0);
+
+    let artifact = read_json(&iteration.join("plugin-shadow.json"));
+    assert_eq!(artifact["findings"][0]["resolved_severity"], "isolated");
+    assert_eq!(
+        artifact["findings"][0]["severity"], "comparison-invalid",
+        "the intrinsic severity records the risk and is never rewritten"
+    );
+    assert_eq!(artifact["verification"]["refuted_findings"], 1);
+    assert_eq!(artifact["verification"]["confirmed_findings"], 0);
 }
 
 #[test]

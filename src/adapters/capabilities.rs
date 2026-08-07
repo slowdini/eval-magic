@@ -91,6 +91,29 @@ impl TranscriptParser {
             }
         }
     }
+
+    /// Whether this parser's event stream reports the session's discoverable
+    /// skills and loaded plugins. Only Claude Code's stream-json carries such a
+    /// roster (the `system`/`init` event); Codex announces a thread id and
+    /// OpenCode's envelope carries no roster, so neither can be read this way.
+    pub(crate) fn surfaces_session_surface(self) -> bool {
+        matches!(self, TranscriptParser::ClaudeStreamJson)
+    }
+
+    /// Parse the session's skill/plugin surface. `None` for parsers whose streams
+    /// carry no roster — see
+    /// [`surfaces_session_surface`](Self::surfaces_session_surface).
+    pub(crate) fn parse_session_surface(
+        self,
+        path: &Path,
+    ) -> io::Result<Option<super::SessionSurface>> {
+        match self {
+            TranscriptParser::ClaudeStreamJson => {
+                super::claude_code::stream_json::parse_claude_session_surface(path)
+            }
+            TranscriptParser::CodexItems | TranscriptParser::OpencodeEvents => Ok(None),
+        }
+    }
 }
 
 /// Staged-slug generators, for harnesses whose naming rules need

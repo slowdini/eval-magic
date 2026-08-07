@@ -17,6 +17,8 @@ pub(crate) mod guard_denials;
 pub mod io;
 pub(crate) mod permission_denials;
 pub mod record_runs;
+pub(crate) mod session_surface;
+pub(crate) mod shadow_verification;
 pub mod slots;
 
 pub use aggregate::{Benchmark, aggregate};

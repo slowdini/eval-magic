@@ -11,6 +11,10 @@ use super::*;
 pub(crate) struct PluginShadowArtifact {
     pub report: PluginShadowReport,
     pub isolates_live_sources: bool,
+    /// Run-level verification totals, written by `ingest` once transcripts exist.
+    /// Absent on an artifact `run` just wrote, and on a harness that reports no
+    /// session surface.
+    pub verification: Option<ReportVerification>,
     legacy_shadowed: Option<Vec<LegacyShadowSource>>,
 }
 
@@ -19,8 +23,15 @@ impl PluginShadowArtifact {
         Self {
             report,
             isolates_live_sources,
+            verification: None,
             legacy_shadowed: None,
         }
+    }
+
+    /// A legacy unversioned artifact carries no per-cell appearances, so there is
+    /// nothing to join evidence against — it can never be verified.
+    pub(crate) fn is_legacy(&self) -> bool {
+        self.legacy_shadowed.is_some()
     }
 
     pub(crate) fn validity_warnings(&self) -> Vec<String> {
@@ -38,6 +49,8 @@ struct PluginShadowArtifactRef<'a> {
     findings: &'a [ShadowFinding],
     #[serde(skip_serializing_if = "is_false")]
     isolates_live_sources: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    verification: &'a Option<ReportVerification>,
 }
 
 impl Serialize for PluginShadowArtifact {
@@ -50,6 +63,7 @@ impl Serialize for PluginShadowArtifact {
             config_dir: &self.report.config_dir,
             findings: &self.report.findings,
             isolates_live_sources: self.isolates_live_sources,
+            verification: &self.verification,
         }
         .serialize(serializer)
     }
@@ -62,6 +76,8 @@ struct PluginShadowArtifactV2 {
     findings: Vec<ShadowFinding>,
     #[serde(default)]
     isolates_live_sources: bool,
+    #[serde(default)]
+    verification: Option<ReportVerification>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -109,6 +125,7 @@ impl LegacyShadowSource {
                 root: ShadowRoot::unknown(path),
                 appearances: Vec::new(),
                 remediation: None,
+                verification: None,
             },
             Self::GlobalSkill { skill_name, path } => ShadowSource {
                 kind: ShadowSourceKind::Skill,
@@ -121,6 +138,7 @@ impl LegacyShadowSource {
                 root: ShadowRoot::unknown(path),
                 appearances: Vec::new(),
                 remediation: None,
+                verification: None,
             },
         }
     }
@@ -147,13 +165,15 @@ impl<'de> Deserialize<'de> for PluginShadowArtifact {
                 if artifact.schema_version != PLUGIN_SHADOW_SCHEMA_VERSION {
                     return Err(D::Error::custom("unsupported plugin-shadow schema version"));
                 }
-                Ok(Self::new(
-                    PluginShadowReport {
+                Ok(Self {
+                    report: PluginShadowReport {
                         config_dir: artifact.config_dir,
                         findings: artifact.findings,
                     },
-                    artifact.isolates_live_sources,
-                ))
+                    isolates_live_sources: artifact.isolates_live_sources,
+                    verification: artifact.verification,
+                    legacy_shadowed: None,
+                })
             }
             Some(version) => Err(D::Error::custom(format!(
                 "unsupported plugin-shadow schema version {version}"
@@ -172,6 +192,7 @@ impl<'de> Deserialize<'de> for PluginShadowArtifact {
                 Ok(Self {
                     report,
                     isolates_live_sources: legacy.isolates_live_sources,
+                    verification: None,
                     legacy_shadowed: Some(legacy.shadowed),
                 })
             }
@@ -185,22 +206,31 @@ fn is_false(value: &bool) -> bool {
 
 /// Informational build-time notice for a report whose resolved descriptor
 /// asserts that every detected live source is isolated from dispatches.
-pub(crate) fn format_isolated_shadow_notice(report: &PluginShadowReport) -> String {
+pub(crate) fn format_isolated_shadow_notice(report: &PluginShadowReport, verifies: bool) -> String {
     let count = report.findings.len();
     let finding = if count == 1 { "finding" } else { "findings" };
-    [
+    let mut lines = vec![
         String::new(),
         format!("ℹ Skill-shadow notice: preflight detected {count} live-source {finding}."),
         "  The resolved descriptor declares `[shadow] isolates_live_sources = true`, so"
             .to_string(),
         "  the findings remain in plugin-shadow.json as informational provenance and".to_string(),
-        "  will not become benchmark.json validity_warnings. eval-magic does not verify"
-            .to_string(),
-        "  this assertion; it must cover every initial and resumed eval-agent dispatch."
-            .to_string(),
-        "  How to confirm it holds: `eval-magic docs isolation`.".to_string(),
-    ]
-    .join("\n")
+        "  will not become benchmark.json validity_warnings.".to_string(),
+    ];
+    lines.push(if verifies {
+        // Saying "eval-magic does not verify this" would now be false for this
+        // harness: `ingest` checks the assertion against the transcripts.
+        "  `ingest` checks this assertion against what each dispatch reported, and".to_string()
+    } else {
+        "  eval-magic cannot verify this assertion for this harness; it must cover".to_string()
+    });
+    lines.push(if verifies {
+        "  `aggregate` reports any contradiction.".to_string()
+    } else {
+        "  every initial and resumed eval-agent dispatch.".to_string()
+    });
+    lines.push("  How to confirm it holds: `eval-magic docs isolation`.".to_string());
+    lines.join("\n")
 }
 
 fn source_label(source: &ShadowSource) -> String {
@@ -231,12 +261,20 @@ fn join_distinct(values: impl Iterator<Item = String>, separator: &str) -> Strin
 }
 
 /// One `validity_warnings` entry per grouped logical skill.
+///
+/// A finding whose evidence refuted every live source produces **nothing**: the
+/// dispatches demonstrably did not load it, so there is no threat to report.
+/// Everything else reports, and says which of the three it is — confirmed by
+/// transcripts, or detected but unverifiable — because "we saw it happen" and
+/// "we could not tell" call for different responses from the operator.
 pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
     report
         .findings
         .iter()
+        .filter(|finding| {
+            finding.resolved_severity != Some(verification::ShadowResolvedSeverity::Isolated)
+        })
         .map(|finding| {
-            let severity = severity_label(finding.severity);
             let sources = join_distinct(
                 finding
                     .sources
@@ -252,15 +290,53 @@ pub fn shadow_validity_warnings(report: &PluginShadowReport) -> Vec<String> {
                     .filter_map(|source| source.remediation.clone()),
                 " ",
             );
-            format!(
-                "{severity}: staged {} skill '{}' is also discoverable from {sources}. {remediation}",
-                role_label(finding.role),
-                finding.skill_name
-            )
-            .trim()
-            .to_string()
+            let role = role_label(finding.role);
+            let skill = &finding.skill_name;
+            let lead = match finding.resolved_severity {
+                Some(resolved) => {
+                    let severity = resolved_severity_label(resolved);
+                    match verification::finding_status(finding) {
+                        verification::VerificationStatus::Confirmed => {
+                            let cells = verification::confirmed_cells(finding).join(", ");
+                            let n = verification::confirming_dispatch_count(finding);
+                            let plural = if n == 1 { "" } else { "s" };
+                            format!(
+                                "{severity}: staged {role} skill '{skill}' was actually loaded \
+                                 from {sources} in {cells} (verified from {n} dispatch \
+                                 transcript{plural})."
+                            )
+                        }
+                        _ => unverified_lead(severity, role, skill, &sources, finding),
+                    }
+                }
+                None => format!(
+                    "{}: staged {role} skill '{skill}' is also discoverable from {sources}.",
+                    severity_label(finding.severity)
+                ),
+            };
+            format!("{lead} {remediation} See `eval-magic docs isolation`.")
+                .trim()
+                .to_string()
         })
         .collect()
+}
+
+/// The lead sentence for a finding evidence could not settle, naming why.
+fn unverified_lead(
+    severity: &str,
+    role: &str,
+    skill: &str,
+    sources: &str,
+    finding: &ShadowFinding,
+) -> String {
+    let reason = verification::inconclusive_reason(finding)
+        .unwrap_or_else(|| "no dispatch reported its skill/plugin surface".to_string());
+    format!(
+        "{severity} (unverified): staged {role} skill '{skill}' is discoverable from {sources}, \
+         and eval-magic could not verify whether dispatches loaded it — {reason}. Treat the \
+         comparison as affected until each dispatch isolates the source or a transcript shows it \
+         did not load."
+    )
 }
 
 fn legacy_shadow_validity_warnings(sources: &[LegacyShadowSource]) -> Vec<String> {
@@ -281,20 +357,35 @@ fn legacy_shadow_validity_warnings(sources: &[LegacyShadowSource]) -> Vec<String
 }
 
 /// Shared build-time banner. Empty when nothing is shadowed.
-pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
+///
+/// Nothing has dispatched yet, so this states a *risk*, not a verdict. Whether a
+/// dispatch actually loads one of these depends on its own config isolation,
+/// which eval-magic reads from the transcript during `ingest` rather than
+/// inferring from command templates. Printing "comparison invalid" here would
+/// convict a correctly-isolated run before it ran a single task (issue #207).
+///
+/// `verifies` reflects whether this harness's transcripts can settle it.
+pub fn format_shadow_banner_with_verification(
+    report: &PluginShadowReport,
+    verifies: bool,
+) -> String {
     if report.findings.is_empty() {
         return String::new();
     }
     let mut lines = vec![
         String::new(),
-        "⚠ Skill-shadow preflight found live copies of staged eval skills:".to_string(),
+        "⚠ Skill-shadow preflight: live copies of staged eval skills are installed in this"
+            .to_string(),
+        "  operator environment. Whether a dispatch loads them depends on that dispatch's own"
+            .to_string(),
+        "  config isolation. At risk unless every dispatch isolates these sources:".to_string(),
     ];
     for finding in &report.findings {
         lines.push(format!(
-            "  • [{}] {} ({})",
-            severity_label(finding.severity),
+            "  • [{}] {} — {}",
+            role_label(finding.role),
             finding.skill_name,
-            role_label(finding.role)
+            consequence(finding.severity)
         ));
         for source in finding
             .sources
@@ -329,6 +420,15 @@ pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
         }
     }
     lines.push("  See plugin-shadow.json for canonical paths and full provenance.".to_string());
+    lines.push(if verifies {
+        "  `ingest` records what each dispatch actually loaded and `aggregate` reports the \
+         verified verdict."
+            .to_string()
+    } else {
+        "  This harness's transcripts do not report the session's skill/plugin surface, so \
+         eval-magic cannot verify isolation."
+            .to_string()
+    });
     lines.push(
         "  Per-harness isolation recipes, and how to verify one worked: \
          `eval-magic docs isolation`."
@@ -337,10 +437,35 @@ pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
     lines.join("\n")
 }
 
+/// Banner for a caller with no harness context. Defaults to "cannot verify",
+/// the conservative direction: understating what eval-magic can settle is safe,
+/// promising a verdict it will never produce is not. Prefer
+/// [`format_shadow_banner_with_verification`] wherever the harness is known.
+pub fn format_shadow_banner(report: &PluginShadowReport) -> String {
+    format_shadow_banner_with_verification(report, false)
+}
+
+/// What the collision would cost if the live copy did load. Conditional mood on
+/// purpose — at banner time it has not happened yet.
+fn consequence(severity: ShadowSeverity) -> &'static str {
+    match severity {
+        ShadowSeverity::Warning => "would weaken the comparison if loaded",
+        ShadowSeverity::ComparisonInvalid => "would invalidate the comparison if loaded",
+    }
+}
+
 fn severity_label(severity: ShadowSeverity) -> &'static str {
     match severity {
         ShadowSeverity::Warning => "warning",
         ShadowSeverity::ComparisonInvalid => "comparison invalid",
+    }
+}
+
+fn resolved_severity_label(severity: verification::ShadowResolvedSeverity) -> &'static str {
+    match severity {
+        verification::ShadowResolvedSeverity::Isolated => "isolated",
+        verification::ShadowResolvedSeverity::Warning => "warning",
+        verification::ShadowResolvedSeverity::ComparisonInvalid => "comparison invalid",
     }
 }
 

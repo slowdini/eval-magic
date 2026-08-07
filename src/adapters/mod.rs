@@ -41,4 +41,4 @@ pub use skill_shadow::{
     ShadowResolution, ShadowRoot, ShadowRootScope, ShadowSeverity, ShadowSkillRole, ShadowSource,
     ShadowSourceKind, ShadowSourceOrigin, format_shadow_banner, shadow_validity_warnings,
 };
-pub use transcript::{PermissionDenial, TranscriptSummary};
+pub use transcript::{LoadedPlugin, PermissionDenial, SessionSurface, TranscriptSummary};

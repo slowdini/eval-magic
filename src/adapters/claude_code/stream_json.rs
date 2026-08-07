@@ -21,7 +21,7 @@ use serde_json::Value;
 use crate::core::ToolInvocation;
 
 use crate::adapters::transcript::{
-    PermissionDenial, TranscriptEvent, TranscriptSummary, read_jsonl,
+    LoadedPlugin, PermissionDenial, SessionSurface, TranscriptEvent, TranscriptSummary, read_jsonl,
 };
 
 use super::transcript::{
@@ -134,6 +134,71 @@ pub fn parse_claude_stream_json_full(path: &Path) -> io::Result<TranscriptSummar
         total_tokens,
         duration_ms,
         final_text,
+    })
+}
+
+/// The session's advertised skill/plugin surface, from the `system`/`init`
+/// event's `skills` and `plugins` arrays.
+///
+/// `Ok(None)` means the capture reports nothing knowable — no `init` event, or an
+/// `init` event from a CLI predating these fields. That is deliberately distinct
+/// from `Some` with empty vectors, which is the harness stating that nothing was
+/// loaded. Only the latter can refute a shadow finding.
+///
+/// Matches on `subtype == "init"` rather than `type == "system"` alone: a guarded
+/// dispatch opens with `hook_started`/`hook_response` system events, so the
+/// looser predicate reads the wrong record. The last matching record wins, which
+/// mirrors the declarative extractor's field-pick rule.
+pub fn parse_claude_session_surface(path: &Path) -> io::Result<Option<SessionSurface>> {
+    let values = read_jsonl::<Value>(path)?;
+    let Some(init) = values.iter().rev().find(|value| {
+        value.get("type").and_then(Value::as_str) == Some("system")
+            && value.get("subtype").and_then(Value::as_str) == Some("init")
+    }) else {
+        return Ok(None);
+    };
+    let skills = init.get("skills").and_then(Value::as_array);
+    let plugins = init.get("plugins").and_then(Value::as_array);
+    if skills.is_none() && plugins.is_none() {
+        return Ok(None);
+    }
+    Ok(Some(SessionSurface {
+        advertised_skills: skills
+            .map(|skills| {
+                skills
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        loaded_plugins: plugins
+            .map(|plugins| plugins.iter().filter_map(loaded_plugin).collect())
+            .unwrap_or_default(),
+    }))
+}
+
+/// One `init.plugins` entry. Objects carry `name`/`source`/`version`; a bare
+/// string is accepted as the name so a shape change degrades rather than drops
+/// the entry.
+fn loaded_plugin(value: &Value) -> Option<LoadedPlugin> {
+    if let Some(name) = value.as_str() {
+        return Some(LoadedPlugin {
+            name: name.to_string(),
+            source: None,
+            version: None,
+        });
+    }
+    Some(LoadedPlugin {
+        name: value.get("name").and_then(Value::as_str)?.to_string(),
+        source: value
+            .get("source")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        version: value
+            .get("version")
+            .and_then(Value::as_str)
+            .map(str::to_string),
     })
 }
 
@@ -456,5 +521,124 @@ mod tests {
             denials[0].reason.as_deref(),
             Some("eval guard: Write to /etc/passwd is outside the eval sandbox")
         );
+    }
+
+    /// A capture whose session loaded a plugin, shaped from an observed 2.1.220
+    /// dispatch: plugin entries are objects, and a plugin's skills are advertised
+    /// under `<plugin-name>:<skill>`.
+    fn init_event_with_a_loaded_plugin() -> Value {
+        json!({
+            "type": "system",
+            "subtype": "init",
+            "session_id": "session-1",
+            "plugins": [
+                {"name": "slow-powers", "path": "/cache/slowdini/slow-powers/0.5.2",
+                 "source": "slow-powers@slowdini", "version": "0.5.2"}
+            ],
+            "skills": ["mr-review", "slow-powers:hardening-plans", "staged-slug__subject"],
+        })
+    }
+
+    #[test]
+    fn session_surface_reports_loaded_plugins_and_namespaced_plugin_skills() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(&path, &[init_event_with_a_loaded_plugin()]);
+
+        let surface = super::parse_claude_session_surface(&path)
+            .unwrap()
+            .expect("an init event carrying plugins/skills is evidence");
+        assert_eq!(surface.loaded_plugins.len(), 1);
+        let plugin = &surface.loaded_plugins[0];
+        assert_eq!(plugin.name, "slow-powers");
+        // `source` is the enabledPlugins key an operator disables, so it has to
+        // survive verbatim for matching against ShadowSource::plugin.
+        assert_eq!(plugin.source.as_deref(), Some("slow-powers@slowdini"));
+        assert_eq!(plugin.version.as_deref(), Some("0.5.2"));
+        assert!(
+            surface
+                .advertised_skills
+                .contains(&"slow-powers:hardening-plans".to_string())
+        );
+    }
+
+    #[test]
+    fn session_surface_distinguishes_an_empty_plugin_list_from_a_missing_report() {
+        let dir = TempDir::new().unwrap();
+
+        // An isolated dispatch: the harness reported a surface, and it is empty.
+        // That is proof of absence, not absence of proof.
+        let isolated = dir.path().join("isolated.jsonl");
+        write_jsonl(
+            &isolated,
+            &[json!({"type": "system", "subtype": "init", "plugins": [], "skills": []})],
+        );
+        let surface = super::parse_claude_session_surface(&isolated)
+            .unwrap()
+            .expect("an explicit empty surface is still evidence");
+        assert!(surface.loaded_plugins.is_empty());
+        assert!(surface.advertised_skills.is_empty());
+
+        // A capture with no init event at all reports nothing knowable.
+        let silent = dir.path().join("silent.jsonl");
+        write_jsonl(
+            &silent,
+            &[
+                json!({"type": "result", "subtype": "success", "is_error": false,
+                     "result": "Done", "duration_ms": 1, "usage": usage()}),
+            ],
+        );
+        assert_eq!(super::parse_claude_session_surface(&silent).unwrap(), None);
+    }
+
+    #[test]
+    fn session_surface_ignores_a_system_event_that_is_not_init() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        // Observed ordering: a guarded dispatch opens with `hook_started`, so
+        // matching on `type == "system"` alone reads the wrong record.
+        write_jsonl(
+            &path,
+            &[
+                json!({"type": "system", "subtype": "hook_started", "session_id": "session-1"}),
+                json!({"type": "system", "subtype": "hook_response", "session_id": "session-1"}),
+                init_event_with_a_loaded_plugin(),
+            ],
+        );
+
+        let surface = super::parse_claude_session_surface(&path).unwrap().unwrap();
+        assert_eq!(surface.loaded_plugins.len(), 1);
+    }
+
+    #[test]
+    fn session_surface_tolerates_a_plugin_entry_without_a_version_or_source() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        write_jsonl(
+            &path,
+            &[json!({"type": "system", "subtype": "init",
+                     "plugins": [{"name": "context7", "path": "/cache/context7/unknown"}],
+                     "skills": ["context7:query"]})],
+        );
+
+        let surface = super::parse_claude_session_surface(&path).unwrap().unwrap();
+        assert_eq!(surface.loaded_plugins.len(), 1);
+        assert_eq!(surface.loaded_plugins[0].name, "context7");
+        assert_eq!(surface.loaded_plugins[0].source, None);
+        assert_eq!(surface.loaded_plugins[0].version, None);
+    }
+
+    #[test]
+    fn session_surface_is_none_for_an_init_event_carrying_neither_field() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        // An older CLI that emits `init` without the roster fields tells us
+        // nothing about what loaded — that must not read as an empty surface.
+        write_jsonl(
+            &path,
+            &[json!({"type": "system", "subtype": "init", "session_id": "session-1"})],
+        );
+
+        assert_eq!(super::parse_claude_session_surface(&path).unwrap(), None);
     }
 }
