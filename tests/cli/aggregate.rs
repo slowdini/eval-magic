@@ -5,6 +5,7 @@ use assert_cmd::Command;
 use std::fs;
 use std::process::Command as StdCommand;
 
+mod assertions;
 mod shadow;
 mod shadow_verification;
 

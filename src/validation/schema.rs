@@ -168,6 +168,8 @@ mod tests {
     use super::{SchemaName, validate_against_schema};
     use serde_json::{Value, json};
 
+    mod benchmark;
+
     /// The canonical valid run-record the cases below mutate.
     fn valid_run_record() -> Value {
         json!({

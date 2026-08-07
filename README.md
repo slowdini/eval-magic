@@ -262,6 +262,14 @@ Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading 
     "with_skill":    { "pass_rate": { "mean": 0.83, "n": 6 }, "duration_ms": { "mean": 45000, "n": 6 }, "total_tokens": { "mean": 3800, "n": 6 } },
     "without_skill": { "pass_rate": { "mean": 0.33, "n": 6 }, "duration_ms": { "mean": 32000, "n": 6 }, "total_tokens": { "mean": 2100, "n": 6 } }
   },
+  "assertions": {
+    "case-a": {
+      "behavior-under-test": {
+        "with_skill": { "passed": 5, "n": 6 },
+        "without_skill": { "passed": 1, "n": 6 }
+      }
+    }
+  },
   "diff_scope": {
     "with_skill": [{ "eval_id": "case-a", "files_touched": 2, "lines_added": 14, "lines_removed": 3, "hunks": 3 }],
     "without_skill": [{ "eval_id": "case-a", "files_touched": 1, "lines_added": 5, "lines_removed": 0, "hunks": 1 }]
@@ -271,6 +279,8 @@ Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading 
 ```
 
 A skill that adds 13 seconds and 1700 tokens but improves pass rate by 50 points is probably worth it; one that doubles tokens for a 2-point gain is probably not. For Mode B the keys are `old_skill` / `new_skill`, and a positive `delta.pass_rate` means the revision is an improvement.
+
+`assertions` shows where that headline came from, keyed by eval id, assertion id, and condition. Each cell reports `passed` and `n` across the observed assertion results, including `llm_judge`, `command_check`, `transcript_check`, and `diff_scope` results. Framework meta-results such as `__skill_invoked` stay out of this effectiveness report because invocation has dedicated fields in `run_summary`. A missing result is not reported as a measured zero: the cell's `n` counts only observations, and a condition with none is omitted. Historical benchmarks may omit `assertions`; rerun `eval-magic aggregate` against a retained iteration to generate it.
 
 Token totals are harness-normalized workload metrics, not provider billing totals. For example,
 Codex uses non-cached input plus output; reasoning tokens are already part of output. Duration is
@@ -318,7 +328,7 @@ Per skill being evaluated, the runner produces this generated workspace tree (au
     conditions.json                      # what each condition is, which SKILL.md it loaded
     stray-writes.json                    # post-hoc write/read audit
     guard-denials.json                   # guard blocks joined to dispatch task keys
-    benchmark.json                       # aggregate stats
+    benchmark.json                       # aggregate stats + per-assertion counts
     skill-snapshot.md                    # frozen SKILL.md at run time
 ```
 
@@ -346,7 +356,7 @@ eval-magic promote-baseline \
 ```
 <skill>/evals/baseline/
   BASELINE.md                          # provenance: mode, iteration, models, timestamp
-  benchmark.json                       # the committed delta
+  benchmark.json                       # the committed delta + assertion counts
   grading/<eval-id>__<condition>.json  # judge rationales per run
   NOTES.md                             # optional, hand-authored — forward-looking observations
 ```
