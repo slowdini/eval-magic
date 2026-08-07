@@ -125,6 +125,19 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
 }
 
 #[test]
+fn finalize_and_aggregate_help_document_per_assertion_rollups() {
+    for command in ["finalize", "aggregate"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("per-assertion"))
+            .stdout(contains("passed"))
+            .stdout(contains("observed assertion results"));
+    }
+}
+
+#[test]
 fn aggregate_help_documents_declared_shadow_isolation() {
     skill_eval()
         .args(["aggregate", "--help"])

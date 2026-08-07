@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/benchmark.schema.json",
   "title": "Benchmark",
-  "description": "Output of evals:aggregate. The before/after comparison across the two conditions, with per-condition stats, the a-b delta, and validity warnings. Lives at <workspace>/iteration-N/benchmark.json.",
+  "description": "Output of evals:aggregate. The before/after comparison across the two conditions, with per-condition stats, per-assertion pass counts, the a-b delta, and validity warnings. Lives at <workspace>/iteration-N/benchmark.json.",
   "type": "object",
   "required": [
     "generated",
@@ -37,6 +37,17 @@
       "description": "Per-condition rollup, keyed by condition name.",
       "additionalProperties": { "$ref": "#/definitions/conditionSummary" }
     },
+    "assertions": {
+      "type": "object",
+      "description": "Observed substantive assertion pass counts, keyed by eval id, assertion id, then condition. Omitted from historical benchmarks generated before this rollup was available.",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/definitions/assertionCount" }
+        }
+      }
+    },
     "diff_scope": {
       "type": "object",
       "description": "Raw final-environment diff metrics per condition, ordered by eval id and then run index. Omitted for iterations created before diff-scope capture.",
@@ -58,6 +69,19 @@
     }
   },
   "definitions": {
+    "assertionCount": {
+      "type": "object",
+      "required": ["passed", "n"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "n": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of observed assertion results in this cell."
+        }
+      }
+    },
     "stats": {
       "type": "object",
       "required": ["mean", "stddev", "n"],

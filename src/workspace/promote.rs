@@ -287,7 +287,8 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Promoted from commit | {head} |"),
         String::new(),
         "Files:".to_string(),
-        "- `benchmark.json` — aggregate pass-rate / duration / token deltas.".to_string(),
+        "- `benchmark.json` — aggregate pass-rate / duration / token deltas plus per-assertion pass counts."
+            .to_string(),
         "- `grading/<eval-id>__<condition>.json` (multi-run cells add an `__r<k>` suffix per run) — assertion results and judge rationales."
             .to_string(),
         "- `NOTES.md` — operator-authored observations for this baseline (never overwritten by promote)."
@@ -394,6 +395,7 @@ mod tests {
         assert!(provenance.contains("2026-05-27T00:00:00.000Z"));
         assert!(provenance.contains("Agent model | unspecified"));
         assert!(provenance.contains("Judge model | unspecified"));
+        assert!(provenance.contains("per-assertion pass counts"));
     }
 
     #[test]

@@ -75,6 +75,17 @@ fn docs_guide_prints_operating_guide() {
         .stdout(contains("exits nonzero"));
 }
 
+#[test]
+fn docs_guide_explains_per_assertion_benchmark_counts() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("\"assertions\""))
+        .stdout(contains("observed assertion results"))
+        .stdout(contains("meta-results"));
+}
+
 /// `docs byoh` prints the embedded bring-your-own-harness authoring guide.
 #[test]
 fn docs_byoh_prints_embedded_authoring_guide() {

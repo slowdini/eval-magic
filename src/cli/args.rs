@@ -615,7 +615,8 @@ pub(crate) enum Commands {
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts,
     /// runner-owned `command_check` results, and deterministic `diff_scope`
     /// files/lines thresholds into normal `grading.json` files, then writes
-    /// `benchmark.json` with raw per-run metrics from `diff-scope.json`. If a live
+    /// `benchmark.json` with a per-assertion `passed`/`n` rollup from observed
+    /// assertion results and raw per-run metrics from `diff-scope.json`. If a live
     /// guard remains armed — the cwd guard, or any per-task Cli env guard — prints
     /// a `teardown` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
@@ -691,7 +692,8 @@ pub(crate) enum Commands {
     /// Aggregate before/after benchmark deltas.
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
-    /// pass-rate / duration / token stats per condition, the delta,
+    /// pass-rate / duration / token stats per condition, a per-assertion
+    /// `passed`/`n` rollup from observed assertion results, the delta,
     /// `validity_warnings` (including incomplete timing sample counts, one per
     /// task in `guard-denials.json`, and one per task in
     /// `permission-denials.json` whose refusals were not the guard's own, plus
