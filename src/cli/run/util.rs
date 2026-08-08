@@ -468,6 +468,7 @@ mod tests {
                 prompt: "p".into(),
                 expected_output: "o".into(),
                 files: None,
+                files_root: None,
                 assertions,
                 skill_should_trigger: None,
                 runs: None,

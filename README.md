@@ -102,6 +102,27 @@ and the stopped run remains gradeable. Scripted tasks run through
 `eval-magic dispatch-task` as directed by the generated runbook so every round
 resumes the same native harness session.
 
+Fixture entries normally resolve from `<skill>/evals/` and land at the same relative path in the
+task repository. Set `files_root` when a project fixture lives under an organizing directory but
+should appear at the task root:
+
+```json
+{
+  "id": "todo-app-change",
+  "prompt": "Add persistence to the React app.",
+  "expected_output": "Uses the existing app structure and verifies the change",
+  "files_root": "fixtures/todo-app",
+  "files": ["package.json", "src/App.tsx"]
+}
+```
+
+Here `src/App.tsx` is read from `<skill>/evals/fixtures/todo-app/src/App.tsx` and
+staged at the task root as `src/App.tsx`; dispatch prompts and run records also use that
+task-relative path.
+`files_root` must be a non-empty relative path without a `..` component. The paths in `files`
+retain their existing task-root safety rules, including the reserved root `.git`. Omitting
+`files_root` preserves the default source and destination behavior.
+
 You can also script it with `--id`, `--prompt`, and `--expected-output`. If
 `evals/evals.json` already exists, `init` refuses to overwrite it unless you pass
 `--force`.

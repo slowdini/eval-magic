@@ -510,6 +510,7 @@ mod tests {
                 prompt: format!("p-{id}"),
                 expected_output: format!("o-{id}"),
                 files: None,
+                files_root: None,
                 assertions: None,
                 skill_should_trigger: None,
                 runs: None,

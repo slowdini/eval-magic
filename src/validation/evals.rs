@@ -218,6 +218,18 @@ mod tests {
     }
 
     #[test]
+    fn rejects_an_empty_files_root() {
+        let mut config = base();
+        config["evals"][0]["files_root"] = json!("");
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("files_root"), "error was: {error}");
+    }
+
+    #[test]
     fn rejects_a_non_boolean_skill_should_trigger() {
         let mut config = base();
         config["evals"][0]["skill_should_trigger"] = json!("false");
