@@ -11,7 +11,7 @@
 //! sibling [`super::staging`] / [`super::dispatch`] modules, and the small
 //! stateless helpers in [`super::util`].
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use crate::adapters::{CliDispatchContext, adapter_for};
@@ -19,6 +19,7 @@ use crate::cli::command_target_args;
 use crate::core::{Eval, Mode, RunContext};
 
 use super::RunError;
+use super::statistics::format_minimum_attainable_fisher_p_value;
 use super::util::mode_str;
 
 mod build;
@@ -181,6 +182,19 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
             r.selected_evals.len(),
             r.total_evals,
             ids.join(", ")
+        );
+    }
+    let effective_run_counts: BTreeSet<u32> = r
+        .selected_evals
+        .iter()
+        .map(|eval| eval.runs.unwrap_or(opts.runs))
+        .collect();
+    for runs in effective_run_counts {
+        let run_label = if runs == 1 { "run" } else { "runs" };
+        println!(
+            "  statistical floor: 2 conditions × {runs} {run_label}; minimum attainable \
+             two-sided Fisher exact p on a binary endpoint is {}",
+            format_minimum_attainable_fisher_p_value(runs)
         );
     }
     if opts.no_stage {

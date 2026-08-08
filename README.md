@@ -167,6 +167,12 @@ run (prepare one private env per dispatch + RUNBOOK.md)
 teardown
 ```
 
+Before staging, `run` prints the minimum attainable two-sided Fisher exact p-value for each
+distinct effective run count (the `--runs` value after per-eval overrides). The bound assumes a
+binary endpoint and perfect separation between the two conditions; for example, three runs per
+condition cannot produce a p-value below `0.10`. This is a sample-size planning aid only:
+eval-magic does not calculate observed p-values or apply a significance threshold.
+
 1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one private task env per `(eval, condition, run)` (`iteration-N/env-<group>-<condition>/`, with `-run-<k>` for repeated runs), copies visible fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. After staging and guard installation, it initializes each task as a clean Git repository, runs shadow preflight from that repository boundary, and snapshots the final-environment baseline. Then it prints a handoff, not a dispatch.
 2. **Follow the runbook.** From `iteration-N/`, read `RUNBOOK.md` end to end. An agent session can drive it (*Read and follow `RUNBOOK.md`*) or you can follow it by hand — the commands are identical. It carries the exact per-task dispatch recipe plus the `ingest` / `finalize` commands, each already threaded with `--harness`.
 3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. One-shot tasks use the harness CLI recipe. Tasks with `turns` use `eval-magic dispatch-task`, which starts the harness CLI once, resumes the same native session for each delivered follow-up, and writes a schema-validated `conversation.json`; raw events remain under `outputs/turn-N/`. The agent may edit existing source or create files anywhere inside `eval_root`; it must not write outside that task environment. Each prompt names `<eval_root>/tmp/` as the conventional task-local scratch directory instead of a host temp directory. The directory is not pre-created or reserved, and files left there remain ordinary workspace content that counts toward `diff_scope`. Conditions and repeated runs are physically isolated.
