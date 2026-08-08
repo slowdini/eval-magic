@@ -4,3 +4,8 @@
 # eval-magic run artifacts (workspace root + per-env outputs) — churn every run
 .eval-magic/
 .eval-magic-outputs/
+
+# Cline memory bank — user- and session-specific agent context, same tier as
+# Claude Code's auto memory / Codex memories. The mechanism (.clinerules/) is
+# committed; the bank contents are local-only and must not be committed.
+/memory-bank/
