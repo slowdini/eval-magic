@@ -490,6 +490,11 @@ pub struct RunArgs {
     /// unchanged (artifacts sit directly in the condition directory). The
     /// benchmark's per-condition `mean`/`stddev`/`n` then reflect all runs. A
     /// per-eval `runs` field in evals.json overrides this flag for that eval.
+    /// Before staging, the run summary prints the minimum attainable two-sided
+    /// Fisher exact p-value for each effective run count, assuming a binary
+    /// endpoint and perfect separation between the two conditions. This is a
+    /// sample-size bound only: eval-magic does not calculate observed p-values or
+    /// apply a significance threshold.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     pub runs: u32,
     /// Agent-under-test model for CLI dispatches; otherwise recorded as

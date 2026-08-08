@@ -26,3 +26,4 @@ mod opencode;
 mod opencode_permission_denials;
 mod runbook;
 mod staging;
+mod statistical_floor;
