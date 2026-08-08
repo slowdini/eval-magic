@@ -110,6 +110,58 @@ fn fixtures_copied_into_env_like_a_real_repo() {
 }
 
 #[test]
+fn files_root_mounts_nested_fixture_sources_at_task_root() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [
+        { "id": "e1", "prompt": "review", "expected_output": "a review",
+          "files_root": "fixtures/todo-app",
+          "files": ["package.json", "src/hooks/useDebounce.ts"] } ] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    let source_root = skill_dir.join("mr-review/evals/fixtures/todo-app");
+    fs::create_dir_all(source_root.join("src/hooks")).unwrap();
+    fs::write(source_root.join("package.json"), "{}").unwrap();
+    fs::write(
+        source_root.join("src/hooks/useDebounce.ts"),
+        "export function useDebounce() {}",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    for cond in ["with_skill", "without_skill"] {
+        let env = cli_env_dir(&cwd, "g1", cond);
+        assert_eq!(read_str(&env.join("package.json")), "{}");
+        assert_eq!(
+            read_str(&env.join("src/hooks/useDebounce.ts")),
+            "export function useDebounce() {}"
+        );
+        assert!(!env.join("fixtures").exists());
+    }
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let task = dispatch["tasks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|task| task["condition"] == "with_skill")
+        .unwrap();
+    assert_eq!(
+        task["fixtures"],
+        json!(["package.json", "src/hooks/useDebounce.ts"])
+    );
+    let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+    assert!(prompt.contains("- package.json"));
+    assert!(prompt.contains("- src/hooks/useDebounce.ts"));
+    assert!(!prompt.contains("fixtures/todo-app"));
+}
+
+#[test]
 fn dispatch_tasks_grouped_by_condition() {
     let tmp = tempfile::TempDir::new().unwrap();
     // Two evals so the interleaved-vs-grouped distinction is observable.

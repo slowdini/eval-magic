@@ -47,7 +47,12 @@
         "files": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Fixture file paths relative to the skill's evals/ directory. Copied into the task repository before dispatch. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
+          "description": "Fixture destination paths relative to the task repository. Sources use the same paths beneath the skill's evals/ directory, or beneath files_root when set. Copied before dispatch. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
+        },
+        "files_root": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Optional source directory relative to the skill's evals/ directory. When set, files are resolved beneath this directory but retain their declared paths in the task repository. Must be relative and may not contain a parent-directory component."
         },
         "runs": {
           "type": "integer",

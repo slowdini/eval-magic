@@ -94,6 +94,10 @@ pub struct Eval {
     pub expected_output: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
+    /// Optional source base under `<skill>/evals/`. Fixture destinations remain
+    /// the task-relative paths declared in [`Self::files`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub files_root: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub assertions: Option<Vec<Assertion>>,
     /// Whether the skill-under-test is expected to fire on this eval. Defaults to
@@ -432,6 +436,7 @@ mod tests {
             prompt: "p".into(),
             expected_output: "o".into(),
             files: None,
+            files_root: None,
             assertions: None,
             skill_should_trigger: None,
             runs: None,
@@ -440,6 +445,7 @@ mod tests {
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
+        assert!(out.get("files_root").is_none());
         assert!(out.get("assertions").is_none());
         assert!(out.get("skill_should_trigger").is_none());
         assert!(out.get("runs").is_none());
@@ -453,6 +459,7 @@ mod tests {
             prompt: "p".into(),
             expected_output: "o".into(),
             files: None,
+            files_root: None,
             assertions: None,
             skill_should_trigger: None,
             runs: None,

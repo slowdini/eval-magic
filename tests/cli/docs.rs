@@ -86,6 +86,17 @@ fn docs_guide_explains_per_assertion_benchmark_counts() {
         .stdout(contains("meta-results"));
 }
 
+#[test]
+fn docs_guide_explains_fixture_source_roots() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("files_root"))
+        .stdout(contains("evals/fixtures/todo-app/src/App.tsx"))
+        .stdout(contains("task root as `src/App.tsx`"));
+}
+
 /// `docs byoh` prints the embedded bring-your-own-harness authoring guide.
 #[test]
 fn docs_byoh_prints_embedded_authoring_guide() {

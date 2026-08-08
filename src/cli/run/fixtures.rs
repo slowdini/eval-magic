@@ -62,19 +62,41 @@ fn validate_fixture_rel(f: &str) -> Result<(), RunError> {
     Ok(())
 }
 
+/// Reject a fixture source root that is absolute or escapes `<skill>/evals/`.
+/// Unlike a fixture destination, this path never lands in the task repository,
+/// so a leading `.git` component is not runner-owned metadata.
+fn validate_files_root_rel(root: &str) -> Result<(), RunError> {
+    let path = Path::new(root);
+    let escapes = path.is_absolute()
+        || path
+            .components()
+            .any(|component| matches!(component, std::path::Component::ParentDir));
+    if escapes {
+        return Err(RunError::msg(format!(
+            "files_root must be relative and stay within the skill's evals directory: {root}"
+        )));
+    }
+    Ok(())
+}
+
 /// Resolve an eval's declared fixtures to `(env-relative dest, source path)` pairs,
 /// validating each path stays within the env and that the source exists — without
 /// copying anything. [`super::grouping`] consumes these pairs to detect cross-eval
 /// clobbers before any env is built, and [`copy_fixtures`] reuses them, so fixture
 /// path resolution lives in exactly one place.
 pub fn fixture_pairs(ev: &Eval, skill_dir: &Path) -> Result<Vec<(String, String)>, RunError> {
+    let mut source_root = skill_dir.join("evals");
+    if let Some(root) = ev.files_root.as_deref() {
+        validate_files_root_rel(root)?;
+        source_root = source_root.join(root);
+    }
     let Some(files) = ev.files.as_ref().filter(|f| !f.is_empty()) else {
         return Ok(Vec::new());
     };
     let mut pairs = Vec::with_capacity(files.len());
     for f in files {
         validate_fixture_rel(f)?;
-        let src = skill_dir.join("evals").join(f);
+        let src = source_root.join(f);
         if !src.exists() {
             return Err(RunError::msg(format!(
                 "fixture not found: {}",
@@ -150,6 +172,7 @@ mod tests {
             prompt: "p".to_string(),
             expected_output: "o".to_string(),
             files: Some(files.iter().map(|f| (*f).to_string()).collect()),
+            files_root: None,
             assertions: None,
             skill_should_trigger: None,
             runs: None,
@@ -217,6 +240,43 @@ mod tests {
                 .to_string()
                 .contains("fixture not found")
         );
+    }
+
+    #[test]
+    fn fixture_pairs_rejects_files_root_escapes_even_when_sources_exist() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        let evals = skill_dir.join("evals");
+        fs::create_dir_all(&evals).unwrap();
+
+        let outside = skill_dir.join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "secret").unwrap();
+
+        for root in [
+            "../outside".to_string(),
+            outside.to_string_lossy().into_owned(),
+        ] {
+            let mut ev = eval_with_files("e1", &["secret.txt"]);
+            ev.files_root = Some(root);
+            let error = fixture_pairs(&ev, &skill_dir).unwrap_err().to_string();
+            assert!(error.contains("files_root"), "error was: {error}");
+            assert!(error.contains("relative"), "error was: {error}");
+        }
+    }
+
+    #[test]
+    fn fixture_pairs_validates_files_root_without_declared_files() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals")).unwrap();
+        let mut ev = eval_with_files("e1", &[]);
+        ev.files_root = Some("../outside".to_string());
+
+        let error = fixture_pairs(&ev, &skill_dir).unwrap_err().to_string();
+
+        assert!(error.contains("files_root"), "error was: {error}");
+        assert!(error.contains("relative"), "error was: {error}");
     }
 
     #[test]
