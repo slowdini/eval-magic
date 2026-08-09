@@ -1,11 +1,11 @@
 //! Shared guard-hook plumbing.
 //!
-//! The harness-specific verdict shaping lives with each harness's guard module
-//! (`crate::adapters::<harness>::guard`): the CLI handler reads the hook
-//! payload from stdin and the marker path from argv, and the harness guard
-//! calls [`parse_tool_call`] + `decide` to evaluate it. Both layers fail open —
-//! a malformed payload or unreadable marker yields "allow", so the guard can
-//! never brick a session.
+//! Descriptor-defined verdict shaping is rendered by the generic engine in
+//! `crate::adapters::guard`: the CLI handler reads the hook payload from stdin
+//! and the marker path from argv, and the engine calls `parse_tool_call` plus
+//! the shared arbiter to evaluate it. Both layers fail open — a malformed
+//! payload or unreadable marker yields "allow", so the guard can never brick a
+//! session.
 
 use std::path::{Path, PathBuf};
 
