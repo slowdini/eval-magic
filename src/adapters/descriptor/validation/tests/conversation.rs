@@ -20,6 +20,25 @@ fn accepts_conversation_resume_with_ordered_messages_and_session_id() {
 }
 
 #[test]
+fn named_conversation_parser_accepts_an_auxiliary_surface_extract() {
+    let src = format!(
+        "{TOOLED}\n\
+         [transcript]\n\
+         events_filename = \"demo-events.jsonl\"\n\
+         parser = \"claude-stream-json\"\n\n\
+         [transcript.extract.session_surface]\n\
+         skills_field = \"skills\"\n\n\
+         [dispatch]\n\
+         exec_template = \"demo <eval-root> <outputs_dir>\"\n\n\
+         [conversation]\n\
+         resume_exec_template = \"demo resume --cd <eval-root> {{session_arg}} \
+         {{prompt_arg}} > <outputs_dir>/demo-events.jsonl\"\n"
+    );
+
+    load_descriptor(&src, "test.toml").expect("the named parser supplies conversation fields");
+}
+
+#[test]
 fn rejects_conversation_resume_without_required_placeholders() {
     let base = format!(
         "{TOOLED}\n\

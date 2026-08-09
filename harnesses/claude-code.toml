@@ -34,7 +34,18 @@ item = "\n- {name}: {description}"
 [transcript]
 events_filename = "claude-events.jsonl"
 parser = "claude-stream-json"
+permission_denials_parser = "claude-stream-json"
 surfaces_skill_invocation = true
+
+# The summary parser still owns Claude's cross-event tool/result stitching,
+# while the init roster is a flat declarative pick shared with BYOH harnesses.
+[transcript.extract.session_surface]
+where = { type = "system", subtype = "init" }
+skills_field = "skills"
+plugins_field = "plugins"
+plugin_name_field = "name"
+plugin_id_field = "source"
+plugin_version_field = "version"
 
 [model]
 flag = "--model"

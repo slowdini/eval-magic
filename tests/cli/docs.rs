@@ -139,6 +139,19 @@ fn docs_byoh_prints_embedded_authoring_guide() {
         .stdout(contains("Upstreaming your descriptor"));
 }
 
+#[test]
+fn docs_byoh_explains_composable_transcript_sub_capabilities() {
+    skill_eval()
+        .args(["docs", "byoh"])
+        .assert()
+        .success()
+        .stdout(contains("permission_denials_parser"))
+        .stdout(contains("[transcript.extract.session_surface]"))
+        .stdout(contains("plugin_version_field"))
+        .stdout(contains("explicitly empty arrays"))
+        .stdout(contains("parser-only descriptors"));
+}
+
 /// `docs isolation` prints the embedded live-source isolation guide. One anchor
 /// per harness, so a section cannot quietly vanish and leave the topic claiming
 /// coverage it no longer has.

@@ -13,7 +13,7 @@ descriptor references:
 | File | What's in it |
 |------|--------------|
 | `harnesses/claude-code.toml` | the descriptor — every declarative value + capability references |
-| `stream_json.rs` | `-p --output-format stream-json` transcript parsing (`claude-stream-json`) |
+| `stream_json.rs` | `claude-stream-json` summary/denial reader + surface compatibility reference |
 | `transcript.rs` | JSONL record shapes + shared tool-call extractors |
 | `plugin_shadow.rs` | plugin-shadow detection + isolation banner (`claude-plugins`) |
 
@@ -92,6 +92,11 @@ Anthropic Messages objects (tool-call extraction matches `tool_result` blocks ba
 duration, and token usage — there are no per-line timestamps. `system`, `rate_limit_event`, and
 other non-message events are skipped. The transcript exposes Skill-tool invocations, so the
 `__skill_invoked` meta-check is deterministic here.
+
+The built-in descriptor uses the named parser for this cross-event summary, selects its denial
+reader explicitly, and maps the session roster through the generic
+`[transcript.extract.session_surface]` block. A differential test keeps that mapping aligned with
+the named parser's retained compatibility implementation.
 
 The session-opening `{"type":"system","subtype":"init"}` event reports what the dispatch actually
 loaded, which is what `eval-magic docs isolation` steers operators to for verifying isolation.

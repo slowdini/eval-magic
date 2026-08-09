@@ -1,7 +1,8 @@
 //! Bring-your-own-harness end to end: a project-local descriptor file alone
 //! carries a complete run — build, dispatch simulation, ingest with the
 //! stray-writes audit, and llm_judge grading — plus the `--harness-file`
-//! session default and zero-code transcript ingest via a named capability.
+//! session default and zero-code transcript ingest via named or declarative
+//! capabilities.
 
 use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
@@ -9,6 +10,8 @@ use predicates::str::contains;
 use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
+
+mod extract;
 
 /// A minimal BYOH descriptor: label + exec template, nothing else.
 const COOL_DESCRIPTOR: &str = r#"label = "cool-custom-harness"
@@ -368,115 +371,5 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
         let invocations = record["tool_invocations"].as_array().unwrap();
         assert_eq!(invocations.len(), 1, "{record}");
         assert_eq!(invocations[0]["name"], "command_execution");
-    }
-}
-
-/// Criterion: a [transcript.extract] block over an event stream no built-in
-/// parser understands still yields full transcript ingest — invocations in
-/// run.json plus token/duration backfill into timing.json — with zero code.
-#[test]
-fn extract_block_gives_zero_code_transcript_ingest_for_a_novel_stream() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    write_project_descriptor(
-        &cwd,
-        r#"label = "cool-custom-harness"
-
-[tools]
-write = ["file_write"]
-shell = ["shell"]
-
-[transcript]
-events_filename = "cool-events.jsonl"
-
-[transcript.extract.tools]
-where = { kind = "tool.call" }
-name_field = "tool"
-args_omit = ["kind", "tool", "output", "at"]
-result_coalesce = ["output"]
-
-[transcript.extract.final_text]
-where = { kind = "message" }
-field = "text"
-
-[transcript.extract.tokens]
-where = { kind = "usage" }
-sum = ["in", "out"]
-
-[transcript.extract.duration]
-timestamp_spread = "at"
-
-[dispatch]
-exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
-"#,
-    );
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "cool-custom-harness",
-        ])
-        .assert()
-        .success()
-        .stderr(contains("declares no transcript parser").not());
-
-    // Simulate dispatches that emit the harness's own flat stream.
-    for task in dispatch_tasks(&cwd) {
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Done.\n").unwrap();
-        fs::write(
-            outputs.join("cool-events.jsonl"),
-            concat!(
-                r#"{"kind":"tool.call","tool":"shell","cmd":"cat notes.md","output":"notes","at":"2026-07-16T09:00:00Z"}"#,
-                "\n",
-                r#"{"kind":"message","text":"First reply","at":"2026-07-16T09:00:05Z"}"#,
-                "\n",
-                r#"{"kind":"usage","in":120,"out":30,"at":"2026-07-16T09:00:09Z"}"#,
-                "\n",
-                r#"{"kind":"message","text":"Done.","at":"2026-07-16T09:00:10Z"}"#,
-                "\n",
-            ),
-        )
-        .unwrap();
-    }
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["ingest", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "cool-custom-harness",
-            "--iteration",
-            "1",
-        ])
-        .assert()
-        .success()
-        .stderr(contains("no transcript parser").not());
-
-    for task in dispatch_tasks(&cwd) {
-        let record = read_json(&resolve(&cwd, task["run_record_path"].as_str().unwrap()));
-        let invocations = record["tool_invocations"].as_array().unwrap();
-        assert_eq!(invocations.len(), 1, "{record}");
-        assert_eq!(invocations[0]["name"], "shell");
-        assert_eq!(
-            invocations[0]["args"],
-            serde_json::json!({"cmd": "cat notes.md"})
-        );
-        assert_eq!(invocations[0]["result"], "notes");
-
-        let timing = read_json(&resolve(&cwd, task["timing_path"].as_str().unwrap()));
-        assert_eq!(timing["total_tokens"], 150, "{timing}");
-        assert_eq!(timing["duration_ms"], 10_000, "{timing}");
     }
 }

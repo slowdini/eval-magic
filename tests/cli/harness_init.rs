@@ -188,6 +188,9 @@ fn harness_init_template_prompts_for_verified_values() {
         "cool-cli-notes.md",
         "claude-stream-json",
         "codex-items",
+        "permission_denials_parser",
+        "[transcript.extract.session_surface]",
+        "plugin_version_field",
         "[guard]",
         "harness lint",
     ] {

@@ -12,7 +12,7 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 
 | File | What's in it |
 |------|--------------|
-| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug, `opencode-events` parser, and `opencode-skills` shadow-preflight references |
+| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug, `opencode-events` summary/denial, and `opencode-skills` shadow-preflight references |
 | `harnesses/opencode-guard-plugin.js` | the embedded write-guard project plugin staged by the `opencode-plugin` guard engine (`{exe}`/`{marker}` substituted; byte-pinned in `src/adapters/guard.rs`) |
 | `mod.rs` | slug sanitization/truncation (the `opencode` slug capability) |
 | `transcript.rs` | `opencode run --format json` event-stream parsing (the `opencode-events` transcript capability) |
@@ -117,8 +117,9 @@ milliseconds — the same fail-open-per-call posture as the other engines.
 
 OpenCode has no dedicated refusal channel: a tool call the harness refuses to run is recorded as
 an ordinary `tool_use` event whose `part.state.status` is `"error"` and whose `state.error` carries
-the refusal explanation. The `opencode-events` parser tells a refusal from an ordinary tool error by
-the *content* of that string, which OpenCode itself authors at the permission layer — before the
+the refusal explanation. The explicitly selected
+`permission_denials_parser = "opencode-events"` reader tells a refusal from an ordinary tool error
+by the *content* of that string, which OpenCode itself authors at the permission layer — before the
 tool body runs — so matching it is not guessing from arbitrary result text:
 
 - An **explicit deny rule** (the operator `permission` config matching the call) throws
@@ -144,7 +145,7 @@ match those OpenCode-authored prefixes and are therefore not classified as permi
 A note on tool *visibility*: when an operator rule denies a tool with pattern `"*"` and action
 `"deny"`, OpenCode removes that tool from the offered toolset entirely — the agent has no `bash`
 to call and emits no event, so there is nothing to record. Pattern-specific denies (which keep the
-tool visible so a matching call throws `PermissionDeniedError`) are what the parser captures; a
+tool visible so a matching call throws `PermissionDeniedError`) are what the reader captures; a
 globally-denied tool is simply absent from the transcript.
 
 These shapes were verified against `opencode v1.18.10` on 2026-07-30 by capturing

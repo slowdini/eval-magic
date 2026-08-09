@@ -18,6 +18,7 @@ mod guard;
 mod guard_denials;
 mod harness;
 mod harness_init;
+mod harness_transcript;
 mod init;
 mod package;
 mod permission_denials;

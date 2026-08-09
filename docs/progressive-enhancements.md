@@ -73,11 +73,11 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
   `src/adapters/descriptor_adapter.rs` — the one generic `DescriptorAdapter` implementing the
   trait from a descriptor.
 - `src/adapters/capabilities.rs` — the **named capabilities**: closed enums a descriptor references
-  by kebab-case name for everything that is real code (transcript parsers, slug generation,
-  shadow preflight). The write guard needs no named capability: it is pure `[guard]` data
-  rendered by the one generic engine in `src/adapters/guard.rs`.
-- `src/adapters/<harness>/` — only the code behind those capabilities: transcript parsers,
-  harness-native shadow scans, the OpenCode slug sanitizer.
+  by kebab-case name for everything that is real code (transcript summary/denial readers, slug
+  generation, shadow preflight). The write guard needs no named capability: it is pure `[guard]`
+  data rendered by the one generic engine in `src/adapters/guard.rs`.
+- `src/adapters/<harness>/` — only the code behind those capabilities: transcript summary/denial
+  readers, harness-native shadow scans, the OpenCode slug sanitizer.
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
   (`src/cli/run/util.rs`) — the `run` preflight: it resolves the guard tri-state (auto-arm when
   the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
@@ -143,25 +143,27 @@ event — a deterministic `__skill_invoked` meta-check.
 
 **Sub-capability: permission-denied tool results.** A refused tool call can be reported in the
 event stream or a paired harness capture while the overall dispatch still exits 0. On its own that
-is easy to miss: the run grades normally and may degrade to static reasoning. A parser that can
-distinguish a refusal from an ordinary tool error makes `ingest` write
+is easy to miss: the run grades normally and may degrade to static reasoning. A named denial reader
+that can distinguish a refusal from an ordinary tool error makes `ingest` write
 `permission-denials.json` and `aggregate` warn once per affected task. *Why harness-specific:*
 refusals are not a shared shape — Claude Code reports them in the terminal `result` event's
 structured `permission_denials`, Codex reports pre-execution router rejections and `PreToolUse`
 hook blocks in the stderr capture beside its JSONL, and OpenCode records a refusal as an ordinary
 `tool_use` event with `part.state.status:"error"` whose `state.error` is the string OpenCode itself
 authors at its permission layer (a fixed `PermissionDeniedError`/`PermissionRejectedError` prefix,
-or the shared `eval guard: ` reason for a guard block). Each parser recognizes only its harness's
-own refusal strings; ordinary failed tool calls — including ambiguous DNS and OS-process failures,
-and OpenCode tool-body errors like `oldString not found` — remain unclassified rather than creating
-false positives. *Fallback:* no report and no warning — a run that degraded to static reasoning is
-only visible in the raw captures, which `run` preflight states once naming that fallback.
-*Capability:* carried by `transcript.parser`, not a separate descriptor field —
-`claude-stream-json`, `codex-items`, and `opencode-events` surface denials
-(`TranscriptParser::surfaces_permission_denials`, pinned across harnesses in
-`src/adapters/harness.rs`). The eval write guard denies through the same permission mechanism, so
-its blocks land in the report as well; they are attributed by the `eval guard: ` reason prefix and
-excluded from the warning so one denial is not reported twice.
+or the shared `eval guard: ` reason for a guard block). Each denial reader recognizes only its
+harness's own refusal strings; ordinary failed tool calls — including ambiguous DNS and OS-process
+failures, and OpenCode tool-body errors like `oldString not found` — remain unclassified rather
+than creating false positives. *Fallback:* no report and no warning — a run that degraded to static
+reasoning is only visible in the raw captures, which `run` preflight states once naming that
+fallback.
+*Capability:* `transcript.permission_denials_parser` names the reader independently of the primary
+summary tier. It may accompany a named `parser` or declarative `[transcript.extract]` summary;
+`claude-stream-json`, `codex-items`, and `opencode-events` surface denials. For compatibility, a
+descriptor with only `transcript.parser` still uses that parser's bundled denial support. The eval
+write guard denies through the same permission mechanism, so its blocks land in the report as well;
+they are attributed by the `eval guard: ` reason prefix and excluded from the warning so one denial
+is not reported twice.
 
 *Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
 `command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
@@ -169,16 +171,17 @@ unrecorded, records are assembled from `outputs/final-message.md` or by hand, an
 uses the LLM-judge fallback.
 
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
-ingest pipeline never calls a parser), exactly one of `parser`/`extract` (validation rejects both
-or neither), and `surfaces_skill_invocation`. The `extract` sub-table is the declarative tier:
-equality `where` filters, final and ordered assistant-text picks, a session-id pick, flat
-tool-item mapping, token sum/subtract reduction, and duration rule, documented with a worked
-example in [byoh.md](byoh.md).
+ingest pipeline never reads a transcript), one primary summary reader, and
+`surfaces_skill_invocation`. The primary reader is either `parser` or the summary outputs under
+`extract`; validation rejects both, neither, and a surface-only extract. The `extract` sub-table is
+the declarative tier: equality `where` filters, final and ordered assistant-text picks, a session-id
+pick, flat tool-item mapping, token sum/subtract reduction, duration rule, and the auxiliary
+session-surface mapping documented with a worked example in [byoh.md](byoh.md).
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
 (`claude-stream-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
-captures reuses one with zero code. The built-in Codex descriptor uses `codex-items` because its
-permission signal must correlate the JSONL path with the sibling stderr capture; the extract
-engine retains a differential test for the JSONL-only summary behavior.
+captures reuses one with zero code. The built-in Codex descriptor uses declarative summary
+extraction plus `permission_denials_parser = "codex-items"`; the named parser remains available as
+a compatibility/reference implementation and is covered by a differential summary test.
 The tool names the transcript yields must be declared in `[tools]` (see the write-guard
 enhancement) or `detect-stray-writes` audits nothing for the harness — validation rejects the
 combination.
@@ -312,7 +315,7 @@ below. When the resolved descriptor declares `isolates_live_sources = true`, the
 severity, and artifact are retained, but the banner becomes an informational notice and `aggregate`
 omits the findings from validity warnings. Historical unversioned artifacts remain readable.
 
-### Session surface (sub-capability of the transcript parser)
+### Session surface (sub-capability of transcript ingest)
 
 *Why harness-specific:* only some CLIs announce what a session could discover. Claude Code's
 stream-json opens with a `system`/`init` event carrying `skills` and `plugins`; Codex announces a
@@ -331,10 +334,19 @@ wins and the contradiction is reported.
 `isolates_live_sources` remains the only way to record applied isolation. Absence of the file always
 means "cannot report", never "nothing loaded".
 
-*Descriptor fields:* none — derived from `[transcript] parser`. A declarative `[extract]` tier
-cannot supply it yet.
+*Descriptor fields:* `[transcript.extract.session_surface]` selects records with an optional
+string-equality `where` filter, then reads `skills_field` and/or `plugins_field`. Plugin objects map
+through required `plugin_name_field` and optional `plugin_id_field` / `plugin_version_field` dotted
+paths; bare plugin strings remain valid names. The last matching record that supplies at least one
+configured array wins. Explicitly empty arrays are positive evidence of an empty roster, while no
+usable matching record means the harness could not report. The mapping is auxiliary and therefore
+must accompany either `transcript.parser` or declarative summary outputs. When explicitly declared
+it is authoritative, even if a named parser also has legacy surface support.
 
-*Capability:* `TranscriptParser::surfaces_session_surface`, true only for `claude-stream-json`.
+*Capability:* session-surface extraction is generic descriptor data. Existing parser-only
+descriptors retain named-parser fallback for compatibility; the built-in Claude descriptor now
+uses the declarative mapping. This is additive descriptor schema surface, so it does not change the
+version or shape of `session-surface.json`.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
 environment is clean; the operator must check any harness-native global discovery sources.
