@@ -125,8 +125,9 @@ a same-named skill is discoverable in *both* arms, so the control arm is not tru
 `plugin_shadow.rs` detects this in every comparison environment. The shared shadow policy records
 one finding per logical skill in schema-v2 `plugin-shadow.json`, including every affected cell,
 canonical/discovery paths, source-specific remediation, and the runtime identifier the agent sees.
-Claude plugin skills use their namespaced `<plugin>:<skill>` runtime ID, while direct global and
-staged skills retain the logical name; direct duplicates record user-before-project precedence.
+Claude plugin skills use their namespaced `<plugin>:<skill>` runtime ID, direct live skills retain
+the logical name, and staged subjects use their staging-directory slug. Direct live duplicates
+record user-before-project precedence; a staged subject with its distinct slug remains selected.
 The shared banner and `benchmark.json` `validity_warnings` consume the same report. The runner can
 detect but never unload a live plugin. The remediation options (also printed inline in the banner):
 
