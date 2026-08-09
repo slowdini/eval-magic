@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/harness-descriptor.schema.json",
   "title": "Harness Descriptor",
-  "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript parsers, slug generation, shadow preflight). The write guard is pure data (the [guard] block) rendered by one generic engine. Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage, guard template contracts) are enforced by the Rust loader on top of this schema.",
+  "description": "The data half of a harness adapter: every declarative value a harness exposes, plus references to named code capabilities (transcript summary/denial readers, slug generation, shadow preflight). The write guard is pure data (the [guard] block) rendered by one generic engine. Authored as TOML (harnesses/*.toml), validated after transcoding to JSON. Cross-field invariants (transcript composition, guard/banner lockstep, slug/naming-rule agreement, vocabulary coverage, guard template contracts) are enforced by the Rust loader on top of this schema.",
   "type": "object",
   "required": ["label"],
   "additionalProperties": false,
@@ -86,15 +86,36 @@
       "type": "object",
       "required": ["events_filename"],
       "additionalProperties": false,
-      "description": "Transcript ingest: the events file the CLI dispatch captures, read by exactly one of `parser` (a named code capability, for streams that need stitching) or `extract` (the declarative tier for flat event streams). The exactly-one rule is a Rust loader invariant.",
+      "description": "Transcript ingest: the events file the CLI dispatch captures, one primary summary reader, and optional composable denial/session-surface readers. The primary summary is either `parser` (a named code capability for streams that need stitching) or summary outputs under `extract` (the declarative tier for flat event streams). A parser may coexist with an extract containing only `session_surface`; `permission_denials_parser` may accompany either tier. These composition rules are Rust loader invariants.",
       "properties": {
         "events_filename": { "type": "string", "minLength": 1 },
         "parser": { "enum": ["claude-stream-json", "codex-items", "opencode-events"] },
+        "permission_denials_parser": {
+          "enum": ["claude-stream-json", "codex-items", "opencode-events"],
+          "description": "Optional named reader for permission-denial evidence. It composes with either primary transcript tier; when absent, a named parser retains its historical bundled denial capability."
+        },
         "extract": {
           "type": "object",
           "additionalProperties": false,
-          "description": "Declarative extractor for flat event streams: an equality filter (`where`), final/ordered assistant text picks, a native session-id pick, a flat tool-item mapping, a token reduction, and a duration rule. Streams needing keyed cross-event joins or content coercion are named `parser` capabilities instead. Declare at least one sub-table. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
+          "description": "Declarative extraction by normalized output: an auxiliary session-surface roster, equality-filtered final/ordered assistant text picks, a native session-id pick, a flat tool-item mapping, a token reduction, and a duration rule. Streams needing keyed cross-event joins or content coercion for their summary are named `parser` capabilities instead. Declare at least one sub-table. A surface-only extract requires a named primary parser. Dotted paths descend nested objects only (keys containing literal dots are unaddressable).",
           "properties": {
+            "session_surface": {
+              "type": "object",
+              "additionalProperties": false,
+              "description": "Session skill/plugin roster from the last matching record that reports at least one configured array. Explicitly empty arrays are evidence of an empty roster; no usable matching record means unavailable. Auxiliary: it may accompany a named primary transcript parser but cannot stand alone.",
+              "properties": {
+                "where": {
+                  "type": "object",
+                  "additionalProperties": { "type": "string" },
+                  "description": "Dotted-path-to-expected-string equality filter; omitted matches every record."
+                },
+                "skills_field": { "type": "string", "minLength": 1, "description": "Dotted path to the skill-id array; at least one of skills_field/plugins_field is required." },
+                "plugins_field": { "type": "string", "minLength": 1, "description": "Dotted path to the plugin array. Entries may be bare name strings or objects; object entries require plugin_name_field." },
+                "plugin_name_field": { "type": "string", "minLength": 1, "description": "Dotted path within each plugin object to its namespace/name; required with plugins_field." },
+                "plugin_id_field": { "type": "string", "minLength": 1, "description": "Optional dotted path within each plugin object to its source/runtime identifier." },
+                "plugin_version_field": { "type": "string", "minLength": 1, "description": "Optional dotted path within each plugin object to its version." }
+              }
+            },
             "tools": {
               "type": "object",
               "required": ["name_field"],

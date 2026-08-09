@@ -4,7 +4,7 @@
 //! adapter exposes (label, dirs, capability booleans, phrases, templates,
 //! banner prose, the write-guard data block) plus references to *named
 //! capabilities* — the code-backed features in [`super::capabilities`]
-//! (transcript parsers, slug generation, shadow preflight).
+//! (transcript summary/denial readers, slug generation, shadow preflight).
 //!
 //! Loading is schema-gated: the TOML transcodes to JSON and must satisfy the
 //! bundled `schema/harness-descriptor.schema.json`, then the cross-field
@@ -17,15 +17,14 @@ use std::collections::BTreeMap;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
-use crate::core::ToolInvocation;
 use crate::validation::{SchemaName, ValidationError, validate_against_schema};
 
-use super::capabilities::{ShadowPreflight, SlugCapability, TranscriptParser};
-use super::extract::ExtractSpec;
+use super::capabilities::{ShadowPreflight, SlugCapability};
 use super::harness::TokenUsageAggregation;
-use super::transcript::TranscriptSummary;
 
 pub mod layers;
+pub use transcript_section::TranscriptSection;
+mod transcript_section;
 mod validation;
 
 /// The three built-in harness descriptors, embedded like the schemas: a
@@ -179,100 +178,6 @@ pub struct SkillsBlockSection {
     pub item: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub footer: String,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TranscriptSection {
-    pub events_filename: String,
-    /// Named code parser — for streams that need stitching (keyed joins,
-    /// content coercion). Exactly one of `parser`/`extract` is declared.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parser: Option<TranscriptParser>,
-    /// Declarative extractor for flat event streams.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extract: Option<ExtractSpec>,
-    #[serde(default = "default_true", skip_serializing_if = "is_true")]
-    pub surfaces_skill_invocation: bool,
-    /// Tool name of the deterministic skill-invocation event the
-    /// `__skill_invoked` meta-check matches (default `"Skill"` — Claude
-    /// Code's Skill tool).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_tool: Option<String>,
-    /// Argument of the skill-invocation tool that carries the staged slug
-    /// (default `"skill"`).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub skill_arg: Option<String>,
-}
-
-impl TranscriptSection {
-    /// Parse the events file into ordered tool invocations, through whichever
-    /// tier the descriptor declares.
-    pub(crate) fn parse(&self, path: &std::path::Path) -> std::io::Result<Vec<ToolInvocation>> {
-        match (&self.parser, &self.extract) {
-            (Some(parser), _) => parser.parse(path),
-            (None, Some(extract)) => super::extract::parse(extract, path),
-            // Validation guarantees one tier is declared; fail like a
-            // parser-less harness if a section slips through unchecked.
-            (None, None) => Err(unwired_error()),
-        }
-    }
-
-    /// Parse the events file into a full [`TranscriptSummary`].
-    pub(crate) fn parse_full(&self, path: &std::path::Path) -> std::io::Result<TranscriptSummary> {
-        match (&self.parser, &self.extract) {
-            (Some(parser), _) => parser.parse_full(path),
-            (None, Some(extract)) => super::extract::parse_full(extract, path),
-            (None, None) => Err(unwired_error()),
-        }
-    }
-
-    /// Whether the declared tier can identify refused tool calls. Only named
-    /// parsers can: the declarative `extract` tier describes tool calls, not the
-    /// harness's permission model.
-    pub(crate) fn surfaces_permission_denials(&self) -> bool {
-        self.parser
-            .is_some_and(super::capabilities::TranscriptParser::surfaces_permission_denials)
-    }
-
-    /// Parse refused tool calls associated with the events path. Unlike
-    /// [`parse`](Self::parse), a tier without the capability returns an empty
-    /// vec rather than an error — no detection is a supported fallback.
-    pub(crate) fn parse_permission_denials(
-        &self,
-        path: &std::path::Path,
-    ) -> std::io::Result<Vec<super::PermissionDenial>> {
-        match &self.parser {
-            Some(parser) => parser.parse_permission_denials(path),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    /// Whether this section's parser reports the session's skill/plugin surface.
-    /// A declarative `[extract]` tier cannot supply it yet, so only a named parser
-    /// answers true.
-    pub(crate) fn surfaces_session_surface(&self) -> bool {
-        self.parser
-            .is_some_and(super::capabilities::TranscriptParser::surfaces_session_surface)
-    }
-
-    /// Parse the session's skill/plugin surface. A tier without the capability
-    /// returns `None` — no evidence, which never refutes a shadow finding.
-    pub(crate) fn parse_session_surface(
-        &self,
-        path: &std::path::Path,
-    ) -> std::io::Result<Option<super::SessionSurface>> {
-        match &self.parser {
-            Some(parser) => parser.parse_session_surface(path),
-            None => Ok(None),
-        }
-    }
-}
-
-fn unwired_error() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "[transcript] declares neither a parser nor an extract block",
-    )
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -572,8 +477,12 @@ pub(crate) fn stage_name_error(
 }
 
 #[cfg(test)]
+mod transcript_composition_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::capabilities::TranscriptParser;
 
     fn load(toml_src: &str) -> Result<HarnessDescriptor, DescriptorError> {
         load_descriptor(toml_src, "test.toml")
@@ -624,6 +533,11 @@ shell = ["command_execution"]
 
 [transcript]
 events_filename = "demo-events.jsonl"
+permission_denials_parser = "codex-items"
+
+[transcript.extract.session_surface]
+where = { type = "system", subtype = "init" }
+skills_field = "skills"
 
 [transcript.extract.tools]
 where = { type = "item.completed" }
@@ -652,12 +566,23 @@ timestamp_spread = "timestamp"
         let transcript = d.transcript.as_ref().expect("transcript section loads");
         assert!(transcript.parser.is_none());
         assert!(transcript.extract.is_some());
+        assert_eq!(
+            transcript.permission_denials_parser,
+            Some(TranscriptParser::CodexItems)
+        );
 
         // `harness show` re-serializes resolved descriptors to TOML; the
         // extract tier must survive the round trip.
         let shown = toml::to_string(&d).expect("descriptor re-serializes");
         let reloaded = load(&shown).unwrap();
         let extract = reloaded.transcript.unwrap().extract.unwrap();
+        assert_eq!(
+            extract
+                .session_surface
+                .as_ref()
+                .and_then(|surface| surface.skills_field.as_deref()),
+            Some("skills")
+        );
         let tokens = extract.tokens.unwrap();
         assert_eq!(
             tokens.sum,

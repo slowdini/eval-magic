@@ -147,21 +147,21 @@ pub fn parse_claude_stream_json_full(path: &Path) -> io::Result<TranscriptSummar
 ///
 /// Matches on `subtype == "init"` rather than `type == "system"` alone: a guarded
 /// dispatch opens with `hook_started`/`hook_response` system events, so the
-/// looser predicate reads the wrong record. The last matching record wins, which
-/// mirrors the declarative extractor's field-pick rule.
+/// looser predicate reads the wrong record. The last matching record that
+/// positively reports at least one roster array wins, which means a later
+/// roster-less init event cannot erase earlier evidence.
 pub fn parse_claude_session_surface(path: &Path) -> io::Result<Option<SessionSurface>> {
     let values = read_jsonl::<Value>(path)?;
     let Some(init) = values.iter().rev().find(|value| {
         value.get("type").and_then(Value::as_str) == Some("system")
             && value.get("subtype").and_then(Value::as_str) == Some("init")
+            && (value.get("skills").and_then(Value::as_array).is_some()
+                || value.get("plugins").and_then(Value::as_array).is_some())
     }) else {
         return Ok(None);
     };
     let skills = init.get("skills").and_then(Value::as_array);
     let plugins = init.get("plugins").and_then(Value::as_array);
-    if skills.is_none() && plugins.is_none() {
-        return Ok(None);
-    }
     Ok(Some(SessionSurface {
         advertised_skills: skills
             .map(|skills| {

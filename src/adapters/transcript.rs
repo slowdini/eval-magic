@@ -1,6 +1,6 @@
 //! Harness-neutral transcript types.
 //!
-//! Every harness's transcript parser reduces its native events file to a
+//! Every harness's primary transcript reader reduces its native events file to a
 //! [`TranscriptSummary`]; the pipeline consumes only this shape, never a
 //! harness's raw record types.
 

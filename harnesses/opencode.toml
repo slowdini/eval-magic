@@ -49,6 +49,7 @@ read = ["read", "glob", "grep"]
 [transcript]
 events_filename = "opencode-events.jsonl"
 parser = "opencode-events"
+permission_denials_parser = "opencode-events"
 surfaces_skill_invocation = true
 skill_tool = "skill"
 skill_arg = "name"
