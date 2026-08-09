@@ -87,14 +87,9 @@ pub(super) fn run(
                 && shadowed_names.contains(&ctx.skill_name)
                 && let Some(slug) = condition_slug
             {
-                let runtime_id = if adapter.advertises_staged_slug_name() {
-                    slug
-                } else {
-                    &ctx.skill_name
-                };
                 let mut source = ShadowSource::staged(
                     &ctx.skill_name,
-                    runtime_id,
+                    slug,
                     &skills_dir.join(slug),
                     ShadowRoot::staged(&skills_dir),
                 );

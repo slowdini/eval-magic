@@ -339,8 +339,8 @@ fn the_shadow_preflight_banner_does_not_assert_a_verdict_before_dispatch() {
 /// The collision is plugin-sourced, mirroring the campaign that produced the
 /// ticket. That matters: a plugin skill is advertised as `<plugin>:<skill>`,
 /// which can never be confused with the staged copy, so the transcript is
-/// decisive. A *global skill* collision shares the staged runtime id and is
-/// correctly inconclusive instead — covered in the verification policy tests.
+/// decisive. A direct global skill is also distinguishable from the uniquely
+/// slugged staged subject — covered by the staged runtime-ID integration tests.
 #[test]
 fn ingest_refutes_a_shadow_finding_when_dispatches_report_an_empty_surface() {
     let tmp = tempfile::TempDir::new().unwrap();
