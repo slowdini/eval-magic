@@ -102,6 +102,34 @@ and the stopped run remains gradeable. Scripted tasks run through
 `eval-magic dispatch-task` as directed by the generated runbook so every round
 resumes the same native harness session.
 
+### Verify a scripted conversation
+
+For each scripted task, take `conversation_path` from its `dispatch.json` entry and inspect the
+runner-owned artifact:
+
+```bash
+jq '{
+  status,
+  delivered_followups,
+  rounds: ([.events[].round] | unique),
+  assistant_rounds: ([.events[] | select(.type == "assistant_message") | .round] | unique)
+}' "<conversation_path>"
+```
+
+`completed` means the driver delivered every declared follow-up: `delivered_followups` should equal
+the task's `turns` length, and both round lists should span round 1 through the final follow-up
+round. `stopped` with `agent_did_not_ask` or `agent_response_mismatch` is also valid, gradeable data;
+it records how many follow-ups were delivered and which one was withheld. Missing
+`conversation.json` means the task was interrupted, so ingest skips it.
+
+This check is harness-neutral because `dispatch-task` owns the conversation. It extracts the native
+session ID from round 1, invokes the selected harness's resume command for every delivered
+follow-up, and fails without committing `conversation.json` if a later transcript reports a
+different native session ID. The raw files under `outputs/turn-N/` retain harness-specific session
+evidence for debugging. A later response referring back to earlier work is a useful behavioral
+spot-check, but it is not session proof by itself: a fresh session in the same `eval_root` could
+also infer prior work from the filesystem.
+
 Fixture entries normally resolve from `<skill>/evals/` and land at the same relative path in the
 task repository. Set `files_root` when a project fixture lives under an organizing directory but
 should appear at the task root:
@@ -216,7 +244,9 @@ Git is required at run time. Each private environment has a runner-owned root `.
 
 ## Cost & confirmation
 
-An eval run is not free: an N-case suite is **2N native agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A scripted case can add up to one model turn per delivered follow-up in each condition (and stops early when a gate fails). `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
+An eval run is not free. For a case with effective run count `R` (after a per-eval `runs` override), the two conditions create `2R` native agent sessions. If that case declares `F` scripted follow-ups, it can add up to `2R × F` additional model turns; delivery gates may stop it earlier. Judge dispatches are also per condition and repetition: each `llm_judge` assertion creates one judge task for every resulting run record. `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
+
+The generated runbook dispatches scripted tasks separately and uses `JOBS` to control how many conversations run concurrently. One worker stays occupied while that conversation's rounds execute sequentially. Lower `JOBS` for the scripted recipe when model rate limits or local resource pressure require it; this changes concurrency and wall-clock shape, not the number of model turns.
 
 If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. Pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection (see the [Harnesses](#harnesses) table); otherwise they are recorded as provenance. The write guard arms automatically on harnesses that support it (see the same table); pass `--no-guard` only when the user actively opts out. Unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
 

@@ -97,6 +97,36 @@ fn docs_guide_explains_fixture_source_roots() {
         .stdout(contains("task root as `src/App.tsx`"));
 }
 
+/// The runner-owned artifact is the portable verification surface; raw event
+/// shapes are harness-specific and cannot support one operator recipe.
+#[test]
+fn docs_guide_explains_scripted_conversation_verification() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("### Verify a scripted conversation"))
+        .stdout(contains("delivered_followups"))
+        .stdout(contains("assistant_rounds"))
+        .stdout(contains("different native session ID"))
+        .stdout(contains("means the task was interrupted"));
+}
+
+#[test]
+fn docs_guide_counts_scripted_turns_per_condition_and_repetition() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("effective run count `R`"))
+        .stdout(contains("`2R` native agent sessions"))
+        .stdout(contains("`2R × F` additional model turns"))
+        .stdout(contains(
+            "Judge dispatches are also per condition and repetition",
+        ))
+        .stdout(contains("`JOBS`"));
+}
+
 /// `docs byoh` prints the embedded bring-your-own-harness authoring guide.
 #[test]
 fn docs_byoh_prints_embedded_authoring_guide() {
