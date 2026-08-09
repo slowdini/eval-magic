@@ -1,11 +1,10 @@
 //! Shared write-guard arm/disarm machinery.
 //!
-//! Each harness's installer (in its adapter module, e.g.
-//! `crate::adapters::claude_code::guard`) writes a marker listing the allowed
-//! roots and merges a `PreToolUse` hook into that harness's project config,
-//! using the marker/manifest helpers here. Arming also initializes a privacy-safe
-//! raw denial log under the guarded task env; disarming preserves that evidence.
-//! The original hook file is backed up verbatim in a manifest so
+//! The descriptor-driven engine in `crate::adapters::guard` installs each
+//! harness's native hook surface using the marker/manifest helpers here. The
+//! marker lists the allowed roots; arming also initializes a privacy-safe raw
+//! denial log under the guarded task env, and disarming preserves that evidence.
+//! The original hook or plugin surface is backed up verbatim in a manifest so
 //! [`teardown_guard`] restores it exactly.
 //!
 //! The hook command points at the running binary (`std::env::current_exe`), so

@@ -8,6 +8,14 @@
 //! descriptor data rendered by the generic engine (`crate::adapters::guard`);
 //! this module holds the shared marker/manifest/teardown machinery and the
 //! boundary policy.
+//!
+//! The resulting two-way reference with `crate::adapters` is intentional.
+//! `adapters` owns the harness-facing contract and renders each descriptor's
+//! native hook surface and verdict shape; this module owns the harness-neutral
+//! enforcement and lifecycle. It consults the adapter registry only where
+//! policy or cleanup must account for every harness. Put new code here when it
+//! enforces the shared boundary; put harness integration and descriptor
+//! rendering in `adapters`.
 
 pub mod decide;
 mod git_command;

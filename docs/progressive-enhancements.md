@@ -289,11 +289,13 @@ tool names is rejected at descriptor load. The hidden `guard` /
 guard-capable built-in uses the generic `guard-hook --harness <label>` entry point (OpenCode's
 plugin spawns exactly that) — a descriptor `[guard]` block is all it takes, no bespoke
 install/verdict code beyond the engine arms. Shared marker/manifest/teardown machinery lives in
-`src/sandbox/`. **User-supplied descriptors may not declare `[guard]`** — the guard fails open,
-so a mistyped user guard block would silently disarm it. On such a harness auto-arm quietly
-stays off (the preflight warns naming the `detect-stray-writes` fallback); only an *explicit*
-`--guard` is rejected in preflight, since a run the user asked to guard must not continue
-silently unguarded.
+`src/sandbox/`. The `adapters` ↔ `sandbox` module dependency is intentional: adapters own the guard
+descriptor and native hook surface, while sandbox owns harness-neutral boundary enforcement and
+lifecycle. New code follows that same rule rather than choosing a side by call direction.
+**User-supplied descriptors may not declare `[guard]`** — the guard fails open, so a mistyped user
+guard block would silently disarm it. On such a harness auto-arm quietly stays off (the preflight
+warns naming the `detect-stray-writes` fallback); only an *explicit* `--guard` is rejected in
+preflight, since a run the user asked to guard must not continue silently unguarded.
 
 ### Shadow preflight
 
