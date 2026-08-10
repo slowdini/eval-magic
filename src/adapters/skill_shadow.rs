@@ -14,11 +14,18 @@ use serde::{Deserialize, Serialize};
 
 mod artifact;
 mod resolution;
+pub(crate) mod verification;
 
 pub(crate) use artifact::{PluginShadowArtifact, format_isolated_shadow_notice};
-pub use artifact::{format_shadow_banner, shadow_validity_warnings};
+pub use artifact::{
+    format_shadow_banner, format_shadow_banner_with_verification, shadow_validity_warnings,
+};
 pub(crate) use resolution::{
     resolve_as_coexisting, resolve_by_precedence, resolve_from_selected_paths,
+};
+pub use verification::{
+    CellVerification, ReportVerification, ShadowResolvedSeverity, SourceVerification,
+    VerificationStatus,
 };
 
 pub const PLUGIN_SHADOW_SCHEMA_VERSION: u8 = 2;
@@ -168,6 +175,11 @@ pub struct ShadowSource {
     pub appearances: Vec<ShadowAppearance>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub remediation: Option<String>,
+    /// What dispatch transcripts showed about this source. Absent until `ingest`
+    /// reconciles the finding, and absent forever on a harness whose transcripts
+    /// carry no skill/plugin roster.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<verification::SourceVerification>,
 }
 
 impl ShadowSource {
@@ -189,6 +201,7 @@ impl ShadowSource {
             root,
             appearances: Vec::new(),
             remediation: Some(remediation.into()),
+            verification: None,
         }
     }
 
@@ -211,6 +224,7 @@ impl ShadowSource {
             root,
             appearances: Vec::new(),
             remediation: Some(remediation.into()),
+            verification: None,
         }
     }
 
@@ -231,6 +245,7 @@ impl ShadowSource {
             root,
             appearances: Vec::new(),
             remediation: None,
+            verification: None,
         }
     }
 
@@ -276,13 +291,58 @@ fn canonical_path(path: &Path) -> Option<String> {
         .map(|path| path.to_string_lossy().into_owned())
 }
 
+/// Severity for one finding, given the cells its live sources appear in.
+///
+/// A subject collision is always comparison-invalid: both arms can resolve the
+/// live copy, so the delta measures nothing. A sibling collision is a mere
+/// warning only when it is *symmetric* — present in every condition of a group or
+/// none of them — because asymmetric contamination is indistinguishable from the
+/// effect under test.
+///
+/// Shared by build-time detection and after-the-fact verification, which apply it
+/// to different cell sets: detection passes every cell a source was expected in,
+/// verification passes only the cells a transcript confirmed. Keeping one
+/// implementation is what stops the two verdicts from drifting apart.
+pub(crate) fn severity_for(
+    role: ShadowSkillRole,
+    live_cells: &BTreeSet<(&str, &str)>,
+    expected_by_group: &BTreeMap<&str, BTreeSet<&str>>,
+) -> ShadowSeverity {
+    match role {
+        ShadowSkillRole::Subject => ShadowSeverity::ComparisonInvalid,
+        ShadowSkillRole::Sibling => {
+            let symmetric = expected_by_group.iter().all(|(group, conditions)| {
+                let seen = conditions
+                    .iter()
+                    .filter(|condition| live_cells.contains(&(*group, *condition)))
+                    .count();
+                seen == 0 || seen == conditions.len()
+            });
+            if symmetric {
+                ShadowSeverity::Warning
+            } else {
+                ShadowSeverity::ComparisonInvalid
+            }
+        }
+    }
+}
+
 /// Every concrete source associated with one logical eval skill.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShadowFinding {
     pub skill_name: String,
     pub role: ShadowSkillRole,
+    /// What the collision would mean if the live copy loaded. Set at detection
+    /// time and **never** rewritten — evidence resolves
+    /// [`resolved_severity`](Self::resolved_severity) instead, so the artifact
+    /// keeps both the risk and the outcome.
     pub severity: ShadowSeverity,
     pub sources: Vec<ShadowSource>,
+    /// Severity after transcript evidence is applied. `None` means the finding
+    /// was never verified, which is distinct from being verified and found
+    /// harmless (`Some(Isolated)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_severity: Option<verification::ShadowResolvedSeverity>,
 }
 
 /// The detector's grouped findings for a run.
@@ -321,6 +381,7 @@ impl PluginShadowReport {
                     role: ShadowSkillRole::Subject,
                     severity: ShadowSeverity::ComparisonInvalid,
                     sources,
+                    resolved_severity: None,
                 }
             })
             .collect();
@@ -364,32 +425,14 @@ impl PluginShadowReport {
             } else {
                 ShadowSkillRole::Sibling
             };
-            finding.severity = match finding.role {
-                ShadowSkillRole::Subject => ShadowSeverity::ComparisonInvalid,
-                ShadowSkillRole::Sibling => {
-                    let live_cells = finding
-                        .sources
-                        .iter()
-                        .filter(|source| source.origin == ShadowSourceOrigin::Live)
-                        .flat_map(|source| &source.appearances)
-                        .map(|appearance| {
-                            (appearance.group.as_str(), appearance.condition.as_str())
-                        })
-                        .collect::<BTreeSet<_>>();
-                    let symmetric = expected_by_group.iter().all(|(group, conditions)| {
-                        let seen = conditions
-                            .iter()
-                            .filter(|condition| live_cells.contains(&(*group, *condition)))
-                            .count();
-                        seen == 0 || seen == conditions.len()
-                    });
-                    if symmetric {
-                        ShadowSeverity::Warning
-                    } else {
-                        ShadowSeverity::ComparisonInvalid
-                    }
-                }
-            };
+            let live_cells = finding
+                .sources
+                .iter()
+                .filter(|source| source.origin == ShadowSourceOrigin::Live)
+                .flat_map(|source| &source.appearances)
+                .map(|appearance| (appearance.group.as_str(), appearance.condition.as_str()))
+                .collect::<BTreeSet<_>>();
+            finding.severity = severity_for(finding.role, &live_cells, &expected_by_group);
         }
         report
     }
@@ -458,6 +501,7 @@ mod tests {
                 remediation: Some(
                     "Disable plugin 'slow-powers@slowdini' for every dispatch.".into(),
                 ),
+                verification: None,
             }],
         )
     }
@@ -508,6 +552,56 @@ mod tests {
         assert!(warnings[0].contains("comparison invalid"));
     }
 
+    /// Two cached versions of one installed plugin, each shipping the same skill
+    /// — the shape a real plugin cache takes once an upgrade leaves both versions
+    /// on disk. The scan contributes two distinct sources that share a plugin key
+    /// and a remediation.
+    fn report_with_one_plugin_cached_at_two_versions() -> PluginShadowReport {
+        let source_at = |version: &str| ShadowSource {
+            kind: ShadowSourceKind::Plugin,
+            origin: ShadowSourceOrigin::Live,
+            skill_name: "hardening-plans".into(),
+            runtime_id: "slow-powers:hardening-plans".into(),
+            plugin: Some("slow-powers@slowdini".into()),
+            discovery_path: format!("/cache/slow-powers/{version}/skills/hardening-plans"),
+            canonical_path: None,
+            root: ShadowRoot {
+                scope: ShadowRootScope::Global,
+                namespace: ShadowNamespace::Plugin,
+                plugin: Some("slow-powers@slowdini".into()),
+                path: format!("/cache/slow-powers/{version}/skills"),
+                relation: ShadowRelation::Native,
+            },
+            appearances: vec![],
+            remediation: Some(
+                "Disable plugin 'slow-powers@slowdini' in the effective enabledPlugins settings \
+                 for every dispatch."
+                    .into(),
+            ),
+            verification: None,
+        };
+        PluginShadowReport::from_sources("/x", vec![source_at("0.5.2"), source_at("0.5.4")])
+    }
+
+    #[test]
+    fn duplicate_source_labels_and_remediations_are_deduped_in_validity_warnings() {
+        let warnings = shadow_validity_warnings(&report_with_one_plugin_cached_at_two_versions());
+        assert_eq!(warnings.len(), 1);
+        let warning = &warnings[0];
+        assert_eq!(
+            warning
+                .matches("enabled plugin 'slow-powers@slowdini'")
+                .count(),
+            1,
+            "one plugin cached twice must be named once, not once per cached copy: {warning}"
+        );
+        assert_eq!(
+            warning.matches("Disable plugin").count(),
+            1,
+            "an identical remediation must not repeat: {warning}"
+        );
+    }
+
     #[test]
     fn banner_is_empty_when_nothing_shadowed() {
         let empty = PluginShadowReport {
@@ -524,6 +618,27 @@ mod tests {
         assert!(banner.contains("slow-powers@slowdini"));
         assert!(banner.contains("g1/without_skill"));
         assert!(banner.contains("Disable plugin"));
+    }
+
+    /// The banner and the isolated notice are what an operator reads at the
+    /// moment they hit a shadow finding, so each has to name the topic that
+    /// tells them what to do. Shipped output cites the embedded topic, never a
+    /// repo-relative path a binary-only install cannot open.
+    #[test]
+    fn banner_and_isolated_notice_point_at_the_isolation_topic() {
+        for rendered in [
+            format_shadow_banner(&sample_report()),
+            format_isolated_shadow_notice(&sample_report(), true),
+        ] {
+            assert!(
+                rendered.contains("eval-magic docs isolation"),
+                "must name the topic that explains the remedy: {rendered}"
+            );
+            assert!(
+                !rendered.contains("docs/isolation.md"),
+                "must not cite a repo path: {rendered}"
+            );
+        }
     }
 
     #[test]
@@ -560,7 +675,9 @@ mod tests {
                         remediation: Some(
                             "Set OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1 for every dispatch.".into(),
                         ),
+                        verification: None,
                     }],
+                    resolved_severity: None,
                 }],
             },
             false,

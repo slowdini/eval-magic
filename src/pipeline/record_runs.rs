@@ -31,6 +31,8 @@ use crate::core::{
 };
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
+use crate::pipeline::session_surface::{self, RoundSurface, TaskSessionSurface};
+use crate::pipeline::shadow_verification;
 use crate::validation::{SchemaName, validate_against_schema};
 
 mod conversation;
@@ -59,6 +61,11 @@ struct DispatchTask {
     dispatch_prompt_path: String,
     #[serde(default)]
     conversation_path: Option<String>,
+    /// Group this task belongs to; absent for a single-group run. Carried so the
+    /// session-surface report can be joined back to the comparison cells a
+    /// shadow finding names.
+    #[serde(default)]
+    group: Option<String>,
 }
 
 /// Tally of what record-runs did across the dispatch's tasks.
@@ -76,6 +83,13 @@ pub struct RecordRunsResult {
     pub permission_denials: usize,
     /// How many tasks those denials are spread across.
     pub permission_denial_tasks: usize,
+    /// Dispatches that reported which skills and plugins they could see, for
+    /// every round. Always 0 for a harness whose transcript carries no such
+    /// roster, in which case no `session-surface.json` is written at all.
+    pub dispatches_with_surface: usize,
+    /// Dispatches whose transcripts left the surface unknown for at least one
+    /// round. Shadow findings covering those cells stay unverified.
+    pub dispatches_without_surface: usize,
 }
 
 impl RecordRunsResult {
@@ -184,7 +198,9 @@ pub fn record_runs(
 
     let mut result = RecordRunsResult::default();
     let detects_denials = adapter_for(harness).surfaces_permission_denials();
+    let reports_surface = adapter_for(harness).surfaces_session_surface();
     let mut denial_tasks: Vec<TaskPermissionDenials> = Vec::new();
+    let mut surface_tasks: Vec<TaskSessionSurface> = Vec::new();
     for task in &tasks {
         let conversation = conversation::for_task(task)?;
         if task.conversation_path.is_some() && conversation.is_none() {
@@ -215,6 +231,19 @@ pub fn record_runs(
                 result.permission_denial_tasks += 1;
             }
             denial_tasks.push(denials);
+        }
+
+        // Collected here for the same reason as the denials above: a task that
+        // never becomes a graded data point still carries evidence about which
+        // live sources its dispatches could see.
+        if reports_surface {
+            surface_tasks.push(TaskSessionSurface {
+                eval_id: task.eval_id.clone(),
+                condition: task.condition.clone(),
+                run_index: task.run_index,
+                group: task.group.clone(),
+                rounds: session_surfaces_for_task(harness, task, conversation.as_ref()),
+            });
         }
 
         let run_record_path = Path::new(&task.run_record_path);
@@ -308,6 +337,17 @@ pub fn record_runs(
         permission_denials::write_report(iteration_dir, iteration, denial_tasks)?;
     }
 
+    // Same contract: absent means "this harness cannot report a surface", which
+    // leaves shadow findings unverified rather than refuted.
+    if reports_surface {
+        let report = session_surface::write_report(iteration_dir, iteration, surface_tasks)?;
+        result.dispatches_with_surface = report.tasks_with_evidence;
+        result.dispatches_without_surface = report.tasks_without_evidence;
+        // Resolve the preflight's findings now that there is evidence to resolve
+        // them against, so the verdict is persisted rather than recomputed.
+        shadow_verification::verify_iteration(iteration_dir)?;
+    }
+
     Ok(result)
 }
 
@@ -375,6 +415,39 @@ fn transcript_summary_for_task(harness: Harness, task: &DispatchTask) -> Option<
     adapter_for(harness)
         .parse_cli_events_full(&events_path)
         .ok()
+}
+
+/// The skill/plugin surface each of a task's rounds reported. Unlike refusals,
+/// these are kept per round rather than flattened: isolation has to hold for the
+/// initial dispatch and every resumed turn, so a round whose transcript is
+/// missing or silent stays a `None` that marks the task unproven.
+fn session_surfaces_for_task(
+    harness: Harness,
+    task: &DispatchTask,
+    conversation: Option<&ConversationRecord>,
+) -> Vec<RoundSurface> {
+    let adapter = adapter_for(harness);
+    let Some(filename) = adapter.cli_events_filename() else {
+        return Vec::new();
+    };
+    let outputs_dir = Path::new(&task.outputs_dir);
+    let paths: Vec<PathBuf> = match conversation {
+        Some(conversation) => (1..=conversation.delivered_followups.saturating_add(1))
+            .map(|round| outputs_dir.join(format!("turn-{round}")).join(&filename))
+            .collect(),
+        None => vec![outputs_dir.join(&filename)],
+    };
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| RoundSurface {
+            round: index as u32 + 1,
+            surface: path
+                .exists()
+                .then(|| adapter.parse_session_surface(path).ok().flatten())
+                .flatten(),
+        })
+        .collect()
 }
 
 /// The tool calls the harness refused across a task's transcript(s): the

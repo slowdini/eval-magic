@@ -13,7 +13,7 @@ references:
 | File | What's in it |
 |------|--------------|
 | `harnesses/codex.toml` | the descriptor — every declarative value + capability references |
-| `transcript.rs` | `item.completed` event parsing plus paired-stderr denial detection (`codex-items`) |
+| `transcript.rs` | `codex-items` compatibility/reference summary parser + paired-stderr denial reader |
 | `skill_shadow.rs` | repo/user/admin/plugin skill collision scan (`codex-skills`) + reporting |
 
 The write guard has no per-harness code: the descriptor's `[guard]` block (hook file, matcher,
@@ -74,30 +74,31 @@ per-source remediation. Codex can expose same-name skills together, so duplicate
 recorded as `coexisting`. The shared banner and `aggregate` validity warnings render this same
 report; historical unversioned artifacts remain readable.
 
-For an installed-plugin collision, add `--disable plugins` to every eval-agent `codex exec`
-invocation, including every resumed turn. It is a global option, so place it before `exec`, for
-example `codex --disable plugins --ask-for-approval never exec ...`. The flag disables installed
-plugins for that invocation; it does not hide skills in repository, user, or admin directories.
-By default, `plugin-shadow.json` and aggregate validity warnings retain the preflight finding
-because eval-magic cannot observe manually added launch arguments.
-
-For a direct skill collision, move or rename the conflicting repo, user, or admin skill before
-dispatch. For a user skill only, a clean `HOME` can isolate `$HOME/.agents/skills`; preserve
-`CODEX_HOME` if the dispatch still needs the existing Codex configuration. That does not isolate
-plugins stored under `CODEX_HOME` or repository/admin skills.
+`--disable plugins` is a **global** option, so it has to precede `exec` — for example
+`codex --disable plugins --ask-for-approval never exec ...`; codex-cli rejects it after `exec`. By
+default `plugin-shadow.json` and aggregate validity warnings retain the preflight finding because
+eval-magic cannot observe manually added launch arguments. The operator-facing recipes — that flag,
+move-or-rename for a direct skill collision, and the clean-`HOME`/`CODEX_HOME` caveat — are in the
+shipped `eval-magic docs isolation` topic ([isolation.md](isolation.md)).
 
 When a descriptor overlay excludes **every** reported source from every initial and resumed
 dispatch, it may declare `[shadow] isolates_live_sources = true`. Preflight and
 `plugin-shadow.json` remain as auditable provenance, while `run` prints an informational notice
-and `aggregate` omits the shadow validity warnings. `--disable plugins` alone justifies the
-assertion only when every finding is plugin-sourced; it does not cover a direct skill finding.
-eval-magic does not inspect the recipes or otherwise verify the assertion.
+and `aggregate` omits the shadow validity warnings. eval-magic does not inspect the recipes or
+otherwise verify the assertion; the honesty rules, including which Codex remedies can and cannot
+justify it, are in `eval-magic docs isolation`.
 
 **Known limit:** Codex also ships bundled system skills, but currently exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled
-system skill; verify that case manually when relevant.
+system skill; verify that case manually when relevant. (Also stated for operators in
+`eval-magic docs isolation`.)
 
 ## Transcript (`item.completed`)
+
+The built-in descriptor normalizes the JSONL summary through `[transcript.extract]`; the
+`codex-items` named parser remains as a compatibility/reference implementation, with a differential
+test pinning the declarative output to it. Its separately selected denial reader still handles the
+paired stderr capture described below.
 
 `item.completed` events whose item type is not an agent message / reasoning / plan update become
 tool invocations: `command_execution`, `file_change`, `web_search`, and MCP items.
@@ -125,9 +126,10 @@ them from the preserved transcripts when desired.
 
 ### Permission denials
 
-Some pre-execution refusals never become Codex JSONL items. The `codex-items` parser therefore
-derives `codex-stderr.log` from `codex-events.jsonl` (and the equivalent paired filenames in
-scripted-turn directories) and recognizes two structural Codex tool-router forms:
+Some pre-execution refusals never become Codex JSONL items. The independently selected
+`permission_denials_parser = "codex-items"` reader therefore derives `codex-stderr.log` from
+`codex-events.jsonl` (and the equivalent paired filenames in scripted-turn directories) and
+recognizes two structural Codex tool-router forms:
 
 - `exec_command` `Rejected(...)` records for approval-required policy and explicit deny rules;
 - `Command blocked by PreToolUse hook` records for `Bash` and patch-shaped `apply_patch` calls.
@@ -139,7 +141,7 @@ twice. A missing stderr capture, unrelated/malformed lines, and ordinary JSONL c
 produce no denial. In particular, DNS and OS-process failures are indistinguishable from normal
 tool failures and are intentionally left unclassified to avoid false positives.
 
-These forms were verified against `codex-cli 0.146.0` on 2026-07-30. Re-check the parser fixtures
+These forms were verified against `codex-cli 0.146.0` on 2026-07-30. Re-check the reader fixtures
 when Codex changes its stderr logging shape.
 
 ## Write guard

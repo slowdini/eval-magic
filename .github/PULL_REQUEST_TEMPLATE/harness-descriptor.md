@@ -1,8 +1,8 @@
 <!--
 Harness-descriptor contribution PR — data-only.
 Use for: adding a new built-in harness descriptor (or extending one) that only
-reuses EXISTING named capabilities. New parsers, slug capabilities, shadow
-preflights, and guard support are CODE contributions — one capability per PR,
+reuses EXISTING named capabilities. New summary/denial readers, slug
+capabilities, shadow preflights, and guard support are CODE contributions — one capability per PR,
 separately from this one (see docs/progressive-enhancements.md "Guardrails").
 Guide: docs/byoh.md "Upstreaming your descriptor".
 Title: feat(harness): add <label> descriptor
@@ -16,12 +16,12 @@ Title: feat(harness): add <label> descriptor
 
 ## Scope check (data-only)
 
-- [ ] This PR adds/changes descriptor **data only** — no parser, slug, shadow,
-      or guard code (those are separate one-capability-per-PR contributions)
+- [ ] This PR adds/changes descriptor **data only** — no summary/denial reader,
+      slug, shadow, or guard code (those are separate one-capability-per-PR contributions)
 - [ ] `[transcript]`/`[shadow]`/`[staging]` (if declared) reuse an existing named
       capability (`claude-stream-json` / `codex-items` / `opencode-events` / `opencode` /
       `claude-plugins` / `codex-skills` / `opencode-skills`)
-      or ingest through a `[transcript.extract]` block (declarative data)
+      or ingest through `[transcript.extract]` blocks (declarative summary/session-surface data)
 - [ ] No `[guard]` table and no `run.supports_guard = true` in this PR
 
 ## The diff (expected shape)
@@ -47,8 +47,8 @@ Title: feat(harness): add <label> descriptor
       (`run --harness <label>` → dispatch → `ingest` → `finalize`); describe or
       link the result:
 - [ ] Every declared enhancement was exercised by that run (e.g. staged skill
-      discovered natively, events file parsed by the named parser, model flag
-      appeared in the generated recipes)
+      discovered natively, events file read by the configured transcript
+      capabilities, model flag appeared in the generated recipes)
 
 ## Don't-guess attestation
 

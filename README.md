@@ -102,6 +102,55 @@ and the stopped run remains gradeable. Scripted tasks run through
 `eval-magic dispatch-task` as directed by the generated runbook so every round
 resumes the same native harness session.
 
+### Verify a scripted conversation
+
+For each scripted task, take `conversation_path` from its `dispatch.json` entry and inspect the
+runner-owned artifact:
+
+```bash
+jq '{
+  status,
+  delivered_followups,
+  rounds: ([.events[].round] | unique),
+  assistant_rounds: ([.events[] | select(.type == "assistant_message") | .round] | unique)
+}' "<conversation_path>"
+```
+
+`completed` means the driver delivered every declared follow-up: `delivered_followups` should equal
+the task's `turns` length, and both round lists should span round 1 through the final follow-up
+round. `stopped` with `agent_did_not_ask` or `agent_response_mismatch` is also valid, gradeable data;
+it records how many follow-ups were delivered and which one was withheld. Missing
+`conversation.json` means the task was interrupted, so ingest skips it.
+
+This check is harness-neutral because `dispatch-task` owns the conversation. It extracts the native
+session ID from round 1, invokes the selected harness's resume command for every delivered
+follow-up, and fails without committing `conversation.json` if a later transcript reports a
+different native session ID. The raw files under `outputs/turn-N/` retain harness-specific session
+evidence for debugging. A later response referring back to earlier work is a useful behavioral
+spot-check, but it is not session proof by itself: a fresh session in the same `eval_root` could
+also infer prior work from the filesystem.
+
+Fixture entries normally resolve from `<skill>/evals/` and land at the same relative path in the
+task repository. Set `files_root` when a project fixture lives under an organizing directory but
+should appear at the task root:
+
+```json
+{
+  "id": "todo-app-change",
+  "prompt": "Add persistence to the React app.",
+  "expected_output": "Uses the existing app structure and verifies the change",
+  "files_root": "fixtures/todo-app",
+  "files": ["package.json", "src/App.tsx"]
+}
+```
+
+Here `src/App.tsx` is read from `<skill>/evals/fixtures/todo-app/src/App.tsx` and
+staged at the task root as `src/App.tsx`; dispatch prompts and run records also use that
+task-relative path.
+`files_root` must be a non-empty relative path without a `..` component. The paths in `files`
+retain their existing task-root safety rules, including the reserved root `.git`. Omitting
+`files_root` preserves the default source and destination behavior.
+
 You can also script it with `--id`, `--prompt`, and `--expected-output`. If
 `evals/evals.json` already exists, `init` refuses to overwrite it unless you pass
 `--force`.
@@ -167,11 +216,17 @@ run (prepare one private env per dispatch + RUNBOOK.md)
 teardown
 ```
 
+Before staging, `run` prints the minimum attainable two-sided Fisher exact p-value for each
+distinct effective run count (the `--runs` value after per-eval overrides). The bound assumes a
+binary endpoint and perfect separation between the two conditions; for example, three runs per
+condition cannot produce a p-value below `0.10`. This is a sample-size planning aid only:
+eval-magic does not calculate observed p-values or apply a significance threshold.
+
 1. **`run` prepares — it does not dispatch.** It builds the iteration workspace (`iteration-N/`), snapshots the `SKILL.md`, stages skills into one private task env per `(eval, condition, run)` (`iteration-N/env-<group>-<condition>/`, with `-run-<k>` for repeated runs), copies visible fixtures in so each reads like a real repo, emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md` (human-readable), and writes `RUNBOOK.md` into `iteration-N/`. After staging and guard installation, it initializes each task as a clean Git repository, runs shadow preflight from that repository boundary, and snapshots the final-environment baseline. Then it prints a handoff, not a dispatch.
 2. **Follow the runbook.** From `iteration-N/`, read `RUNBOOK.md` end to end. An agent session can drive it (*Read and follow `RUNBOOK.md`*) or you can follow it by hand — the commands are identical. It carries the exact per-task dispatch recipe plus the `ingest` / `finalize` commands, each already threaded with `--harness`.
 3. **Dispatch agents (runbook-driven).** Read `dispatch.json`. Each task object points at a `dispatch_prompt_path` (the full prompt lives in a file so you never reproduce kilobytes inline), the `eval_root` env to dispatch from, and the exact `run_record_path` / `timing_path`. One-shot tasks use the harness CLI recipe. Tasks with `turns` use `eval-magic dispatch-task`, which starts the harness CLI once, resumes the same native session for each delivered follow-up, and writes a schema-validated `conversation.json`; raw events remain under `outputs/turn-N/`. The agent may edit existing source or create files anywhere inside `eval_root`; it must not write outside that task environment. Each prompt names `<eval_root>/tmp/` as the conventional task-local scratch directory instead of a host temp directory. The directory is not pre-created or reserved, and files left there remain ordinary workspace content that counts toward `diff_scope`. Conditions and repeated runs are physically isolated.
 4. **`ingest`** (a fixed-order chain: record-runs → fill-transcripts → detect-stray-writes → grade) assembles each task's `run.json` and `timing.json`, scans for writes outside `eval_root`, and collects every guard block from the private envs into `guard-denials.json` even when a task produced no `run.json`. It also measures the final environment into `diff-scope.json`, grades transcript checks, and only then injects and runs held-out `command_check` assertions. It stops at the judge hand-off, listing a judge task per `llm_judge` assertion; `diff_scope` thresholds are folded in at finalize.
-5. **Dispatch judges.** Same pattern as step 3: run the CLI recipe for each judge task to read its prompt file and write its verdict back.
+5. **Dispatch judges.** Same pattern as step 3: run the CLI recipe for each judge task to read its prompt file and write its verdict back. The recipe skips existing nonempty responses, so rerunning it dispatches only missing or empty verdicts. It finishes with `N/M verdicts present` and exits nonzero until every task has a response.
 6. **`finalize`** (grade `--finalize` → aggregate) merges judge verdicts, runner-owned command results, and `diff_scope` thresholds, then writes `benchmark.json` into `iteration-N/`, *above* the envs. Its top-level `diff_scope` object also preserves the raw per-run metrics whether or not an eval declared a scope assertion. Read it. If a guard marker is still live, it also reminds you to run `teardown-guard` before editing source.
 7. **`teardown`** disarms the guard, removes the staged skill set, and reclaims the workspace artifacts that are safe to delete.
 
@@ -189,7 +244,9 @@ Git is required at run time. Each private environment has a runner-owned root `.
 
 ## Cost & confirmation
 
-An eval run is not free: an N-case suite is **2N native agent sessions**, plus a judge dispatch per `llm_judge` assertion — real wall-clock time and real tokens. A scripted case can add up to one model turn per delivered follow-up in each condition (and stops early when a gate fails). `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
+An eval run is not free. For a case with effective run count `R` (after a per-eval `runs` override), the two conditions create `2R` native agent sessions. If that case declares `F` scripted follow-ups, it can add up to `2R × F` additional model turns; delivery gates may stop it earlier. Judge dispatches are also per condition and repetition: each `llm_judge` assertion creates one judge task for every resulting run record. `command_check` adds local command runtime but no judge tokens. A subagent under test runs the real skill, and some skills write to disk, so it can attempt to write outside its task environment.
+
+The generated runbook dispatches scripted tasks separately and uses `JOBS` to control how many conversations run concurrently. One worker stays occupied while that conversation's rounds execute sequentially. Lower `JOBS` for the scripted recipe when model rate limits or local resource pressure require it; this changes concurrency and wall-clock shape, not the number of model turns.
 
 If you are an agent driving this tool, **never kick off a run silently.** Present the user a run summary — skill, mode, eval cases, the models that will run the agents and the judge, the cost, and the guard status — and wait for explicit confirmation. Pass `--agent-model <id>` and `--judge-model <id>` to have the generated command recipes select those models when the harness adapter supports model selection (see the [Harnesses](#harnesses) table); otherwise they are recorded as provenance. The write guard arms automatically on harnesses that support it (see the same table); pass `--no-guard` only when the user actively opts out. Unguarded, stray writes are only *detected* after the fact by `detect-stray-writes`, never blocked.
 
@@ -262,6 +319,14 @@ Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading 
     "with_skill":    { "pass_rate": { "mean": 0.83, "n": 6 }, "duration_ms": { "mean": 45000, "n": 6 }, "total_tokens": { "mean": 3800, "n": 6 } },
     "without_skill": { "pass_rate": { "mean": 0.33, "n": 6 }, "duration_ms": { "mean": 32000, "n": 6 }, "total_tokens": { "mean": 2100, "n": 6 } }
   },
+  "assertions": {
+    "case-a": {
+      "behavior-under-test": {
+        "with_skill": { "passed": 5, "n": 6 },
+        "without_skill": { "passed": 1, "n": 6 }
+      }
+    }
+  },
   "diff_scope": {
     "with_skill": [{ "eval_id": "case-a", "files_touched": 2, "lines_added": 14, "lines_removed": 3, "hunks": 3 }],
     "without_skill": [{ "eval_id": "case-a", "files_touched": 1, "lines_added": 5, "lines_removed": 0, "hunks": 1 }]
@@ -271,6 +336,8 @@ Exact schemas are in [`schema/`](schema/); the assertion shapes and the grading 
 ```
 
 A skill that adds 13 seconds and 1700 tokens but improves pass rate by 50 points is probably worth it; one that doubles tokens for a 2-point gain is probably not. For Mode B the keys are `old_skill` / `new_skill`, and a positive `delta.pass_rate` means the revision is an improvement.
+
+`assertions` shows where that headline came from, keyed by eval id, assertion id, and condition. Each cell reports `passed` and `n` across the observed assertion results, including `llm_judge`, `command_check`, `transcript_check`, and `diff_scope` results. Framework meta-results such as `__skill_invoked` stay out of this effectiveness report because invocation has dedicated fields in `run_summary`. A missing result is not reported as a measured zero: the cell's `n` counts only observations, and a condition with none is omitted. Historical benchmarks may omit `assertions`; rerun `eval-magic aggregate` against a retained iteration to generate it.
 
 Token totals are harness-normalized workload metrics, not provider billing totals. For example,
 Codex uses non-cached input plus output; reasoning tokens are already part of output. Duration is
@@ -283,7 +350,7 @@ Always read each metric's `n`: `n: 0` means unavailable, not a measured zero, ev
 
 Read `validity_warnings` **before** trusting any delta — mixed timing sources, incomplete timing samples, a low skill-invocation rate, a flagged stray write, a guard denial, a permission-denied tool call, missing diff-scope metrics, a flagged live-source read (an arm that read the live skill source instead of its staged copy), or a legacy task whose Git top-level resolves outside `eval_root` means the result may not reflect the skill at all. Every guard denial is reported, including a legitimate boundary block, because the rejected action changed agent behavior; inspect `guard-denials.json` for the affected task and count.
 
-A **permission-denied tool call** is the harness refusing to run something the agent asked for — an approval-required call with nobody to approve it, an explicit deny rule, or a managed setting overriding the dispatch permission mode. The dispatch can still exit 0, so the run may silently degrade to static reasoning. `ingest` writes `permission-denials.json` (tool, normalized refusal reason, and the refused input's *keys* — values are omitted so a refused command or write cannot spill its contents) and `aggregate` raises one warning per affected task. The write guard denies through the same mechanism, so its blocks appear in that report too, attributed and left to the guard's own warning rather than counted twice. Detection is per-harness: Claude Code reads structured refusals from its event stream; Codex correlates structural tool-router rejection and `PreToolUse` block records from the paired `codex-stderr.log` capture; OpenCode recognizes its own permission-layer error strings on a refused `tool_use` event (an explicit deny rule's `PermissionDeniedError`, a headless reject's `PermissionRejectedError`, or the shared `eval guard: ` guard reason). Each parser deliberately does not classify ordinary tool failures (including ambiguous DNS and OS-process failures and tool-body errors like `oldString not found`) as permission denials. `run` preflight names the fallback for a harness that cannot detect denials.
+A **permission-denied tool call** is the harness refusing to run something the agent asked for — an approval-required call with nobody to approve it, an explicit deny rule, or a managed setting overriding the dispatch permission mode. The dispatch can still exit 0, so the run may silently degrade to static reasoning. `ingest` writes `permission-denials.json` (tool, normalized refusal reason, and the refused input's *keys* — values are omitted so a refused command or write cannot spill its contents) and `aggregate` raises one warning per affected task. The write guard denies through the same mechanism, so its blocks appear in that report too, attributed and left to the guard's own warning rather than counted twice. Detection is per-harness: Claude Code reads structured refusals from its event stream; Codex correlates structural tool-router rejection and `PreToolUse` block records from the paired `codex-stderr.log` capture; OpenCode recognizes its own permission-layer error strings on a refused `tool_use` event (an explicit deny rule's `PermissionDeniedError`, a headless reject's `PermissionRejectedError`, or the shared `eval guard: ` guard reason). Each denial reader deliberately does not classify ordinary tool failures (including ambiguous DNS and OS-process failures and tool-body errors like `oldString not found`) as permission denials. A descriptor can compose that named reader with declarative transcript-summary extraction; `run` preflight names the fallback for a harness that cannot detect denials.
 
 ## Workspace layout
 
@@ -318,7 +385,7 @@ Per skill being evaluated, the runner produces this generated workspace tree (au
     conditions.json                      # what each condition is, which SKILL.md it loaded
     stray-writes.json                    # post-hoc write/read audit
     guard-denials.json                   # guard blocks joined to dispatch task keys
-    benchmark.json                       # aggregate stats
+    benchmark.json                       # aggregate stats + per-assertion counts
     skill-snapshot.md                    # frozen SKILL.md at run time
 ```
 
@@ -346,7 +413,7 @@ eval-magic promote-baseline \
 ```
 <skill>/evals/baseline/
   BASELINE.md                          # provenance: mode, iteration, models, timestamp
-  benchmark.json                       # the committed delta
+  benchmark.json                       # the committed delta + assertion counts
   grading/<eval-id>__<condition>.json  # judge rationales per run
   NOTES.md                             # optional, hand-authored — forward-looking observations
 ```
@@ -364,7 +431,11 @@ For the `without_skill` / baseline condition, the dispatch reflects "this skill 
 
 **Parity is only as clean as each dispatch's live environment.** Staging controls what the runner *adds*, not the user, repository, admin, or plugin skills the harness's one-shot CLI also discovers. A live copy of a logical eval skill can therefore contaminate a comparison — the staging slug stops an on-disk collision, not runtime discovery. The runner scans every `(group, condition)` environment and writes the schema-v2 `plugin-shadow.json` artifact (`schema/plugin-shadow.schema.json`). It groups sources by logical skill; distinguishes subject and sibling roles, logical names and harness runtime IDs, native and cross-harness roots, live and staged paths, affected matrix cells, and observed resolution; and carries exact per-source remediation. Subject collisions are comparison-invalid. A sibling collision is a warning only when it is symmetric across both arms of every affected group; asymmetric sibling discovery is comparison-invalid. Claude records scope precedence and namespaced plugin IDs, Codex records same-name coexistence, and OpenCode probes `opencode debug skill` only when duplicate runtime IDs require a selected-path decision. `aggregate` still reads historical unversioned artifacts.
 
-The runner can't unload a live skill. The shared build-time *skill-shadow* banner is surfaced again in `benchmark.json`'s `validity_warnings`. When a layered harness descriptor truthfully declares `[shadow] isolates_live_sources = true`, detection still records every finding and its intrinsic severity in `plugin-shadow.json`, but `run` treats it as informational provenance and `aggregate` omits the shadow validity warnings. This is an unverified operator assertion that must cover every reported source and every initial/resumed dispatch; eval-magic does not inspect command templates or implement isolation itself.
+The runner can't unload a live skill, so isolating the dispatch is the operator's move — and a supported one. **`eval-magic docs isolation`** carries the per-harness recipes (`--setting-sources project,local` or a clean `CLAUDE_CONFIG_DIR` for Claude Code, `codex --disable plugins`, OpenCode's `OPENCODE_DISABLE_*` switches), what each one does and does not hide, and how to confirm the live copy did not load.
+
+**The preflight reports risk; the transcripts settle it.** Detection runs before anything dispatches, so it can only say a live copy is *discoverable* — the banner states the stake conditionally rather than declaring a verdict. Where a harness descriptor maps a transcript skill/plugin roster (Claude Code's stream-json `init` event today), `ingest` records what each dispatch — and each resumed turn — actually loaded in `session-surface.json`, then resolves every finding to `resolved_severity` in `plugin-shadow.json`. A finding refuted across every expected cell becomes `isolated` and drops out of `benchmark.json`'s `validity_warnings`; one confirmed by a transcript keeps its severity and names the cells it was seen in; one that could not be settled says so, and says why. Refuting requires every expected cell to have reported and none to have seen the source — a missing transcript never refutes, so a reporting gap can't be mistaken for isolation. The intrinsic `severity` is never rewritten, so the artifact keeps both the risk and the outcome. BYOH descriptors can add that roster mapping under `[transcript.extract.session_surface]` without a Rust parser.
+
+Where transcripts carry no roster (Codex and OpenCode), findings stay unverified and a layered harness descriptor records applied isolation with `[shadow] isolates_live_sources = true`: detection still writes every finding to `plugin-shadow.json`, but `run` treats it as informational provenance and `aggregate` omits the shadow validity warnings. It must cover every reported source and every initial/resumed dispatch, and partial isolation does not qualify. Where transcripts *do* report, evidence outranks the assertion — a declared isolation that a transcript contradicts is reported, not trusted.
 
 ## Harnesses
 
@@ -397,8 +468,9 @@ Per-harness implementation notes for developers wiring features live in [docs/cl
 | Where | What's in it |
 |-------|--------------|
 | `eval-magic --help` / `eval-magic <cmd> --help` | The flag-by-flag reference: every subcommand and flag, worked examples, the `--skill-dir` model, the skill-invocation meta-check |
-| `eval-magic docs <topic>` | The reference docs embedded in the binary — version-matched to the install and readable offline: `guide` (this README) and `byoh` (the BYOH authoring guide). Bare `eval-magic docs` lists topics |
+| `eval-magic docs <topic>` | The reference docs embedded in the binary — version-matched to the install and readable offline: `guide` (this README), `byoh` (the BYOH authoring guide), and `isolation` (isolating dispatches from live skill sources). Bare `eval-magic docs` lists topics |
 | [docs/byoh.md](docs/byoh.md) | Bring your own harness: the `harness init` scaffold, authoring a descriptor file for an unknown harness, layering/merge rules, named capabilities, the `harness list`/`show`/`lint` workflow, and upstreaming a descriptor as a data-only PR (also printable as `eval-magic docs byoh`) |
+| [docs/isolation.md](docs/isolation.md) | Isolating dispatches from live skill sources: why a live copy breaks the comparison, per-harness remedies with what each does and does not hide, declaring `[shadow] isolates_live_sources` honestly, and verifying isolation from a dispatch's own transcript (also printable as `eval-magic docs isolation`) |
 | [docs/progressive-enhancements.md](docs/progressive-enhancements.md) | Development doc: the harness baseline-vs-enhancement contract — what each enhancement unlocks, why it needs harness-specific code, and its fallback |
 | [docs/claude-notes.md](docs/claude-notes.md) / [docs/codex-notes.md](docs/codex-notes.md) / [docs/opencode-notes.md](docs/opencode-notes.md) | Development docs: per-harness implementation notes for working on eval-magic's harness support |
 | [docs/README.md](docs/README.md) | Development doc: the documentation placement policy — what ships in the binary vs. stays internal |

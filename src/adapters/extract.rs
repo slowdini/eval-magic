@@ -2,9 +2,10 @@
 //!
 //! [`ExtractSpec`] is the data half of a descriptor's `[transcript.extract]`
 //! block: equality filters, field picks, a flat tool-item mapping, a token
-//! reduction, and a duration rule interpreted by this one generic engine. A
-//! stream that needs more (keyed cross-event joins, content coercion) is a named code capability
-//! ([`super::capabilities::TranscriptParser`]), not a bigger spec.
+//! reduction, a duration rule, and an auxiliary session-surface roster
+//! interpreted by this one generic engine. A stream whose primary summary
+//! needs more (keyed cross-event joins, content coercion) is a named code
+//! capability ([`super::capabilities::TranscriptParser`]), not a bigger spec.
 //!
 //! Fixed rules the spec cannot change: `final_text` and `duration.field` take
 //! the last match; `timestamp_spread` needs at least two parseable RFC 3339
@@ -22,13 +23,20 @@ use std::collections::BTreeMap;
 use std::io;
 use std::path::Path;
 
+mod session_surface;
+
+pub use session_surface::SessionSurfaceExtract;
+pub(crate) use session_surface::parse as parse_session_surface;
+
 /// Dotted-path → expected-string equality filter; empty matches every record.
 type Where = BTreeMap<String, String>;
 
 /// The `[transcript.extract]` block: which normalized outputs to produce and
-/// how. Validation requires at least one sub-table.
+/// how. Validation requires at least one sub-table and a primary summary reader.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ExtractSpec {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_surface: Option<SessionSurfaceExtract>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<ToolsExtract>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -41,6 +49,20 @@ pub struct ExtractSpec {
     pub tokens: Option<TokensExtract>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub duration: Option<DurationExtract>,
+}
+
+impl ExtractSpec {
+    /// Whether this spec declares any of the outputs that make up the primary
+    /// transcript summary. Session-surface extraction is auxiliary and may be
+    /// paired with a named summary parser.
+    pub(crate) fn has_summary_outputs(&self) -> bool {
+        self.tools.is_some()
+            || self.final_text.is_some()
+            || self.assistant_messages.is_some()
+            || self.session_id.is_some()
+            || self.tokens.is_some()
+            || self.duration.is_some()
+    }
 }
 
 /// Flat tool-item mapping: each matching record's item object becomes one

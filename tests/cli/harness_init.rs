@@ -188,6 +188,9 @@ fn harness_init_template_prompts_for_verified_values() {
         "cool-cli-notes.md",
         "claude-stream-json",
         "codex-items",
+        "permission_denials_parser",
+        "[transcript.extract.session_surface]",
+        "plugin_version_field",
         "[guard]",
         "harness lint",
     ] {
@@ -227,6 +230,14 @@ fn harness_init_template_points_at_embedded_docs() {
     assert!(
         !descriptor.contains("docs/byoh.md"),
         "descriptor template must not point at the repo-relative byoh path"
+    );
+    assert!(
+        descriptor.contains("eval-magic docs isolation"),
+        "the [shadow] block should point at the embedded isolation topic"
+    );
+    assert!(
+        !descriptor.contains("docs/isolation.md"),
+        "descriptor template must not point at the repo-relative isolation path"
     );
 }
 

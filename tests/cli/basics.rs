@@ -100,6 +100,17 @@ fn grade_and_ingest_help_document_runner_owned_command_checks() {
 }
 
 #[test]
+fn ingest_help_documents_judge_batch_completion() {
+    skill_eval()
+        .args(["ingest", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("skips existing nonempty responses"))
+        .stdout(contains("verdicts present"))
+        .stdout(contains("exits nonzero while any are missing"));
+}
+
+#[test]
 fn pipeline_help_documents_always_on_diff_scope_metrics() {
     for command in ["ingest", "grade", "finalize", "aggregate"] {
         skill_eval()
@@ -114,6 +125,19 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
 }
 
 #[test]
+fn finalize_and_aggregate_help_document_per_assertion_rollups() {
+    for command in ["finalize", "aggregate"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("per-assertion"))
+            .stdout(contains("passed"))
+            .stdout(contains("observed assertion results"));
+    }
+}
+
+#[test]
 fn aggregate_help_documents_declared_shadow_isolation() {
     skill_eval()
         .args(["aggregate", "--help"])
@@ -121,7 +145,8 @@ fn aggregate_help_documents_declared_shadow_isolation() {
         .success()
         .stdout(contains("plugin-shadow.json"))
         .stdout(contains("isolates_live_sources"))
-        .stdout(contains("validity_warnings"));
+        .stdout(contains("validity_warnings"))
+        .stdout(contains("eval-magic docs isolation"));
 }
 
 #[test]

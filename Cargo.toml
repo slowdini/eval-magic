@@ -1,6 +1,6 @@
 [package]
 name = "eval-magic"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2024"
 description = "One-stop CLI for running skill evals — measure whether an agent skill actually shifts behavior."
 license = "MIT"
@@ -12,6 +12,7 @@ categories = ["command-line-utilities"]
 exclude = [
     "/.cargo-husky/**",
     "/.claude/**",
+    "/.clinerules/**",
     "/.github/**",
     "AGENTS.md",
     "CLAUDE.md",

@@ -118,6 +118,8 @@ pub(crate) fn render_judge_dispatch_recipe(
         "Dispatch each judge task from judge-tasks.json with:".to_string(),
         "Existing nonempty response files are skipped; delete one to dispatch that judge again."
             .to_string(),
+        "The final `N/M verdicts present` summary exits nonzero until every task has one."
+            .to_string(),
         String::new(),
         "```bash".to_string(),
         "JOBS=${JOBS:-4}".to_string(),
@@ -137,6 +139,20 @@ pub(crate) fn render_judge_dispatch_recipe(
         format!("      > \"$response_base.{capture_prefix}-events.jsonl\" \\"),
         format!("      2> \"$response_base.{capture_prefix}-stderr.log\""),
         "  ' sh".to_string(),
+        "judge_dispatch_status=$?".to_string(),
+        "judge_total=$(jq '.tasks | length' judge-tasks.json)".to_string(),
+        "judge_present=$(".to_string(),
+        "  jq -r '.tasks[].response_path' judge-tasks.json \\".to_string(),
+        "    | while IFS= read -r response_path; do".to_string(),
+        "        if [ -s \"$response_path\" ]; then printf '%s\\n' \"$response_path\"; fi"
+            .to_string(),
+        "      done \\".to_string(),
+        "    | wc -l \\".to_string(),
+        "    | tr -d '[:space:]'".to_string(),
+        ")".to_string(),
+        "printf '%s/%s verdicts present\\n' \"$judge_present\" \"$judge_total\"".to_string(),
+        "[ \"$judge_dispatch_status\" -eq 0 ] && [ \"$judge_present\" -eq \"$judge_total\" ]"
+            .to_string(),
         "```".to_string(),
     ]
     .join("\n")
@@ -145,11 +161,52 @@ pub(crate) fn render_judge_dispatch_recipe(
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+    use std::fs;
+    use std::path::Path;
+    use std::process::{Command, Output};
+
+    use serde_json::json;
 
     use super::{
         render_agent_dispatch_command, render_cli_model_arg, render_judge_dispatch_recipe,
         render_parallel_dispatch_recipe, shell_quote_arg,
     };
+
+    fn write_judge_tasks(cwd: &Path, response_paths: &[&Path]) {
+        let tasks = response_paths
+            .iter()
+            .enumerate()
+            .map(|(index, response_path)| {
+                json!({
+                    "dispatch_prompt_path": cwd.join(format!("prompt-{index}.txt")),
+                    "response_path": response_path,
+                    "model": null,
+                })
+            })
+            .collect::<Vec<_>>();
+        fs::write(
+            cwd.join("judge-tasks.json"),
+            serde_json::to_vec(&json!({ "tasks": tasks })).unwrap(),
+        )
+        .unwrap();
+    }
+
+    fn run_judge_recipe(cwd: &Path, command_line: &str) -> Output {
+        let recipe = render_judge_dispatch_recipe(command_line, "--model", "judge");
+        let shell = recipe
+            .split_once("```bash\n")
+            .unwrap()
+            .1
+            .strip_suffix("\n```")
+            .unwrap();
+        Command::new("/bin/sh")
+            .arg("-c")
+            .arg(shell)
+            .current_dir(cwd)
+            .env("JOBS", "1")
+            .output()
+            .unwrap()
+    }
 
     #[test]
     fn agent_dispatch_environment_is_sorted_and_shell_quoted() {
@@ -266,7 +323,78 @@ mod tests {
             ),
             "{recipe}"
         );
+        assert!(
+            recipe.contains(
+                "The final `N/M verdicts present` summary exits nonzero until every task has one."
+            ),
+            "{recipe}"
+        );
         assert!(!recipe.contains("-I{}"), "{recipe}");
         assert!(!recipe.contains("cut -f"), "{recipe}");
+    }
+
+    #[test]
+    fn judge_recipe_reports_partial_completion_and_exits_nonzero() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let responses_dir = tmp.path().join("judge responses");
+        fs::create_dir_all(&responses_dir).unwrap();
+        let existing_response = responses_dir.join("existing.json");
+        let missing_response = responses_dir.join("missing.json");
+        fs::write(&existing_response, "{}\n").unwrap();
+        write_judge_tasks(tmp.path(), &[&existing_response, &missing_response]);
+
+        let output = run_judge_recipe(tmp.path(), "    true $model_arg \\");
+
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "1/2 verdicts present\n"
+        );
+    }
+
+    #[test]
+    fn judge_recipe_reports_complete_resumed_batch_and_exits_zero() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let first_response = tmp.path().join("first.json");
+        let second_response = tmp.path().join("second.json");
+        fs::write(&first_response, "first\n").unwrap();
+        fs::write(&second_response, "second\n").unwrap();
+        write_judge_tasks(tmp.path(), &[&first_response, &second_response]);
+
+        let output = run_judge_recipe(tmp.path(), "    false $model_arg \\");
+
+        assert!(output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "2/2 verdicts present\n"
+        );
+        assert_eq!(fs::read_to_string(first_response).unwrap(), "first\n");
+        assert_eq!(fs::read_to_string(second_response).unwrap(), "second\n");
+    }
+
+    #[test]
+    fn judge_recipe_preserves_dispatch_failure_after_response_is_written() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let response = tmp.path().join("response.json");
+        let failing_judge = tmp.path().join("failing-judge");
+        fs::write(
+            &failing_judge,
+            "#!/bin/sh\nprintf '{}\\n' > \"$1\"\nexit 7\n",
+        )
+        .unwrap();
+        write_judge_tasks(tmp.path(), &[&response]);
+
+        let output = run_judge_recipe(
+            tmp.path(),
+            "    sh ./failing-judge \"$response_path\" $model_arg \\",
+        );
+
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "1/1 verdicts present\n",
+            "{output:?}"
+        );
+        assert!(response.exists());
     }
 }

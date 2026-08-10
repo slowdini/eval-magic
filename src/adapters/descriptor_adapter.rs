@@ -25,7 +25,7 @@ use super::harness::{
 };
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::skills_block::{DEFAULT_HEADER, DEFAULT_ITEM, render_skills_block};
-use super::{PermissionDenial, TranscriptSummary};
+use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
 /// A [`HarnessAdapter`] backed by a validated [`HarnessDescriptor`].
 #[derive(Debug)]
@@ -263,6 +263,20 @@ impl HarnessAdapter for DescriptorAdapter {
             // No transcript table: nothing to read, and no error — a harness
             // without ingest simply carries no denial signal.
             None => Ok(Vec::new()),
+        }
+    }
+
+    fn surfaces_session_surface(&self) -> bool {
+        self.descriptor
+            .transcript
+            .as_ref()
+            .is_some_and(TranscriptSection::surfaces_session_surface)
+    }
+
+    fn parse_session_surface(&self, path: &Path) -> io::Result<Option<SessionSurface>> {
+        match &self.descriptor.transcript {
+            Some(transcript) => transcript.parse_session_surface(path),
+            None => Ok(None),
         }
     }
 
@@ -777,6 +791,7 @@ mod tests {
             .expect("claude judge recipe is wired");
         let expected = r#"Dispatch each judge task from judge-tasks.json with:
 Existing nonempty response files are skipped; delete one to dispatch that judge again.
+The final `N/M verdicts present` summary exits nonzero until every task has one.
 
 ```bash
 JOBS=${JOBS:-4}
@@ -796,6 +811,18 @@ jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // 
       > "$response_base.claude-events.jsonl" \
       2> "$response_base.claude-stderr.log"
   ' sh
+judge_dispatch_status=$?
+judge_total=$(jq '.tasks | length' judge-tasks.json)
+judge_present=$(
+  jq -r '.tasks[].response_path' judge-tasks.json \
+    | while IFS= read -r response_path; do
+        if [ -s "$response_path" ]; then printf '%s\n' "$response_path"; fi
+      done \
+    | wc -l \
+    | tr -d '[:space:]'
+)
+printf '%s/%s verdicts present\n' "$judge_present" "$judge_total"
+[ "$judge_dispatch_status" -eq 0 ] && [ "$judge_present" -eq "$judge_total" ]
 ```"#;
         assert_eq!(recipe, expected);
     }

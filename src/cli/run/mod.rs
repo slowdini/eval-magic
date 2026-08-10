@@ -20,6 +20,7 @@ pub mod orchestrate;
 pub mod runbook;
 mod scratch;
 pub mod staging;
+mod statistics;
 pub mod steps;
 mod util;
 

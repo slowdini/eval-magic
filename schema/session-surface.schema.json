@@ -1,0 +1,128 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eval-magic.dev/schema/session-surface.schema.json",
+  "title": "Session surface report",
+  "description": "What each dispatch reported it could discover, read from that dispatch's own transcript. Written only when the harness can report a surface, so a missing file means 'cannot report', never 'nothing loaded'. Within a task, a round whose `surface` is absent reports nothing knowable for that round.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "generated",
+    "iteration",
+    "tasks_with_evidence",
+    "tasks_without_evidence",
+    "tasks"
+  ],
+  "properties": {
+    "generated": {
+      "type": "string"
+    },
+    "iteration": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tasks_with_evidence": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Tasks with at least one round and a reported surface for every round."
+    },
+    "tasks_without_evidence": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/task"
+      }
+    }
+  },
+  "$defs": {
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["eval_id", "condition", "rounds"],
+      "properties": {
+        "eval_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "run_index": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "group": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rounds": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/round"
+          }
+        }
+      }
+    },
+    "round": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["round"],
+      "properties": {
+        "round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1 for a one-shot dispatch, then one per resumed turn."
+        },
+        "surface": {
+          "$ref": "#/$defs/surface"
+        }
+      }
+    },
+    "surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["advertised_skills", "loaded_plugins"],
+      "description": "Present means the transcript reported a roster; empty arrays are a positive report that nothing was discoverable.",
+      "properties": {
+        "advertised_skills": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": "Runtime identifiers, including namespaced plugin skills (`<plugin>:<skill>`) and staged slugs."
+        },
+        "loaded_plugins": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/plugin"
+          }
+        }
+      }
+    },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The namespace this plugin's skills are prefixed with."
+        },
+        "source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The enabledPlugins key an operator disables, e.g. `slow-powers@slowdini`."
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

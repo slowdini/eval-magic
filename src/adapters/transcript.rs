@@ -1,6 +1,6 @@
 //! Harness-neutral transcript types.
 //!
-//! Every harness's transcript parser reduces its native events file to a
+//! Every harness's primary transcript reader reduces its native events file to a
 //! [`TranscriptSummary`]; the pipeline consumes only this shape, never a
 //! harness's raw record types.
 
@@ -56,6 +56,36 @@ pub(crate) fn read_jsonl<T: serde::de::DeserializeOwned>(path: &Path) -> io::Res
         .filter(|line| !line.trim().is_empty())
         .filter_map(|line| serde_json::from_str::<T>(line).ok())
         .collect())
+}
+
+/// One plugin a dispatch loaded, as its own transcript reported it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadedPlugin {
+    /// The namespace the harness prefixes this plugin's skills with
+    /// (`slow-powers` in `slow-powers:hardening-plans`).
+    pub name: String,
+    /// The identity an operator disables — the `enabledPlugins` key, e.g.
+    /// `slow-powers@slowdini`. Absent when the harness reports only a name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
+/// What one dispatch reported it could discover, read from that dispatch's own
+/// transcript.
+///
+/// Parsers return `Option<Self>`, and the distinction is load-bearing: `None`
+/// means the transcript reports **no evidence** either way, while a `Some` whose
+/// vectors are empty is a harness positively reporting an empty surface — proof
+/// that nothing live loaded. Collapsing the two would turn "we cannot tell" into
+/// "nothing was there", which is exactly the wrong direction to guess in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionSurface {
+    /// Runtime skill identifiers the session could see: staged slugs, natural
+    /// names, and namespaced plugin skills (`<plugin>:<skill>`).
+    pub advertised_skills: Vec<String>,
+    pub loaded_plugins: Vec<LoadedPlugin>,
 }
 
 /// A transcript boiled down to the artifacts the pipeline needs.

@@ -18,7 +18,9 @@ pub(super) fn validate(descriptor: &HarnessDescriptor) -> Result<(), String> {
                 .into(),
         );
     };
-    if let Some(extract) = &transcript.extract {
+    if transcript.parser.is_none()
+        && let Some(extract) = &transcript.extract
+    {
         if extract.assistant_messages.is_none() {
             return Err(
                 "[conversation] with declarative transcript extraction requires \

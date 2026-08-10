@@ -5,14 +5,14 @@ use std::collections::BTreeSet;
 use crate::adapters::adapter_for;
 use crate::adapters::skill_shadow::{
     PluginShadowArtifact, PluginShadowReport, ShadowAppearance, ShadowResolution, ShadowRoot,
-    ShadowSource, format_isolated_shadow_notice, format_shadow_banner,
+    ShadowSource, format_isolated_shadow_notice, format_shadow_banner_with_verification,
 };
 use crate::core::RunContext;
+use crate::pipeline::shadow_verification::write_verified;
 
 use super::envs::EnvTarget;
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::run::RunError;
-use crate::core::fs::write_json;
 
 pub(super) fn run(
     ctx: &RunContext,
@@ -87,14 +87,9 @@ pub(super) fn run(
                 && shadowed_names.contains(&ctx.skill_name)
                 && let Some(slug) = condition_slug
             {
-                let runtime_id = if adapter.advertises_staged_slug_name() {
-                    slug
-                } else {
-                    &ctx.skill_name
-                };
                 let mut source = ShadowSource::staged(
                     &ctx.skill_name,
-                    runtime_id,
+                    slug,
                     &skills_dir.join(slug),
                     ShadowRoot::staged(&skills_dir),
                 );
@@ -128,11 +123,19 @@ pub(super) fn run(
         &expected_cells,
     );
     let artifact = PluginShadowArtifact::new(report, adapter.isolates_live_sources());
-    write_json(&r.iteration_dir.join("plugin-shadow.json"), &artifact)?;
+    let verifies = adapter.surfaces_session_surface();
+    write_verified(&r.iteration_dir.join("plugin-shadow.json"), &artifact)
+        .map_err(|e| RunError::Message(e.to_string()))?;
     if artifact.isolates_live_sources {
-        eprintln!("{}", format_isolated_shadow_notice(&artifact.report));
+        eprintln!(
+            "{}",
+            format_isolated_shadow_notice(&artifact.report, verifies)
+        );
     } else {
-        eprintln!("{}", format_shadow_banner(&artifact.report));
+        eprintln!(
+            "{}",
+            format_shadow_banner_with_verification(&artifact.report, verifies)
+        );
     }
     Ok(())
 }

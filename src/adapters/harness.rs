@@ -31,7 +31,7 @@ use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
-use super::{PermissionDenial, TranscriptSummary};
+use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
@@ -191,21 +191,21 @@ pub trait HarnessAdapter {
         "If the staged skill cannot be resolved".to_string()
     }
 
-    // ── Enhancement: transcript parser (defaulted) ───────────────────────────
+    // ── Enhancement: transcript ingest (defaulted) ───────────────────────────
     // Fallback without it: `transcript_check` assertions grade as
     // unverifiable, `llm_judge` carries the grading, token/cost/duration go
     // unrecorded, and run records are assembled by hand (or from
     // `outputs/final-message.md`) instead of auto-ingested.
 
-    /// **Enhancement: transcript parser.** The filename (under a task's
+    /// **Enhancement: transcript ingest.** The filename (under a task's
     /// `outputs/` dir) this harness's one-shot CLI writes the captured
     /// transcript to. `None` when no transcript ingest is wired — the ingest
-    /// pipeline then never calls the parsers below.
+    /// pipeline then never calls the readers below.
     fn cli_events_filename(&self) -> Option<String> {
         None
     }
 
-    /// **Enhancement: transcript parser.** Parse the events file this
+    /// **Enhancement: transcript ingest.** Parse the events file this
     /// harness's one-shot CLI wrote (the captured transcript) into ordered
     /// tool invocations.
     fn parse_cli_events(&self, _path: &Path) -> io::Result<Vec<ToolInvocation>> {
@@ -218,7 +218,7 @@ pub trait HarnessAdapter {
         ))
     }
 
-    /// **Enhancement: transcript parser.** The full-summary counterpart of
+    /// **Enhancement: transcript ingest.** The full-summary counterpart of
     /// [`parse_cli_events`](Self::parse_cli_events): tool invocations, deduped
     /// token usage, duration, and final message text.
     fn parse_cli_events_full(&self, _path: &Path) -> io::Result<TranscriptSummary> {
@@ -231,7 +231,7 @@ pub trait HarnessAdapter {
         ))
     }
 
-    /// **Enhancement: transcript parser.** The deterministic skill-invocation
+    /// **Enhancement: transcript ingest.** The deterministic skill-invocation
     /// signature the `__skill_invoked` meta-check matches: `(tool name, arg
     /// carrying the staged slug)` — Claude Code's `Skill`/`skill`, OpenCode's
     /// `skill`/`name`. `None` for Codex (its JSONL has no skill-tool event),
@@ -240,23 +240,41 @@ pub trait HarnessAdapter {
         Some(("Skill".to_string(), "skill".to_string()))
     }
 
-    /// **Enhancement: transcript parser.** Whether this harness's transcript
-    /// identifies tool calls it refused to run. `false` for harnesses whose
-    /// refusals are not distinguishable from ordinary tool errors — `ingest`
-    /// then writes no `permission-denials.json` and `aggregate` raises no
-    /// permission-denial validity warning, so a silently degraded run is only
-    /// visible in the transcripts.
+    /// **Enhancement: transcript denial reader.** Whether this harness's
+    /// transcript identifies tool calls it refused to run. `false` for
+    /// harnesses whose refusals are not distinguishable from ordinary tool
+    /// errors — `ingest` then writes no `permission-denials.json` and
+    /// `aggregate` raises no permission-denial validity warning, so a silently
+    /// degraded run is only visible in the transcripts.
     fn surfaces_permission_denials(&self) -> bool {
         false
     }
 
-    /// **Enhancement: transcript parser.** The refused tool calls in a captured
-    /// events file. Unlike [`parse_cli_events`](Self::parse_cli_events) the
-    /// default is an empty vec, not an `Unsupported` error: no detection is a
-    /// supported fallback, and the pipeline treats "none reported" and "cannot
-    /// report" alike rather than failing ingest.
+    /// **Enhancement: transcript denial reader.** The refused tool calls in a
+    /// captured events file. Unlike [`parse_cli_events`](Self::parse_cli_events)
+    /// the default is an empty vec, not an `Unsupported` error: no detection is
+    /// a supported fallback, and the pipeline treats "none reported" and
+    /// "cannot report" alike rather than failing ingest.
     fn parse_permission_denials(&self, _path: &Path) -> io::Result<Vec<PermissionDenial>> {
         Ok(Vec::new())
+    }
+
+    /// **Enhancement: session surface.** Whether this harness's transcript
+    /// reports the skills and plugins the session could actually discover.
+    /// `false` for harnesses whose captures carry no such roster — `ingest` then
+    /// writes no `session-surface.json` and shadow findings stay unverified,
+    /// leaving `[shadow] isolates_live_sources` as the operator's only way to
+    /// record that a dispatch was isolated.
+    fn surfaces_session_surface(&self) -> bool {
+        false
+    }
+
+    /// **Enhancement: session surface.** The skill/plugin surface one captured
+    /// events file reports. `Ok(None)` means the capture says nothing knowable;
+    /// only a `Some` with an empty roster can refute a live-source finding, so
+    /// the default is `None` rather than an empty surface.
+    fn parse_session_surface(&self, _path: &Path) -> io::Result<Option<SessionSurface>> {
+        Ok(None)
     }
 
     // ── Enhancement: model flag (defaulted) ──────────────────────────────────
@@ -350,9 +368,15 @@ pub trait HarnessAdapter {
     }
 
     /// **Enhancement: shadow preflight.** Format the shared runner banner for
-    /// a report.
+    /// a report. Whether the banner promises a verified verdict follows this
+    /// adapter's own
+    /// [`surfaces_session_surface`](Self::surfaces_session_surface), so a caller
+    /// cannot accidentally claim verification a harness can't deliver.
     fn format_shadow_banner(&self, report: &PluginShadowReport) -> String {
-        super::skill_shadow::format_shadow_banner(report)
+        super::skill_shadow::format_shadow_banner_with_verification(
+            report,
+            self.surfaces_session_surface(),
+        )
     }
 
     /// **Enhancement: shadow preflight.** Format shared aggregate validity
@@ -555,7 +579,7 @@ mod tests {
     #[test]
     fn claude_codex_and_opencode_surface_permission_denials() {
         // Each harness encodes a refused tool call differently, so detection is
-        // opt-in per parser. Every built-in parser detects today; a future
+        // opt-in per named reader. Every built-in selects one today; a future
         // harness whose transcript cannot distinguish a refusal from an ordinary
         // tool error leaves the default `false` and reports nothing rather than
         // guessing — `aggregate` then raises no permission-denial warning.
@@ -569,9 +593,9 @@ mod tests {
     #[test]
     fn a_deny_less_transcript_parses_no_denials_for_every_detecting_harness() {
         // "None reported" is a supported, distinguishable outcome — not an
-        // error. Each detecting parser, given a transcript whose tool calls all
+        // error. Each detecting reader, given a transcript whose tool calls all
         // completed or failed for ordinary (non-permission) reasons, yields an
-        // empty vec; the per-parser suites cover the false-positive guard.
+        // empty vec; the per-reader suites cover the false-positive guard.
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("events.jsonl");
         std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
@@ -585,6 +609,41 @@ mod tests {
                 adapter.parse_permission_denials(&path).unwrap(),
                 Vec::new(),
                 "{harness:?} reported a denial from a denial-less transcript"
+            );
+        }
+    }
+
+    #[test]
+    fn only_claude_code_reports_a_session_surface_today() {
+        // Claude Code's descriptor maps its `init` roster declaratively. Codex
+        // reports only `thread_id` on `thread.started`, and OpenCode's envelope
+        // carries no roster at all, so neither can supply this evidence and
+        // their shadow findings stay unverified rather than being wrongly
+        // refuted.
+        assert!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_session_surface(),
+            "claude-code's init event carries the surface"
+        );
+        for harness in ["codex", "opencode"] {
+            assert!(
+                !adapter_for(Harness::resolve(harness).unwrap()).surfaces_session_surface(),
+                "{harness} transcripts carry no skill/plugin roster"
+            );
+        }
+    }
+
+    #[test]
+    fn a_surface_less_transcript_parses_to_none_for_every_harness() {
+        // No roster in the capture must read as "no evidence" (`None`), never as
+        // an empty surface — an empty surface would refute a live-source finding.
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("events.jsonl");
+        std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
+        for harness in Harness::known() {
+            assert_eq!(
+                adapter_for(harness).parse_session_surface(&path).unwrap(),
+                None,
+                "{harness:?} invented a surface from a roster-less transcript"
             );
         }
     }

@@ -150,44 +150,59 @@ map as inline comments in its scaffolded template. The short map:
 |-------|----------|----------------------|
 | (top level) | `label` (required), `skills_dir`, `config_dirs` | no `skills_dir` ⇒ forced `--no-stage`, SKILL.md inlined |
 | `[dispatch]` | exec/parallel/judge/next-steps/manifest templates; eval-agent `env` defaults | generic handoff text; with only `exec_template`, generic recipes are built around it; absent env keys inherit the operator environment |
-| `[transcript]` | `events_filename` + exactly one of `parser` (a named capability) or `extract` (the declarative tier) | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
+| `[transcript]` | `events_filename`; one primary summary reader (`parser` or summary fields under `extract`); optional denial parser and declarative session surface | `transcript_check` grades unverifiable; `command_check` and `llm_judge` carry grading; tokens/duration unrecorded |
 | `[conversation]` | native `resume_exec_template` using the captured session id; optional token aggregation (`sum` default, `last` for cumulative reports) | no safe fallback: evals declaring `turns` are rejected in run preflight |
 | `[model]` | `flag` | `--agent-model`/`--judge-model` recorded as provenance only |
 | `[staging]` + `[skills_block]` | slug/naming rules, skills-block format | `--no-stage` inlining |
 | `[tools]` | tool-name vocabulary by role | required alongside `[transcript]` (the stray-writes audit classifies by it) |
-| `[shadow]` | `preflight` (named capability); optional `isolates_live_sources` assertion | no shadow report — correct for harnesses that load nothing global |
+| `[shadow]` | `preflight` (named capability); optional `isolates_live_sources` — records isolation you applied (`eval-magic docs isolation`) | no shadow report — correct for harnesses that load nothing global |
 | `[guard]` | **built-ins only** — see below | `detect-stray-writes` audits after the fact |
 
 ### Named capabilities: real code for free
 
-Everything that is genuinely code — transcript stitching, slug sanitization, shadow scanning —
-is a **named capability** a descriptor references. If your harness emits a compatible stream,
-you get the full feature from configuration alone:
+Everything that is genuinely code — transcript stitching, permission-denial parsing, slug
+sanitization, shadow scanning — is a **named capability** a descriptor references. Transcript
+capabilities compose by output: `parser` supplies the primary summary, while
+`permission_denials_parser` may read the same event stream or a paired harness capture.
 
 - `transcript.parser = "claude-stream-json"` — Claude Code `-p --output-format stream-json` events.
-  It surfaces **permission-denied tool calls** from the terminal `result` event's
-  `permission_denials`, which drives `permission-denials.json` and its validity warning.
-- `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL plus
-  structural tool-router rejections and `PreToolUse` blocks from the sibling `*-stderr.log`
-  capture. The events filename must end in `events.jsonl` so the parser can derive that sibling.
-  Ordinary failed command events are intentionally not treated as permission denials.
-- `transcript.parser = "opencode-events"` — OpenCode `run --format json` `tool_use`/`text`/`step_finish`
-  events. It surfaces **permission-denied tool calls** by recognizing OpenCode's own permission-layer
-  error strings on a `tool_use` event's `state.error` (an explicit deny rule's
-  `PermissionDeniedError` prefix, a headless reject's `PermissionRejectedError` prefix, or the
-  shared `eval guard: ` reason for a guard block), which drives `permission-denials.json` and its
-  validity warning. Ordinary tool-body errors are intentionally not treated as permission denials.
+- `transcript.parser = "codex-items"` — Codex `item.started`/`item.completed` JSONL. The built-in
+  Codex descriptor uses the equivalent declarative summary mapping below instead.
+- `transcript.parser = "opencode-events"` — OpenCode `run --format json`
+  `tool_use`/`text`/`step_finish` events.
+- `transcript.permission_denials_parser = "claude-stream-json"` — structured
+  `permission_denials` from Claude's terminal result event.
+- `transcript.permission_denials_parser = "codex-items"` — structural router rejections and
+  `PreToolUse` blocks from the sibling `*-stderr.log`; `events_filename` must end in
+  `events.jsonl` so the reader can derive that sibling.
+- `transcript.permission_denials_parser = "opencode-events"` — OpenCode-authored permission-layer
+  errors on refused `tool_use` events.
 - `staging.slug_capability = "opencode"` — OpenCode's sanitizing slug rules.
 - `shadow.preflight = "claude-plugins"` — the Claude plugin/global-skills shadow scan.
 - `shadow.preflight = "codex-skills"` — the Codex repo/user/admin/plugin skill scan.
 - `shadow.preflight = "opencode-skills"` — the OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
 
-`shadow.isolates_live_sources = true` is not a capability and does not change the scan. It is an
-unverified operator assertion that every source the selected preflight can report is excluded from
-every initial and resumed eval-agent dispatch. Detected sources remain in `plugin-shadow.json`,
-which records the assertion, and `run` prints an informational notice instead of a warning;
-`aggregate` then omits those findings from `validity_warnings`. Do not set it for partial isolation.
-eval-magic deliberately does not inspect shell templates for known flags.
+Each denial reader deliberately ignores ordinary tool-body failures. For compatibility, existing
+parser-only descriptors keep the denial behavior their parser historically supplied. An explicit
+`permission_denials_parser` is authoritative and lets a declarative summary reuse a code-backed
+denial reader, as the built-in Codex descriptor does.
+
+`shadow.isolates_live_sources = true` is not a capability and does not change the scan. It is the
+sanctioned way to record isolation you have **already applied**: once every source the selected
+preflight can report is excluded from every initial and resumed eval-agent dispatch, declare it and
+the findings stop reading as defects. Detected sources remain in `plugin-shadow.json`, which records
+the assertion, and `run` prints an informational notice instead of a warning; `aggregate` then omits
+those findings from `validity_warnings`.
+
+eval-magic deliberately does not inspect shell templates for known flags — it verifies isolation
+from dispatch transcripts instead. When a transcript reports the session's skill/plugin roster,
+`ingest` checks the assertion against what each dispatch actually loaded and `aggregate` reports
+any contradiction, so a false declaration produces a louder warning rather than a quieter one.
+When it cannot, the assertion is taken on trust and the honesty rules are yours to keep: it must
+cover *every* reported source and *every* dispatch including resumed turns, and partial isolation
+does not qualify.
+`eval-magic docs isolation` has the per-harness recipes, what each one does and does not hide, and
+how to read the verdict.
 
 All named preflights feed the same schema-v2 report policy and renderer; a descriptor does not need
 harness-specific reporting code. The artifact groups sources by logical skill and records roles,
@@ -233,6 +248,7 @@ and one generic engine executes it, unlocking the same transcript ingest a named
 [transcript]
 events_filename = "codex-events.jsonl"
 surfaces_skill_invocation = false
+permission_denials_parser = "codex-items"
 
 # Flat tool-item mapping: each matching record's item object becomes one
 # tool invocation, in stream order.
@@ -272,6 +288,25 @@ subtract = ["usage.cached_input_tokens"]
 timestamp_spread = "timestamp"
 ```
 
+Session-surface extraction is an auxiliary declarative output, so it may accompany either primary
+summary tier. This Claude-shaped example is also the mapping used by the built-in Claude descriptor:
+
+```toml
+[transcript.extract.session_surface]
+where = { type = "system", subtype = "init" }
+skills_field = "skills"
+plugins_field = "plugins"
+plugin_name_field = "name"       # namespace used in <plugin>:<skill>
+plugin_id_field = "source"       # operator-facing key used to disable the plugin
+plugin_version_field = "version" # optional provenance
+```
+
+At least one of `skills_field` or `plugins_field` is required. A plugin roster additionally needs
+`plugin_name_field`; the id and version mappings are optional. The last matching record that
+resolves at least one configured field to an array wins. No usable match yields `None` (no
+evidence), while explicitly empty arrays are positive evidence of an empty surface. Non-string
+skills and non-string/non-object plugins are skipped; a bare plugin string is its name.
+
 The primitive set is deliberately minimal:
 
 1. **`where`** — a dotted-path → expected-string equality filter shared by every sub-table
@@ -289,6 +324,8 @@ The primitive set is deliberately minimal:
    total into zero.
 7. **`duration`** — a millisecond `field` pick (last match wins) or `timestamp_spread` (last
    minus first; needs at least two parseable timestamps).
+8. **`session_surface`** — last usable roster record, with separate skill/plugin array picks and
+   plugin identity mappings; unlike the summary fields, it may accompany a named parser.
 
 Dotted paths (`"usage.input_tokens"`, `"item.text"`) descend nested objects only — there is no
 array indexing, and keys containing literal dots are unaddressable. Malformed JSONL lines are
@@ -299,10 +336,12 @@ skill-invocation event; when true, the `__skill_invoked` meta-check matches the 
 `skill_tool` whose `skill_arg` argument equals the staged slug (defaults `"Skill"` / `"skill"` —
 Claude Code's spellings; OpenCode declares `"skill"` / `"name"`).
 
-**If a stream needs more than these primitives, it's a code capability, not a bigger DSL.** The
-line is cross-event state: a stream whose tool results arrive in *separate* records joined by id
-(Claude Code's `tool_use`/`tool_result` pairing), or whose content needs shape-dependent
-coercion, is what named parsers are for — that's `claude-stream-json`, and it stays code.
+**If summary extraction needs more than these primitives, it's a code capability, not a bigger
+DSL.** The line is cross-event state: a stream whose tool results arrive in *separate* records
+joined by id (Claude Code's `tool_use`/`tool_result` pairing), or whose content needs
+shape-dependent coercion, is what named parsers are for — that's `claude-stream-json`, and it
+stays code. A parser may coexist with `extract.session_surface`; parser plus any summary extract
+field remains invalid so summary precedence cannot become ambiguous.
 
 ### The guard restriction
 
@@ -362,12 +401,13 @@ beyond a mechanical registration. What counts as data vs code:
 
 - **Data — one descriptor PR:** the descriptor file itself: `label` / `skills_dir` /
   `config_dirs`, the `[dispatch]` / `[conversation]` templates, `[model]`, `[staging]` + `[skills_block]`,
-  `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (the declarative tier is pure
-  data), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
+  `[tools]`, the `[run]` booleans, a `[transcript.extract]` block (including session-surface
+  extraction), and `[transcript]` / `[shadow]` **when they reuse an existing named capability**
   (`claude-stream-json`, `codex-items`, `opencode-events`, `opencode`, `claude-plugins`,
   `codex-skills`, `opencode-skills`).
-- **Code — one capability per PR, separate from the descriptor PR:** a new transcript parser,
-  slug capability, or shadow preflight (each is `src/adapters/capabilities.rs` + a
+- **Code — one capability per PR, separate from the descriptor PR:** a new transcript
+  summary/denial reader, slug capability, or shadow preflight (each is
+  `src/adapters/capabilities.rs` + a
   `src/adapters/<harness>/` module + a schema enum entry), and guard support (`[guard]` data is
   built-in-only — see the guard restriction above).
 

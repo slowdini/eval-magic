@@ -37,13 +37,41 @@ item = "\n- {name}: {description} (file: {path})"
 # Codex's JSONL exposes no deterministic skill-tool event, so the
 # `__skill_invoked` meta-check uses the LLM-judge fallback.
 #
-# The stream is flat (every tool event self-contained). The code parser also
-# correlates the sibling stderr capture, where Codex reports structural
-# permission denials that do not appear in JSONL.
+# The JSONL stream is flat (every tool event self-contained), so its summary is
+# declarative. Permission denials are independent: the named reader correlates
+# the sibling stderr capture where Codex reports structural router rejections.
 [transcript]
 events_filename = "codex-events.jsonl"
 surfaces_skill_invocation = false
-parser = "codex-items"
+permission_denials_parser = "codex-items"
+
+[transcript.extract.tools]
+where = { type = "item.completed" }
+item = "item"
+name_field = "type"
+skip_names = ["agent_message", "reasoning", "plan_update"]
+args_omit = ["id", "type", "status", "output", "result", "error"]
+result_coalesce = ["output", "result", "error"]
+
+[transcript.extract.final_text]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.assistant_messages]
+where = { type = "item.completed", "item.type" = "agent_message" }
+field = "item.text"
+
+[transcript.extract.session_id]
+where = { type = "thread.started" }
+field = "thread_id"
+
+[transcript.extract.tokens]
+where = { type = "turn.completed" }
+sum = ["usage.input_tokens", "usage.output_tokens"]
+subtract = ["usage.cached_input_tokens"]
+
+[transcript.extract.duration]
+timestamp_spread = "timestamp"
 
 [model]
 flag = "-m"

@@ -490,6 +490,11 @@ pub struct RunArgs {
     /// unchanged (artifacts sit directly in the condition directory). The
     /// benchmark's per-condition `mean`/`stddev`/`n` then reflect all runs. A
     /// per-eval `runs` field in evals.json overrides this flag for that eval.
+    /// Before staging, the run summary prints the minimum attainable two-sided
+    /// Fisher exact p-value for each effective run count, assuming a binary
+    /// endpoint and perfect separation between the two conditions. This is a
+    /// sample-size bound only: eval-magic does not calculate observed p-values or
+    /// apply a significance threshold.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     pub runs: u32,
     /// Agent-under-test model for CLI dispatches; otherwise recorded as
@@ -557,6 +562,14 @@ pub(crate) enum Commands {
     /// no remotes. The runner owns its root `.git`; task outputs remain ignored,
     /// and rebuilding an explicit iteration resets prior Git history, branches,
     /// and remotes before dispatch.
+    ///
+    /// Before dispatch, a shadow preflight scans every task environment for live
+    /// copies of the staged skills — installed plugins, global and cross-harness
+    /// skill directories — and warns when one could contaminate the comparison. It
+    /// reports what is discoverable, not what a dispatch loaded: eval-magic never
+    /// reads your command templates, so a remedy you applied is invisible to it.
+    /// Isolating each dispatch from those sources, and confirming it worked, is
+    /// `eval-magic docs isolation`.
     Run(RunArgs),
     /// Execute one scripted multi-turn task through its harness CLI.
     ///
@@ -597,7 +610,9 @@ pub(crate) enum Commands {
     /// scope is captured before held-out files are injected. Then stops at the
     /// judge hand-off, listing a judge task per `llm_judge` assertion. Requires
     /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
-    /// harness exposes transcripts.
+    /// harness exposes transcripts. When the harness provides a judge recipe, it
+    /// skips existing nonempty responses, prints `N/M verdicts present`, and exits
+    /// nonzero while any are missing; rerun the same recipe to fill the gaps.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
@@ -605,7 +620,8 @@ pub(crate) enum Commands {
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts,
     /// runner-owned `command_check` results, and deterministic `diff_scope`
     /// files/lines thresholds into normal `grading.json` files, then writes
-    /// `benchmark.json` with raw per-run metrics from `diff-scope.json`. If a live
+    /// `benchmark.json` with a per-assertion `passed`/`n` rollup from observed
+    /// assertion results and raw per-run metrics from `diff-scope.json`. If a live
     /// guard remains armed — the cwd guard, or any per-task Cli env guard — prints
     /// a `teardown` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
@@ -625,6 +641,17 @@ pub(crate) enum Commands {
     /// invisible. `aggregate` lifts one validity warning per affected task from
     /// that file. No file is written for a harness that cannot detect a refusal,
     /// so its absence never reads as "nothing was refused".
+    ///
+    /// For harnesses whose captures report the session's discoverable skills and
+    /// plugins (Claude Code today), it also writes `session-surface.json` — one
+    /// entry per dispatch and per resumed turn — and uses it to resolve the
+    /// build-time shadow preflight's findings, writing `resolved_severity` back
+    /// into `plugin-shadow.json`. A finding refuted in every expected cell
+    /// becomes `isolated` and raises no validity warning; refuting requires every
+    /// cell to have reported, so a missing transcript leaves it unverified rather
+    /// than isolated. No file is written for a harness that cannot report a
+    /// surface, so its absence never reads as "nothing loaded". See
+    /// `eval-magic docs isolation`.
     RecordRuns(CommonArgs),
     /// Populate tool invocations from persisted transcripts.
     ///
@@ -670,7 +697,8 @@ pub(crate) enum Commands {
     /// Aggregate before/after benchmark deltas.
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
-    /// pass-rate / duration / token stats per condition, the delta,
+    /// pass-rate / duration / token stats per condition, a per-assertion
+    /// `passed`/`n` rollup from observed assertion results, the delta,
     /// `validity_warnings` (including incomplete timing sample counts, one per
     /// task in `guard-denials.json`, and one per task in
     /// `permission-denials.json` whose refusals were not the guard's own, plus
@@ -682,6 +710,9 @@ pub(crate) enum Commands {
     /// remediation. A timing metric with `n: 0` is unavailable, not a measured
     /// zero. The top-level `diff_scope` field is omitted for compatible older
     /// iterations that predate metric capture.
+    ///
+    /// Isolating dispatches from the live sources a shadow finding names, and
+    /// confirming it worked, is `eval-magic docs isolation`.
     Aggregate(CommonArgs),
     /// Scaffold a first `evals/evals.json` for a skill.
     ///
@@ -712,8 +743,10 @@ pub(crate) enum Commands {
     /// The user-facing reference docs ship inside the binary — version-matched
     /// to the installed release and readable offline. `guide` is the complete
     /// operating guide (the README); `byoh` is the bring-your-own-harness
-    /// descriptor authoring guide. Development docs for working on eval-magic
-    /// itself stay in the repository's `docs/` directory.
+    /// descriptor authoring guide; `isolation` covers isolating dispatches from
+    /// live and installed skill sources, and verifying it worked. Development
+    /// docs for working on eval-magic itself stay in the repository's `docs/`
+    /// directory.
     Docs {
         /// Topic to print (bare `docs` lists the available topics).
         topic: Option<String>,

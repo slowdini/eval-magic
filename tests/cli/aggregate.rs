@@ -5,7 +5,9 @@ use assert_cmd::Command;
 use std::fs;
 use std::process::Command as StdCommand;
 
+mod assertions;
 mod shadow;
+mod shadow_verification;
 
 /// Create skill-dir/SKILL.md + iteration-1, returning
 /// `(skill_dir, skill_md_path, iteration_dir, cwd)`.

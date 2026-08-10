@@ -2,11 +2,13 @@
 //!
 //! Compares exactly two conditions: collects
 //! `pass_rate` (from `grading.json`), `total_tokens`/`duration_ms` (from
-//! `timing.json`), raw per-run diff scope, and the skill-invocation determination
-//! per condition; computes mean/stddev and the `a - b` delta; accumulates validity
-//! warnings (mixed timing sources, sub-100% invocation rate, stray-write
-//! violations + live-source reads, guard denials, permission-denied tool calls,
-//! plugin shadows); and writes `benchmark.json`.
+//! `timing.json`), per-assertion pass counts, raw per-run diff scope, and the
+//! skill-invocation determination per condition; computes mean/stddev and the
+//! `a - b` delta; accumulates validity warnings (mixed timing sources, sub-100%
+//! invocation rate, stray-write violations + live-source reads, guard denials,
+//! permission-denied tool calls, plugin shadows); and writes `benchmark.json`.
+
+mod assertions;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -15,6 +17,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use self::assertions::AssertionRollup;
 use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::core::fs::write_json;
 use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
@@ -110,6 +113,7 @@ pub struct Benchmark {
     #[serde(skip)]
     pub warnings: Vec<String>,
     pub run_summary: Value,
+    pub assertions: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_scope: Option<Value>,
     delta: Delta,
@@ -197,6 +201,7 @@ pub fn aggregate(
     let mut missing_gradings = 0usize;
     let mut warnings: Vec<String> = Vec::new();
     let mut timing_sources: HashSet<String> = HashSet::new();
+    let mut assertion_counts = AssertionRollup::default();
     let mut diff_scope_by_condition: HashMap<String, Vec<DiffScopeRun>> = condition_names
         .iter()
         .map(|condition| (condition.clone(), Vec::new()))
@@ -246,6 +251,11 @@ pub fn aggregate(
                 }
                 let grading: GradingResult =
                     serde_json::from_str(&fs::read_to_string(&grading_path)?)?;
+                let eval_id = eval_dir
+                    .strip_prefix("eval-")
+                    .unwrap_or(eval_dir)
+                    .to_string();
+                assertion_counts.record(&eval_id, cond, &grading.assertion_results);
                 let bucket = by_condition.get_mut(cond).expect("condition bucket");
                 bucket.pass_rates.push(grading.summary.pass_rate);
                 if let Some(meta) = &grading.meta_summary
@@ -392,6 +402,7 @@ pub fn aggregate(
         }
         Value::Object(by_condition)
     });
+    let assertions = assertion_counts.into_value(&eval_dirs, &condition_names);
 
     let benchmark = Benchmark {
         generated: now_iso8601(),
@@ -402,6 +413,7 @@ pub fn aggregate(
         validity_warnings,
         warnings,
         run_summary: Value::Object(run_summary),
+        assertions,
         diff_scope,
         delta,
     };
@@ -496,8 +508,25 @@ fn collect_shadow_warnings(
     let Ok(artifact) = serde_json::from_str::<PluginShadowArtifact>(&raw) else {
         return;
     };
-    if artifact.isolates_live_sources {
+    // Evidence outranks the assertion. A declared isolation that transcripts
+    // contradict means the suppressed findings were real, so the contradiction
+    // is reported rather than trusted.
+    let contradicted = artifact
+        .verification
+        .as_ref()
+        .is_some_and(|verification| verification.assertion_contradicted);
+    if artifact.isolates_live_sources && !contradicted {
         return;
+    }
+    if contradicted {
+        warnings.push(
+            "comparison invalid: the resolved harness descriptor declares `[shadow] \
+             isolates_live_sources = true`, but dispatch transcripts show a reported source was \
+             actually loaded — the isolation assertion is false and the suppressed findings are \
+             real. Remove the assertion or fix the isolation, then re-run. See `eval-magic docs \
+             isolation`."
+                .to_string(),
+        );
     }
     warnings.extend(artifact.validity_warnings());
 }

@@ -12,7 +12,7 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
 
 | File | What's in it |
 |------|--------------|
-| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug, `opencode-events` parser, and `opencode-skills` shadow-preflight references |
+| `harnesses/opencode.toml` | the descriptor — every declarative value + the `opencode` slug, `opencode-events` summary/denial, and `opencode-skills` shadow-preflight references |
 | `harnesses/opencode-guard-plugin.js` | the embedded write-guard project plugin staged by the `opencode-plugin` guard engine (`{exe}`/`{marker}` substituted; byte-pinned in `src/adapters/guard.rs`) |
 | `mod.rs` | slug sanitization/truncation (the `opencode` slug capability) |
 | `transcript.rs` | `opencode run --format json` event-stream parsing (the `opencode-events` transcript capability) |
@@ -117,8 +117,9 @@ milliseconds — the same fail-open-per-call posture as the other engines.
 
 OpenCode has no dedicated refusal channel: a tool call the harness refuses to run is recorded as
 an ordinary `tool_use` event whose `part.state.status` is `"error"` and whose `state.error` carries
-the refusal explanation. The `opencode-events` parser tells a refusal from an ordinary tool error by
-the *content* of that string, which OpenCode itself authors at the permission layer — before the
+the refusal explanation. The explicitly selected
+`permission_denials_parser = "opencode-events"` reader tells a refusal from an ordinary tool error
+by the *content* of that string, which OpenCode itself authors at the permission layer — before the
 tool body runs — so matching it is not guessing from arbitrary result text:
 
 - An **explicit deny rule** (the operator `permission` config matching the call) throws
@@ -144,7 +145,7 @@ match those OpenCode-authored prefixes and are therefore not classified as permi
 A note on tool *visibility*: when an operator rule denies a tool with pattern `"*"` and action
 `"deny"`, OpenCode removes that tool from the offered toolset entirely — the agent has no `bash`
 to call and emits no event, so there is nothing to record. Pattern-specific denies (which keep the
-tool visible so a matching call throws `PermissionDeniedError`) are what the parser captures; a
+tool visible so a matching call throws `PermissionDeniedError`) are what the reader captures; a
 globally-denied tool is simply absent from the transcript.
 
 These shapes were verified against `opencode v1.18.10` on 2026-07-30 by capturing
@@ -178,23 +179,22 @@ probe and are `selected`. The shared banner and `aggregate` validity warnings re
 report; historical unversioned artifacts remain readable.
 
 eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
-set the kill switches below on the operator's behalf — parity with a real user session matters.
-Before dispatch, move or rename the conflicting skill directory; or, for a cross-harness root,
-hide it with the session environment:
-
-- `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=1` hides the `.claude` roots only (global + project);
-- `OPENCODE_DISABLE_EXTERNAL_SKILLS=1` hides both `.claude` and `.agents` roots.
+set the `OPENCODE_DISABLE_*` kill switches on the operator's behalf — parity with a real user
+session matters. The operator-facing recipes — both switches with their exact scopes, and
+move-or-rename as the only remedy for an `.opencode` root — are in the shipped
+`eval-magic docs isolation` topic ([isolation.md](isolation.md)).
 
 When descriptor environment/recipes exclude **every** reported source from every initial and
 resumed dispatch, an overlay may declare `[shadow] isolates_live_sources = true`. Preflight still
 writes every source and the assertion to `plugin-shadow.json`; `run` prints an informational
-notice and `aggregate` omits the shadow validity warnings. The two environment switches above do
-not hide `.opencode` sources, so they cannot justify the assertion when one is reported.
-eval-magic does not inspect or verify the dispatch configuration.
+notice and `aggregate` omits the shadow validity warnings. eval-magic does not inspect or verify
+the dispatch configuration; the honesty rules, including which OpenCode remedies can and cannot
+justify the assertion, are in `eval-magic docs isolation`.
 
 **Known limits:** OpenCode also loads skills from config-declared `skills.paths` directories
 and `skills.urls` (remote-pulled), and matches a singular `.opencode/skill/` directory; the
-preflight does not scan those sources. Verify those cases manually when relevant.
+preflight does not scan those sources. Verify those cases manually when relevant. (Also stated for
+operators in `eval-magic docs isolation`.)
 
 ## Naming rules
 

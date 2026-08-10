@@ -35,8 +35,30 @@ fn docs_lists_topics() {
         .success()
         .stdout(contains("guide"))
         .stdout(contains("byoh"))
+        .stdout(contains("isolation"))
         .stdout(contains("operating guide"))
         .stdout(contains("harness"));
+}
+
+/// Every listing row fits an 80-column terminal. `docs/README.md` treats "the
+/// bare-`docs` listing stops fitting on a screen" as a trigger for moving to
+/// hosted docs, so a wrapped row would misreport that threshold as reached.
+#[test]
+fn docs_listing_rows_fit_eighty_columns() {
+    let output = skill_eval()
+        .arg("docs")
+        .assert()
+        .success()
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    for line in stdout.lines() {
+        assert!(
+            line.chars().count() <= 80,
+            "listing row wraps at 80 columns ({} chars): {line}",
+            line.chars().count()
+        );
+    }
 }
 
 /// `docs guide` prints the embedded operating guide (the README body).
@@ -48,7 +70,61 @@ fn docs_guide_prints_operating_guide() {
         .success()
         .stdout(contains("# eval-magic"))
         .stdout(contains("## Quickstart"))
-        .stdout(contains("## Reading results"));
+        .stdout(contains("## Reading results"))
+        .stdout(contains("verdicts present"))
+        .stdout(contains("exits nonzero"));
+}
+
+#[test]
+fn docs_guide_explains_per_assertion_benchmark_counts() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("\"assertions\""))
+        .stdout(contains("observed assertion results"))
+        .stdout(contains("meta-results"));
+}
+
+#[test]
+fn docs_guide_explains_fixture_source_roots() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("files_root"))
+        .stdout(contains("evals/fixtures/todo-app/src/App.tsx"))
+        .stdout(contains("task root as `src/App.tsx`"));
+}
+
+/// The runner-owned artifact is the portable verification surface; raw event
+/// shapes are harness-specific and cannot support one operator recipe.
+#[test]
+fn docs_guide_explains_scripted_conversation_verification() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("### Verify a scripted conversation"))
+        .stdout(contains("delivered_followups"))
+        .stdout(contains("assistant_rounds"))
+        .stdout(contains("different native session ID"))
+        .stdout(contains("means the task was interrupted"));
+}
+
+#[test]
+fn docs_guide_counts_scripted_turns_per_condition_and_repetition() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .success()
+        .stdout(contains("effective run count `R`"))
+        .stdout(contains("`2R` native agent sessions"))
+        .stdout(contains("`2R × F` additional model turns"))
+        .stdout(contains(
+            "Judge dispatches are also per condition and repetition",
+        ))
+        .stdout(contains("`JOBS`"));
 }
 
 /// `docs byoh` prints the embedded bring-your-own-harness authoring guide.
@@ -63,6 +139,49 @@ fn docs_byoh_prints_embedded_authoring_guide() {
         .stdout(contains("Upstreaming your descriptor"));
 }
 
+#[test]
+fn docs_byoh_explains_composable_transcript_sub_capabilities() {
+    skill_eval()
+        .args(["docs", "byoh"])
+        .assert()
+        .success()
+        .stdout(contains("permission_denials_parser"))
+        .stdout(contains("[transcript.extract.session_surface]"))
+        .stdout(contains("plugin_version_field"))
+        .stdout(contains("explicitly empty arrays"))
+        .stdout(contains("parser-only descriptors"));
+}
+
+/// `docs isolation` prints the embedded live-source isolation guide. One anchor
+/// per harness, so a section cannot quietly vanish and leave the topic claiming
+/// coverage it no longer has.
+#[test]
+fn docs_isolation_prints_embedded_topic() {
+    skill_eval()
+        .args(["docs", "isolation"])
+        .assert()
+        .success()
+        .stdout(contains("# Isolating dispatches from live skill sources"))
+        .stdout(contains("--setting-sources project,local"))
+        .stdout(contains("CLAUDE_CONFIG_DIR"))
+        .stdout(contains("--disable plugins"))
+        .stdout(contains("OPENCODE_DISABLE_EXTERNAL_SKILLS"))
+        .stdout(contains("isolates_live_sources"));
+}
+
+/// The topic must keep naming the tool that *cannot* answer "did this dispatch
+/// load the plugin", and the event that can. Both cost real debugging time to
+/// discover (issue #207), and both read as trimmable detail to a future editor.
+#[test]
+fn docs_isolation_documents_the_plugin_list_antipattern() {
+    skill_eval()
+        .args(["docs", "isolation"])
+        .assert()
+        .success()
+        .stdout(contains("claude plugin list"))
+        .stdout(contains("\"subtype\":\"init\""));
+}
+
 /// An unknown topic fails and names the available topics.
 #[test]
 fn docs_unknown_topic_fails_listing_available() {
@@ -73,7 +192,8 @@ fn docs_unknown_topic_fails_listing_available() {
         .stderr(
             contains("unknown docs topic 'nope'")
                 .and(contains("guide"))
-                .and(contains("byoh")),
+                .and(contains("byoh"))
+                .and(contains("isolation")),
         );
 }
 
@@ -103,9 +223,14 @@ fn harness_init_help_points_at_docs_subcommand() {
 #[test]
 fn shipped_help_references_resolve_to_real_topics() {
     let topics = listed_topics();
-    assert!(topics.len() >= 2, "bare `docs` lists topics: {topics:?}");
+    assert!(topics.len() >= 3, "bare `docs` lists topics: {topics:?}");
 
-    for help_args in ["--help", "harness init --help", "run --help"] {
+    for help_args in [
+        "--help",
+        "harness init --help",
+        "run --help",
+        "aggregate --help",
+    ] {
         let output = skill_eval()
             .args(help_args.split_whitespace())
             .assert()

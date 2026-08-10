@@ -13,6 +13,7 @@ use super::{
 };
 
 mod conversation;
+mod transcript;
 
 /// The placeholders a slug template must carry to keep cleanup prefix-scans
 /// and per-cell uniqueness working.
@@ -34,8 +35,8 @@ const CHECKS: &[Check] = &[
     check_config_dirs_cover_skills_dir,
     check_guard_engine_fields,
     check_guard_verdict_template,
-    check_transcript_tool_vocabulary,
-    check_transcript_tiers,
+    transcript::check_tool_vocabulary,
+    transcript::check_tiers,
     conversation::validate,
     check_tool_roles_disjoint,
     check_judge_command_template,
@@ -338,73 +339,6 @@ fn check_guard_verdict_template(d: &HarnessDescriptor) -> Result<(), String> {
             Ok(())
         }
     }
-}
-
-/// A transcript parser without a write/shell vocabulary makes the stray-writes
-/// audit a silent no-op.
-fn check_transcript_tool_vocabulary(d: &HarnessDescriptor) -> Result<(), String> {
-    if d.transcript.is_some() && (d.tools.write.is_empty() || d.tools.shell.is_empty()) {
-        return Err(
-            "[transcript] is declared but [tools] write/shell are empty; \
-             detect-stray-writes would audit nothing — declare the harness's tool names"
-                .into(),
-        );
-    }
-    Ok(())
-}
-
-/// Transcript ingest reads through exactly one tier: a named code parser or
-/// the declarative extract block, which must itself declare something to parse.
-fn check_transcript_tiers(d: &HarnessDescriptor) -> Result<(), String> {
-    let Some(transcript) = &d.transcript else {
-        return Ok(());
-    };
-    match (&transcript.parser, &transcript.extract) {
-        (Some(_), Some(_)) => {
-            return Err(
-                "[transcript] declares both a parser and an extract block; ingest reads \
-                 through exactly one — drop one of them. Layered overrides merge fields \
-                 and cannot delete an inherited parser, so moving a harness from parser \
-                 to extract needs a new label rather than an overlay"
-                    .into(),
-            );
-        }
-        (None, None) => {
-            return Err(
-                "[transcript] declares neither a parser nor an extract block; declare \
-                 exactly one — name a parser capability or add [transcript.extract] — \
-                 or drop the table and let llm_judge carry the grading"
-                    .into(),
-            );
-        }
-        _ => {}
-    }
-    if let Some(extract) = &transcript.extract {
-        if extract.tools.is_none()
-            && extract.final_text.is_none()
-            && extract.assistant_messages.is_none()
-            && extract.session_id.is_none()
-            && extract.tokens.is_none()
-            && extract.duration.is_none()
-        {
-            return Err(
-                "[transcript.extract] declares none of tools/final_text/assistant_messages/\
-                 session_id/tokens/duration; an empty extract block parses nothing — \
-                 declare at least one output"
-                    .into(),
-            );
-        }
-        if let Some(duration) = &extract.duration
-            && duration.field.is_some() == duration.timestamp_spread.is_some()
-        {
-            return Err(
-                "[transcript.extract.duration] must declare exactly one of field \
-                 (a millisecond pick) or timestamp_spread (last minus first timestamp)"
-                    .into(),
-            );
-        }
-    }
-    Ok(())
 }
 
 /// Tool roles are disjoint: one name in two roles would double-classify

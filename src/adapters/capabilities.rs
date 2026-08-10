@@ -1,12 +1,13 @@
 //! Named code capabilities a harness descriptor references.
 //!
-//! Everything a descriptor cannot express as data — transcript stitching,
-//! slug sanitization, plugin-shadow scanning — lives behind one of these
-//! closed enums. A descriptor opts in by naming the capability
-//! (`parser = "codex-items"`); a harness whose stream is compatible with an
-//! existing capability gets the full feature from configuration alone. (The
-//! write guard needs no named capability: its install and verdict render from
-//! the descriptor's `[guard]` data via [`super::guard`].)
+//! Everything a descriptor cannot express as data — transcript stitching or
+//! harness-specific denial evidence, slug sanitization, plugin-shadow scanning
+//! — lives behind one of these closed enums. A descriptor opts in by naming the
+//! capability (`parser = "codex-items"` or
+//! `permission_denials_parser = "codex-items"`); a harness whose stream is
+//! compatible with an existing capability gets the feature from configuration
+//! alone. (The write guard needs no named capability: its install and verdict
+//! render from the descriptor's `[guard]` data via [`super::guard`].)
 //!
 //! The enums deserialize from the kebab-case capability names the
 //! `harness-descriptor` schema also enumerates, so an unknown name fails the
@@ -22,8 +23,9 @@ use crate::core::ToolInvocation;
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, TranscriptSummary};
 
-/// Transcript parsers: turn a captured CLI events file into tool invocations
-/// and a [`super::TranscriptSummary`].
+/// Code-backed transcript readers. Every variant can produce a primary summary
+/// when selected as `parser`; descriptors may also select its independent
+/// denial reader or rely on its legacy session-surface support.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum TranscriptParser {
@@ -62,9 +64,9 @@ impl TranscriptParser {
         }
     }
 
-    /// Whether this parser can identify tool calls the harness refused to run.
+    /// Whether this reader can identify tool calls the harness refused to run.
     /// Refusals are encoded differently by every CLI, so detection is opt-in per
-    /// parser; the rest report none rather than guessing from result text.
+    /// reader; the rest report none rather than guessing from result text.
     pub(crate) fn surfaces_permission_denials(self) -> bool {
         matches!(
             self,
@@ -75,7 +77,7 @@ impl TranscriptParser {
     }
 
     /// Parse refused tool calls associated with the captured events path. A
-    /// parser may correlate sibling captures. Empty for parsers that don't
+    /// reader may correlate sibling captures. Empty for readers that don't
     /// surface denials — see
     /// [`surfaces_permission_denials`](Self::surfaces_permission_denials).
     pub(crate) fn parse_permission_denials(self, path: &Path) -> io::Result<Vec<PermissionDenial>> {
@@ -89,6 +91,28 @@ impl TranscriptParser {
             TranscriptParser::OpencodeEvents => {
                 super::opencode::transcript::parse_opencode_permission_denials(path)
             }
+        }
+    }
+
+    /// Whether this parser's event stream has legacy support for the session's
+    /// discoverable skills and loaded plugins. New descriptors should prefer
+    /// the generic `transcript.extract.session_surface` mapping.
+    pub(crate) fn surfaces_session_surface(self) -> bool {
+        matches!(self, TranscriptParser::ClaudeStreamJson)
+    }
+
+    /// Parse the session's skill/plugin surface. `None` for parsers whose streams
+    /// carry no roster — see
+    /// [`surfaces_session_surface`](Self::surfaces_session_surface).
+    pub(crate) fn parse_session_surface(
+        self,
+        path: &Path,
+    ) -> io::Result<Option<super::SessionSurface>> {
+        match self {
+            TranscriptParser::ClaudeStreamJson => {
+                super::claude_code::stream_json::parse_claude_session_surface(path)
+            }
+            TranscriptParser::CodexItems | TranscriptParser::OpencodeEvents => Ok(None),
         }
     }
 }
