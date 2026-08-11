@@ -110,7 +110,7 @@ implementation evidence in an internal note.
 
 - [Harness progressive enhancements](progressive-enhancements.md) defines the baseline adapter
   contract, optional enhancements, fallbacks, and contribution boundaries.
-- [Claude Code notes](claude-notes.md), [Codex notes](codex-notes.md), and
+- [Claude Code notes](claude-notes.md), [Cline notes](cline-notes.md), [Codex notes](codex-notes.md), and
   [OpenCode notes](opencode-notes.md) record harness-specific evidence and maintenance details.
 - [Shipped harness-authoring guide](guides/byoh.md) is the repository source for
   `eval-magic docs byoh`.

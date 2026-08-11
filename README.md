@@ -30,7 +30,7 @@ eval-magic runs the same task in two controlled conditions—such as a new skill
 an edited skill versus its previous version—and grades both results against shared assertions. It
 builds isolated task workspaces, stages skills, generates harness-specific dispatch instructions,
 ingests transcripts and final state, and produces comparison artifacts. You dispatch the agent
-sessions with Claude Code, Codex, OpenCode, or a descriptor-backed harness of your own.
+sessions with Claude Code, Cline, Codex, OpenCode, or a descriptor-backed harness of your own.
 
 The installed CLI is the primary manual. Start with `eval-magic --help`, and use
 `eval-magic <command> --help` whenever you reach a new phase.
@@ -87,6 +87,7 @@ eval-magic run
 Or select another registered harness:
 
 ```bash
+eval-magic run --harness cline
 eval-magic run --harness codex
 eval-magic run --harness opencode
 ```

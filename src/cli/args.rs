@@ -80,11 +80,13 @@ pub struct CommonArgs {
     /// `baseline`.
     #[arg(long)]
     pub mode: Option<String>,
-    /// Target harness: `claude-code` (default), `codex`, or `opencode`.
+    /// Target harness: `claude-code` (default), `cline`, `codex`, or `opencode`.
     ///
-    /// All three built-ins support staged skills, transcript ingest, scripted
-    /// same-session follow-ups, and the automatically armed write guard. Each
-    /// reads its own per-task events file; Codex stages skills under
+    /// All four built-ins support staged skills, transcript ingest, and dispatch
+    /// recipes; `claude-code`, `codex`, and `opencode` additionally support
+    /// scripted same-session follow-ups and the automatically armed write guard.
+    /// Each reads its own per-task events file; Claude Code stages skills under
+    /// `.claude/skills`, Cline under `.cline/skills`, Codex under
     /// `.agents/skills`, and OpenCode under `.opencode/skills`.
     /// The name is resolved against the harness descriptor registry after
     /// parsing; an unknown name errors listing every registered harness.

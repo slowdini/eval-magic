@@ -27,12 +27,16 @@ pub use transcript_section::TranscriptSection;
 mod transcript_section;
 mod validation;
 
-/// The three built-in harness descriptors, embedded like the schemas: a
+/// The built-in harness descriptors, embedded like the schemas: a
 /// `(source path, TOML text)` pair per harness, in registry order.
-pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 3] = [
+pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 4] = [
     (
         "harnesses/claude-code.toml",
         include_str!("../../harnesses/claude-code.toml"),
+    ),
+    (
+        "harnesses/cline.toml",
+        include_str!("../../harnesses/cline.toml"),
     ),
     (
         "harnesses/codex.toml",

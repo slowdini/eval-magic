@@ -97,6 +97,7 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "schema/harness-descriptor.schema.json",
         "profiles/shared/plan-mode.md",
         "harnesses/claude-code.toml",
+        "harnesses/cline.toml",
         "harnesses/codex.toml",
         "harnesses/opencode.toml",
         "harnesses/template.toml",

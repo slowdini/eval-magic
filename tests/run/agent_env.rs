@@ -69,7 +69,7 @@ fn descriptor_defaults_and_cli_overrides_are_recorded_and_rendered() {
 #[test]
 fn cli_agent_environment_renders_for_every_builtin_harness() {
     let tmp = tempfile::TempDir::new().unwrap();
-    for harness in ["claude-code", "codex", "opencode"] {
+    for harness in ["claude-code", "cline", "codex", "opencode"] {
         let root = tmp.path().join(harness);
         let (skill_dir, cwd) = setup(&root, DEFAULT_EVALS);
 

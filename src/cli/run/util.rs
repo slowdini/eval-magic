@@ -342,8 +342,9 @@ mod tests {
 
     #[test]
     fn guard_auto_arms_on_every_guarded_builtin() {
-        // Every built-in declares a write guard since #155, so auto mode arms
-        // without any guard warning. The guardless-auto warning is only
+        // Three built-ins declare a write guard since #155 (Cline does not, so
+        // it warns and continues unguarded), so auto mode arms without any
+        // guard warning. The guardless-auto warning is only
         // reachable on user-only harnesses now — pinned in tests/run/byoh.rs.
         for name in ["claude-code", "codex", "opencode"] {
             let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
@@ -504,7 +505,7 @@ mod tests {
     fn wired_built_ins_do_not_warn_about_dispatch_recipes() {
         // The dispatch-recipe warning for a dispatchless harness is pinned on
         // a user descriptor in tests/run/byoh.rs; every built-in wires recipes.
-        for name in ["claude-code", "codex", "opencode"] {
+        for name in ["claude-code", "cline", "codex", "opencode"] {
             let (_t, ctx) = ctx_for(Harness::resolve(name).unwrap());
             let preflight = harness_run_preflight(&RunOptions::default(), &ctx, false).unwrap();
             assert!(
