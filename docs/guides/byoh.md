@@ -3,7 +3,7 @@
 > **Audience:** operators adapting eval-magic to an agent CLI that has no built-in descriptor.
 > You do not need to write Rust for a baseline harness.
 
-Use this guide when `claude-code`, `codex`, and `opencode` are not the CLI you need, or when a
+Use this guide when `claude-code`, `cline`, `codex`, and `opencode` are not the CLI you need, or when a
 project must override part of a built-in harness. Normal eval authoring and run options belong in
 `eval-magic init --help` and `eval-magic run --help`.
 

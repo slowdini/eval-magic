@@ -431,7 +431,7 @@ mod tests {
     fn all_config_dir_names_unions_every_adapter() {
         assert_eq!(
             all_config_dir_names(),
-            [".agents", ".claude", ".codex", ".opencode"]
+            [".agents", ".claude", ".cline", ".codex", ".opencode"]
         );
     }
 
@@ -446,15 +446,28 @@ mod tests {
                 "NotebookEdit",
                 "Write",
                 "edit",
+                "editor",
                 "file_change",
                 "write"
             ]
         );
         assert_eq!(vocab.patch_tools, ["apply_patch"]);
-        assert_eq!(vocab.shell_tools, ["Bash", "bash", "command_execution"]);
+        assert_eq!(
+            vocab.shell_tools,
+            ["Bash", "bash", "command_execution", "run_commands"]
+        );
         assert_eq!(
             vocab.read_tools,
-            ["Glob", "Grep", "Read", "glob", "grep", "read"]
+            [
+                "Glob",
+                "Grep",
+                "Read",
+                "glob",
+                "grep",
+                "read",
+                "read_files",
+                "search_codebase"
+            ]
         );
     }
 
@@ -738,7 +751,7 @@ armed_message = "x"
     fn resolve_unknown_name_lists_known_harnesses() {
         let err = Harness::resolve("nonexistent").unwrap_err().to_string();
         assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
-        for name in ["claude-code", "codex", "opencode"] {
+        for name in ["claude-code", "cline", "codex", "opencode"] {
             assert!(err.contains(name), "error must name {name}: {err}");
         }
     }
@@ -759,12 +772,12 @@ armed_message = "x"
     #[test]
     fn known_iterates_in_descriptor_order() {
         let names: Vec<_> = Harness::known().map(Harness::name).collect();
-        assert_eq!(names, ["claude-code", "codex", "opencode"]);
+        assert_eq!(names, ["claude-code", "cline", "codex", "opencode"]);
     }
 
     #[test]
     fn labels_match_kebab_case_identifiers() {
-        for name in ["claude-code", "codex", "opencode"] {
+        for name in ["claude-code", "cline", "codex", "opencode"] {
             let harness = Harness::resolve(name).unwrap();
             assert_eq!(adapter_for(harness).label(), name);
         }

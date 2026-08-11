@@ -12,6 +12,7 @@ mod helpers;
 mod agent_env;
 mod byoh;
 mod claude_cli;
+mod cline;
 mod codex;
 mod codex_guard;
 mod codex_permission_denials;

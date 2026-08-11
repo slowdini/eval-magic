@@ -223,6 +223,12 @@ fn golden_judge_recipe_per_harness() {
             true,
             "codex/judge-recipe.golden.md",
         ),
+        // Cline has no guard, so one variant covers both guard states.
+        (
+            Harness::resolve("cline").unwrap(),
+            false,
+            "cline/judge-recipe.golden.md",
+        ),
         // Pins the hook-trust conditional in the judge command line.
         (
             Harness::resolve("codex").unwrap(),
@@ -243,6 +249,24 @@ fn golden_judge_recipe_per_harness() {
             })
             .expect("judge recipe is wired for this harness");
         assert_golden(rel, &recipe);
+    }
+}
+
+#[test]
+fn golden_cline_next_steps_with_and_without_model() {
+    for (agent_model, rel) in [
+        (Some("model-x"), "cline/next-steps-model.golden.txt"),
+        (None, "cline/next-steps-nomodel.golden.txt"),
+    ] {
+        let steps =
+            adapter_for(Harness::resolve("cline").unwrap()).cli_next_steps(CliDispatchContext {
+                guard: false,
+                target_args: " --skill-dir /tmp/skills --skill widget-skill",
+                iteration: 2,
+                agent_model,
+                agent_env: empty_env(),
+            });
+        assert_golden(rel, &steps);
     }
 }
 

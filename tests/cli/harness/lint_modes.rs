@@ -7,7 +7,7 @@ fn harness_lint_as_builtin_passes_embedded_descriptor_sources() {
     let tmp = TempDir::new().unwrap();
     let harnesses_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("harnesses");
 
-    for name in ["claude-code", "codex", "opencode"] {
+    for name in ["claude-code", "cline", "codex", "opencode"] {
         let file = harnesses_dir.join(format!("{name}.toml"));
         skill_eval()
             .current_dir(tmp.path())
