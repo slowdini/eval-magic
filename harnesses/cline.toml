@@ -101,16 +101,16 @@ flag = "-m"
 # default; `--auto-approve true` pins that against default drift (with approval
 # required instead, non-TTY dispatches would auto-DENY every call). `--act`
 # (a hidden flag) pins act mode: the global `planActMode` setting otherwise
-# converts dispatches to read-only plan sessions that refuse writes (found by
-# the smoke eval: both arms stalled asking to "switch to act mode"). Piped
-# stdin is treated as extra prompt context, so every recipe detaches it with
-# </dev/null, same as codex. There is no --output-last-message: the terminal
+# applies to headless dispatches and converts them to read-only plan sessions
+# that refuse writes. Piped stdin is treated as extra prompt context, so
+# every recipe detaches it with </dev/null, same as codex. There is no
+# --output-last-message: the terminal
 # `run_result` event carries the final text, and the trailing jq step writes
 # `final-message.md` from the captured events (the probe's final-message
 # contract checks that file; ingest recovers final text from the events file
 # via the extract mapping above). The parallel block runs nested inside the
-# shared scaffold's `sh -c '...'`, so its jq program uses escaped double
-# quotes — single quotes would terminate the body (caught by the smoke eval).
+# shared scaffold's `sh -c '...'`, where a single quote would terminate the
+# body, so its jq program uses escaped double quotes.
 [dispatch]
 capture_prefix = "cline"
 next_steps_template = '''
