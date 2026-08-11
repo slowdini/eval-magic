@@ -8,73 +8,23 @@
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
 EXAMPLES:
-  # Scaffold a first evals/evals.json from inside a skill directory
+  # Scaffold a first eval and prepare its isolated comparison environments
   eval-magic init
-
-  # Mode A — evaluate a new skill (with vs. without)
   eval-magic run
-  # run builds one private env per dispatch + RUNBOOK.md (a human-followed recipe),
-  # arming the write guard automatically when the harness supports it.
-  # Follow it to dispatch each task in dispatch.json via `claude -p`, capturing each
-  # task's outputs/claude-events.jsonl, then:
-  #   eval-magic ingest      # reads each task's outputs/claude-events.jsonl
-  #   …dispatch each judge task ingest listed…
-  #   eval-magic finalize
-  #   eval-magic teardown
-  eval-magic promote-baseline   # optional, once benchmark.json lands
+  # run prepares the workspace but does not dispatch. Read the generated
+  # RUNBOOK.md end to end and follow it through ingest, judges, finalize, and teardown.
 
-  # Mode B — evaluate a language change (edit-first)
+  # Evaluate a revision: edit first, snapshot committed content, then compare
   eval-magic snapshot --ref HEAD
   eval-magic run --mode revision
-  # …then the same ingest → finalize → teardown steps as Mode A.
 
-  # Reduced-set / dry runs
-  eval-magic run --dry-run
+  # Reduce cost while iterating on the suite
   eval-magic run --only case-a,case-b
-  eval-magic run --skip slow-case
 
-  # Scripted evals with a turns[] array use the generated runbook's driver:
-  eval-magic dispatch-task --dispatch .eval-magic/my-skill/iteration-1/dispatch.json --task-index 0
-
-  # Opt out of the auto-armed write guard
-  eval-magic run --no-guard
-
-  # Evaluate one skill from elsewhere, without staging sibling skills
-  eval-magic run --skill ./skills/my-skill
-
-  # Opt in to seeded environment parity: stage sibling skills from a skills dir
-  eval-magic run --skill-dir ./skills --skill my-skill
-
-  # Codex harness: dispatch with stdin detached; ingest reads each task's codex-events.jsonl
+  # Select a built-in harness; `run --help` documents models and environment options
   eval-magic run --harness codex
-  eval-magic ingest --harness codex
 
-  # Codex model selection: agent dispatches use --agent-model; judge tasks
-  # use --judge-model unless an individual llm_judge assertion sets model.
-  eval-magic run --harness codex --agent-model gpt-5-mini --judge-model gpt-5
-
-  # Reproduce an agent-side environment condition (recorded in run artifacts)
-  eval-magic run --agent-env TZ=America/Los_Angeles
-
-  # OpenCode harness: stages under `.opencode/skills/`; dispatch per RUNBOOK.md
-  # with `opencode run` (stdin detached), then ingest reads each task's
-  # outputs/opencode-events.jsonl
-  eval-magic run --harness opencode
-  eval-magic ingest --harness opencode
-
-  # Bring your own harness (eval-magic docs byoh): scaffold a commented descriptor +
-  # notes skeleton into .eval-magic/harnesses/, fill in verified values, lint, run
+  # Bring your own harness: scaffold a descriptor, then follow the shipped guide
   eval-magic harness init cool-custom-harness
-  eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml
-  eval-magic harness list
-  eval-magic run --harness cool-custom-harness
-  # ...or load a one-off descriptor (its label becomes the default harness):
-  eval-magic run --harness-file ./cool-custom-harness.toml
-
-  # Inspect the resolved descriptor after layer merging (built-ins included)
-  eval-magic harness show claude-code
-
-  # Preflight warned that an installed plugin shadows the staged skill? Per-harness
-  # isolation recipes, and how to verify a dispatch really didn't load the live copy:
-  eval-magic docs isolation
+  eval-magic docs byoh
 ";

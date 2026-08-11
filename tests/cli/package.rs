@@ -72,9 +72,6 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "Cargo.toml",
         "LICENSE",
         "README.md",
-        // Embedded by `eval-magic docs` — the binary build breaks without these.
-        "docs/byoh.md",
-        "docs/isolation.md",
         "schema/evals.schema.json",
         "schema/harness-descriptor.schema.json",
         "profiles/shared/plan-mode.md",
@@ -88,6 +85,22 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         assert!(
             files.lines().any(|line| line == required),
             "{required} should be packaged"
+        );
+    }
+
+    // Every shipped guide is discovered by build.rs and embedded in the
+    // binary, so packaging must follow the directory rather than a duplicated
+    // topic list.
+    let guide_dir = repo_root().join("docs/guides");
+    for entry in std::fs::read_dir(&guide_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root()).unwrap().to_string_lossy();
+        assert!(
+            files.lines().any(|line| line == relative),
+            "{relative} should be packaged"
         );
     }
 

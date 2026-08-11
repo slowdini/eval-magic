@@ -553,9 +553,16 @@ pub(crate) enum Commands {
     ///
     /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
-    /// (human-readable). Dispatch each task through the harness CLI (`claude -p`,
-    /// `codex exec`). Also writes `RUNBOOK.md`, a human-followable handoff for the
-    /// run ("Read and follow RUNBOOK.md").
+    /// (human-readable). It prepares the run but does not dispatch agents. After
+    /// setup, read `RUNBOOK.md` end to end; that generated file is the authority
+    /// for dispatch, ingest, judge, finalize, and teardown commands for the selected
+    /// harness.
+    ///
+    /// A case with effective run count `R` creates `2R` native agent sessions: one
+    /// per condition and repetition. Scripted follow-ups add up to `2R × F` model
+    /// turns for `F` declared follow-ups, and each `llm_judge` assertion creates a
+    /// judge task per condition and repetition. Review the printed run summary and
+    /// obtain confirmation before spending model usage.
     ///
     /// Git is required. Every task environment is initialized as an independent,
     /// clean repository on branch `work` with a deterministic baseline commit and
@@ -574,8 +581,13 @@ pub(crate) enum Commands {
     /// Execute one scripted multi-turn task through its harness CLI.
     ///
     /// Starts the task, resumes the same native session for every delivered
-    /// follow-up, and writes the task's conversation.json completion artifact.
-    /// One-shot tasks continue to use the commands in dispatch-manifest.md.
+    /// follow-up, and writes the task's `conversation.json` completion artifact.
+    /// A completed or normally stopped conversation records
+    /// `delivered_followups`; an interrupted task commits no artifact. Each round
+    /// must report the same native session ID or the command fails. Inspect the
+    /// per-round assistant messages and delivered count to verify the script ran as
+    /// intended. One-shot tasks continue to use the commands in
+    /// `dispatch-manifest.md`.
     DispatchTask(DispatchTaskArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -711,6 +723,11 @@ pub(crate) enum Commands {
     /// zero. The top-level `diff_scope` field is omitted for compatible older
     /// iterations that predate metric capture.
     ///
+    /// Read `validity_warnings` before trusting the delta. Raw `diff_scope` entries
+    /// are diagnostic context rather than an optimization target: smaller is not
+    /// necessarily better. In rendered JSON, `n: 0` means unavailable, never a
+    /// measured zero.
+    ///
     /// Isolating dispatches from the live sources a shadow finding names, and
     /// confirming it worked, is `eval-magic docs isolation`.
     Aggregate(CommonArgs),
@@ -721,8 +738,19 @@ pub(crate) enum Commands {
     /// interactively for any missing seed fields, and refuses to overwrite an
     /// existing eval file unless `--force` is passed. This is scaffold-only: it
     /// does not run agents, ingest transcripts, finalize, or promote results.
+    ///
+    /// Extend the seed in `evals/evals.json`: `turns` scripts same-session
+    /// follow-ups, `files_root` mounts fixture sources at the task root, and a
+    /// per-eval `runs` value overrides `run --runs`. Add assertions after the first
+    /// iteration, then check the file with `eval-magic validate`.
     Init(InitArgs),
-    /// Promote a benchmark + gradings into a committed baseline.
+    /// Promote a benchmark and gradings into a committed baseline.
+    ///
+    /// Copies the iteration's `benchmark.json` and per-run `grading.json` files to
+    /// `<skill>/evals/baseline/`. The benchmark stays at that directory's root,
+    /// grading files land under `grading/`, and `BASELINE.md` records provenance.
+    /// An existing hand-authored `NOTES.md` is retained; one is scaffolded when
+    /// absent. Promote before teardown when the result is worth keeping.
     PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),
@@ -740,13 +768,12 @@ pub(crate) enum Commands {
     Harness(HarnessArgs),
     /// Print an embedded reference doc, or list the available topics.
     ///
-    /// The user-facing reference docs ship inside the binary — version-matched
-    /// to the installed release and readable offline. `guide` is the complete
-    /// operating guide (the README); `byoh` is the bring-your-own-harness
-    /// descriptor authoring guide; `isolation` covers isolating dispatches from
-    /// live and installed skill sources, and verifying it worked. Development
-    /// docs for working on eval-magic itself stay in the repository's `docs/`
-    /// directory.
+    /// Every Markdown file directly under `docs/guides/` ships inside the binary,
+    /// version-matched to the installed release and readable offline. `byoh`
+    /// covers adapting an unknown harness; `isolation` covers excluding live
+    /// skill sources after a shadow warning. Bare `docs` lists the discovered
+    /// topics. Contributor documentation stays unembedded in the repository's
+    /// `docs/` root.
     Docs {
         /// Topic to print (bare `docs` lists the available topics).
         topic: Option<String>,

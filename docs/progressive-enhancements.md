@@ -1,11 +1,11 @@
 # Harness progressive enhancements
 
-> **Audience:** developers working on the eval-magic codebase. The README and `eval-magic --help`
-> are the user-facing docs; this file explains how harness support is structured in code and what
+> **Audience:** developers working on the eval-magic codebase. CLI help and the shipped guides are
+> the user-facing docs; this file explains how harness support is structured in code and what
 > wiring more of it buys. Per-harness implementation notes live in [claude-notes.md](claude-notes.md),
 > [codex-notes.md](codex-notes.md), and [opencode-notes.md](opencode-notes.md). Pointing eval-magic
 > at a harness it doesn't know — user-supplied descriptor files, layering, `harness
-> list`/`show`/`lint` — is the user-facing [byoh.md](byoh.md).
+> list`/`show`/`lint` — is the user-facing [BYOH guide](guides/byoh.md).
 
 Harness compatibility is not a parity checklist to audit — it is **a minimal baseline every harness
 satisfies, plus optional enhancements** a harness's adapter opts into. Most missing enhancements
@@ -62,7 +62,7 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
   (embedded → user-global → project-local → `--harness-file`) with field-level merge per label,
   and `adapter_for()` resolves each `Harness` handle to its descriptor-backed adapter — still the
   single dispatch point. Broken discovered files skip with a warning; the layer model itself is
-  documented in [byoh.md](byoh.md).
+  documented in the [BYOH guide](guides/byoh.md).
 - `src/adapters/descriptor/layers.rs` — layer discovery (config-root resolution, per-directory
   scans, the `--harness-file` top layer) and the user-layer restrictions (no `[guard]`).
 - `src/adapters/harness.rs` — the `HarnessAdapter` trait, tiered into baseline and enhancement
@@ -176,7 +176,7 @@ ingest pipeline never reads a transcript), one primary summary reader, and
 `extract`; validation rejects both, neither, and a surface-only extract. The `extract` sub-table is
 the declarative tier: equality `where` filters, final and ordered assistant-text picks, a session-id
 pick, flat tool-item mapping, token sum/subtract reduction, duration rule, and the auxiliary
-session-surface mapping documented with a worked example in [byoh.md](byoh.md).
+session-surface mapping represented in the descriptor schema and visible in resolved descriptors.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
 (`claude-stream-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
 captures reuses one with zero code. The built-in Codex descriptor uses declarative summary
@@ -345,9 +345,9 @@ usable matching record means the harness could not report. The mapping is auxili
 must accompany either `transcript.parser` or declarative summary outputs. When explicitly declared
 it is authoritative, even if a named parser also has legacy surface support.
 
-*Capability:* session-surface extraction is generic descriptor data. Existing parser-only
-descriptors retain named-parser fallback for compatibility; the built-in Claude descriptor now
-uses the declarative mapping. This is additive descriptor schema surface, so it does not change the
+*Capability:* session-surface extraction is generic descriptor data. Parser-only descriptors retain
+named-parser fallback for compatibility; the built-in Claude descriptor uses the declarative
+mapping. This is additive descriptor schema surface, so it does not change the
 version or shape of `session-surface.json`.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
@@ -405,14 +405,17 @@ in. Validation rejects a template whose placeholder has no backing field.
 
 ## Current support
 
-The **Harnesses table in the README is the source of truth** for which harness has which
-enhancement — keep it in sync with the adapters when wiring or dropping one.
+The resolved descriptor registry is the source of truth for which harness has which enhancement.
+`eval-magic harness list` summarizes the registered capabilities; `eval-magic harness show
+<label>` prints the resolved descriptor behind that summary. Both surfaces update from descriptor
+data rather than a hand-maintained support table.
 
 ## Adding a new harness
 
 1. **Start as a user descriptor** — scaffold it with `eval-magic harness init <label>` (a
    commented template plus a notes skeleton, lint-clean as written), fill in verified values per
-   [byoh.md](byoh.md), and iterate with `harness lint`/`show` and real runs. No Rust, no rebuild;
+   the [BYOH guide](guides/byoh.md), and iterate with `harness lint`/`show` and real runs. No Rust,
+   no rebuild;
    this is also where the descriptor's field set gets proven.
 2. **Promote to a built-in** once it earns bundling: move the file to `harnesses/<label>.toml` and
    add it to `EMBEDDED_DESCRIPTORS` (`src/adapters/descriptor.rs`). The registry keys on the
@@ -422,11 +425,12 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
 3. Create `docs/<harness>-notes.md` with the implementation notes discovered along the way —
    promoted from the scaffolded `.eval-magic/harnesses/<label>-notes.md`. The PR template
    requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
-4. Add the harness to the README support table (all enhancements ❌ at baseline).
+4. Confirm `eval-magic harness list` and `harness show <label>` report the built-in and only the
+   capabilities its descriptor actually declares.
 5. Wire enhancements in leverage order — dispatch recipes and transcript ingest first (they carry
    the most fidelity and are prerequisites for conversation resume), then conversation resume,
    staging, model flag, guard (guard requires built-in status — user
-   descriptors may not declare one) — updating the table as each lands. Most enhancements are
+   descriptors may not declare one). Most enhancements are
    descriptor fields; add a named capability in `src/adapters/capabilities.rs` (plus its
    `src/adapters/<harness>/` module) only when the harness's stream or hooks are incompatible with
    every existing capability.

@@ -1,14 +1,43 @@
-//! `docs` — the embedded user-facing reference docs shipped in the binary.
+//! Embedded user guides shipped in the binary.
 //!
-//! The binary is the only doc surface an installer-script user has locally, so
-//! every user-facing reference doc is embedded and printable, and every
-//! `eval-magic docs <topic>` mention in shipped output must name a real topic.
+//! Every Markdown file directly under `docs/guides/` is a CLI topic. The file
+//! stem is its topic name, the first H1 is its listing title, and the complete
+//! source body is printed verbatim.
 
 use crate::helpers::skill_eval;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-/// The topic names printed by a bare `eval-magic docs` invocation.
+fn repo_root() -> &'static Path {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+}
+
+fn guide_sources() -> Vec<(String, String, String, PathBuf)> {
+    let guide_dir = repo_root().join("docs/guides");
+    let mut guides = fs::read_dir(&guide_dir)
+        .unwrap_or_else(|err| panic!("expected guide directory {}: {err}", guide_dir.display()))
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            (path.extension().and_then(|value| value.to_str()) == Some("md")).then_some(path)
+        })
+        .map(|path| {
+            let topic = path.file_stem().unwrap().to_str().unwrap().to_string();
+            let body = fs::read_to_string(&path).unwrap();
+            let title = body
+                .lines()
+                .next()
+                .and_then(|line| line.strip_prefix("# "))
+                .unwrap_or_else(|| panic!("{} must start with an H1", path.display()))
+                .to_string();
+            (topic, title, body, path)
+        })
+        .collect::<Vec<_>>();
+    guides.sort_by(|left, right| left.0.cmp(&right.0));
+    guides
+}
+
 fn listed_topics() -> Vec<String> {
     let output = skill_eval()
         .arg("docs")
@@ -19,30 +48,70 @@ fn listed_topics() -> Vec<String> {
     let stdout = String::from_utf8(output.stdout).unwrap();
     stdout
         .lines()
-        // Topic rows are indented "<name>  <summary>"; the header is not.
         .filter(|line| line.starts_with("  "))
         .filter_map(|line| line.trim().split_once(char::is_whitespace))
         .map(|(name, _)| name.to_string())
         .collect()
 }
 
-/// Bare `docs` lists every embedded topic with a summary.
 #[test]
-fn docs_lists_topics() {
-    skill_eval()
+fn docs_listing_matches_the_guide_directory() {
+    let guides = guide_sources();
+    let expected = guides
+        .iter()
+        .map(|(topic, _, _, _)| topic.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(listed_topics(), expected);
+
+    let output = skill_eval()
         .arg("docs")
         .assert()
         .success()
-        .stdout(contains("guide"))
-        .stdout(contains("byoh"))
-        .stdout(contains("isolation"))
-        .stdout(contains("operating guide"))
-        .stdout(contains("harness"));
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let topic_width = guides
+        .iter()
+        .map(|(topic, _, _, _)| topic.len())
+        .max()
+        .unwrap_or_default();
+    for (topic, title, _, _) in guides {
+        let row = format!("  {topic:topic_width$} {title}");
+        assert!(stdout.lines().any(|line| line == row), "{stdout}");
+    }
 }
 
-/// Every listing row fits an 80-column terminal. `docs/README.md` treats "the
-/// bare-`docs` listing stops fitting on a screen" as a trigger for moving to
-/// hosted docs, so a wrapped row would misreport that threshold as reached.
+#[test]
+fn docs_prints_every_guide_verbatim() {
+    for (topic, _, body, path) in guide_sources() {
+        let output = skill_eval()
+            .args(["docs", &topic])
+            .assert()
+            .success()
+            .get_output()
+            .clone();
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            body,
+            "topic {topic} drifted from {}",
+            path.display()
+        );
+    }
+}
+
+#[test]
+fn docs_guide_topic_is_retired() {
+    skill_eval()
+        .args(["docs", "guide"])
+        .assert()
+        .failure()
+        .stderr(
+            contains("unknown docs topic 'guide'")
+                .and(contains("byoh"))
+                .and(contains("isolation")),
+        );
+}
+
 #[test]
 fn docs_listing_rows_fit_eighty_columns() {
     let output = skill_eval()
@@ -61,102 +130,21 @@ fn docs_listing_rows_fit_eighty_columns() {
     }
 }
 
-/// `docs guide` prints the embedded operating guide (the README body).
 #[test]
-fn docs_guide_prints_operating_guide() {
-    skill_eval()
-        .args(["docs", "guide"])
-        .assert()
-        .success()
-        .stdout(contains("# eval-magic"))
-        .stdout(contains("## Quickstart"))
-        .stdout(contains("## Reading results"))
-        .stdout(contains("verdicts present"))
-        .stdout(contains("exits nonzero"));
-}
-
-#[test]
-fn docs_guide_explains_per_assertion_benchmark_counts() {
-    skill_eval()
-        .args(["docs", "guide"])
-        .assert()
-        .success()
-        .stdout(contains("\"assertions\""))
-        .stdout(contains("observed assertion results"))
-        .stdout(contains("meta-results"));
-}
-
-#[test]
-fn docs_guide_explains_fixture_source_roots() {
-    skill_eval()
-        .args(["docs", "guide"])
-        .assert()
-        .success()
-        .stdout(contains("files_root"))
-        .stdout(contains("evals/fixtures/todo-app/src/App.tsx"))
-        .stdout(contains("task root as `src/App.tsx`"));
-}
-
-/// The runner-owned artifact is the portable verification surface; raw event
-/// shapes are harness-specific and cannot support one operator recipe.
-#[test]
-fn docs_guide_explains_scripted_conversation_verification() {
-    skill_eval()
-        .args(["docs", "guide"])
-        .assert()
-        .success()
-        .stdout(contains("### Verify a scripted conversation"))
-        .stdout(contains("delivered_followups"))
-        .stdout(contains("assistant_rounds"))
-        .stdout(contains("different native session ID"))
-        .stdout(contains("means the task was interrupted"));
-}
-
-#[test]
-fn docs_guide_counts_scripted_turns_per_condition_and_repetition() {
-    skill_eval()
-        .args(["docs", "guide"])
-        .assert()
-        .success()
-        .stdout(contains("effective run count `R`"))
-        .stdout(contains("`2R` native agent sessions"))
-        .stdout(contains("`2R × F` additional model turns"))
-        .stdout(contains(
-            "Judge dispatches are also per condition and repetition",
-        ))
-        .stdout(contains("`JOBS`"));
-}
-
-/// `docs byoh` prints the embedded bring-your-own-harness authoring guide.
-#[test]
-fn docs_byoh_prints_embedded_authoring_guide() {
+fn docs_byoh_keeps_the_authoring_workflow() {
     skill_eval()
         .args(["docs", "byoh"])
         .assert()
         .success()
         .stdout(contains("# Bring your own harness"))
-        .stdout(contains("exec_template"))
+        .stdout(contains("harness init"))
+        .stdout(contains("harness lint"))
+        .stdout(contains("--probe"))
         .stdout(contains("Upstreaming your descriptor"));
 }
 
 #[test]
-fn docs_byoh_explains_composable_transcript_sub_capabilities() {
-    skill_eval()
-        .args(["docs", "byoh"])
-        .assert()
-        .success()
-        .stdout(contains("permission_denials_parser"))
-        .stdout(contains("[transcript.extract.session_surface]"))
-        .stdout(contains("plugin_version_field"))
-        .stdout(contains("explicitly empty arrays"))
-        .stdout(contains("parser-only descriptors"));
-}
-
-/// `docs isolation` prints the embedded live-source isolation guide. One anchor
-/// per harness, so a section cannot quietly vanish and leave the topic claiming
-/// coverage it no longer has.
-#[test]
-fn docs_isolation_prints_embedded_topic() {
+fn docs_isolation_keeps_remedies_and_verification() {
     skill_eval()
         .args(["docs", "isolation"])
         .assert()
@@ -166,70 +154,76 @@ fn docs_isolation_prints_embedded_topic() {
         .stdout(contains("CLAUDE_CONFIG_DIR"))
         .stdout(contains("--disable plugins"))
         .stdout(contains("OPENCODE_DISABLE_EXTERNAL_SKILLS"))
-        .stdout(contains("isolates_live_sources"));
-}
-
-/// The topic must keep naming the tool that *cannot* answer "did this dispatch
-/// load the plugin", and the event that can. Both cost real debugging time to
-/// discover (issue #207), and both read as trimmable detail to a future editor.
-#[test]
-fn docs_isolation_documents_the_plugin_list_antipattern() {
-    skill_eval()
-        .args(["docs", "isolation"])
-        .assert()
-        .success()
+        .stdout(contains("resumed"))
+        .stdout(contains("isolates_live_sources"))
         .stdout(contains("claude plugin list"))
+        .stdout(contains("`comparison-invalid`"))
         .stdout(contains("\"subtype\":\"init\""));
 }
 
-/// An unknown topic fails and names the available topics.
 #[test]
-fn docs_unknown_topic_fails_listing_available() {
-    skill_eval()
-        .args(["docs", "nope"])
-        .assert()
-        .failure()
-        .stderr(
-            contains("unknown docs topic 'nope'")
-                .and(contains("guide"))
-                .and(contains("byoh"))
-                .and(contains("isolation")),
-        );
+fn shipped_guides_do_not_depend_on_repository_relative_links() {
+    for (topic, _, body, path) in guide_sources() {
+        for destination in body
+            .match_indices("](")
+            .map(|(index, _)| &body[index + 2..])
+            .filter_map(|rest| rest.split_once(')').map(|(destination, _)| destination))
+        {
+            assert!(
+                destination.starts_with("https://") || destination.starts_with('#'),
+                "topic {topic} has a repository-relative link `{destination}` in {}",
+                path.display()
+            );
+        }
+    }
 }
 
-/// The top-level EXAMPLES block points BYOH readers at the embedded docs.
 #[test]
-fn top_level_help_examples_point_at_docs_subcommand() {
-    skill_eval()
-        .arg("--help")
-        .assert()
-        .success()
-        .stdout(contains("eval-magic docs byoh"));
+fn docs_unknown_topic_lists_every_available_guide() {
+    let assert = skill_eval().args(["docs", "nope"]).assert().failure();
+    let stderr = String::from_utf8(assert.get_output().stderr.clone()).unwrap();
+    for (topic, _, _, _) in guide_sources() {
+        assert!(stderr.contains(&topic), "{stderr}");
+    }
 }
 
-/// `harness init --help` points at the embedded docs, not a repo-relative path
-/// a binary-only user cannot open.
 #[test]
-fn harness_init_help_points_at_docs_subcommand() {
-    skill_eval()
-        .args(["harness", "init", "--help"])
-        .assert()
-        .success()
-        .stdout(contains("eval-magic docs byoh"));
+fn harness_authoring_help_points_at_the_byoh_guide() {
+    for args in ["--help", "harness init --help"] {
+        skill_eval()
+            .args(args.split_whitespace())
+            .assert()
+            .success()
+            .stdout(contains("eval-magic docs byoh"));
+    }
 }
 
-/// Drift guard: every `eval-magic docs <topic>` mention in shipped help output
-/// names a topic the binary actually embeds.
 #[test]
-fn shipped_help_references_resolve_to_real_topics() {
+fn every_guide_reference_in_shipped_help_resolves() {
     let topics = listed_topics();
-    assert!(topics.len() >= 3, "bare `docs` lists topics: {topics:?}");
-
     for help_args in [
         "--help",
-        "harness init --help",
         "run --help",
+        "dispatch-task --help",
+        "snapshot --help",
+        "teardown --help",
+        "teardown-guard --help",
+        "ingest --help",
+        "finalize --help",
+        "record-runs --help",
+        "fill-transcripts --help",
+        "detect-stray-writes --help",
+        "grade --help",
         "aggregate --help",
+        "init --help",
+        "promote-baseline --help",
+        "validate --help",
+        "harness --help",
+        "harness init --help",
+        "harness list --help",
+        "harness show --help",
+        "harness lint --help",
+        "docs --help",
     ] {
         let output = skill_eval()
             .args(help_args.split_whitespace())
@@ -238,19 +232,78 @@ fn shipped_help_references_resolve_to_real_topics() {
             .get_output()
             .clone();
         let stdout = String::from_utf8(output.stdout).unwrap();
-        let references = stdout
+        for rest in stdout
             .match_indices("eval-magic docs ")
-            .map(|(i, _)| &stdout[i + "eval-magic docs ".len()..]);
-        for rest in references {
-            let referenced: String = rest
+            .map(|(index, _)| &stdout[index + "eval-magic docs ".len()..])
+            .filter(|rest| {
+                rest.starts_with(|character: char| {
+                    character.is_ascii_alphanumeric() || character == '-'
+                })
+            })
+        {
+            let topic = rest
                 .chars()
-                .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
-                .collect();
+                .take_while(|character| character.is_ascii_alphanumeric() || *character == '-')
+                .collect::<String>();
             assert!(
-                topics.contains(&referenced),
-                "`{help_args}` references `eval-magic docs {referenced}`, \
-                 but bare `docs` lists only: {topics:?}"
+                topics.contains(&topic),
+                "`{help_args}` references `eval-magic docs {topic}`, but topics are {topics:?}"
             );
         }
     }
+}
+
+#[test]
+fn repository_documentation_map_names_each_surface() {
+    let overview_path = repo_root().join("docs/developer_overview.md");
+    let overview = fs::read_to_string(&overview_path)
+        .unwrap_or_else(|err| panic!("expected {}: {err}", overview_path.display()));
+
+    for heading in [
+        "## How an evaluation moves through the system",
+        "## Repository map",
+        "## Sources of truth",
+        "## Documentation policy",
+        "## Internal guide index",
+    ] {
+        assert!(overview.contains(heading), "missing {heading}");
+    }
+
+    assert!(
+        !repo_root().join("docs/README.md").exists(),
+        "the developer overview replaces docs/README.md"
+    );
+
+    let agents = fs::read_to_string(repo_root().join("AGENTS.md")).unwrap();
+    assert!(agents.contains("docs/guides/"));
+    assert!(agents.contains("docs/developer_overview.md"));
+    assert!(!agents.contains("docs/README.md"));
+}
+
+#[test]
+fn readme_is_a_concise_first_run_path() {
+    let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
+
+    for expected in [
+        "## Install",
+        "## Quickstart",
+        "cargo install eval-magic",
+        "eval-magic init",
+        "eval-magic run",
+        "eval-magic snapshot --label baseline --ref HEAD",
+        "RUNBOOK.md",
+        "eval-magic teardown",
+        "eval-magic docs byoh",
+        "eval-magic docs isolation",
+        "docs/developer_overview.md",
+    ] {
+        assert!(readme.contains(expected), "README is missing {expected}");
+    }
+
+    assert!(
+        readme.lines().count() <= 160,
+        "README should hand detail to shipped docs instead of duplicating it"
+    );
+    assert!(!readme.contains("## Harnesses"));
+    assert!(!readme.contains("docs/README.md"));
 }

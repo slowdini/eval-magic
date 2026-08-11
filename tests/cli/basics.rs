@@ -41,6 +41,112 @@ fn help_uses_published_binary_name() {
         .stdout(contains("eval-magic"));
 }
 
+// Hidden guard entry points are implementation contracts rather than user journeys.
+#[test]
+fn every_visible_command_and_harness_subcommand_renders_help() {
+    for args in [
+        "run --help",
+        "dispatch-task --help",
+        "snapshot --help",
+        "teardown --help",
+        "teardown-guard --help",
+        "ingest --help",
+        "finalize --help",
+        "record-runs --help",
+        "fill-transcripts --help",
+        "detect-stray-writes --help",
+        "grade --help",
+        "aggregate --help",
+        "init --help",
+        "promote-baseline --help",
+        "validate --help",
+        "harness --help",
+        "harness init --help",
+        "harness list --help",
+        "harness show --help",
+        "harness lint --help",
+        "docs --help",
+    ] {
+        skill_eval()
+            .args(args.split_whitespace())
+            .assert()
+            .success()
+            .stdout(contains("Usage:"));
+    }
+}
+
+#[test]
+fn init_help_documents_extended_eval_authoring() {
+    skill_eval()
+        .args(["init", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("turns"))
+        .stdout(contains("files_root"))
+        .stdout(contains("per-eval `runs`"))
+        .stdout(contains("eval-magic validate"));
+}
+
+#[test]
+fn run_help_documents_cost_and_runbook_authority() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("does not dispatch"))
+        .stdout(contains("`2R` native agent sessions"))
+        .stdout(contains("read `RUNBOOK.md` end to end"));
+}
+
+#[test]
+fn top_level_examples_stop_after_orientation_and_handoffs() {
+    skill_eval()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("eval-magic init"))
+        .stdout(contains("eval-magic run"))
+        .stdout(contains("RUNBOOK.md"))
+        .stdout(contains("--agent-env TZ=America/Los_Angeles").not())
+        .stdout(contains("harness show claude-code").not());
+}
+
+#[test]
+fn dispatch_task_help_documents_conversation_verification() {
+    skill_eval()
+        .args(["dispatch-task", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("delivered_followups"))
+        .stdout(contains("same native session ID"))
+        .stdout(contains("interrupted"));
+}
+
+#[test]
+fn aggregate_help_explains_how_to_read_results() {
+    skill_eval()
+        .args(["aggregate", "--help"])
+        .assert()
+        .success()
+        .stdout(contains(
+            "Read `validity_warnings` before trusting the delta",
+        ))
+        .stdout(contains("`n: 0` means unavailable"))
+        .stdout(contains("smaller is not necessarily better"));
+}
+
+#[test]
+fn promote_help_documents_baseline_artifacts() {
+    skill_eval()
+        .args(["promote-baseline", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("evals/baseline"))
+        .stdout(contains("benchmark.json"))
+        .stdout(contains("grading/"))
+        .stdout(contains("NOTES.md"));
+}
+
 /// `--guard` and `--no-guard` are contradictory and rejected at parse time.
 #[test]
 fn run_rejects_guard_with_no_guard() {
