@@ -51,6 +51,26 @@ fn source_files_advertise_crates_io_publish_channel() {
 }
 
 #[test]
+fn ci_publishes_default_branch_coverage_for_readme_badge() {
+    let workflow = read_repo_file(".github/workflows/ci.yml");
+
+    for expected in [
+        "  push:\n    branches: [dev]",
+        "if: github.event_name == 'push'",
+        "id-token: write",
+        "components: llvm-tools-preview",
+        "taiki-e/install-action@cargo-llvm-cov",
+        "cargo llvm-cov --all-targets --all-features --workspace --locked",
+        "codecov/codecov-action@v5",
+        "files: lcov.info",
+        "use_oidc: true",
+        "fail_ci_if_error: true",
+    ] {
+        assert!(workflow.contains(expected), "CI is missing {expected}");
+    }
+}
+
+#[test]
 fn cargo_package_excludes_repo_local_authoring_files() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(cargo)
@@ -72,6 +92,7 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "Cargo.toml",
         "LICENSE",
         "README.md",
+        "assets/readme.png",
         "schema/evals.schema.json",
         "schema/harness-descriptor.schema.json",
         "profiles/shared/plan-mode.md",

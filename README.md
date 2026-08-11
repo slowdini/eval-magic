@@ -1,3 +1,27 @@
+<p align="center">
+  <img src="assets/readme.png"
+    alt="eval-magic — Prove your skills actually work with structured, iterative eval loops"
+    width="845" />
+</p>
+
+<p align="center">
+  <a href="https://github.com/slowdini/eval-magic/actions/workflows/ci.yml"><img
+    src="https://img.shields.io/github/actions/workflow/status/slowdini/eval-magic/ci.yml?branch=dev"
+    alt="CI status" /></a>
+  <a href="https://app.codecov.io/gh/slowdini/eval-magic"><img
+    src="https://codecov.io/gh/slowdini/eval-magic/branch/dev/graph/badge.svg"
+    alt="Code coverage" /></a>
+  <a href="https://github.com/slowdini/eval-magic/releases/latest"><img
+    src="https://img.shields.io/github/v/release/slowdini/eval-magic"
+    alt="Latest release" /></a>
+  <a href="https://crates.io/crates/eval-magic"><img
+    src="https://img.shields.io/crates/v/eval-magic"
+    alt="eval-magic on crates.io" /></a>
+  <a href="./LICENSE"><img
+    src="https://img.shields.io/github/license/slowdini/eval-magic"
+    alt="License: MIT" /></a>
+</p>
+
 # eval-magic
 
 **A CLI for measuring whether an agent skill changes behavior.**
