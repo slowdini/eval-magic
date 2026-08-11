@@ -307,3 +307,36 @@ fn readme_is_a_concise_first_run_path() {
     assert!(!readme.contains("## Harnesses"));
     assert!(!readme.contains("docs/README.md"));
 }
+
+#[test]
+fn readme_opens_with_live_project_branding() {
+    let readme = fs::read_to_string(repo_root().join("README.md")).unwrap();
+    let banner = r#"<img src="assets/readme.png""#;
+    let banner_position = readme
+        .find(banner)
+        .expect("README should render the banner");
+    let title_position = readme
+        .find("# eval-magic")
+        .expect("README should retain its text title");
+
+    assert!(
+        banner_position < title_position,
+        "the banner should appear before the text title"
+    );
+
+    for expected in [
+        r#"alt="eval-magic — Prove your skills actually work with structured, iterative eval loops""#,
+        "https://img.shields.io/github/actions/workflow/status/slowdini/eval-magic/ci.yml?branch=dev",
+        "https://codecov.io/gh/slowdini/eval-magic/branch/dev/graph/badge.svg",
+        "https://img.shields.io/github/v/release/slowdini/eval-magic",
+        "https://img.shields.io/crates/v/eval-magic",
+        "https://img.shields.io/github/license/slowdini/eval-magic",
+        "https://github.com/slowdini/eval-magic/actions/workflows/ci.yml",
+        "https://app.codecov.io/gh/slowdini/eval-magic",
+        "https://github.com/slowdini/eval-magic/releases/latest",
+        "https://crates.io/crates/eval-magic",
+        r#"href="./LICENSE""#,
+    ] {
+        assert!(readme.contains(expected), "README is missing {expected}");
+    }
+}
