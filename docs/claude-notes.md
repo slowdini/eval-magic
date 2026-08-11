@@ -140,7 +140,7 @@ The three remedies the banner names — `--setting-sources project,local`, a per
 `"enabledPlugins": { "<plugin>@<marketplace>": false }`, and a clean
 `CLAUDE_CONFIG_DIR="$(mktemp -d)"` — are documented for operators, with the caveat attached to each
 (including the OAuth caveat for a relocated config dir), in the shipped `eval-magic docs isolation`
-topic ([isolation.md](isolation.md)). The per-source strings the banner prints live in
+topic ([isolation guide](guides/isolation.md)). The per-source strings the banner prints live in
 `plugin_shadow.rs`; keep them consistent with that topic.
 
 `--setting-sources project,local` drops **all** user-scope discovery, not just `enabledPlugins`:

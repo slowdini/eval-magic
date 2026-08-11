@@ -78,7 +78,7 @@ hook forwards every tool call as `{"tool_name", "tool_input"}` on stdin to the g
 `reason` to block; the shared arbiter stays the single classification point (the plugin is
 deliberately dumb). The deny verdict rides the shared renderer with the codex-style
 `{"decision":"block","reason":"..."}` shape. Teardown deletes the plugin it created (restoring a
-pre-existing file verbatim) and prunes `.opencode/plugins/` when restoring leaves it empty
+original file verbatim) and prunes `.opencode/plugins/` when restoring leaves it empty
 (`guard_hook_cleanup_dir`).
 
 Live-verified on v1.18.4 (#155):
@@ -182,7 +182,7 @@ eval-magic detects but cannot unload these sources, and the generated dispatch r
 set the `OPENCODE_DISABLE_*` kill switches on the operator's behalf — parity with a real user
 session matters. The operator-facing recipes — both switches with their exact scopes, and
 move-or-rename as the only remedy for an `.opencode` root — are in the shipped
-`eval-magic docs isolation` topic ([isolation.md](isolation.md)).
+`eval-magic docs isolation` topic ([isolation guide](guides/isolation.md)).
 
 When descriptor environment/recipes exclude **every** reported source from every initial and
 resumed dispatch, an overlay may declare `[shadow] isolates_live_sources = true`. Preflight still
