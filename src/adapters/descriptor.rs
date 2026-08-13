@@ -27,12 +27,16 @@ pub use transcript_section::TranscriptSection;
 mod transcript_section;
 mod validation;
 
-/// The three built-in harness descriptors, embedded like the schemas: a
+/// The built-in harness descriptors, embedded like the schemas: a
 /// `(source path, TOML text)` pair per harness, in registry order.
-pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 3] = [
+pub const EMBEDDED_DESCRIPTORS: [(&str, &str); 4] = [
     (
         "harnesses/claude-code.toml",
         include_str!("../../harnesses/claude-code.toml"),
+    ),
+    (
+        "harnesses/cline.toml",
+        include_str!("../../harnesses/cline.toml"),
     ),
     (
         "harnesses/codex.toml",
@@ -188,13 +192,16 @@ pub struct ModelSection {
 /// Which install mechanism the guard engine uses: `json-hooks` (the default)
 /// merges a rendered hook entry into the harness's hook-config file (Claude
 /// Code, Codex); `opencode-plugin` stages an embedded JS plugin whose
-/// `tool.execute.before` hook blocks a tool call by throwing.
+/// `tool.execute.before` hook blocks a tool call by throwing; `cline-plugin`
+/// stages an embedded JS plugin *directory* whose `beforeTool` hook blocks by
+/// returning `{skip: true, reason}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GuardEngine {
     #[default]
     JsonHooks,
     OpencodePlugin,
+    ClinePlugin,
 }
 
 impl GuardEngine {

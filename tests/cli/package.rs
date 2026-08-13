@@ -51,6 +51,26 @@ fn source_files_advertise_crates_io_publish_channel() {
 }
 
 #[test]
+fn ci_publishes_default_branch_coverage_for_readme_badge() {
+    let workflow = read_repo_file(".github/workflows/ci.yml");
+
+    for expected in [
+        "  push:\n    branches: [dev]",
+        "if: github.event_name == 'push'",
+        "id-token: write",
+        "components: llvm-tools-preview",
+        "taiki-e/install-action@cargo-llvm-cov",
+        "cargo llvm-cov --all-targets --all-features --workspace --locked",
+        "codecov/codecov-action@v5",
+        "files: lcov.info",
+        "use_oidc: true",
+        "fail_ci_if_error: true",
+    ] {
+        assert!(workflow.contains(expected), "CI is missing {expected}");
+    }
+}
+
+#[test]
 fn cargo_package_excludes_repo_local_authoring_files() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
     let output = Command::new(cargo)
@@ -72,13 +92,12 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "Cargo.toml",
         "LICENSE",
         "README.md",
-        // Embedded by `eval-magic docs` — the binary build breaks without these.
-        "docs/byoh.md",
-        "docs/isolation.md",
+        "assets/readme.png",
         "schema/evals.schema.json",
         "schema/harness-descriptor.schema.json",
         "profiles/shared/plan-mode.md",
         "harnesses/claude-code.toml",
+        "harnesses/cline.toml",
         "harnesses/codex.toml",
         "harnesses/opencode.toml",
         "harnesses/template.toml",
@@ -88,6 +107,22 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         assert!(
             files.lines().any(|line| line == required),
             "{required} should be packaged"
+        );
+    }
+
+    // Every shipped guide is discovered by build.rs and embedded in the
+    // binary, so packaging must follow the directory rather than a duplicated
+    // topic list.
+    let guide_dir = repo_root().join("docs/guides");
+    for entry in std::fs::read_dir(&guide_dir).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|value| value.to_str()) != Some("md") {
+            continue;
+        }
+        let relative = path.strip_prefix(repo_root()).unwrap().to_string_lossy();
+        assert!(
+            files.lines().any(|line| line == relative),
+            "{relative} should be packaged"
         );
     }
 

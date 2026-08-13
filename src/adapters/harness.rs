@@ -579,10 +579,12 @@ mod tests {
     #[test]
     fn claude_codex_and_opencode_surface_permission_denials() {
         // Each harness encodes a refused tool call differently, so detection is
-        // opt-in per named reader. Every built-in selects one today; a future
-        // harness whose transcript cannot distinguish a refusal from an ordinary
-        // tool error leaves the default `false` and reports nothing rather than
-        // guessing — `aggregate` then raises no permission-denial warning.
+        // opt-in per named reader. The three parser-backed built-ins select one
+        // today; Cline's declarative extract tier cannot distinguish a refusal
+        // from an ordinary tool error (a `cline-json` parser is the tracked
+        // gap), and any future harness in that position leaves the default
+        // `false` and reports nothing rather than guessing — `aggregate` then
+        // raises no permission-denial warning.
         assert!(
             adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_permission_denials()
         );
@@ -596,15 +598,17 @@ mod tests {
         // error. Each detecting reader, given a transcript whose tool calls all
         // completed or failed for ordinary (non-permission) reasons, yields an
         // empty vec; the per-reader suites cover the false-positive guard.
+        // Harnesses without a denial reader (Cline's declarative extract tier
+        // cannot distinguish refusals) are skipped rather than expected to
+        // detect.
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("events.jsonl");
         std::fs::write(&path, "{\"type\":\"turn.completed\"}\n").unwrap();
         for harness in Harness::known() {
             let adapter = adapter_for(harness);
-            assert!(
-                adapter.surfaces_permission_denials(),
-                "{harness:?} should detect"
-            );
+            if !adapter.surfaces_permission_denials() {
+                continue;
+            }
             assert_eq!(
                 adapter.parse_permission_denials(&path).unwrap(),
                 Vec::new(),
@@ -616,15 +620,16 @@ mod tests {
     #[test]
     fn only_claude_code_reports_a_session_surface_today() {
         // Claude Code's descriptor maps its `init` roster declaratively. Codex
-        // reports only `thread_id` on `thread.started`, and OpenCode's envelope
-        // carries no roster at all, so neither can supply this evidence and
+        // reports only `thread_id` on `thread.started`, OpenCode's envelope
+        // carries no roster at all, and Cline's `agent_event` stream has no
+        // roster record either, so none of them can supply this evidence and
         // their shadow findings stay unverified rather than being wrongly
         // refuted.
         assert!(
             adapter_for(Harness::resolve("claude-code").unwrap()).surfaces_session_surface(),
             "claude-code's init event carries the surface"
         );
-        for harness in ["codex", "opencode"] {
+        for harness in ["cline", "codex", "opencode"] {
             assert!(
                 !adapter_for(Harness::resolve(harness).unwrap()).surfaces_session_surface(),
                 "{harness} transcripts carry no skill/plugin roster"

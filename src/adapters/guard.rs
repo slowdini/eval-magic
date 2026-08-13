@@ -7,10 +7,14 @@
 //! file (`hooks_file`). `opencode-plugin` stages an embedded JS project
 //! plugin whole at `plugin_file` — OpenCode auto-loads project plugins by
 //! directory convention, and the plugin blocks a tool call by throwing the
-//! deny verdict's reason. Both arms stage the marker/manifest via
-//! [`crate::sandbox::install`]. The verdict side is shared: it feeds a hook
-//! payload through the shared arbiter ([`crate::sandbox::decide`]) and
-//! serializes the descriptor's `verdict_template` on deny. Template key order
+//! deny verdict's reason. `cline-plugin` stages the embedded plugin as a
+//! directory's `index.js` under `.cline/plugins/` — Cline auto-loads project
+//! plugin directories, and the plugin's `beforeTool` hook blocks by returning
+//! the verdict's reason as `{skip: true, reason}`. All arms stage the
+//! marker/manifest via [`crate::sandbox::install`]. The verdict side is
+//! shared: it feeds a hook payload through the shared arbiter
+//! ([`crate::sandbox::decide`]) and serializes the descriptor's
+//! `verdict_template` on deny. Template key order
 //! is authored in the descriptor and serialized verbatim (`serde_json` keeps
 //! insertion order), so verdict bytes and hook-file shape are pinned by data,
 //! not code.
@@ -61,6 +65,9 @@ pub(crate) fn install_guard(
         GuardEngine::OpencodePlugin => {
             install_opencode_plugin(guard, skills_dir, stage_root, guard_exe, &marker_path)
         }
+        GuardEngine::ClinePlugin => {
+            install_cline_plugin(guard, skills_dir, stage_root, guard_exe, &marker_path)
+        }
     }
 }
 
@@ -106,6 +113,65 @@ fn install_opencode_plugin(
         .expect("a path string serializes as JSON");
     let plugin = subst(
         OPENCODE_GUARD_PLUGIN_TEMPLATE,
+        &[("exe", &exe), ("marker", &marker)],
+    );
+    fs::write(&plugin_path, plugin)?;
+
+    write_manifest(
+        &skills_dir.join(GUARD_MANIFEST),
+        &plugin_path,
+        plugin_existed,
+        backup,
+        marker_path,
+    )?;
+
+    Ok(marker_path.to_path_buf())
+}
+
+/// The embedded Cline project plugin. The `{exe}`/`{marker}` placeholders
+/// substitute as JSON string literals (a JSON string is a valid JS string
+/// literal), so any exe/marker path characters survive without hand-escaping.
+/// The file's exact bytes are pinned in this module's tests — the staged
+/// plugin is an on-disk contract.
+const CLINE_GUARD_PLUGIN_TEMPLATE: &str = include_str!("../../harnesses/cline-guard-plugin.js");
+
+/// The cline-plugin arm: the embedded JS template with `{exe}`/`{marker}`
+/// substituted, staged whole at the descriptor's `plugin_file`. Cline
+/// auto-loads project plugin *directories* from `.cline/plugins/` (a bare
+/// `index.js` is discovered without a package.json; loose files at the
+/// plugins root are ignored — 3.0.53 spike-verified), and the plugin's
+/// `beforeTool` hook blocks by returning `{skip: true, reason}`, so the file
+/// *is* the hook surface.
+fn install_cline_plugin(
+    guard: &GuardSection,
+    skills_dir: &Path,
+    stage_root: &Path,
+    guard_exe: &Path,
+    marker_path: &Path,
+) -> io::Result<PathBuf> {
+    let plugin_path = resolve_rel(
+        stage_root,
+        guard
+            .plugin_file
+            .as_deref()
+            .expect("guard.plugin_file is declared (proven at descriptor load)"),
+    );
+    if let Some(parent) = plugin_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let plugin_existed = plugin_path.exists();
+    let backup = if plugin_existed {
+        Some(fs::read_to_string(&plugin_path)?)
+    } else {
+        None
+    };
+
+    let exe = serde_json::to_string(&guard_exe.display().to_string())
+        .expect("a path string serializes as JSON");
+    let marker = serde_json::to_string(&marker_path.display().to_string())
+        .expect("a path string serializes as JSON");
+    let plugin = subst(
+        CLINE_GUARD_PLUGIN_TEMPLATE,
         &[("exe", &exe), ("marker", &marker)],
     );
     fs::write(&plugin_path, plugin)?;
@@ -282,7 +348,7 @@ pub(crate) fn hook_cleanup_dir(
 ) -> Option<PathBuf> {
     let hook_file = match guard.engine {
         GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
-        GuardEngine::OpencodePlugin => guard.plugin_file.as_deref(),
+        GuardEngine::OpencodePlugin | GuardEngine::ClinePlugin => guard.plugin_file.as_deref(),
     }?;
     let (parent, _) = hook_file.rsplit_once('/')?;
     if let Some(skills) = skills_dir_rel {
@@ -340,6 +406,9 @@ fn resolve_rel(root: &Path, rel: &str) -> PathBuf {
     rel.split('/')
         .fold(root.to_path_buf(), |path, segment| path.join(segment))
 }
+
+#[cfg(test)]
+mod cline_plugin_tests;
 
 #[cfg(test)]
 mod guard_denial_tests;

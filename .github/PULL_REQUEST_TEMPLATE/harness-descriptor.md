@@ -1,10 +1,10 @@
 <!--
 Harness-descriptor contribution PR — data-only.
 Use for: adding a new built-in harness descriptor (or extending one) that only
-reuses EXISTING named capabilities. New summary/denial readers, slug
-capabilities, shadow preflights, and guard support are CODE contributions — one capability per PR,
+reuses AVAILABLE named capabilities. Summary/denial readers, slug capabilities, shadow preflights,
+and guard support that require code are CODE contributions — one capability per PR,
 separately from this one (see docs/progressive-enhancements.md "Guardrails").
-Guide: docs/byoh.md "Upstreaming your descriptor".
+Guide: docs/guides/byoh.md "Upstreaming your descriptor".
 Title: feat(harness): add <label> descriptor
 -->
 
@@ -32,8 +32,8 @@ Title: feat(harness): add <label> descriptor
 - [ ] `docs/<label>-notes.md` — verified implementation notes (promote your
       project's `.eval-magic/harnesses/<label>-notes.md` — `harness init`
       scaffolds it)
-- [ ] `README.md` — new support-table row (only wired enhancements checked;
-      ❌ elsewhere)
+- [ ] `eval-magic harness list` and `harness show <label>` report only the
+      enhancements declared by the descriptor
 
 ## Verification evidence
 

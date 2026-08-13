@@ -159,7 +159,7 @@ fn ordinary_failed_command_events_and_process_errors_are_not_denials() {
     fs::write(
         &events_path,
         concat!(
-            r#"{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"curl https://example.test","status":"failed","exit_code":6,"output":"Could not resolve host"}}"#,
+            r#"{"type":"item.completed","item":{"id":"i1","type":"command_execution","command":"curl https://example.test","status":"failed","exit_code":6,"aggregated_output":"Could not resolve host"}}"#,
             "\n"
         ),
     )

@@ -1,0 +1,165 @@
+# Cline harness descriptor.
+#
+# Command templates and banners use TOML *literal* strings ('...' / '''...''')
+# so shell line-continuation backslashes survive verbatim. The banner starts
+# with a blank line (a leading newline in the rendered message) and every
+# template's exact whitespace is pinned by the golden tests under tests/golden/.
+#
+# Verified against cline 3.0.52 (`cline --version`, `cline --help`, and an
+# observed `cline --json` dispatch capture); the transcript parser, shadow
+# roots, and guard plugin contract re-verified against 3.0.53. Per-value
+# evidence lives in docs/cline-notes.md.
+
+label = "cline"
+skills_dir = ".cline/skills"
+config_dirs = [".cline"]
+
+[run]
+supports_guard = true
+
+# Tool ids as the `agent_event` stream spells them (`content_start` /
+# `contentType:"tool"` events carry `toolName`). Cline 3.x routes the classic
+# tool names to these executor names: `editor` (write_to_file / replace_in_file
+# / apply_diff), `run_commands` (execute_command / bash), `read_files`,
+# `search_codebase` (search_files / list_code_definition_names). `skills`
+# (use_skill) and `submit_and_exit` (attempt_completion) are not
+# write/patch/shell/read roles.
+[tools]
+write = ["editor"]
+patch = []
+shell = ["run_commands"]
+read = ["read_files", "search_codebase"]
+
+# Cline 3.0.52 does NOT enforce the Agent Skills naming spec — a staged skill
+# named `underscore_probe_skill` was discovered and invoked — so the default
+# slug template (with its `__` separator) works as-is. The pattern below only
+# constrains `--stage-name` overrides to slug-safe names the generated slug
+# itself satisfies. Discovery keys on the frontmatter `name:` (the docs require
+# it to match the directory name), so staging rewrites it to the slug and
+# advertises the slug.
+[staging]
+slug_template = "{prefix}{iteration}-{condition}__{skill_name}"
+stage_name_pattern = "^[a-z0-9][a-z0-9_-]*$"
+stage_name_invalid_message = 'Cline skill name "{name}" must start lowercase-alphanumeric and use only lowercase letters, numbers, hyphens, and underscores'
+rewrites_frontmatter_name = true
+advertises_staged_slug_name = true
+surface_phrase = "as a Cline skill"
+unresolved_phrase = "If it does not load as a Cline skill"
+
+[skills_block]
+header = "## Skills\n"
+item = "\n- {name}: {description} (file: {path})"
+
+# `cline --json` emits NDJSON: `agent_event` wrappers (`content_start` /
+# `content_end` / `usage` / `iteration_start` / `iteration_end` / `done`),
+# `hook_event` lifecycle lines, and a terminal `run_result` carrying the final
+# text, run token usage, and `durationMs`. Tool args nest under `input` and
+# `content_start`/`content_end` pair by `toolCallId`, so the summary rides the
+# named `cline-json` parser (src/adapters/cline/transcript.rs): it flattens
+# args per tool (`run_commands`' `commands` array joins into one `command`
+# string, so the stray-writes audit and guard can classify it; `skills` calls
+# surface `skill` at top level for the deterministic `__skill_invoked`
+# meta-check), attaches per-tool results, and reads refusal evidence from
+# `content_end` error payloads. There is no session id anywhere in the stream
+# (and `--id` headless resume errors in 3.0.52+), so [conversation] is not
+# declarable.
+[transcript]
+events_filename = "cline-events.jsonl"
+parser = "cline-json"
+permission_denials_parser = "cline-json"
+surfaces_skill_invocation = true
+skill_tool = "skills"
+skill_arg = "skill"
+
+# `-m <model-id>` selects a model for the session's configured provider (model
+# ids are provider-qualified, e.g. `cline-pass/kimi-k3`; choose providers with
+# `cline auth` or `-P`, outside eval-magic's model flag).
+[model]
+flag = "-m"
+
+# Guard data rendered by the engine (src/adapters/guard.rs). The
+# cline-plugin engine stages an embedded JS project plugin
+# (harnesses/cline-guard-plugin.js, {exe}/{marker} substituted as JSON string
+# literals) as a *directory* under .cline/plugins/ — Cline auto-loads project
+# plugin dirs with no trust prompt (a bare index.js needs no package.json;
+# loose files at the plugins root are ignored), including in headless one-shot
+# dispatches. The plugin's beforeTool hook forwards every tool call to
+# `eval-magic guard-hook --harness cline` on stdin (run_commands' commands
+# array joined into one `command` string for the shared arbiter) and returns
+# {skip: true, reason} to block; the reason reaches the stream as the
+# content_end {"error"} payload, which the cline-json parser reads as a
+# guard-attributed denial. All 3.0.53 spike-verified: docs/cline-notes.md.
+[guard]
+engine = "cline-plugin"
+plugin_file = ".cline/plugins/slow-powers-eval-guard/index.js"
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = '''
+🛡 Write guard armed: a project plugin is staged in .cline/plugins/slow-powers-eval-guard/index.js
+   and will block writes/installs outside the eval sandbox during Cline dispatches.
+   Each `cline` dispatch auto-loads the plugin from the env's .cline/plugins directory.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard'''
+
+# Cline discovers skills from the dispatch cwd's `.cline/skills` (runner
+# staging during evals — Cline does NOT walk project ancestors; verified
+# against 3.0.53 with a live probe) plus two live global roots the preflight
+# scans: `$CLINE_DIR/skills` (default `~/.cline/skills`) and the cross-harness
+# `~/.agents/skills` (where `cline skill install` lands global installs).
+[shadow]
+preflight = "cline-skills"
+
+# `-c/--cwd <eval-root>` sets the dispatch cwd. Tool calls auto-approve by
+# default; `--auto-approve true` pins that against default drift (with approval
+# required instead, non-TTY dispatches would auto-DENY every call). `--act`
+# (a hidden flag) pins act mode: the global `planActMode` setting otherwise
+# applies to headless dispatches and converts them to read-only plan sessions
+# that refuse writes. Piped stdin is treated as extra prompt context, so
+# every recipe detaches it with </dev/null, same as codex. There is no
+# --output-last-message: the terminal
+# `run_result` event carries the final text, and the trailing jq step writes
+# `final-message.md` from the captured events (the probe's final-message
+# contract checks that file; ingest recovers final text from the events file
+# via the extract mapping above). The parallel block runs nested inside the
+# shared scaffold's `sh -c '...'`, where a single quote would terminate the
+# body, so its jq program uses escaped double quotes.
+[dispatch]
+capture_prefix = "cline"
+next_steps_template = '''
+
+Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
+{exec_command}
+Then run `ingest{target_args} --iteration {iteration} --harness cline`.'''
+exec_template = '''
+cline --cwd <eval-root> --act --json --auto-approve true{model_arg} \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
+  </dev/null \
+  > <outputs_dir>/cline-events.jsonl \
+  2> <outputs_dir>/cline-stderr.log; \
+  jq -rj 'select(.type == "run_result") | .text' <outputs_dir>/cline-events.jsonl \
+  > <outputs_dir>/final-message.md'''
+parallel_command_template = '''
+    cline --cwd "$eval_root" --act --json --auto-approve true{model_arg} \
+      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
+      </dev/null \
+      > "$outputs_dir/cline-events.jsonl" \
+      2> "$outputs_dir/cline-stderr.log"; \
+      jq -rj "select(.type == \"run_result\") | .text" "$outputs_dir/cline-events.jsonl" \
+      > "$outputs_dir/final-message.md"'''
+judge_command_template = '    cline --cwd "{cwd}" --act --json --auto-approve true $model_arg \'
+manifest_template = '''
+After all dispatches (Cline):
+
+Run one fresh `cline --cwd <eval-root> --act --json --auto-approve true` per task. Detach stdin with `</dev/null>` so piped task data cannot become extra prompt context; capture stdout as `outputs/cline-events.jsonl` and stderr as `outputs/cline-stderr.log`. The trailing jq step recovers `outputs/final-message.md` from the terminal `run_result` event.
+
+```bash
+{exec_command}
+```
+
+Parallel dispatch from this iteration directory:
+
+```bash
+{parallel_recipe}
+```
+
+Then run `eval-magic ingest --harness cline`; ingest reads each task's `outputs/cline-events.jsonl`.
+'''

@@ -16,7 +16,15 @@ use std::io;
 use std::path::Path;
 
 const NON_TOOL_ITEMS: [&str; 3] = ["agent_message", "reasoning", "plan_update"];
-const ARG_OMIT_KEYS: [&str; 6] = ["id", "type", "status", "output", "result", "error"];
+const ARG_OMIT_KEYS: [&str; 7] = [
+    "id",
+    "type",
+    "status",
+    "aggregated_output",
+    "output",
+    "result",
+    "error",
+];
 
 fn permission_denial(tool: &str, reason: &str) -> PermissionDenial {
     PermissionDenial {
@@ -57,10 +65,10 @@ fn stringify_value(v: &Value) -> String {
     }
 }
 
-/// First present of `output`, `result`, `error` (a present-but-null value still
-/// counts), stringified.
+/// First present of `aggregated_output`, `output`, `result`, `error` (a
+/// present-but-null value still counts), stringified.
 fn maybe_result(item: &Map<String, Value>) -> Option<String> {
-    ["output", "result", "error"]
+    ["aggregated_output", "output", "result", "error"]
         .into_iter()
         .find_map(|k| item.get(k).map(stringify_value))
 }
@@ -267,7 +275,7 @@ mod tests {
             &path,
             &[
                 json!({"type": "item.started", "timestamp": "2026-06-07T10:00:00.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "status": "in_progress"}}),
-                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:02.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "output": "2 pass\n0 fail", "status": "completed"}}),
+                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:02.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "aggregated_output": "2 pass\n0 fail", "status": "completed"}}),
                 json!({"type": "item.completed", "item": {"id": "item_2", "type": "file_change", "path": "src/app.ts", "status": "completed"}}),
                 json!({"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": "Done."}}),
             ],
@@ -293,6 +301,36 @@ mod tests {
                 ordinal: 1,
             }
         );
+    }
+
+    #[test]
+    fn prefers_aggregated_output_and_retains_legacy_result_fallbacks() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("result-fields.jsonl");
+        write_jsonl(
+            &path,
+            &[
+                json!({"type": "item.completed", "item": {"id": "a", "type": "command_execution", "command": "one", "aggregated_output": "current", "output": "legacy-output", "result": "legacy-result", "error": "legacy-error", "status": "completed"}}),
+                json!({"type": "item.completed", "item": {"id": "b", "type": "command_execution", "command": "two", "output": "legacy-output"}}),
+                json!({"type": "item.completed", "item": {"id": "c", "type": "mcp_tool_call", "tool": "demo", "result": "legacy-result"}}),
+                json!({"type": "item.completed", "item": {"id": "d", "type": "mcp_tool_call", "tool": "demo", "error": "legacy-error"}}),
+            ],
+        );
+
+        let result = parse_codex_events(&path).unwrap();
+        assert_eq!(
+            result
+                .iter()
+                .map(|invocation| invocation.result.clone())
+                .collect::<Vec<_>>(),
+            vec![
+                Some(json!("current")),
+                Some(json!("legacy-output")),
+                Some(json!("legacy-result")),
+                Some(json!("legacy-error")),
+            ]
+        );
+        assert_eq!(result[0].args, Some(json!({"command": "one"})));
     }
 
     #[test]
@@ -356,7 +394,7 @@ mod tests {
             &path,
             &[
                 json!({"type": "thread.started", "thread_id": "thread-codex-1", "timestamp": "2026-06-07T10:00:00.000Z"}),
-                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "output": "README.md"}}),
+                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "aggregated_output": "README.md"}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:04.000Z", "item": {"id": "item_2", "type": "agent_message", "text": "First."}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:05.000Z", "item": {"id": "item_3", "type": "agent_message", "text": "Final."}}),
                 json!({"type": "turn.completed", "timestamp": "2026-06-07T10:00:10.000Z", "usage": {"input_tokens": 100, "cached_input_tokens": 75, "output_tokens": 20, "reasoning_output_tokens": 5}}),

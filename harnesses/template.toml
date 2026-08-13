@@ -99,10 +99,11 @@ label = "{label}"
 ## can compose with it.
 ## parser is a NAMED SUMMARY CAPABILITY — real parsing code reused from configuration alone:
 ##   parser = "claude-stream-json"   Claude Code `-p --output-format stream-json` events
+##   parser = "cline-json"           Cline `--json` agent_event/run_result NDJSON
 ##   parser = "codex-items"          Codex `item.started`/`item.completed` JSONL
 ##   parser = "opencode-events"      OpenCode `run --format json` tool_use/text/step_finish events
 ## permission_denials_parser is an OPTIONAL NAMED CAPABILITY for harness-specific refusal evidence;
-## it works with either primary reader. Existing parser-only descriptors retain their bundled
+## it works with either primary reader. Parser-only descriptors retain their bundled
 ## denial reader for compatibility.
 ## extract is the DECLARATIVE tier for flat event streams (each tool event self-contained):
 ##   [transcript.extract.tools]       where / item / name_field / skip_names / args_omit /
@@ -119,7 +120,8 @@ label = "{label}"
 ##                                    optional plugin_id_field / plugin_version_field
 ## session_surface is auxiliary: pair it with parser or declarative summary outputs. An explicit
 ## mapping is authoritative; explicitly empty arrays are evidence that the roster was empty.
-## See `eval-magic docs byoh` "The declarative extractor" for the worked Codex-shaped example.
+## Use `eval-magic harness show codex` for a resolved Codex-shaped example and the descriptor
+## schema for the field-by-field contract.
 ## A stream that needs more than these primitives (keyed cross-event joins, content coercion) is
 ## a named-parser code contribution (one capability per PR — see `eval-magic docs byoh`
 ## "Upstreaming your descriptor"); leave this table commented and llm_judge carries the grading
@@ -214,7 +216,8 @@ label = "{label}"
 ## -------------------------------------------------------------------------------------------
 ## [shadow] — preflight scan for globally-installed plugins/skills that could shadow the eval's
 ## staged skills. Named capabilities: preflight = "claude-plugins" (Claude plugin/global-skills
-## scan), preflight = "codex-skills" (Codex repo/user/admin/plugin scan), and
+## scan), preflight = "cline-skills" (Cline global $CLINE_DIR/skills + ~/.agents/skills scan),
+## preflight = "codex-skills" (Codex repo/user/admin/plugin scan), and
 ## preflight = "opencode-skills" (OpenCode project/global .opencode/.claude/.agents scan).
 ## Reuse one only when the harness has compatible discovery semantics. Most harnesses leave
 ## this table out. `isolates_live_sources = true` records isolation you have ALREADY applied:
@@ -233,8 +236,8 @@ label = "{label}"
 ## run.supports_guard = true) because the write guard fails open — a mistyped block would
 ## silently disarm it. Unguarded runs fall back to the detect-stray-writes audit (guarded
 ## built-ins arm the guard automatically; --no-guard opts out). Guard support is a built-in,
-## one-capability-per-PR contribution: see `eval-magic docs byoh` "The guard restriction" and
-## docs/progressive-enhancements.md in the eval-magic repo.
+## one-capability-per-PR contribution: see `eval-magic docs byoh` for the contribution boundary
+## and docs/progressive-enhancements.md in the eval-magic repo for the internal guard contract.
 
 ## -------------------------------------------------------------------------------------------
 ## Before opening a PR (`eval-magic docs byoh` "Upstreaming your descriptor"):
@@ -247,4 +250,4 @@ label = "{label}"
 ##   3. .eval-magic/harnesses/{label}-notes.md records every verified value, its source, and the
 ##      harness version.
 ##   4. Open the PR with .github/PULL_REQUEST_TEMPLATE/harness-descriptor.md — a data-only PR:
-##      the descriptor, the notes doc, and a README support-table row.
+##      the descriptor, its registry entry, and the notes doc. `harness list` updates from data.

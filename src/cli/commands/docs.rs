@@ -1,10 +1,9 @@
 //! `docs` — print the embedded user-facing reference docs.
 //!
 //! The installed binary is the only doc surface an installer-script user has
-//! locally, so every user-facing reference doc is embedded at compile time
-//! (version-matched, offline). Internal contributor docs stay unembedded in
-//! the repository's `docs/` directory — see docs/README.md for the placement
-//! policy.
+//! locally, so every Markdown file directly under `docs/guides/` is discovered and
+//! embedded at compile time. Internal contributor docs stay unembedded in the
+//! repository's `docs/` root — see `docs/developer_overview.md`.
 
 use anyhow::bail;
 
@@ -16,35 +15,14 @@ struct Topic {
     body: &'static str,
 }
 
-/// The shipped reference docs. References from help text and console output
-/// use `eval-magic docs <name>`; `tests/cli/docs.rs` drift-guards that every
-/// such mention names a topic listed here.
-const TOPICS: &[Topic] = &[
-    Topic {
-        name: "guide",
-        summary: "complete operating guide: install, the run loop, assertions, results",
-        body: include_str!("../../../README.md"),
-    },
-    Topic {
-        name: "byoh",
-        summary: "author a TOML descriptor for a harness eval-magic has never seen",
-        body: include_str!("../../../docs/byoh.md"),
-    },
-    Topic {
-        name: "isolation",
-        summary: "isolate dispatches from live/installed skills, and verify it worked",
-        body: include_str!("../../../docs/isolation.md"),
-    },
-];
+include!(concat!(env!("OUT_DIR"), "/guide_topics.rs"));
 
 /// The bare-`docs` listing: one indented `<name>  <summary>` row per topic.
 ///
 /// The name column is padded to the longest registered name rather than a
-/// literal width, so adding a topic can't silently misalign the listing — the
-/// first surface a new user reads.
+/// literal width, so adding a topic cannot silently misalign the listing.
 fn render_topic_list() -> String {
-    let mut out =
-        String::from("Embedded reference docs — print one with `eval-magic docs <topic>`:\n\n");
+    let mut out = String::from("Shipped guides — print one with `eval-magic docs <topic>`:\n\n");
     let width = TOPICS
         .iter()
         .map(|topic| topic.name.len())

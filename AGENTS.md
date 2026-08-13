@@ -6,11 +6,11 @@
 `src/lib.rs` and submodules such as `cli/`, `pipeline/`, `sandbox/`, `validation/`, and
 `workspace/`. JSON schemas are tracked in `schema/`, harness descriptors (plus embedded harness
 assets such as the OpenCode write-guard plugin template) in `harnesses/`, shared
-prompt profiles in `profiles/`, and docs in `docs/` — user-facing `byoh.md` and `isolation.md` ship
-embedded in the binary (the `eval-magic docs byoh` and `eval-magic docs isolation` topics), the rest
-are internal development docs (the harness enhancement contract, per-harness notes);
-`docs/README.md` holds the placement policy. Integration tests are split by surface area under
-`tests/cli/` and `tests/run/`; unit tests usually live beside the module they exercise.
+prompt profiles in `profiles/`, and docs in `docs/` — user-facing Markdown under `docs/guides/`
+ships embedded in the binary as `eval-magic docs <topic>`; the other files are internal development
+docs. `docs/developer_overview.md` maps the repository and holds the placement policy. Integration
+tests are split by surface area under `tests/cli/` and `tests/run/`; unit tests usually live beside
+the module they exercise.
 
 ## Build, Test, and Development Commands
 
@@ -26,9 +26,9 @@ are internal development docs (the harness enhancement contract, per-harness not
 CLI `--help` docs are the primary way that usage is discovered. Any new feature that has
 user-facing elements must be thoroughly described in the shipped documentation. Shipped means the
 `--help` tree plus the reference topics embedded in the binary and printable via
-`eval-magic docs <topic>` (topics are registered in `src/cli/commands/docs.rs`; shipped output
-references them as `eval-magic docs <topic>`, never repo-relative paths). What belongs where is
-governed by `docs/README.md`.
+`eval-magic docs <topic>` (topics are discovered from `docs/guides/*.md`; shipped output references
+them as `eval-magic docs <topic>`, never repo-relative paths). What belongs where is governed by
+`docs/developer_overview.md`.
 
 ## Coding Style & Naming Conventions
 

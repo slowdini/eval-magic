@@ -358,6 +358,9 @@ pub fn record_runs(
 /// A run that never references the prompt path is NOT flagged — absence is not
 /// proof of failure (the agent can receive the prompt another way),
 /// and requiring positive evidence keeps the check free of false positives.
+/// An invocation without a string result is not judged either: transcript
+/// readers that leave results unjoined (the declarative extract tier) carry no
+/// delivery evidence, and treating that as failure flags every successful read.
 /// Returns `false` when `sentinel` is empty (the prompt file was missing or
 /// unreadable, so the read cannot be judged).
 fn prompt_read_failed(summary: &TranscriptSummary, prompt_path: &str, sentinel: &str) -> bool {
@@ -374,13 +377,11 @@ fn prompt_read_failed(summary: &TranscriptSummary, prompt_path: &str, sentinel: 
         if !mentions_prompt {
             continue;
         }
+        let Some(result) = inv.result.as_ref().and_then(serde_json::Value::as_str) else {
+            continue;
+        };
         referenced = true;
-        if inv
-            .result
-            .as_ref()
-            .and_then(serde_json::Value::as_str)
-            .is_some_and(|r| r.contains(sentinel))
-        {
+        if result.contains(sentinel) {
             delivered = true;
         }
     }

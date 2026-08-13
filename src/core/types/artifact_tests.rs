@@ -58,6 +58,10 @@ fn conditions_json_fixtures_round_trip_byte_identically() {
             include_str!("../../../tests/fixtures/conditions/claude-code.json"),
         ),
         (
+            "cline",
+            include_str!("../../../tests/fixtures/conditions/cline.json"),
+        ),
+        (
             "codex",
             include_str!("../../../tests/fixtures/conditions/codex.json"),
         ),
@@ -92,7 +96,7 @@ fn conditions_json_with_unknown_harness_errors_naming_known_harnesses() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("unknown harness 'nonexistent'"), "{err}");
-    for name in ["claude-code", "codex", "opencode"] {
+    for name in ["claude-code", "cline", "codex", "opencode"] {
         assert!(err.contains(name), "error must name {name}: {err}");
     }
 }

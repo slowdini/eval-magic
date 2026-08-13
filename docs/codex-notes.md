@@ -79,7 +79,7 @@ report; historical unversioned artifacts remain readable.
 default `plugin-shadow.json` and aggregate validity warnings retain the preflight finding because
 eval-magic cannot observe manually added launch arguments. The operator-facing recipes — that flag,
 move-or-rename for a direct skill collision, and the clean-`HOME`/`CODEX_HOME` caveat — are in the
-shipped `eval-magic docs isolation` topic ([isolation.md](isolation.md)).
+shipped `eval-magic docs isolation` topic ([isolation guide](guides/isolation.md)).
 
 When a descriptor overlay excludes **every** reported source from every initial and resumed
 dispatch, it may declare `[shadow] isolates_live_sources = true`. Preflight and
@@ -88,7 +88,7 @@ and `aggregate` omits the shadow validity warnings. eval-magic does not inspect 
 otherwise verify the assertion; the honesty rules, including which Codex remedies can and cannot
 justify it, are in `eval-magic docs isolation`.
 
-**Known limit:** Codex also ships bundled system skills, but currently exposes no stable
+**Known limit:** Codex also ships bundled system skills, but exposes no stable
 enumeration mechanism for them. The preflight therefore cannot detect a collision with a bundled
 system skill; verify that case manually when relevant. (Also stated for operators in
 `eval-magic docs isolation`.)
@@ -99,6 +99,12 @@ The built-in descriptor normalizes the JSONL summary through `[transcript.extrac
 `codex-items` named parser remains as a compatibility/reference implementation, with a differential
 test pinning the declarative output to it. Its separately selected denial reader still handles the
 paired stderr capture described below.
+
+Codex CLI 0.147.0's
+[`CommandExecutionItem`](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/exec/src/exec_events.rs)
+serializes completed command output in `aggregated_output`. Both readers prefer that field, then
+retain `output`, `result`, and `error` as compatibility fallbacks. All four result-bearing fields
+are omitted from tool arguments so `run.json` records command output once, in `result`.
 
 `item.completed` events whose item type is not an agent message / reasoning / plan update become
 tool invocations: `command_execution`, `file_change`, `web_search`, and MCP items.
@@ -118,11 +124,11 @@ max(input_tokens + output_tokens - cached_input_tokens, 0)
 count reasoning. Resumed `turn.completed` usage is cumulative for the native thread; the Codex
 descriptor therefore uses the final round's total instead of summing round totals.
 
-Current `codex exec --json` transcripts do not include a native duration or event timestamps, so
+`codex exec --json` transcripts do not include a native duration or event timestamps, so
 `duration_ms` remains `null`. Aggregate reports the missing sample count; a benchmark statistic
-with `n: 0` is unavailable, not a measured zero. Existing timing artifacts are not migrated
+with `n: 0` is unavailable, not a measured zero. Ingest does not migrate timing artifacts
 automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
-them from the preserved transcripts when desired.
+them from preserved transcripts when desired.
 
 ### Permission denials
 
@@ -175,8 +181,8 @@ The hook invokes the hidden `guard-codex` subcommand
 
 ## Running inside Codex itself
 
-User-facing guidance lives in the README's Harnesses section ("Running inside Codex itself")
-and in `run --guard --help`: staging writes `.agents/skills`, guarded runs also write
+User-facing guidance lives in `eval-magic run --help`: staging writes `.agents/skills`, guarded
+runs also write
 `.codex/hooks.json`, and Codex's default workspace-write sandbox protects those paths, so the
-runner may need approval/escalation or an external terminal invocation. Keep the public text in
-sync when this changes.
+runner may need approval/escalation or an external terminal invocation. Keep that help text in sync
+when this changes.

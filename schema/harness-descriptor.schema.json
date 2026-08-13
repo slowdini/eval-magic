@@ -89,9 +89,9 @@
       "description": "Transcript ingest: the events file the CLI dispatch captures, one primary summary reader, and optional composable denial/session-surface readers. The primary summary is either `parser` (a named code capability for streams that need stitching) or summary outputs under `extract` (the declarative tier for flat event streams). A parser may coexist with an extract containing only `session_surface`; `permission_denials_parser` may accompany either tier. These composition rules are Rust loader invariants.",
       "properties": {
         "events_filename": { "type": "string", "minLength": 1 },
-        "parser": { "enum": ["claude-stream-json", "codex-items", "opencode-events"] },
+        "parser": { "enum": ["claude-stream-json", "cline-json", "codex-items", "opencode-events"] },
         "permission_denials_parser": {
-          "enum": ["claude-stream-json", "codex-items", "opencode-events"],
+          "enum": ["claude-stream-json", "cline-json", "codex-items", "opencode-events"],
           "description": "Optional named reader for permission-denial evidence. It composes with either primary transcript tier; when absent, a named parser retains its historical bundled denial capability."
         },
         "extract": {
@@ -263,11 +263,11 @@
     "guard": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Write guard: the data the guard engine renders into the harness's native pre-tool hook surface and a deny verdict. The engine selects the install mechanism: json-hooks (default) merges a hook entry into hooks_file (Claude Code, Codex); opencode-plugin stages an embedded JS plugin at plugin_file. Restricted to embedded built-in descriptors (the guard fails open, so a mistyped user descriptor would silently disarm it).",
+      "description": "Write guard: the data the guard engine renders into the harness's native pre-tool hook surface and a deny verdict. The engine selects the install mechanism: json-hooks (default) merges a hook entry into hooks_file (Claude Code, Codex); opencode-plugin and cline-plugin stage an embedded JS plugin at plugin_file. Restricted to embedded built-in descriptors (the guard fails open, so a mistyped user descriptor would silently disarm it).",
       "properties": {
         "engine": {
-          "enum": ["json-hooks", "opencode-plugin"],
-          "description": "Install mechanism: json-hooks (default when absent) merges hook_entry into hooks_file; opencode-plugin stages the embedded JS plugin at plugin_file."
+          "enum": ["json-hooks", "opencode-plugin", "cline-plugin"],
+          "description": "Install mechanism: json-hooks (default when absent) merges hook_entry into hooks_file; opencode-plugin stages the embedded JS plugin at plugin_file; cline-plugin stages the embedded JS plugin directory's index.js at plugin_file."
         },
         "hooks_file": {
           "type": "string",
@@ -292,7 +292,7 @@
         "plugin_file": {
           "type": "string",
           "minLength": 1,
-          "description": "(opencode-plugin) Plugin file staged from the embedded JS template ({exe}/{marker} substituted), `/`-separated relative to the staged env root (e.g. \".opencode/plugins/slow-powers-eval-guard.js\")."
+          "description": "(opencode-plugin/cline-plugin) Plugin file staged from the embedded JS template ({exe}/{marker} substituted), `/`-separated relative to the staged env root (e.g. \".opencode/plugins/slow-powers-eval-guard.js\" or \".cline/plugins/slow-powers-eval-guard/index.js\")."
         },
         "verdict_template": {
           "type": "string",
@@ -304,7 +304,7 @@
       "allOf": [
         {
           "if": {
-            "properties": { "engine": { "const": "opencode-plugin" } },
+            "properties": { "engine": { "enum": ["opencode-plugin", "cline-plugin"] } },
             "required": ["engine"]
           },
           "then": { "required": ["plugin_file", "verdict_template", "armed_message"] },
@@ -327,8 +327,8 @@
       "description": "Live-source collision preflight plus an optional operator isolation assertion. A later layer may inherit preflight from a built-in; every fully resolved descriptor with this table must still provide it.",
       "properties": {
         "preflight": {
-          "description": "Named live-skill collision scanner: claude-plugins, codex-skills, or opencode-skills.",
-          "enum": ["claude-plugins", "codex-skills", "opencode-skills"]
+          "description": "Named live-skill collision scanner: claude-plugins, cline-skills, codex-skills, or opencode-skills.",
+          "enum": ["claude-plugins", "cline-skills", "codex-skills", "opencode-skills"]
         },
         "isolates_live_sources": {
           "type": "boolean",

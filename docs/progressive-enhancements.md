@@ -1,11 +1,11 @@
 # Harness progressive enhancements
 
-> **Audience:** developers working on the eval-magic codebase. The README and `eval-magic --help`
-> are the user-facing docs; this file explains how harness support is structured in code and what
+> **Audience:** developers working on the eval-magic codebase. CLI help and the shipped guides are
+> the user-facing docs; this file explains how harness support is structured in code and what
 > wiring more of it buys. Per-harness implementation notes live in [claude-notes.md](claude-notes.md),
 > [codex-notes.md](codex-notes.md), and [opencode-notes.md](opencode-notes.md). Pointing eval-magic
 > at a harness it doesn't know — user-supplied descriptor files, layering, `harness
-> list`/`show`/`lint` — is the user-facing [byoh.md](byoh.md).
+> list`/`show`/`lint` — is the user-facing [BYOH guide](guides/byoh.md).
 
 Harness compatibility is not a parity checklist to audit — it is **a minimal baseline every harness
 satisfies, plus optional enhancements** a harness's adapter opts into. Most missing enhancements
@@ -62,7 +62,7 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
   (embedded → user-global → project-local → `--harness-file`) with field-level merge per label,
   and `adapter_for()` resolves each `Harness` handle to its descriptor-backed adapter — still the
   single dispatch point. Broken discovered files skip with a warning; the layer model itself is
-  documented in [byoh.md](byoh.md).
+  documented in the [BYOH guide](guides/byoh.md).
 - `src/adapters/descriptor/layers.rs` — layer discovery (config-root resolution, per-directory
   scans, the `--harness-file` top layer) and the user-layer restrictions (no `[guard]`).
 - `src/adapters/harness.rs` — the `HarnessAdapter` trait, tiered into baseline and enhancement
@@ -159,7 +159,7 @@ reasoning is only visible in the raw captures, which `run` preflight states once
 fallback.
 *Capability:* `transcript.permission_denials_parser` names the reader independently of the primary
 summary tier. It may accompany a named `parser` or declarative `[transcript.extract]` summary;
-`claude-stream-json`, `codex-items`, and `opencode-events` surface denials. For compatibility, a
+`claude-stream-json`, `cline-json`, `codex-items`, and `opencode-events` surface denials. For compatibility, a
 descriptor with only `transcript.parser` still uses that parser's bundled denial support. The eval
 write guard denies through the same permission mechanism, so its blocks land in the report as well;
 they are attributed by the `eval guard: ` reason prefix and excluded from the warning so one denial
@@ -176,9 +176,9 @@ ingest pipeline never reads a transcript), one primary summary reader, and
 `extract`; validation rejects both, neither, and a surface-only extract. The `extract` sub-table is
 the declarative tier: equality `where` filters, final and ordered assistant-text picks, a session-id
 pick, flat tool-item mapping, token sum/subtract reduction, duration rule, and the auxiliary
-session-surface mapping documented with a worked example in [byoh.md](byoh.md).
+session-surface mapping represented in the descriptor schema and visible in resolved descriptors.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
-(`claude-stream-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
+(`claude-stream-json`, `cline-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
 captures reuses one with zero code. The built-in Codex descriptor uses declarative summary
 extraction plus `permission_denials_parser = "codex-items"`; the named parser remains available as
 a compatibility/reference implementation and is covered by a differential summary test.
@@ -260,15 +260,19 @@ arm; fatal in revision mode, where the `old_skill` arm then sees new-skill conte
 *Descriptor fields:* the `[guard]` table — `verdict_template` and `armed_message` for every
 engine, `engine` (the install-mechanism discriminator, default `json-hooks`), and the per-engine
 fields: `json-hooks` (Claude Code, Codex) declares `hooks_file`, `matcher`, `command_template`,
-and `hook_entry`; `opencode-plugin` declares `plugin_file` instead — plus `[tools]` (the
+and `hook_entry`; `opencode-plugin` and `cline-plugin` declare `plugin_file` instead — plus `[tools]` (the
 write/patch/shell/read vocabulary) and `run.supports_guard` (validated to stay in lockstep with
 the `[guard]` table). There is no guard code capability: one engine module
-(`src/adapters/guard.rs`) holds two install arms selected by `engine` and a single shared verdict
+(`src/adapters/guard.rs`) holds three install arms selected by `engine` and a single shared verdict
 path. `json-hooks` merges the rendered hook entry into `hooks_file`; `opencode-plugin` stages an
 embedded JS project plugin (`harnesses/opencode-guard-plugin.js`, `{exe}`/`{marker}` substituted
 as JSON string literals) whose `tool.execute.before` hook forwards every tool call to the generic
 entry point and throws the verdict's reason to block — OpenCode auto-loads project plugins by
-directory convention, so no dispatch flag is needed. The templates' authored JSON key order is
+directory convention, so no dispatch flag is needed. `cline-plugin` stages an embedded JS project
+plugin *directory* (`harnesses/cline-guard-plugin.js` as `.cline/plugins/.../index.js`) whose
+`beforeTool` hook forwards every tool call the same way — joining `run_commands`' `commands`
+array into one `command` string first — and returns `{skip: true, reason}` to block; Cline
+auto-loads project plugin dirs in headless dispatches too. The templates' authored JSON key order is
 serialized verbatim — the verdict bytes are the harness's on-disk contract. Validation proves the
 per-engine shape (the schema's conditional requiredness, plus load-time checks barring the other
 engine's fields), that every hooked `matcher` tool is declared in `[tools]` (json-hooks), that
@@ -345,9 +349,9 @@ usable matching record means the harness could not report. The mapping is auxili
 must accompany either `transcript.parser` or declarative summary outputs. When explicitly declared
 it is authoritative, even if a named parser also has legacy surface support.
 
-*Capability:* session-surface extraction is generic descriptor data. Existing parser-only
-descriptors retain named-parser fallback for compatibility; the built-in Claude descriptor now
-uses the declarative mapping. This is additive descriptor schema surface, so it does not change the
+*Capability:* session-surface extraction is generic descriptor data. Parser-only descriptors retain
+named-parser fallback for compatibility; the built-in Claude descriptor uses the declarative
+mapping. This is additive descriptor schema surface, so it does not change the
 version or shape of `session-surface.json`.
 
 *Fallback:* no preflight — the run proceeds with no shadow report. This does not prove the live
@@ -362,7 +366,7 @@ resolve to a preflight. It must not be used for partial isolation, and eval-magi
 parsing shell templates — the operator-facing recipes and verification procedure are
 `eval-magic docs isolation`.
 
-*Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
+*Capability:* `shadow.preflight` names the scan (`claude-plugins`, `cline-skills`, `codex-skills`, or
 `opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
 `src/adapters/skill_shadow.rs`. Harness modules emit discovery/root/remediation facts; grouping,
 severity, artifact serialization, the banner, and aggregate warnings are shared. The capability
@@ -405,14 +409,17 @@ in. Validation rejects a template whose placeholder has no backing field.
 
 ## Current support
 
-The **Harnesses table in the README is the source of truth** for which harness has which
-enhancement — keep it in sync with the adapters when wiring or dropping one.
+The resolved descriptor registry is the source of truth for which harness has which enhancement.
+`eval-magic harness list` summarizes the registered capabilities; `eval-magic harness show
+<label>` prints the resolved descriptor behind that summary. Both surfaces update from descriptor
+data rather than a hand-maintained support table.
 
 ## Adding a new harness
 
 1. **Start as a user descriptor** — scaffold it with `eval-magic harness init <label>` (a
    commented template plus a notes skeleton, lint-clean as written), fill in verified values per
-   [byoh.md](byoh.md), and iterate with `harness lint`/`show` and real runs. No Rust, no rebuild;
+   the [BYOH guide](guides/byoh.md), and iterate with `harness lint`/`show` and real runs. No Rust,
+   no rebuild;
    this is also where the descriptor's field set gets proven.
 2. **Promote to a built-in** once it earns bundling: move the file to `harnesses/<label>.toml` and
    add it to `EMBEDDED_DESCRIPTORS` (`src/adapters/descriptor.rs`). The registry keys on the
@@ -422,11 +429,12 @@ enhancement — keep it in sync with the adapters when wiring or dropping one.
 3. Create `docs/<harness>-notes.md` with the implementation notes discovered along the way —
    promoted from the scaffolded `.eval-magic/harnesses/<label>-notes.md`. The PR template
    requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
-4. Add the harness to the README support table (all enhancements ❌ at baseline).
+4. Confirm `eval-magic harness list` and `harness show <label>` report the built-in and only the
+   capabilities its descriptor actually declares.
 5. Wire enhancements in leverage order — dispatch recipes and transcript ingest first (they carry
    the most fidelity and are prerequisites for conversation resume), then conversation resume,
    staging, model flag, guard (guard requires built-in status — user
-   descriptors may not declare one) — updating the table as each lands. Most enhancements are
+   descriptors may not declare one). Most enhancements are
    descriptor fields; add a named capability in `src/adapters/capabilities.rs` (plus its
    `src/adapters/<harness>/` module) only when the harness's stream or hooks are incompatible with
    every existing capability.

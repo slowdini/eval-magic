@@ -20,7 +20,7 @@ mod tests {
         use serde_json::json;
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("codex-events.jsonl");
-        let line = json!({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bun test", "output": "ok"}});
+        let line = json!({"type": "item.completed", "item": {"id": "i1", "type": "command_execution", "command": "bun test", "aggregated_output": "ok"}});
         std::fs::write(&path, format!("{line}\n")).unwrap();
 
         let inv = adapter_for(Harness::resolve("codex").unwrap())

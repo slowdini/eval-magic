@@ -185,7 +185,8 @@ fn check_guard_engine_fields(d: &HarnessDescriptor) -> Result<(), String> {
     };
     match guard.engine {
         GuardEngine::JsonHooks => check_json_hooks_guard(d, guard),
-        GuardEngine::OpencodePlugin => check_opencode_plugin_guard(guard),
+        GuardEngine::OpencodePlugin => check_plugin_guard(guard, "opencode-plugin"),
+        GuardEngine::ClinePlugin => check_plugin_guard(guard, "cline-plugin"),
     }
 }
 
@@ -292,7 +293,7 @@ fn check_json_hooks_guard(d: &HarnessDescriptor, guard: &GuardSection) -> Result
 
 /// The plugin engine stages the plugin file whole — there is no hook-config
 /// merge, tool matcher, or shell command to render.
-fn check_opencode_plugin_guard(guard: &GuardSection) -> Result<(), String> {
+fn check_plugin_guard(guard: &GuardSection, engine: &str) -> Result<(), String> {
     for (field, present) in [
         ("hooks_file", guard.hooks_file.is_some()),
         ("matcher", guard.matcher.is_some()),
@@ -302,17 +303,16 @@ fn check_opencode_plugin_guard(guard: &GuardSection) -> Result<(), String> {
         if present {
             return Err(format!(
                 "guard.{field} is only valid with the json-hooks engine; the \
-                 opencode-plugin engine stages the plugin file whole — declare \
+                 {engine} engine stages the plugin file whole — declare \
                  plugin_file instead"
             ));
         }
     }
     let Some(plugin_file) = &guard.plugin_file else {
-        return Err(
-            "engine = \"opencode-plugin\" requires plugin_file (proven by the \
+        return Err(format!(
+            "engine = \"{engine}\" requires plugin_file (proven by the \
              schema gate)"
-                .into(),
-        );
+        ));
     };
     check_guard_relative_path("plugin_file", plugin_file)
 }
