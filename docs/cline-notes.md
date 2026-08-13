@@ -36,14 +36,15 @@ gaps — see "Wiring the next enhancements" below.
 
 ## Verification record
 
-Every non-comment field in `harnesses/cline.toml`, with its source. "Probe capture" refers to
-the observed dispatch described above.
+Every non-comment field in `harnesses/cline.toml`, with its source — plus the parser behaviors
+the descriptor references. "Probe capture" refers to the observed dispatches described above.
 
-| Descriptor field | Value | Source |
+| Descriptor field / parser behavior | Value | Source |
 |------------------|-------|--------|
 | `label` | `cline` | chosen name |
 | `skills_dir` | `.cline/skills` | docs CLI reference ("Configuration Files": project `.cline/skills/`); confirmed by probe capture: a skill staged at `<cwd>/.cline/skills/kebab-probe-skill` was invoked via `--cwd` alone |
 | `config_dirs` | `[".cline"]` | same docs section (project config root is `.cline/`: rules/skills/hooks/plugins/mcp.json) |
+| `run.supports_guard` | `true` | the `[guard]` table is present (the two move in lockstep); the arm itself is spike-verified on 3.0.53 (the `guard.*` rows) |
 | `[tools] write` | `["editor"]` | Cline 3.x tool-routing table maps `write_to_file`/`replace_in_file`/`apply_diff` to the `editor` executor; the stream's `toolName` uses executor names (observed `read_files`, `run_commands`, `skills` in the probe capture) |
 | `[tools] patch` | `[]` | no patch-shaped executor in the routing table (`apply_diff` routes to `editor`) |
 | `[tools] shell` | `["run_commands"]` | routing table maps `execute_command`/`bash` to `run_commands`; probe capture shows `run_commands` with `input.commands: [...]` |
@@ -61,9 +62,14 @@ the observed dispatch described above.
 | Parser denial recognition | `content_end` error payloads carrying the guard `eval guard: ` prefix (verbatim) or the runtime's `Tool … is disabled by policy` / `was not approved` / `was blocked by a runtime hook` wordings | guard-spike capture for the shape; the policy wordings are the runtime's fixed strings in the 3.0.53 binary |
 | Parser summary fields | final text + token totals (cache reads subtracted, codex accounting) + `durationMs` from the terminal `run_result`; assistant messages from `content_end` text blocks (complete, ordered; `content_start` text chunks are streaming partials) | 3.0.52 + 3.0.53 probe captures |
 | `model.flag` | `-m` | `cline --help`: `-m, --model <model-id>` |
+| `guard.engine` / `plugin_file` | `cline-plugin` / `.cline/plugins/slow-powers-eval-guard/index.js` | 3.0.53 spike: project plugin *dirs* auto-load from `.cline/plugins/` in headless one-shot dispatches (a bare `index.js` needs no package.json; a loose `.js` at the plugins root is ignored) |
+| `guard.verdict_template` | `{"decision":"block","reason":"{reason}"}` | same shape as the other engines; the staged plugin parses `reason` and returns it as `{skip: true, reason}` — 3.0.53 spike: the reason reaches the stream as the `content_end` `{"error"}` payload |
+| `guard.armed_message` | see descriptor | prose authored for eval-magic output (same structure as the other built-ins) |
+| Plugin hook contract | `beforeTool({snapshot, tool, toolCall, input})`; block with `{skip: true, reason}`; 3000ms default hook budget (plugin spawns with a 2s timeout so a hung arbiter fails open); `spawnSync` works from the plugin sandbox | 3.0.53 spike capture + the binary's runtime hook loop; the docs' `tool_call_before`/`fail_closed` vocabulary lags the binary |
+| `shadow.preflight` | `cline-skills` | 3.0.53 root probe (one uniquely-named skill per candidate root): dispatch cwd's `.cline/skills` read, ancestor's NOT (no project walk), `~/.agents/skills` IS read (and receives `cline skill install` global installs); `$CLINE_DIR` overrides the `~/.cline` default (3.0.53 binary) |
 | `dispatch.capture_prefix` | `cline` | chosen name (judge capture files `$response_base.cline-events.jsonl`) |
 | `dispatch.exec_template` / `parallel_command_template` | see descriptor | flags from `cline --help` (`--act` from the 3.0.52 binary’s hidden option registration + behavioral write test); `--json` NDJSON stdout and `</dev/null` stdin detach from the docs CLI overview (piped stdin becomes prompt context); final-message jq recovery verified by the live probe |
-| `dispatch.judge_command_template` | `cline --cwd "{cwd}" --json --auto-approve true $model_arg \` | same flag sources; render-checked by the live probe |
+| `dispatch.judge_command_template` | `cline --cwd "{cwd}" --act --json --auto-approve true $model_arg \` | same flag sources; render-checked by the live probe |
 | `dispatch.next_steps_template` / `manifest_template` | see descriptor | prose authored for eval-magic artifacts (same structure as the other built-ins) |
 
 ## Dispatch quirks
@@ -140,8 +146,21 @@ the observed dispatch described above.
   write/shell classification works. Known blind spot: `read_files`' `files:[{path}]` stays
   nested, so the live-source-read path branch doesn't fire for it (shell-based read detection
   still covers `cat`-style reads).
-- **Riding documented fallbacks** (the `run` preflight names each): no guard (the audit is
-  after-the-fact, never blocked), no `[conversation]` (scripted `turns` evals are rejected).
+- **Riding documented fallbacks** (the `run` preflight names each): no `[conversation]`
+  (scripted `turns` evals are rejected).
+- **Write guard** (`cline-plugin` engine): `run` auto-arms a staged project plugin at
+  `.cline/plugins/slow-powers-eval-guard/index.js` whose `beforeTool` hook forwards every tool
+  call to `eval-magic guard-hook --harness cline` (`run_commands`' `commands` array joined into
+  one `command` string for the shared arbiter) and returns `{skip: true, reason}` on deny.
+  Spike-verified on 3.0.53 (all in a throwaway dir, hand-staged plugin): project plugin dirs
+  auto-load in headless one-shot dispatches (a bare `index.js` needs no package.json; a loose
+  `.js` file at the plugins root is IGNORED); the hook context is `{snapshot, tool, toolCall,
+  input}` with `toolCall.toolName`/`toolCall.input`; `{skip, reason}` blocks and the reason
+  reaches the stream as the `content_end` `{"error"}` payload; `spawnSync` works from the
+  plugin sandbox (2s spawn timeout, under the runtime's 3000ms hook budget, so a hung arbiter
+  fails open). The docs' hook vocabulary (`tool_call_before`, `fail_closed`) lags the binary —
+  the plugin registers `beforeTool`. Teardown removes the plugin and prunes the plugin dir,
+  restoring any pre-existing `index.js` verbatim.
 
 ## Wiring the next enhancements
 
@@ -158,18 +177,15 @@ contribution (see docs/progressive-enhancements.md "Guardrails"), in leverage or
    open question — and is where `cline skill install` lands global installs); project
    `.cline/skills` is read only at the dispatch cwd (no ancestor walk), so the preflight scans
    no project roots.
-3. **Write guard engine arm** (`cline-plugin`, mirroring `opencode-plugin`) — stage a JS plugin
-   at `.cline/plugins/` whose `beforeTool` hook forwards tool calls to
-   `eval-magic guard-hook --harness cline` and returns `{skip, reason}` on deny. The 3.0.53
-   spike verified the open items: project plugins auto-load in headless one-shot mode, the hook
-   receives `{snapshot, tool, toolCall, input}`, `{skip: true, reason}` blocks, the reason
-   reaches the stream as the `content_end` `{"error"}` payload, and `spawnSync` works from the
-   plugin sandbox. Note the docs' hook vocabulary (`tool_call_before`, `fail_closed`) lags the
-   binary — the plugin registers `beforeTool`. The plugin must also normalize
-   `run_commands`' `commands` array into a single `command` string before forwarding (the shared
-   arbiter reads `tool_input.command`). `CLINE_COMMAND_PERMISSIONS` appears nowhere in the
-   3.0.53 binary — docs-only, and shell-only besides: not a guard substitute.
+3. ~~**Write guard engine arm** (`cline-plugin`)~~ — **landed**: `GuardEngine::ClinePlugin` +
+   `harnesses/cline-guard-plugin.js` staged at `.cline/plugins/slow-powers-eval-guard/index.js`.
+   Every ticket open item was spike-verified on 3.0.53 (see "What's wired"): headless project
+   plugin auto-load, the `{skip, reason}` deny contract, the `{"error"}` stream shape (which the
+   `cline-json` parser reads as a guard-attributed denial), and `spawnSync` from the plugin
+   sandbox. `CLINE_COMMAND_PERMISSIONS` appears nowhere in the 3.0.53 binary — docs-only, and
+   shell-only besides: not a guard substitute.
 4. **Conversation resume** — blocked upstream: needs the resume `sessionId` surfaced in the
-   `--json` stream *and* headless `--id` fixed (both absent/broken in 3.0.52, see "Dispatch
-   quirks"). Then declare `[transcript.extract.session_id]` plus
+   `--json` stream *and* headless `--id` fixed (both absent/broken in 3.0.52, and `--id` still
+   errors identically in 3.0.53 — re-verified 2026-08-12; see "Dispatch quirks"). Then declare
+   `[transcript.extract.session_id]` plus
    `[conversation].resume_exec_template` (`cline --cwd <eval-root> --id {session_arg} ...`).

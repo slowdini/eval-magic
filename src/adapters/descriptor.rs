@@ -192,13 +192,16 @@ pub struct ModelSection {
 /// Which install mechanism the guard engine uses: `json-hooks` (the default)
 /// merges a rendered hook entry into the harness's hook-config file (Claude
 /// Code, Codex); `opencode-plugin` stages an embedded JS plugin whose
-/// `tool.execute.before` hook blocks a tool call by throwing.
+/// `tool.execute.before` hook blocks a tool call by throwing; `cline-plugin`
+/// stages an embedded JS plugin *directory* whose `beforeTool` hook blocks by
+/// returning `{skip: true, reason}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum GuardEngine {
     #[default]
     JsonHooks,
     OpencodePlugin,
+    ClinePlugin,
 }
 
 impl GuardEngine {

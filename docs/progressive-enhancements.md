@@ -260,15 +260,19 @@ arm; fatal in revision mode, where the `old_skill` arm then sees new-skill conte
 *Descriptor fields:* the `[guard]` table — `verdict_template` and `armed_message` for every
 engine, `engine` (the install-mechanism discriminator, default `json-hooks`), and the per-engine
 fields: `json-hooks` (Claude Code, Codex) declares `hooks_file`, `matcher`, `command_template`,
-and `hook_entry`; `opencode-plugin` declares `plugin_file` instead — plus `[tools]` (the
+and `hook_entry`; `opencode-plugin` and `cline-plugin` declare `plugin_file` instead — plus `[tools]` (the
 write/patch/shell/read vocabulary) and `run.supports_guard` (validated to stay in lockstep with
 the `[guard]` table). There is no guard code capability: one engine module
-(`src/adapters/guard.rs`) holds two install arms selected by `engine` and a single shared verdict
+(`src/adapters/guard.rs`) holds three install arms selected by `engine` and a single shared verdict
 path. `json-hooks` merges the rendered hook entry into `hooks_file`; `opencode-plugin` stages an
 embedded JS project plugin (`harnesses/opencode-guard-plugin.js`, `{exe}`/`{marker}` substituted
 as JSON string literals) whose `tool.execute.before` hook forwards every tool call to the generic
 entry point and throws the verdict's reason to block — OpenCode auto-loads project plugins by
-directory convention, so no dispatch flag is needed. The templates' authored JSON key order is
+directory convention, so no dispatch flag is needed. `cline-plugin` stages an embedded JS project
+plugin *directory* (`harnesses/cline-guard-plugin.js` as `.cline/plugins/.../index.js`) whose
+`beforeTool` hook forwards every tool call the same way — joining `run_commands`' `commands`
+array into one `command` string first — and returns `{skip: true, reason}` to block; Cline
+auto-loads project plugin dirs in headless dispatches too. The templates' authored JSON key order is
 serialized verbatim — the verdict bytes are the harness's on-disk contract. Validation proves the
 per-engine shape (the schema's conditional requiredness, plus load-time checks barring the other
 engine's fields), that every hooked `matcher` tool is declared in `[tools]` (json-hooks), that

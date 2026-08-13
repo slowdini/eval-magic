@@ -1,0 +1,5 @@
+🛡 Write guard armed: a project plugin is staged in .cline/plugins/slow-powers-eval-guard/index.js
+   and will block writes/installs outside the eval sandbox during Cline dispatches.
+   Each `cline` dispatch auto-loads the plugin from the env's .cline/plugins directory.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard

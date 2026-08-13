@@ -6,12 +6,16 @@
 # template's exact whitespace is pinned by the golden tests under tests/golden/.
 #
 # Verified against cline 3.0.52 (`cline --version`, `cline --help`, and an
-# observed `cline --json` dispatch capture); per-value evidence lives in
-# docs/cline-notes.md.
+# observed `cline --json` dispatch capture); the transcript parser, shadow
+# roots, and guard plugin contract re-verified against 3.0.53. Per-value
+# evidence lives in docs/cline-notes.md.
 
 label = "cline"
 skills_dir = ".cline/skills"
 config_dirs = [".cline"]
+
+[run]
+supports_guard = true
 
 # Tool ids as the `agent_event` stream spells them (`content_start` /
 # `contentType:"tool"` events carry `toolName`). Cline 3.x routes the classic
@@ -72,6 +76,29 @@ skill_arg = "skill"
 # `cline auth` or `-P`, outside eval-magic's model flag).
 [model]
 flag = "-m"
+
+# Guard data rendered by the engine (src/adapters/guard.rs). The
+# cline-plugin engine stages an embedded JS project plugin
+# (harnesses/cline-guard-plugin.js, {exe}/{marker} substituted as JSON string
+# literals) as a *directory* under .cline/plugins/ — Cline auto-loads project
+# plugin dirs with no trust prompt (a bare index.js needs no package.json;
+# loose files at the plugins root are ignored), including in headless one-shot
+# dispatches. The plugin's beforeTool hook forwards every tool call to
+# `eval-magic guard-hook --harness cline` on stdin (run_commands' commands
+# array joined into one `command` string for the shared arbiter) and returns
+# {skip: true, reason} to block; the reason reaches the stream as the
+# content_end {"error"} payload, which the cline-json parser reads as a
+# guard-attributed denial. All 3.0.53 spike-verified: docs/cline-notes.md.
+[guard]
+engine = "cline-plugin"
+plugin_file = ".cline/plugins/slow-powers-eval-guard/index.js"
+verdict_template = '{"decision":"block","reason":"{reason}"}'
+armed_message = '''
+🛡 Write guard armed: a project plugin is staged in .cline/plugins/slow-powers-eval-guard/index.js
+   and will block writes/installs outside the eval sandbox during Cline dispatches.
+   Each `cline` dispatch auto-loads the plugin from the env's .cline/plugins directory.
+   It auto-expires in 6h and is removed on the next run; to remove it now:
+     eval-magic teardown-guard'''
 
 # Cline discovers skills from the dispatch cwd's `.cline/skills` (runner
 # staging during evals — Cline does NOT walk project ancestors; verified

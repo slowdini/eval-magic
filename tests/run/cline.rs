@@ -1,7 +1,8 @@
 //! Cline-harness behavior: `.cline/skills` staging with the default
-//! (underscore-preserving) slug template, preflight fallback warnings for the
-//! undeclared guard, and `cline-json` transcript ingest of the `cline --json`
-//! NDJSON stream (`agent_event` records plus the terminal `run_result`).
+//! (underscore-preserving) slug template, the auto-armed write guard (the
+//! `cline-plugin` engine's staged project plugin), the `cline-skills` shadow
+//! preflight, and `cline-json` transcript ingest of the `cline --json` NDJSON
+//! stream (`agent_event` records plus the terminal `run_result`).
 
 use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
@@ -53,8 +54,8 @@ fn cline_stages_repo_local_skills_under_cline_dir() {
     )
     .unwrap();
 
-    // The guard is the one enhancement Cline does not declare, so the
-    // preflight warns; the wired enhancements must not warn.
+    // Every enhancement is wired for Cline now, so none of the fallback
+    // preflight warnings may fire on a dry run.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -72,6 +73,7 @@ fn cline_stages_repo_local_skills_under_cline_dir() {
         .success()
         .stderr(
             contains("declares no write guard")
+                .not()
                 .and(contains("declares no transcript parser").not())
                 .and(contains("cannot tell a permission-denied").not())
                 .and(contains("declares no skills_dir").not())
@@ -125,6 +127,45 @@ const CLINE_EVENTS: &str = concat!(
     r#"{"ts":"2026-08-11T19:29:54.000Z","type":"run_result","finishReason":"completed","iterations":1,"usage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":40,"cacheWriteTokens":0,"totalCost":0.001},"aggregateUsage":{"inputTokens":100,"outputTokens":20,"cacheReadTokens":40,"cacheWriteTokens":0,"totalCost":0.001},"durationMs":12345,"text":"Done."}"#,
     "\n",
 );
+
+#[test]
+fn cline_default_run_auto_arms_guard() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // No guard flag: cline declares guard support, so the bare run arms it
+    // (enhancements are provided, not opted into) and prints the armed banner
+    // naming the plugin file.
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cline",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("guard: armed"),
+        "the run plan reports the armed guard: {stdout}"
+    );
+    assert!(
+        stdout.contains(".cline/plugins/slow-powers-eval-guard/index.js"),
+        "the armed banner names the plugin file: {stdout}"
+    );
+
+    assert!(
+        cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".cline/plugins/slow-powers-eval-guard/index.js")
+            .exists(),
+        "cline guard plugin staged in the env"
+    );
+}
 
 /// A live copy of the eval skill in either verified global root (the native
 /// `$CLINE_DIR/skills` defaulting to `~/.cline/skills`, or the cross-harness
