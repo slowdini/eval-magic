@@ -73,6 +73,14 @@ skill_arg = "skill"
 [model]
 flag = "-m"
 
+# Cline discovers skills from the dispatch cwd's `.cline/skills` (runner
+# staging during evals — Cline does NOT walk project ancestors; verified
+# against 3.0.53 with a live probe) plus two live global roots the preflight
+# scans: `$CLINE_DIR/skills` (default `~/.cline/skills`) and the cross-harness
+# `~/.agents/skills` (where `cline skill install` lands global installs).
+[shadow]
+preflight = "cline-skills"
+
 # `-c/--cwd <eval-root>` sets the dispatch cwd. Tool calls auto-approve by
 # default; `--auto-approve true` pins that against default drift (with approval
 # required instead, non-TTY dispatches would auto-DENY every call). `--act`

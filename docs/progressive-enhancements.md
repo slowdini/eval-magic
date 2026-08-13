@@ -362,7 +362,7 @@ resolve to a preflight. It must not be used for partial isolation, and eval-magi
 parsing shell templates — the operator-facing recipes and verification procedure are
 `eval-magic docs isolation`.
 
-*Capability:* `shadow.preflight` names the scan (`claude-plugins`, `codex-skills`, or
+*Capability:* `shadow.preflight` names the scan (`claude-plugins`, `cline-skills`, `codex-skills`, or
 `opencode-skills`). It returns the harness-neutral `PluginShadowReport` from
 `src/adapters/skill_shadow.rs`. Harness modules emit discovery/root/remediation facts; grouping,
 severity, artifact serialization, the banner, and aggregate warnings are shared. The capability

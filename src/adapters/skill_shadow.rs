@@ -78,6 +78,7 @@ pub enum ShadowRootScope {
 pub enum ShadowNamespace {
     Opencode,
     Claude,
+    Cline,
     Agents,
     Codex,
     Plugin,

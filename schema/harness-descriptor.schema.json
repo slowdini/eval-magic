@@ -327,8 +327,8 @@
       "description": "Live-source collision preflight plus an optional operator isolation assertion. A later layer may inherit preflight from a built-in; every fully resolved descriptor with this table must still provide it.",
       "properties": {
         "preflight": {
-          "description": "Named live-skill collision scanner: claude-plugins, codex-skills, or opencode-skills.",
-          "enum": ["claude-plugins", "codex-skills", "opencode-skills"]
+          "description": "Named live-skill collision scanner: claude-plugins, cline-skills, codex-skills, or opencode-skills.",
+          "enum": ["claude-plugins", "cline-skills", "codex-skills", "opencode-skills"]
         },
         "isolates_live_sources": {
           "type": "boolean",
