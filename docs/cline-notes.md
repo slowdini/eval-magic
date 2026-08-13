@@ -140,8 +140,21 @@ the observed dispatch described above.
   write/shell classification works. Known blind spot: `read_files`' `files:[{path}]` stays
   nested, so the live-source-read path branch doesn't fire for it (shell-based read detection
   still covers `cat`-style reads).
-- **Riding documented fallbacks** (the `run` preflight names each): no guard (the audit is
-  after-the-fact, never blocked), no `[conversation]` (scripted `turns` evals are rejected).
+- **Riding documented fallbacks** (the `run` preflight names each): no `[conversation]`
+  (scripted `turns` evals are rejected).
+- **Write guard** (`cline-plugin` engine): `run` auto-arms a staged project plugin at
+  `.cline/plugins/slow-powers-eval-guard/index.js` whose `beforeTool` hook forwards every tool
+  call to `eval-magic guard-hook --harness cline` (`run_commands`' `commands` array joined into
+  one `command` string for the shared arbiter) and returns `{skip: true, reason}` on deny.
+  Spike-verified on 3.0.53 (all in a throwaway dir, hand-staged plugin): project plugin dirs
+  auto-load in headless one-shot dispatches (a bare `index.js` needs no package.json; a loose
+  `.js` file at the plugins root is IGNORED); the hook context is `{snapshot, tool, toolCall,
+  input}` with `toolCall.toolName`/`toolCall.input`; `{skip, reason}` blocks and the reason
+  reaches the stream as the `content_end` `{"error"}` payload; `spawnSync` works from the
+  plugin sandbox (2s spawn timeout, under the runtime's 3000ms hook budget, so a hung arbiter
+  fails open). The docs' hook vocabulary (`tool_call_before`, `fail_closed`) lags the binary —
+  the plugin registers `beforeTool`. Teardown removes the plugin and prunes the plugin dir,
+  restoring any pre-existing `index.js` verbatim.
 
 ## Wiring the next enhancements
 
@@ -158,17 +171,13 @@ contribution (see docs/progressive-enhancements.md "Guardrails"), in leverage or
    open question — and is where `cline skill install` lands global installs); project
    `.cline/skills` is read only at the dispatch cwd (no ancestor walk), so the preflight scans
    no project roots.
-3. **Write guard engine arm** (`cline-plugin`, mirroring `opencode-plugin`) — stage a JS plugin
-   at `.cline/plugins/` whose `beforeTool` hook forwards tool calls to
-   `eval-magic guard-hook --harness cline` and returns `{skip, reason}` on deny. The 3.0.53
-   spike verified the open items: project plugins auto-load in headless one-shot mode, the hook
-   receives `{snapshot, tool, toolCall, input}`, `{skip: true, reason}` blocks, the reason
-   reaches the stream as the `content_end` `{"error"}` payload, and `spawnSync` works from the
-   plugin sandbox. Note the docs' hook vocabulary (`tool_call_before`, `fail_closed`) lags the
-   binary — the plugin registers `beforeTool`. The plugin must also normalize
-   `run_commands`' `commands` array into a single `command` string before forwarding (the shared
-   arbiter reads `tool_input.command`). `CLINE_COMMAND_PERMISSIONS` appears nowhere in the
-   3.0.53 binary — docs-only, and shell-only besides: not a guard substitute.
+3. ~~**Write guard engine arm** (`cline-plugin`)~~ — **landed**: `GuardEngine::ClinePlugin` +
+   `harnesses/cline-guard-plugin.js` staged at `.cline/plugins/slow-powers-eval-guard/index.js`.
+   Every ticket open item was spike-verified on 3.0.53 (see "What's wired"): headless project
+   plugin auto-load, the `{skip, reason}` deny contract, the `{"error"}` stream shape (which the
+   `cline-json` parser reads as a guard-attributed denial), and `spawnSync` from the plugin
+   sandbox. `CLINE_COMMAND_PERMISSIONS` appears nowhere in the 3.0.53 binary — docs-only, and
+   shell-only besides: not a guard substitute.
 4. **Conversation resume** — blocked upstream: needs the resume `sessionId` surfaced in the
    `--json` stream *and* headless `--id` fixed (both absent/broken in 3.0.52, see "Dispatch
    quirks"). Then declare `[transcript.extract.session_id]` plus

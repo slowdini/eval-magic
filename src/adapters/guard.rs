@@ -61,6 +61,9 @@ pub(crate) fn install_guard(
         GuardEngine::OpencodePlugin => {
             install_opencode_plugin(guard, skills_dir, stage_root, guard_exe, &marker_path)
         }
+        GuardEngine::ClinePlugin => {
+            install_cline_plugin(guard, skills_dir, stage_root, guard_exe, &marker_path)
+        }
     }
 }
 
@@ -106,6 +109,65 @@ fn install_opencode_plugin(
         .expect("a path string serializes as JSON");
     let plugin = subst(
         OPENCODE_GUARD_PLUGIN_TEMPLATE,
+        &[("exe", &exe), ("marker", &marker)],
+    );
+    fs::write(&plugin_path, plugin)?;
+
+    write_manifest(
+        &skills_dir.join(GUARD_MANIFEST),
+        &plugin_path,
+        plugin_existed,
+        backup,
+        marker_path,
+    )?;
+
+    Ok(marker_path.to_path_buf())
+}
+
+/// The embedded Cline project plugin. The `{exe}`/`{marker}` placeholders
+/// substitute as JSON string literals (a JSON string is a valid JS string
+/// literal), so any exe/marker path characters survive without hand-escaping.
+/// The file's exact bytes are pinned in this module's tests — the staged
+/// plugin is an on-disk contract.
+const CLINE_GUARD_PLUGIN_TEMPLATE: &str = include_str!("../../harnesses/cline-guard-plugin.js");
+
+/// The cline-plugin arm: the embedded JS template with `{exe}`/`{marker}`
+/// substituted, staged whole at the descriptor's `plugin_file`. Cline
+/// auto-loads project plugin *directories* from `.cline/plugins/` (a bare
+/// `index.js` is discovered without a package.json; loose files at the
+/// plugins root are ignored — 3.0.53 spike-verified), and the plugin's
+/// `beforeTool` hook blocks by returning `{skip: true, reason}`, so the file
+/// *is* the hook surface.
+fn install_cline_plugin(
+    guard: &GuardSection,
+    skills_dir: &Path,
+    stage_root: &Path,
+    guard_exe: &Path,
+    marker_path: &Path,
+) -> io::Result<PathBuf> {
+    let plugin_path = resolve_rel(
+        stage_root,
+        guard
+            .plugin_file
+            .as_deref()
+            .expect("guard.plugin_file is declared (proven at descriptor load)"),
+    );
+    if let Some(parent) = plugin_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let plugin_existed = plugin_path.exists();
+    let backup = if plugin_existed {
+        Some(fs::read_to_string(&plugin_path)?)
+    } else {
+        None
+    };
+
+    let exe = serde_json::to_string(&guard_exe.display().to_string())
+        .expect("a path string serializes as JSON");
+    let marker = serde_json::to_string(&marker_path.display().to_string())
+        .expect("a path string serializes as JSON");
+    let plugin = subst(
+        CLINE_GUARD_PLUGIN_TEMPLATE,
         &[("exe", &exe), ("marker", &marker)],
     );
     fs::write(&plugin_path, plugin)?;
@@ -282,7 +344,7 @@ pub(crate) fn hook_cleanup_dir(
 ) -> Option<PathBuf> {
     let hook_file = match guard.engine {
         GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
-        GuardEngine::OpencodePlugin => guard.plugin_file.as_deref(),
+        GuardEngine::OpencodePlugin | GuardEngine::ClinePlugin => guard.plugin_file.as_deref(),
     }?;
     let (parent, _) = hook_file.rsplit_once('/')?;
     if let Some(skills) = skills_dir_rel {
@@ -928,5 +990,206 @@ export const SlowPowersEvalGuard = async () => {
         let payload =
             r#"{ "tool_name": "write", "tool_input": { "filePath": "/work/.eval-magic/out.md" } }"#;
         assert_eq!(verdict("opencode", payload, Some(marker())), None);
+    }
+
+    // ── cline-plugin engine ─────────────────────────────────────────────────
+
+    fn cline_skills_dir(stage_root: &Path) -> PathBuf {
+        stage_root.join(".cline").join("skills")
+    }
+
+    /// The staged plugin is a *directory* holding one embedded `index.js`:
+    /// Cline auto-loads project plugin dirs from `.cline/plugins/` (loose
+    /// files are ignored) — 3.0.53 spike-verified, docs/cline-notes.md.
+    fn cline_plugin_path(stage_root: &Path) -> PathBuf {
+        stage_root
+            .join(".cline")
+            .join("plugins")
+            .join("slow-powers-eval-guard")
+            .join("index.js")
+    }
+
+    fn expected_cline_plugin(marker_path: &Path) -> String {
+        let exe = serde_json::to_string("/g/eval-magic").unwrap();
+        let marker = serde_json::to_string(&marker_path.display().to_string()).unwrap();
+        subst(
+            EXPECTED_CLINE_PLUGIN_TEMPLATE,
+            &[("exe", &exe), ("marker", &marker)],
+        )
+    }
+
+    /// The staged plugin file, byte-for-byte: the embedded template with
+    /// `{exe}`/`{marker}` substituted as JSON string literals. Written out
+    /// here in full so any template edit forces a reviewed re-pin — the file
+    /// is the on-disk contract armed envs run.
+    const EXPECTED_CLINE_PLUGIN_TEMPLATE: &str = r#"// slow-powers eval write guard — staged by `eval-magic` into this env's
+// project plugins; removed by `eval-magic teardown-guard` (or the next run).
+// Do not edit: re-staging overwrites, and teardown restores the original.
+//
+// Dumb forwarder by design: every tool call goes to
+// `eval-magic guard-hook --harness cline <marker>` on stdin and the shared
+// arbiter inside the binary classifies it. Empty stdout allows; non-empty
+// stdout is the deny verdict JSON whose reason blocks the call.
+import { spawnSync } from "node:child_process";
+
+const EXE = {exe};
+const MARKER = {marker};
+
+// Cline's plugin hook surface (3.0.53): the runtime calls `beforeTool` with
+// {snapshot, tool, toolCall, input}; returning {skip: true, reason} blocks
+// the call and the reason reaches the agent (and the transcript).
+const SlowPowersEvalGuard = {
+  name: "slow-powers-eval-guard",
+  manifest: { capabilities: ["hooks"] },
+  hooks: {
+    beforeTool(context) {
+      const name = context?.toolCall?.toolName ?? "";
+      const input = context?.toolCall?.input ?? context?.input ?? {};
+      // run_commands nests its shell commands as an array; the shared arbiter
+      // classifies one `command` string, so join before forwarding.
+      let toolInput = input;
+      if (name === "run_commands" && Array.isArray(input?.commands)) {
+        const { commands, ...rest } = input;
+        toolInput = { ...rest, command: commands.join("\n") };
+      }
+      const payload = JSON.stringify({ tool_name: name, tool_input: toolInput });
+      const result = spawnSync(EXE, ["guard-hook", "--harness", "cline", MARKER], {
+        input: payload,
+        encoding: "utf8",
+        // Under the runtime's 3000ms hook budget, so a hung arbiter fails
+        // open here rather than erroring the hook.
+        timeout: 2000,
+        stdio: ["pipe", "pipe", "ignore"],
+      });
+      const stdout = (result.stdout ?? "").trim();
+      if (!stdout) {
+        return {}; // allow — also the fail-open path on spawn error or timeout
+      }
+      let reason = stdout;
+      try {
+        const verdict = JSON.parse(stdout);
+        if (typeof verdict?.reason === "string") {
+          reason = verdict.reason;
+        }
+      } catch {
+        // Not the verdict shape — surface the raw stdout as the reason.
+      }
+      return { skip: true, reason };
+    },
+  },
+};
+
+export default SlowPowersEvalGuard;
+"#;
+
+    #[test]
+    fn cline_install_stages_the_byte_exact_plugin_marker_and_manifest() {
+        let c = setup();
+        let marker_path = install("cline", &c.stage_root);
+
+        let marker = read_json(&cline_skills_dir(&c.stage_root).join(GUARD_MARKER));
+        assert_eq!(marker["active"], json!(true));
+        let env = absolutize(&c.stage_root).display().to_string();
+        assert!(
+            marker["allowedRoots"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|r| r.as_str().unwrap() == env)
+        );
+
+        let plugin = fs::read_to_string(cline_plugin_path(&c.stage_root)).unwrap();
+        assert_eq!(plugin, expected_cline_plugin(&marker_path));
+        // The substitution lands the generic guard-hook entry point with the
+        // cline harness and the staged marker path.
+        assert!(plugin.contains("\"guard-hook\""), "{plugin}");
+        assert!(plugin.contains("\"cline\""), "{plugin}");
+
+        assert!(
+            cline_skills_dir(&c.stage_root)
+                .join(GUARD_MANIFEST)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn cline_teardown_removes_the_plugin_and_prunes_the_plugin_dir() {
+        let c = setup();
+        install("cline", &c.stage_root);
+        assert!(cline_plugin_path(&c.stage_root).exists());
+
+        assert!(teardown_guard(&c.stage_root));
+        assert!(!cline_plugin_path(&c.stage_root).exists());
+        assert!(
+            !c.stage_root
+                .join(".cline")
+                .join("plugins")
+                .join("slow-powers-eval-guard")
+                .exists(),
+            "the dir created for the plugin alone is pruned"
+        );
+        assert!(!cline_skills_dir(&c.stage_root).join(GUARD_MARKER).exists());
+        assert!(
+            !cline_skills_dir(&c.stage_root)
+                .join(GUARD_MANIFEST)
+                .exists()
+        );
+    }
+
+    #[test]
+    fn cline_teardown_restores_a_pre_existing_plugin_verbatim() {
+        let c = setup();
+        let plugin_dir = c
+            .stage_root
+            .join(".cline")
+            .join("plugins")
+            .join("slow-powers-eval-guard");
+        fs::create_dir_all(&plugin_dir).unwrap();
+        let original = "// the user's own plugin\nexport default {};\n";
+        fs::write(cline_plugin_path(&c.stage_root), original).unwrap();
+
+        install("cline", &c.stage_root);
+        assert!(
+            fs::read_to_string(cline_plugin_path(&c.stage_root))
+                .unwrap()
+                .contains("SlowPowersEvalGuard")
+        );
+
+        teardown_guard(&c.stage_root);
+        assert_eq!(
+            fs::read_to_string(cline_plugin_path(&c.stage_root)).unwrap(),
+            original
+        );
+    }
+
+    /// Byte-pin of the cline deny verdict: the verdict path is the shared
+    /// `guard-hook` rendering, so this characterizes the shape the staged
+    /// plugin parses (`decision`/`reason`) against the real descriptor data.
+    #[test]
+    fn cline_deny_verdict_bytes_match_the_on_disk_contract() {
+        let payload = r#"{ "tool_name": "editor", "tool_input": { "path": "/etc/passwd" } }"#;
+        assert_eq!(
+            verdict("cline", payload, Some(marker())).expect("should block"),
+            "{\"decision\":\"block\",\"reason\":\"eval guard: editor to /etc/passwd is \
+             outside the eval sandbox (allowed: /work/.eval-magic). For temporary or scratch \
+             files, use /work/.eval-magic/tmp.\"}"
+        );
+    }
+
+    /// The staged plugin joins `run_commands`' `commands` array into one
+    /// `command` before forwarding; this is the payload shape it sends, and
+    /// the arbiter's shell patterns must classify it.
+    #[test]
+    fn cline_deny_verdict_classifies_a_joined_shell_command() {
+        let payload = r#"{ "tool_name": "run_commands", "tool_input": { "command": "npm install left-pad" } }"#;
+        let verdict = verdict("cline", payload, Some(marker())).expect("should block");
+        assert!(verdict.contains("package install/add"), "{verdict}");
+    }
+
+    #[test]
+    fn cline_allows_an_in_bounds_write() {
+        let payload =
+            r#"{ "tool_name": "editor", "tool_input": { "path": "/work/.eval-magic/out.md" } }"#;
+        assert_eq!(verdict("cline", payload, Some(marker())), None);
     }
 }
