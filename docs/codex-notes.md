@@ -100,6 +100,12 @@ The built-in descriptor normalizes the JSONL summary through `[transcript.extrac
 test pinning the declarative output to it. Its separately selected denial reader still handles the
 paired stderr capture described below.
 
+Codex CLI 0.147.0's
+[`CommandExecutionItem`](https://github.com/openai/codex/blob/rust-v0.147.0/codex-rs/exec/src/exec_events.rs)
+serializes completed command output in `aggregated_output`. Both readers prefer that field, then
+retain `output`, `result`, and `error` as compatibility fallbacks. All four result-bearing fields
+are omitted from tool arguments so `run.json` records command output once, in `result`.
+
 `item.completed` events whose item type is not an agent message / reasoning / plan update become
 tool invocations: `command_execution`, `file_change`, `web_search`, and MCP items.
 `thread.started.thread_id` is normalized as the resumable session id, and every completed
