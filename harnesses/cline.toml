@@ -6,8 +6,9 @@
 # template's exact whitespace is pinned by the golden tests under tests/golden/.
 #
 # Verified against cline 3.0.52 (`cline --version`, `cline --help`, and an
-# observed `cline --json` dispatch capture); per-value evidence lives in
-# docs/cline-notes.md.
+# observed `cline --json` dispatch capture); the transcript parser, shadow
+# roots, and guard plugin contract re-verified against 3.0.53. Per-value
+# evidence lives in docs/cline-notes.md.
 
 label = "cline"
 skills_dir = ".cline/skills"
