@@ -348,8 +348,8 @@ mod tests {
             item = "item"
             name_field = "type"
             skip_names = ["agent_message", "reasoning", "plan_update"]
-            args_omit = ["id", "type", "status", "output", "result", "error"]
-            result_coalesce = ["output", "result", "error"]
+            args_omit = ["id", "type", "status", "aggregated_output", "output", "result", "error"]
+            result_coalesce = ["aggregated_output", "output", "result", "error"]
 
             [final_text]
             where = { type = "item.completed", "item.type" = "agent_message" }
@@ -383,7 +383,7 @@ mod tests {
             &path,
             &[
                 json!({"type": "item.started", "timestamp": "2026-06-07T10:00:00.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "status": "in_progress"}}),
-                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:02.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "output": "2 pass\n0 fail", "status": "completed"}}),
+                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:02.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "aggregated_output": "2 pass\n0 fail", "status": "completed"}}),
                 json!({"type": "item.completed", "item": {"id": "item_2", "type": "file_change", "path": "src/app.ts", "status": "completed"}}),
                 json!({"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": "Done."}}),
             ],
@@ -472,7 +472,7 @@ mod tests {
             &path,
             &[
                 json!({"type": "thread.started", "thread_id": "thread-flat-1", "timestamp": "2026-06-07T10:00:00.000Z"}),
-                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "output": "README.md"}}),
+                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "aggregated_output": "README.md"}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:04.000Z", "item": {"id": "item_2", "type": "agent_message", "text": "First."}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:05.000Z", "item": {"id": "item_3", "type": "agent_message", "text": "Final."}}),
                 json!({"type": "turn.completed", "timestamp": "2026-06-07T10:00:10.000Z", "usage": {"input_tokens": 100, "cached_input_tokens": 75, "output_tokens": 20, "reasoning_output_tokens": 5}}),
@@ -739,9 +739,15 @@ mod tests {
         let corpora: Vec<Vec<Value>> = vec![
             vec![
                 json!({"type": "item.started", "timestamp": "2026-06-07T10:00:00.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "status": "in_progress"}}),
-                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:02.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "output": "2 pass\n0 fail", "status": "completed"}}),
+                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:02.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bash -lc 'bun test'", "aggregated_output": "2 pass\n0 fail", "status": "completed"}}),
                 json!({"type": "item.completed", "item": {"id": "item_2", "type": "file_change", "path": "src/app.ts", "status": "completed"}}),
                 json!({"type": "item.completed", "item": {"id": "item_3", "type": "agent_message", "text": "Done."}}),
+            ],
+            vec![
+                json!({"type": "item.completed", "item": {"id": "a", "type": "command_execution", "command": "one", "aggregated_output": "current", "output": "legacy-output", "result": "legacy-result", "error": "legacy-error", "status": "completed"}}),
+                json!({"type": "item.completed", "item": {"id": "b", "type": "command_execution", "command": "two", "output": "legacy-output"}}),
+                json!({"type": "item.completed", "item": {"id": "c", "type": "mcp_tool_call", "tool": "demo", "result": "legacy-result"}}),
+                json!({"type": "item.completed", "item": {"id": "d", "type": "mcp_tool_call", "tool": "demo", "error": "legacy-error"}}),
             ],
             vec![
                 json!({"type": "item.completed", "item": {"id": "item_1", "type": "web_search", "query": "codex events", "text": "search summary"}}),
@@ -753,7 +759,7 @@ mod tests {
             ],
             vec![
                 json!({"type": "thread.started", "timestamp": "2026-06-07T10:00:00.000Z"}),
-                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "output": "README.md"}}),
+                json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:03.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "ls", "aggregated_output": "README.md"}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:04.000Z", "item": {"id": "item_2", "type": "agent_message", "text": "First."}}),
                 json!({"type": "item.completed", "timestamp": "2026-06-07T10:00:05.000Z", "item": {"id": "item_3", "type": "agent_message", "text": "Final."}}),
                 json!({"type": "turn.completed", "timestamp": "2026-06-07T10:00:10.000Z", "usage": {"input_tokens": 100, "cached_input_tokens": 75, "output_tokens": 20, "reasoning_output_tokens": 5}}),

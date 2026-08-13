@@ -50,8 +50,8 @@ where = { type = "item.completed" }
 item = "item"
 name_field = "type"
 skip_names = ["agent_message", "reasoning", "plan_update"]
-args_omit = ["id", "type", "status", "output", "result", "error"]
-result_coalesce = ["output", "result", "error"]
+args_omit = ["id", "type", "status", "aggregated_output", "output", "result", "error"]
+result_coalesce = ["aggregated_output", "output", "result", "error"]
 
 [transcript.extract.final_text]
 where = { type = "item.completed", "item.type" = "agent_message" }

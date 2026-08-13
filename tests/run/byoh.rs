@@ -339,7 +339,7 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
         fs::write(
             outputs.join("cool-events.jsonl"),
             concat!(
-                r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'cat notes.md'","output":"notes","status":"completed"}}"#,
+                r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'cat notes.md'","aggregated_output":"notes","status":"completed"}}"#,
                 "\n",
                 r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Done."}}"#,
                 "\n",

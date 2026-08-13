@@ -274,7 +274,7 @@ mod tests {
         fs::write(
             outputs_dir.join("codex-events.jsonl"),
             jsonl(&[
-                json!({"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "bun test", "output": "ok"}}),
+                json!({"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": "bun test", "aggregated_output": "ok"}}),
             ]),
         )
         .unwrap();
@@ -317,7 +317,7 @@ mod tests {
             fs::write(
                 outputs_dir.join("codex-events.jsonl"),
                 jsonl(&[
-                    json!({"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": command, "output": "ok"}}),
+                    json!({"type": "item.completed", "item": {"id": "item_1", "type": "command_execution", "command": command, "aggregated_output": "ok"}}),
                 ]),
             )
             .unwrap();

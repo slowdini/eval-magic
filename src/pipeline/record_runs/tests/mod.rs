@@ -26,7 +26,7 @@ fn jsonl(lines: &[Value]) -> String {
 fn write_codex_events(outputs_dir: &Path, final_text: &str) {
     let lines = vec![
         json!({"type": "thread.started", "timestamp": "2026-06-04T10:00:00.000Z"}),
-        json!({"type": "item.completed", "timestamp": "2026-06-04T10:00:10.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bun test", "output": "ok"}}),
+        json!({"type": "item.completed", "timestamp": "2026-06-04T10:00:10.000Z", "item": {"id": "item_1", "type": "command_execution", "command": "bun test", "aggregated_output": "ok"}}),
         json!({"type": "item.completed", "timestamp": "2026-06-04T10:00:20.000Z", "item": {"id": "item_2", "type": "agent_message", "text": final_text}}),
         json!({"type": "turn.completed", "timestamp": "2026-06-04T10:00:30.000Z", "usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 20, "reasoning_output_tokens": 5}}),
     ];
