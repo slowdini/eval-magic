@@ -159,6 +159,8 @@ impl SlugCapability {
 pub enum ShadowPreflight {
     /// Claude Code plugin/skill scan rooted at the user config dir.
     ClaudePlugins,
+    /// Cline global `$CLINE_DIR/skills` + cross-harness `~/.agents/skills` scan.
+    ClineSkills,
     /// Codex repo/user/admin/plugin skill scan.
     CodexSkills,
     /// OpenCode project/global `.opencode`/`.claude`/`.agents` skill scan.
@@ -179,6 +181,9 @@ impl ShadowPreflight {
                 scan_root,
                 staged_skill_names,
             ),
+            ShadowPreflight::ClineSkills => {
+                super::cline::skill_shadow::shadow_preflight(scan_root, staged_skill_names)
+            }
             ShadowPreflight::CodexSkills => {
                 super::codex::skill_shadow::shadow_preflight(scan_root, staged_skill_names)
             }
@@ -193,6 +198,7 @@ impl ShadowPreflight {
     pub(crate) fn resolve(self, scan_root: &Path, sources: &mut [ShadowSource]) {
         match self {
             ShadowPreflight::ClaudePlugins => super::skill_shadow::resolve_by_precedence(sources),
+            ShadowPreflight::ClineSkills => super::skill_shadow::resolve_as_coexisting(sources),
             ShadowPreflight::CodexSkills => super::skill_shadow::resolve_as_coexisting(sources),
             ShadowPreflight::OpencodeSkills => {
                 super::opencode::skill_shadow::resolve_sources(scan_root, sources)

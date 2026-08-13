@@ -158,6 +158,7 @@
           "enum": [
             "opencode",
             "claude",
+            "cline",
             "agents",
             "codex",
             "plugin",

@@ -126,6 +126,67 @@ const CLINE_EVENTS: &str = concat!(
     "\n",
 );
 
+/// A live copy of the eval skill in either verified global root (the native
+/// `$CLINE_DIR/skills` defaulting to `~/.cline/skills`, or the cross-harness
+/// `~/.agents/skills`) must surface in the shadow preflight; Cline reads only
+/// the dispatch cwd's `.cline/skills` (3.0.53 probe: no ancestor walk), so no
+/// project roots are scanned.
+#[test]
+fn cline_warns_when_live_global_skill_shadows_staged_skill() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let fake_home = tmp.path().join("home");
+    // Native root: $CLINE_DIR/skills (pinned to a temp dir so the operator's
+    // real ~/.cline/skills stays out of the test).
+    let cline_home = tmp.path().join("cline-home");
+    let native_skill = cline_home.join("skills/mr-review");
+    fs::create_dir_all(&native_skill).unwrap();
+    fs::write(
+        native_skill.join("SKILL.md"),
+        "---\nname: mr-review\ndescription: installed copy\n---\n\nlive\n",
+    )
+    .unwrap();
+    // Cross-harness root: ~/.agents/skills (cline skill install lands here).
+    let agents_skill = fake_home.join(".agents/skills/mr-review");
+    fs::create_dir_all(&agents_skill).unwrap();
+    fs::write(
+        agents_skill.join("SKILL.md"),
+        "---\nname: mr-review\ndescription: codex-side copy\n---\n\nlive\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .env("HOME", &fake_home)
+        .env("CLINE_DIR", &cline_home)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "cline", "--dry-run"])
+        .assert()
+        .success()
+        .stderr(contains("Skill-shadow preflight"))
+        .stderr(contains("cross-harness"));
+
+    let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
+    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["findings"][0]["skill_name"], "mr-review");
+    let sources = report["findings"][0]["sources"].as_array().unwrap();
+    let mut namespaces: Vec<&str> = sources
+        .iter()
+        .filter(|source| source["origin"] == "live")
+        .map(|source| source["root"]["namespace"].as_str().unwrap())
+        .collect();
+    namespaces.sort_unstable();
+    assert_eq!(namespaces, ["agents", "cline"], "{report}");
+    let relations: Vec<&str> = sources
+        .iter()
+        .filter(|source| source["origin"] == "live")
+        .map(|source| source["root"]["relation"].as_str().unwrap())
+        .collect();
+    assert!(relations.contains(&"native"), "{report}");
+    assert!(relations.contains(&"cross-harness"), "{report}");
+}
+
 /// Ingest reads the declared `cline-json` parser tier: tool invocations get
 /// flattened top-level args (`run_commands`' `commands` array joins into
 /// `command`) with the result attached from the paired `content_end`, and

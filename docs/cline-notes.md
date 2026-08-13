@@ -130,13 +130,18 @@ the observed dispatch described above.
   the meta-check grades from the transcript instead of the LLM-judge fallback.
 - **Permission denials**: the parser reads refusal evidence (`content_end` `{"error"}` payloads
   with the guard prefix or the runtime's policy wordings) into `permission-denials.json`.
+- **`cline-skills` shadow preflight**: scans the two live global roots a dispatch can actually
+  see — `$CLINE_DIR/skills` (default `~/.cline/skills`, native) and `~/.agents/skills`
+  (cross-harness; `cline skill install` lands global installs there). Root verification
+  (3.0.53 live probe, one uniquely-named skill per candidate root): the dispatch cwd's
+  `.cline/skills` is read (runner staging during evals), an ancestor's `.cline/skills` is NOT
+  (no project walk, unlike OpenCode), and `~/.agents/skills` IS read at runtime.
 - **Stray-writes coverage**: flattened args give the audit top-level `command`/`path` keys, so
   write/shell classification works. Known blind spot: `read_files`' `files:[{path}]` stays
   nested, so the live-source-read path branch doesn't fire for it (shell-based read detection
   still covers `cat`-style reads).
 - **Riding documented fallbacks** (the `run` preflight names each): no guard (the audit is
-  after-the-fact, never blocked), no shadow preflight (warning only), no `[conversation]`
-  (scripted `turns` evals are rejected).
+  after-the-fact, never blocked), no `[conversation]` (scripted `turns` evals are rejected).
 
 ## Wiring the next enhancements
 
@@ -146,11 +151,13 @@ contribution (see docs/progressive-enhancements.md "Guardrails"), in leverage or
 
 1. ~~**`cline-json` named transcript parser**~~ — **landed**: `TranscriptParser::ClineJson` +
    `src/adapters/cline/transcript.rs` (verified against a fresh 3.0.53 capture, not the docs).
-2. **`cline-skills` shadow preflight** — new `ShadowPreflight` variant scanning Cline's live
-   roots: global `~/.cline/skills` (observed on 3.0.52; the docs' `~/.cline/data/settings/skills`
-   path lags the binary) plus project-ancestor `.cline/skills`; check whether `.agents/skills`
-   is also read (the cline repo carries one; unverified). Until it lands, no preflight runs and
-   the run warning says so.
+2. ~~**`cline-skills` shadow preflight**~~ — **landed**: `ShadowPreflight::ClineSkills` +
+   `src/adapters/cline/skill_shadow.rs`. Roots verified against 3.0.53 with a live
+   uniquely-named-skill probe: global `~/.cline/skills` (observed on 3.0.52; `$CLINE_DIR`
+   override from the 3.0.53 binary) and `~/.agents/skills` (IS read at runtime — the ticket's
+   open question — and is where `cline skill install` lands global installs); project
+   `.cline/skills` is read only at the dispatch cwd (no ancestor walk), so the preflight scans
+   no project roots.
 3. **Write guard engine arm** (`cline-plugin`, mirroring `opencode-plugin`) — stage a JS plugin
    at `.cline/plugins/` whose `beforeTool` hook forwards tool calls to
    `eval-magic guard-hook --harness cline` and returns `{skip, reason}` on deny. The 3.0.53
