@@ -49,47 +49,23 @@ item = "\n- {name}: {description} (file: {path})"
 # `cline --json` emits NDJSON: `agent_event` wrappers (`content_start` /
 # `content_end` / `usage` / `iteration_start` / `iteration_end` / `done`),
 # `hook_event` lifecycle lines, and a terminal `run_result` carrying the final
-# text, run token usage, and `durationMs`. The flat declarative tier covers the
-# summary: tool calls are self-contained `content_start` records (args nested
-# under `input`, so transcripts read `{"input": {...}}` — the stray-writes
-# audit only reads top-level `command`/path args and stays blind to Cline's
-# until a named parser flattens them). `content_end` text blocks are the
-# ordered assistant messages. There is no session id anywhere in the stream
-# (and `--id` headless resume errors in 3.0.52), so [conversation] is not
+# text, run token usage, and `durationMs`. Tool args nest under `input` and
+# `content_start`/`content_end` pair by `toolCallId`, so the summary rides the
+# named `cline-json` parser (src/adapters/cline/transcript.rs): it flattens
+# args per tool (`run_commands`' `commands` array joins into one `command`
+# string, so the stray-writes audit and guard can classify it; `skills` calls
+# surface `skill` at top level for the deterministic `__skill_invoked`
+# meta-check), attaches per-tool results, and reads refusal evidence from
+# `content_end` error payloads. There is no session id anywhere in the stream
+# (and `--id` headless resume errors in 3.0.52+), so [conversation] is not
 # declarable.
-#
-# surfaces_skill_invocation stays false: the deterministic meta-check looks up
-# the skill argument at the TOP level of the invocation args, and Cline nests
-# it (`input.skill`), so the check would never match — the `__skill_invoked`
-# meta-check rides the LLM-judge fallback until a named parser exists.
 [transcript]
 events_filename = "cline-events.jsonl"
-surfaces_skill_invocation = false
-
-[transcript.extract.tools]
-where = { type = "agent_event", "event.type" = "content_start", "event.contentType" = "tool" }
-item = "event"
-name_field = "toolName"
-args_omit = ["type", "contentType", "toolCallId", "toolName"]
-
-[transcript.extract.final_text]
-where = { type = "run_result" }
-field = "text"
-
-[transcript.extract.assistant_messages]
-where = { type = "agent_event", "event.type" = "content_end", "event.contentType" = "text" }
-field = "event.text"
-
-# usage.inputTokens includes cached input, so cache reads are subtracted
-# (matching codex accounting).
-[transcript.extract.tokens]
-where = { type = "run_result" }
-sum = ["usage.inputTokens", "usage.outputTokens"]
-subtract = ["usage.cacheReadTokens"]
-
-[transcript.extract.duration]
-where = { type = "run_result" }
-field = "durationMs"
+parser = "cline-json"
+permission_denials_parser = "cline-json"
+surfaces_skill_invocation = true
+skill_tool = "skills"
+skill_arg = "skill"
 
 # `-m <model-id>` selects a model for the session's configured provider (model
 # ids are provider-qualified, e.g. `cline-pass/kimi-k3`; choose providers with

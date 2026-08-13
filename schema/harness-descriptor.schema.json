@@ -89,9 +89,9 @@
       "description": "Transcript ingest: the events file the CLI dispatch captures, one primary summary reader, and optional composable denial/session-surface readers. The primary summary is either `parser` (a named code capability for streams that need stitching) or summary outputs under `extract` (the declarative tier for flat event streams). A parser may coexist with an extract containing only `session_surface`; `permission_denials_parser` may accompany either tier. These composition rules are Rust loader invariants.",
       "properties": {
         "events_filename": { "type": "string", "minLength": 1 },
-        "parser": { "enum": ["claude-stream-json", "codex-items", "opencode-events"] },
+        "parser": { "enum": ["claude-stream-json", "cline-json", "codex-items", "opencode-events"] },
         "permission_denials_parser": {
-          "enum": ["claude-stream-json", "codex-items", "opencode-events"],
+          "enum": ["claude-stream-json", "cline-json", "codex-items", "opencode-events"],
           "description": "Optional named reader for permission-denial evidence. It composes with either primary transcript tier; when absent, a named parser retains its historical bundled denial capability."
         },
         "extract": {
