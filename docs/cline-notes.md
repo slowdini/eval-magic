@@ -8,11 +8,11 @@
 
 ## Verified against
 
-- Harness CLI + version: `cline 3.0.52` (`cline --version`), installed via npm (`npm i -g cline`)
-- Date verified: 2026-08-11
+- Harness CLI + version: `cline 3.0.52` (`cline --version`), installed via npm (`npm i -g cline`);
+  the `cline-json` parser re-verified every stream shape against `cline 3.0.53` on 2026-08-12
+- Date verified: 2026-08-11 (descriptor), 2026-08-12 (parser)
 - Documentation consulted: <https://docs.cline.bot/cline-cli/overview>,
-  <https://docs.cline.bot/cline-cli/cli-reference>,
-  <https://docs.cline.bot/customization/skills>,
+  <https://docs.cline.bot/cline-cli/cli-reference>, <https://docs.cline.bot/customization/skills>,
   <https://docs.cline.bot/customization/plugins>, <https://docs.cline.bot/sdk/plugins>,
   <https://agentskills.io/specification>
 - Observed output: a real `cline --json --auto-approve true` dispatch in a throwaway directory
@@ -20,14 +20,19 @@
   invocations), `cline history --json`, several `--id` resume attempts, and
   `eval-magic harness lint harnesses/cline.toml --as-builtin --probe --yes` (the live probe
   rendered the exec template, dispatched it, and recovered a non-empty `final-message.md`).
+  Against 3.0.53: a second dispatch exercising `editor`, `run_commands`, `read_files`, and
+  `skills` (arg/result shapes below), and a guard spike — a hand-staged `.cline/plugins/` project
+  plugin whose `beforeTool` hook blocked calls, proving headless plugin auto-load, the
+  `{skip, reason}` deny contract, `spawnSync` from the plugin sandbox, and the refusal stream
+  shape (`content_end` output `{"error": "<reason>"}`).
 
 ## Code map
 
-Cline support is **descriptor-only**: `harnesses/cline.toml` plus the mechanical
-`EMBEDDED_DESCRIPTORS` entry in `src/adapters/descriptor.rs`. There is no
-`src/adapters/cline/` module — the transcript summary rides the declarative
-`[transcript.extract]` tier, and no guard, shadow preflight, slug, or parser capability is
-declared. Named-capability gaps are tracked in "Wiring the next enhancements" below.
+Cline support is the descriptor `harnesses/cline.toml` (the mechanical `EMBEDDED_DESCRIPTORS`
+entry in `src/adapters/descriptor.rs`) plus `src/adapters/cline/`: `transcript.rs` holds the
+`cline-json` named parser (arg flattening, `toolCallId` joins, per-tool result coercion, refusal
+recognition). Shadow preflight, guard, and conversation remain descriptor-absent named-capability
+gaps — see "Wiring the next enhancements" below.
 
 ## Verification record
 
@@ -49,12 +54,12 @@ the observed dispatch described above.
 | `staging.surface_phrase` / `unresolved_phrase` | "as a Cline skill" / "If it does not load as a Cline skill" | phrasing authored for eval-magic prompts (no Cline equivalent string) |
 | `skills_block.header` / `item` | `## Skills` / `- {name}: {description} (file: {path})` | eval-magic-authored markdown block (same shape as the codex descriptor); Cline's own skill list rendering is internal |
 | `transcript.events_filename` | `cline-events.jsonl` | exec template captures `--json` stdout to this file (probe capture) |
-| `transcript.surfaces_skill_invocation` | `false` | the deterministic meta-check matches the skill arg at the top level of invocation args, but Cline nests it (`input.skill`) — see "What's wired" |
-| `[transcript.extract.tools]` | `where type=agent_event, event.type=content_start, event.contentType=tool; item=event; name_field=toolName` | probe capture: one `content_start` per tool call, self-contained (`toolCallId`, `toolName`, `input`) |
-| `[transcript.extract.final_text]` | `where type=run_result; field=text` | probe capture: terminal `run_result` line carries the full final text |
-| `[transcript.extract.assistant_messages]` | `where type=agent_event, event.type=content_end, event.contentType=text; field=event.text` | probe capture: `content_end` text events carry complete (non-streaming) text blocks in order |
-| `[transcript.extract.tokens]` | `sum usage.inputTokens+usage.outputTokens, subtract usage.cacheReadTokens` over `run_result` | probe capture: `run_result.usage` shape; cache-read subtraction matches codex accounting (`inputTokens` includes cached input) |
-| `[transcript.extract.duration]` | `field=durationMs` over `run_result` | probe capture: `run_result.durationMs` (28233 for the probe run) |
+| `transcript.parser` / `permission_denials_parser` | `cline-json` / `cline-json` | args nest under `input` and `content_start`/`content_end` pair by `toolCallId` — beyond the extract tier's primitives, so the named parser does the normalization (3.0.53 capture) |
+| `transcript.surfaces_skill_invocation` / `skill_tool` / `skill_arg` | `true` / `skills` / `skill` | 3.0.53 capture: `skills` calls carry `input.skill = "<name>"`, which the parser hoists to top level so the deterministic meta-check matches |
+| Parser arg flattening | `run_commands` `commands:[...]` → one `command` string (newline-joined); every other tool's `input` hoists verbatim | 3.0.53 capture: `editor` takes `path`/`new_text`, `read_files` `files:[{path}]`, `skills` `skill`, `run_commands` `commands:[...]`; the join gives the stray-writes audit and guard a classifiable `command` |
+| Parser result coercion | string (`skills`) / single `{query,result,success}` object (`editor`) / arrays of those objects (`run_commands`, `read_files`) / `{"error"}` on refusals → result text | 3.0.53 capture + guard spike (`beforeTool` block landed as `output:{"error":"<reason>"}`) |
+| Parser denial recognition | `content_end` error payloads carrying the guard `eval guard: ` prefix (verbatim) or the runtime's `Tool … is disabled by policy` / `was not approved` / `was blocked by a runtime hook` wordings | guard-spike capture for the shape; the policy wordings are the runtime's fixed strings in the 3.0.53 binary |
+| Parser summary fields | final text + token totals (cache reads subtracted, codex accounting) + `durationMs` from the terminal `run_result`; assistant messages from `content_end` text blocks (complete, ordered; `content_start` text chunks are streaming partials) | 3.0.52 + 3.0.53 probe captures |
 | `model.flag` | `-m` | `cline --help`: `-m, --model <model-id>` |
 | `dispatch.capture_prefix` | `cline` | chosen name (judge capture files `$response_base.cline-events.jsonl`) |
 | `dispatch.exec_template` / `parallel_command_template` | see descriptor | flags from `cline --help` (`--act` from the 3.0.52 binary’s hidden option registration + behavioral write test); `--json` NDJSON stdout and `</dev/null` stdin detach from the docs CLI overview (piped stdin becomes prompt context); final-message jq recovery verified by the live probe |
@@ -113,20 +118,25 @@ the observed dispatch described above.
   (`cline --cwd ... --act --json --auto-approve true`, `-m`); live-probe verified end to end.
   The parallel template’s jq step uses escaped double quotes because the block nests inside the
   shared scaffold’s `sh -c '...'` — single quotes terminate the body (caught by the smoke eval).
-- **Declarative transcript ingest**: tool invocations (args nested under `input`), final text
-  from `run_result.text`, ordered assistant messages from `content_end` text blocks, token
-  totals from `run_result.usage` (cache reads subtracted), duration from `run_result.durationMs`.
-  `transcript_check` works; patterns match the `"<name> <compact-json-args>"` rendering, so
-  Cline args match at their nested shape (e.g. `run_commands.*"commands"`).
-- **Riding documented fallbacks** (the `run` preflight names each): no guard (detect-stray-writes
-  is the after-the-fact audit), no shadow preflight (warning only), `surfaces_skill_invocation =
-  false` (the `__skill_invoked` meta-check uses the LLM judge), no permission-denials reader, no
-  `[conversation]` (scripted `turns` evals are rejected).
-- **Stray-writes caveat:** the audit reads top-level args keys (`command`, `path`, `filePath`,
-  ...); Cline nests args under `input`, so with declarative extraction the audit classifies
-  nothing for this harness — effectively the no-transcript baseline for that one audit until the
-  named parser lands. The `[tools]` vocabulary is still declared (load-time validation requires
-  it with `[transcript]`, and the future guard consumes it).
+- **`cline-json` transcript ingest**: tool invocations with flattened top-level args
+  (`run_commands`' `commands` array joins into one `command`; `editor` surfaces `path`;
+  `skills` surfaces `skill`), results attached from the paired `content_end` (per-tool shape
+  coercion, `{"error"}` payloads included), final text from `run_result.text`, ordered assistant
+  messages from `content_end` text blocks, token totals from `run_result.usage` (cache reads
+  subtracted), duration from `run_result.durationMs`. `transcript_check` patterns match the
+  `"<name> <compact-json-args>"` rendering of the *flattened* args (e.g. `run_commands.*"command"`).
+- **Deterministic `__skill_invoked`**: `surfaces_skill_invocation = true` with
+  `skill_tool = "skills"` / `skill_arg = "skill"` — the parser hoists the slug to top level, so
+  the meta-check grades from the transcript instead of the LLM-judge fallback.
+- **Permission denials**: the parser reads refusal evidence (`content_end` `{"error"}` payloads
+  with the guard prefix or the runtime's policy wordings) into `permission-denials.json`.
+- **Stray-writes coverage**: flattened args give the audit top-level `command`/`path` keys, so
+  write/shell classification works. Known blind spot: `read_files`' `files:[{path}]` stays
+  nested, so the live-source-read path branch doesn't fire for it (shell-based read detection
+  still covers `cat`-style reads).
+- **Riding documented fallbacks** (the `run` preflight names each): no guard (the audit is
+  after-the-fact, never blocked), no shadow preflight (warning only), no `[conversation]`
+  (scripted `turns` evals are rejected).
 
 ## Wiring the next enhancements
 
@@ -134,24 +144,24 @@ Tracked as the Cline-harness gap ticket
 ([#234](https://github.com/slowdini/eval-magic/issues/234)); each is a separate one-capability-per-PR code
 contribution (see docs/progressive-enhancements.md "Guardrails"), in leverage order:
 
-1. **`cline-json` named transcript parser** — new `TranscriptParser` variant + schema enum value
-   + `src/adapters/cline/transcript.rs`: flatten `input` to top-level args per tool (the
-   stray-writes audit then sees `command`/paths and the meta-check sees `skill`), join
-   `content_start`/`content_end` by `toolCallId` to attach results, normalize per-tool output
-   shapes (observed: `skills` results are strings, other tools' are `[{query, result, success}]`
-   arrays), and add refusal recognition for `permission-denials.json`. Unlocks full-fidelity
-   `transcript_check`, the deterministic `__skill_invoked` (`skill_tool = "skills"`,
-   `skill_arg = "skill"`), and real stray-write coverage.
+1. ~~**`cline-json` named transcript parser**~~ — **landed**: `TranscriptParser::ClineJson` +
+   `src/adapters/cline/transcript.rs` (verified against a fresh 3.0.53 capture, not the docs).
 2. **`cline-skills` shadow preflight** — new `ShadowPreflight` variant scanning Cline's live
    roots: global `~/.cline/skills` (observed on 3.0.52; the docs' `~/.cline/data/settings/skills`
    path lags the binary) plus project-ancestor `.cline/skills`; check whether `.agents/skills`
    is also read (the cline repo carries one; unverified). Until it lands, no preflight runs and
    the run warning says so.
 3. **Write guard engine arm** (`cline-plugin`, mirroring `opencode-plugin`) — stage a JS plugin
-   at `.cline/plugins/` whose `tool_call_before` hook (blocking, `fail_closed`) forwards tool
-   calls to `eval-magic guard-hook --harness cline`. Needs verification that project plugins
-   auto-load in headless one-shot mode and of the exact deny-verdict shape from the SDK hooks
-   docs. `CLINE_COMMAND_PERMISSIONS` is shell-command-only and not a guard substitute.
+   at `.cline/plugins/` whose `beforeTool` hook forwards tool calls to
+   `eval-magic guard-hook --harness cline` and returns `{skip, reason}` on deny. The 3.0.53
+   spike verified the open items: project plugins auto-load in headless one-shot mode, the hook
+   receives `{snapshot, tool, toolCall, input}`, `{skip: true, reason}` blocks, the reason
+   reaches the stream as the `content_end` `{"error"}` payload, and `spawnSync` works from the
+   plugin sandbox. Note the docs' hook vocabulary (`tool_call_before`, `fail_closed`) lags the
+   binary — the plugin registers `beforeTool`. The plugin must also normalize
+   `run_commands`' `commands` array into a single `command` string before forwarding (the shared
+   arbiter reads `tool_input.command`). `CLINE_COMMAND_PERMISSIONS` appears nowhere in the
+   3.0.53 binary — docs-only, and shell-only besides: not a guard substitute.
 4. **Conversation resume** — blocked upstream: needs the resume `sessionId` surfaced in the
    `--json` stream *and* headless `--id` fixed (both absent/broken in 3.0.52, see "Dispatch
    quirks"). Then declare `[transcript.extract.session_id]` plus

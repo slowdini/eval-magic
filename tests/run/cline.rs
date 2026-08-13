@@ -1,6 +1,6 @@
 //! Cline-harness behavior: `.cline/skills` staging with the default
 //! (underscore-preserving) slug template, preflight fallback warnings for the
-//! undeclared guard, and declarative transcript ingest of the `cline --json`
+//! undeclared guard, and `cline-json` transcript ingest of the `cline --json`
 //! NDJSON stream (`agent_event` records plus the terminal `run_result`).
 
 use crate::helpers::*;
@@ -73,6 +73,7 @@ fn cline_stages_repo_local_skills_under_cline_dir() {
         .stderr(
             contains("declares no write guard")
                 .and(contains("declares no transcript parser").not())
+                .and(contains("cannot tell a permission-denied").not())
                 .and(contains("declares no skills_dir").not())
                 .and(contains("declares no model flag").not()),
         );
@@ -125,9 +126,11 @@ const CLINE_EVENTS: &str = concat!(
     "\n",
 );
 
-/// Ingest reads the declared extract tier: tool invocations keep Cline's
-/// nested `input` args, and timing backfills from `run_result` (cached input
-/// subtracted, matching codex accounting).
+/// Ingest reads the declared `cline-json` parser tier: tool invocations get
+/// flattened top-level args (`run_commands`' `commands` array joins into
+/// `command`) with the result attached from the paired `content_end`, and
+/// timing backfills from `run_result` (cached input subtracted, matching
+/// codex accounting).
 #[test]
 fn cline_ingest_extracts_summary_from_events_stream() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -179,8 +182,9 @@ fn cline_ingest_extracts_summary_from_events_stream() {
         assert_eq!(invocations[0]["name"], "run_commands");
         assert_eq!(
             invocations[0]["args"],
-            serde_json::json!({"input": {"commands": ["echo hi"]}})
+            serde_json::json!({"command": "echo hi"})
         );
+        assert_eq!(invocations[0]["result"], serde_json::json!("hi\n"));
         assert_eq!(record["final_message"], "Done.");
 
         let timing = read_json(&resolve(&cwd, task["timing_path"].as_str().unwrap()));

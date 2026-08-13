@@ -159,7 +159,7 @@ reasoning is only visible in the raw captures, which `run` preflight states once
 fallback.
 *Capability:* `transcript.permission_denials_parser` names the reader independently of the primary
 summary tier. It may accompany a named `parser` or declarative `[transcript.extract]` summary;
-`claude-stream-json`, `codex-items`, and `opencode-events` surface denials. For compatibility, a
+`claude-stream-json`, `cline-json`, `codex-items`, and `opencode-events` surface denials. For compatibility, a
 descriptor with only `transcript.parser` still uses that parser's bundled denial support. The eval
 write guard denies through the same permission mechanism, so its blocks land in the report as well;
 they are attributed by the `eval guard: ` reason prefix and excluded from the warning so one denial
@@ -178,7 +178,7 @@ the declarative tier: equality `where` filters, final and ordered assistant-text
 pick, flat tool-item mapping, token sum/subtract reduction, duration rule, and the auxiliary
 session-surface mapping represented in the descriptor schema and visible in resolved descriptors.
 *Capability:* `transcript.parser` names the code that stitches a non-flat stream
-(`claude-stream-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
+(`claude-stream-json`, `cline-json`, `codex-items`, `opencode-events`) — a new harness emitting compatible
 captures reuses one with zero code. The built-in Codex descriptor uses declarative summary
 extraction plus `permission_denials_parser = "codex-items"`; the named parser remains available as
 a compatibility/reference implementation and is covered by a differential summary test.

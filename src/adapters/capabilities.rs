@@ -31,6 +31,8 @@ use super::{PermissionDenial, TranscriptSummary};
 pub enum TranscriptParser {
     /// `claude -p --output-format stream-json` events.
     ClaudeStreamJson,
+    /// `cline --json` `agent_event`/`run_result` NDJSON.
+    ClineJson,
     /// `codex exec --json` `item.completed` events.
     CodexItems,
     /// `opencode run --format json` `tool_use`/`text`/`step_finish` events.
@@ -44,6 +46,7 @@ impl TranscriptParser {
             TranscriptParser::ClaudeStreamJson => {
                 super::claude_code::stream_json::parse_claude_stream_json(path)
             }
+            TranscriptParser::ClineJson => super::cline::transcript::parse_cline_events(path),
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events(path),
             TranscriptParser::OpencodeEvents => {
                 super::opencode::transcript::parse_opencode_events(path)
@@ -57,6 +60,7 @@ impl TranscriptParser {
             TranscriptParser::ClaudeStreamJson => {
                 super::claude_code::stream_json::parse_claude_stream_json_full(path)
             }
+            TranscriptParser::ClineJson => super::cline::transcript::parse_cline_events_full(path),
             TranscriptParser::CodexItems => super::codex::transcript::parse_codex_events_full(path),
             TranscriptParser::OpencodeEvents => {
                 super::opencode::transcript::parse_opencode_events_full(path)
@@ -71,6 +75,7 @@ impl TranscriptParser {
         matches!(
             self,
             TranscriptParser::ClaudeStreamJson
+                | TranscriptParser::ClineJson
                 | TranscriptParser::CodexItems
                 | TranscriptParser::OpencodeEvents
         )
@@ -84,6 +89,9 @@ impl TranscriptParser {
         match self {
             TranscriptParser::ClaudeStreamJson => {
                 super::claude_code::stream_json::parse_claude_permission_denials(path)
+            }
+            TranscriptParser::ClineJson => {
+                super::cline::transcript::parse_cline_permission_denials(path)
             }
             TranscriptParser::CodexItems => {
                 super::codex::transcript::parse_codex_permission_denials(path)
@@ -112,7 +120,9 @@ impl TranscriptParser {
             TranscriptParser::ClaudeStreamJson => {
                 super::claude_code::stream_json::parse_claude_session_surface(path)
             }
-            TranscriptParser::CodexItems | TranscriptParser::OpencodeEvents => Ok(None),
+            TranscriptParser::ClineJson
+            | TranscriptParser::CodexItems
+            | TranscriptParser::OpencodeEvents => Ok(None),
         }
     }
 }
