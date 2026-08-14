@@ -51,6 +51,28 @@ is the default — most modules use it. Extract only when that module outgrows i
 do) or to a single `<topic>_tests.rs` sibling (as `adapters/guard/guard_denial_tests.rs` does).
 Extraction is a size decision, not a style preference; don't split a small inline module.
 
+**Spawning a child process from a test.** Use the hidden `__fixture` subcommand, never `sh`, `true`,
+`printf`, or a `#!/bin/sh` stub. It exits with a chosen code, emits chosen bytes, writes a chosen
+file, or checks a file or variable — see `FixtureArgs` in `src/cli/args.rs`. One invocation parses
+the same under `sh -c` and `cmd /C`, which is what keeps `command_check` tests off per-OS command
+strings. Build the command with the `fixture` helper (`tests/run/helpers.rs` for integration tests,
+the one in `src/pipeline/grade/command_check/tests.rs` for unit tests). Because the fixture is the
+binary, `cargo test --lib` alone does not build it — run `cargo test`, or `cargo build` first.
+
+**Tests are gated on capabilities, not on the OS.** `#[cfg(unix)]` on a test hides it from
+compilation and clippy on the other host and hides the coverage gap. Instead, probe for what the
+test actually needs and call `report_skip` (`src/core/runtime.rs`), which prints the reason and
+returns `true`. Setting `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns every skip into a failure; CI sets
+it, so a runner cannot quietly stop covering something. Two capabilities are gated today: the POSIX
+toolchain the shipped dispatch recipes need (`require_posix_toolchain`), and symlink creation, which
+Windows allows only under Developer Mode. Where a genuine per-OS difference is the behavior under
+test — signals, path separators — branch on `cfg!(windows)` at runtime so both arms still compile
+everywhere.
+
+**Finding a POSIX shell.** Harness `exec_template`s are POSIX command lines, so the dispatch and
+probe paths spawn `sh` via `posix_shell()` (`src/core/runtime.rs`) rather than a hardcoded
+`/bin/sh`: it searches `PATH`, then a Git for Windows install. Set `EVAL_MAGIC_SH` to override it.
+
 **Where user-facing warnings come from.** Library modules (`pipeline`, `workspace`, `sandbox`,
 `adapters`) never print. They return warning strings on their result struct — `#[serde(skip)]` when
 that struct is also a serialized artifact — and the `cli` handler prints them with the `⚠ ` prefix.

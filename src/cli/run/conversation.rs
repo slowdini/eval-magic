@@ -21,7 +21,7 @@ use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::transcript::{TranscriptEvent, TranscriptSummary};
 use crate::core::{
     ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason, DeliverWhen,
-    ScriptedTurn, validate_agent_environment_entry,
+    ScriptedTurn, posix_shell, validate_agent_environment_entry,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -373,7 +373,8 @@ fn execute_round(
 ) -> anyhow::Result<()> {
     fs::create_dir_all(outputs_dir)
         .with_context(|| format!("failed to create turn {round} outputs"))?;
-    let status = Command::new("/bin/sh")
+    let shell = posix_shell().map_err(|message| anyhow!("{message}"))?;
+    let status = Command::new(shell)
         .arg("-c")
         .arg(command)
         .current_dir(eval_root)

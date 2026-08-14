@@ -191,17 +191,38 @@ mod tests {
         .unwrap();
     }
 
-    fn run_judge_recipe(cwd: &Path, command_line: &str) -> Output {
+    /// The tools the rendered judge recipe shells out to. Git for Windows
+    /// bundles every one of these except `jq`.
+    const RECIPE_TOOLS: &[&str] = &["jq", "xargs", "tr", "wc"];
+
+    /// The shell to run a rendered recipe in, or `None` after reporting a skip.
+    ///
+    /// These three tests execute shipped POSIX pipeline text, so no portable
+    /// fixture can stand in for the toolchain — the pipeline *is* the subject.
+    /// Gating on the capability rather than the OS lets them run on any host
+    /// that has the tools (including Windows with `jq` installed) and stops them
+    /// failing inscrutably on a Linux box that happens to lack `jq`.
+    fn recipe_shell(test: &str) -> Option<&'static Path> {
+        match crate::core::runtime::require_posix_toolchain(RECIPE_TOOLS) {
+            Ok(shell) => Some(shell),
+            Err(missing) => {
+                crate::core::runtime::report_skip(test, &missing);
+                None
+            }
+        }
+    }
+
+    fn run_judge_recipe(shell: &Path, cwd: &Path, command_line: &str) -> Output {
         let recipe = render_judge_dispatch_recipe(command_line, "--model", "judge");
-        let shell = recipe
+        let program = recipe
             .split_once("```bash\n")
             .unwrap()
             .1
             .strip_suffix("\n```")
             .unwrap();
-        Command::new("/bin/sh")
+        Command::new(shell)
             .arg("-c")
-            .arg(shell)
+            .arg(program)
             .current_dir(cwd)
             .env("JOBS", "1")
             .output()
@@ -335,6 +356,10 @@ mod tests {
 
     #[test]
     fn judge_recipe_reports_partial_completion_and_exits_nonzero() {
+        let Some(shell) = recipe_shell("judge_recipe_reports_partial_completion_and_exits_nonzero")
+        else {
+            return;
+        };
         let tmp = tempfile::TempDir::new().unwrap();
         let responses_dir = tmp.path().join("judge responses");
         fs::create_dir_all(&responses_dir).unwrap();
@@ -343,7 +368,7 @@ mod tests {
         fs::write(&existing_response, "{}\n").unwrap();
         write_judge_tasks(tmp.path(), &[&existing_response, &missing_response]);
 
-        let output = run_judge_recipe(tmp.path(), "    true $model_arg \\");
+        let output = run_judge_recipe(shell, tmp.path(), "    true $model_arg \\");
 
         assert!(!output.status.success(), "{output:?}");
         assert_eq!(
@@ -354,6 +379,11 @@ mod tests {
 
     #[test]
     fn judge_recipe_reports_complete_resumed_batch_and_exits_zero() {
+        let Some(shell) =
+            recipe_shell("judge_recipe_reports_complete_resumed_batch_and_exits_zero")
+        else {
+            return;
+        };
         let tmp = tempfile::TempDir::new().unwrap();
         let first_response = tmp.path().join("first.json");
         let second_response = tmp.path().join("second.json");
@@ -361,7 +391,7 @@ mod tests {
         fs::write(&second_response, "second\n").unwrap();
         write_judge_tasks(tmp.path(), &[&first_response, &second_response]);
 
-        let output = run_judge_recipe(tmp.path(), "    false $model_arg \\");
+        let output = run_judge_recipe(shell, tmp.path(), "    false $model_arg \\");
 
         assert!(output.status.success(), "{output:?}");
         assert_eq!(
@@ -374,6 +404,11 @@ mod tests {
 
     #[test]
     fn judge_recipe_preserves_dispatch_failure_after_response_is_written() {
+        let Some(shell) =
+            recipe_shell("judge_recipe_preserves_dispatch_failure_after_response_is_written")
+        else {
+            return;
+        };
         let tmp = tempfile::TempDir::new().unwrap();
         let response = tmp.path().join("response.json");
         let failing_judge = tmp.path().join("failing-judge");
@@ -385,6 +420,7 @@ mod tests {
         write_judge_tasks(tmp.path(), &[&response]);
 
         let output = run_judge_recipe(
+            shell,
             tmp.path(),
             "    sh ./failing-judge \"$response_path\" $model_arg \\",
         );

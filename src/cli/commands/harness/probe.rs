@@ -18,6 +18,7 @@ use crate::adapters::cli_command::{
     render_agent_dispatch_command, render_cli_model_arg, shell_quote_arg,
 };
 use crate::adapters::descriptor::{HarnessDescriptor, subst};
+use crate::core::posix_shell;
 
 /// Options carried from the parsed `--probe` flags into [`run_probe`].
 #[derive(Debug, Clone, Copy)]
@@ -86,16 +87,20 @@ fn render_probe_exec(
     )
 }
 
-/// Execute `command` via `/bin/sh -c` with `cwd` as the subprocess working
-/// directory, killing the child if it exceeds `timeout`. The child's stdin is
-/// `null`: the parent reads the `y/N` confirm on its own stdin and never wants
-/// the dispatched agent CLI to consume it.
+/// Execute `command` via the resolved POSIX shell with `cwd` as the subprocess
+/// working directory, killing the child if it exceeds `timeout`. The child's
+/// stdin is `null`: the parent reads the `y/N` confirm on its own stdin and
+/// never wants the dispatched agent CLI to consume it.
+///
+/// Only the direct child is killed on timeout, not its process group — a shell
+/// that has already forked leaves the grandchild running until it exits.
 fn execute_with_timeout(
     command: &str,
     cwd: &Path,
     timeout: Duration,
 ) -> Result<ExitStatus, ProbeError> {
-    let mut child = Command::new("/bin/sh")
+    let shell = posix_shell().map_err(|message| ProbeError::SpawnFailed(message.to_string()))?;
+    let mut child = Command::new(shell)
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
@@ -165,7 +170,7 @@ const RENDER_STAND_INS: [(&str, &str); 2] = [
 
 /// The live dispatch probe. Renders `dispatch.exec_template` with a trivial
 /// prompt in a throwaway temp dir, asks for confirmation, runs it under a
-/// timeout through `/bin/sh -c` from that dir, then verifies the final-message
+/// timeout through the resolved POSIX shell from that dir, then verifies the final-message
 /// recovery contract. Also render-only-validates `parallel_command_template`
 /// and `judge_command_template` for placeholder-shape errors. Invokes the real
 /// harness CLI and is opt-in; never part of standard CI checks.
