@@ -472,10 +472,7 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
         .unwrap();
     assert_eq!(live["kind"], "skill");
     assert_eq!(live["root"]["namespace"], "agents");
-    assert_eq!(
-        live["discovery_path"],
-        live_skill.to_string_lossy().as_ref()
-    );
+    assert_eq!(live["discovery_path"], wire_path(&live_skill).as_str());
     let appearances = live["appearances"].as_array().unwrap();
     assert_eq!(
         appearances.len(),

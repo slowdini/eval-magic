@@ -87,6 +87,11 @@ pub(super) fn env_targets(input: &EnvLayoutInput) -> Vec<EnvTarget> {
 mod tests {
     use super::*;
 
+    // `EnvTarget.root` stays a `PathBuf` for filesystem use and is only rendered
+    // as wire format where it is serialized, so the layout assertions below
+    // compare the rendered form rather than the host's spelling.
+    use crate::core::fs::artifact_path;
+
     fn groups() -> Vec<Group> {
         vec![
             Group {
@@ -117,10 +122,7 @@ mod tests {
             skill_path_b: None,
         });
         assert_eq!(targets.len(), 4, "2 groups × 2 conditions");
-        let roots: Vec<String> = targets
-            .iter()
-            .map(|t| t.root.to_string_lossy().into_owned())
-            .collect();
+        let roots: Vec<String> = targets.iter().map(|t| artifact_path(&t.root)).collect();
         assert_eq!(
             roots,
             vec![
@@ -174,7 +176,7 @@ mod tests {
         assert_eq!(
             targets
                 .iter()
-                .map(|target| target.root.to_string_lossy().into_owned())
+                .map(|target| artifact_path(&target.root))
                 .collect::<Vec<_>>(),
             vec![
                 "/w/iteration-1/env-g1-with_skill-run-1",

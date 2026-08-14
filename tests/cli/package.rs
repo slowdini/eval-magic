@@ -119,7 +119,12 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         if path.extension().and_then(|value| value.to_str()) != Some("md") {
             continue;
         }
-        let relative = path.strip_prefix(repo_root()).unwrap().to_string_lossy();
+        // `cargo package --list` prints forward slashes on every platform.
+        let relative = path
+            .strip_prefix(repo_root())
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         assert!(
             files.lines().any(|line| line == relative),
             "{relative} should be packaged"

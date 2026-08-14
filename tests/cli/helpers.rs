@@ -19,5 +19,12 @@ pub fn skill_eval() -> Command {
 pub fn canonical_root() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let root = fs::canonicalize(tmp.path()).unwrap();
+    // `canonicalize` returns a verbatim (`\\?\`) path on Windows, but a child
+    // process launched with it reports the plain form as its cwd — so paths the
+    // CLI emits would never match ones a test joins onto this root.
+    let root = match root.to_string_lossy().strip_prefix(r"\\?\") {
+        Some(plain) => PathBuf::from(plain),
+        None => root,
+    };
     (tmp, root)
 }

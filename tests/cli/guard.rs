@@ -23,38 +23,43 @@ fn guard_subcommand_is_hidden_but_callable() {
         .success();
 }
 
-/// Write an armed guard marker scoping writes to `<allowed>`, and return its path.
-fn write_armed_marker(root: &std::path::Path, allowed: &std::path::Path) -> std::path::PathBuf {
-    let skills = root.join(".claude").join("skills");
+/// Write an armed guard marker scoping writes to `<allowed>` under
+/// `<root>/<namespace>/skills`, and return its path.
+///
+/// Serialized rather than string-interpolated: a Windows path embeds `\U`,
+/// `\A`, `\T` — none of them valid JSON escapes — so a `format!`-built marker
+/// is malformed, the guard reads it as absent, and every assertion below
+/// silently passes through the fail-open path instead of testing anything.
+fn write_marker_in(
+    root: &std::path::Path,
+    namespace: &str,
+    allowed: &std::path::Path,
+) -> std::path::PathBuf {
+    let skills = root.join(namespace).join("skills");
     fs::create_dir_all(&skills).unwrap();
     let marker = skills.join(".slow-powers-eval-guard.json");
     fs::write(
         &marker,
-        format!(
-            r#"{{ "active": true, "allowedRoots": ["{}"], "expiresAt": "2999-01-01T00:00:00.000Z" }}"#,
-            allowed.display()
-        ),
+        serde_json::to_string(&serde_json::json!({
+            "active": true,
+            "allowedRoots": [allowed.to_string_lossy()],
+            "expiresAt": "2999-01-01T00:00:00.000Z",
+        }))
+        .unwrap(),
     )
     .unwrap();
     marker
+}
+
+fn write_armed_marker(root: &std::path::Path, allowed: &std::path::Path) -> std::path::PathBuf {
+    write_marker_in(root, ".claude", allowed)
 }
 
 fn write_codex_armed_marker(
     root: &std::path::Path,
     allowed: &std::path::Path,
 ) -> std::path::PathBuf {
-    let skills = root.join(".agents").join("skills");
-    fs::create_dir_all(&skills).unwrap();
-    let marker = skills.join(".slow-powers-eval-guard.json");
-    fs::write(
-        &marker,
-        format!(
-            r#"{{ "active": true, "allowedRoots": ["{}"], "expiresAt": "2999-01-01T00:00:00.000Z" }}"#,
-            allowed.display()
-        ),
-    )
-    .unwrap();
-    marker
+    write_marker_in(root, ".agents", allowed)
 }
 
 /// `guard` denies a Write outside the sandbox: it prints a PreToolUse deny verdict
@@ -256,18 +261,7 @@ fn write_opencode_armed_marker(
     root: &std::path::Path,
     allowed: &std::path::Path,
 ) -> std::path::PathBuf {
-    let skills = root.join(".opencode").join("skills");
-    fs::create_dir_all(&skills).unwrap();
-    let marker = skills.join(".slow-powers-eval-guard.json");
-    fs::write(
-        &marker,
-        format!(
-            r#"{{ "active": true, "allowedRoots": ["{}"], "expiresAt": "2999-01-01T00:00:00.000Z" }}"#,
-            allowed.display()
-        ),
-    )
-    .unwrap();
-    marker
+    write_marker_in(root, ".opencode", allowed)
 }
 
 /// `guard-hook --harness opencode` round-trip, fed the exact payload shape
@@ -363,11 +357,14 @@ fn teardown_guard_removes_an_installed_opencode_plugin() {
     fs::write(&plugin, "// staged plugin\n").unwrap();
     fs::write(
         skills.join(".slow-powers-eval-guard-manifest.json"),
-        format!(
-            r#"{{ "created_at": "2026-07-23T00:00:00.000Z", "settings_path": "{}", "settings_existed": false, "settings_backup": null, "marker_path": "{}" }}"#,
-            plugin.display(),
-            marker.display()
-        ),
+        serde_json::to_string(&serde_json::json!({
+            "created_at": "2026-07-23T00:00:00.000Z",
+            "settings_path": plugin.to_string_lossy(),
+            "settings_existed": false,
+            "settings_backup": null,
+            "marker_path": marker.to_string_lossy(),
+        }))
+        .unwrap(),
     )
     .unwrap();
 
