@@ -35,18 +35,24 @@ pub(super) fn write_dispatch(
     r: &Resolved,
     staged: &Staged,
 ) -> Result<usize, RunError> {
+    // `conditions.json` is echoed into `dispatch.json` beside the tasks, which
+    // carry the same skill path — spelling it differently in the two places
+    // would put one field in two forms in one file.
+    let condition_skill_path = |path: &Option<String>| -> Option<String> {
+        path.as_deref().map(|p| artifact_path(Path::new(p)))
+    };
     let conditions = ConditionsRecord {
         mode: r.mode,
         baseline: r.baseline.clone(),
         conditions: vec![
             ConditionEntry {
                 name: r.cond_a.to_string(),
-                skill_path: r.skill_path_a.clone(),
+                skill_path: condition_skill_path(&r.skill_path_a),
                 staged_skill_slug: Some(staged.cond_a_slug.clone()),
             },
             ConditionEntry {
                 name: r.cond_b.to_string(),
-                skill_path: r.skill_path_b.clone(),
+                skill_path: condition_skill_path(&r.skill_path_b),
                 staged_skill_slug: Some(staged.cond_b_slug.clone()),
             },
         ],

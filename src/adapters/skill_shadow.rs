@@ -10,9 +10,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use crate::core::fs::artifact_path;
-
 use serde::{Deserialize, Serialize};
+
+use crate::core::fs::artifact_path;
 
 mod artifact;
 mod resolution;

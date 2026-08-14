@@ -165,10 +165,10 @@ mod tests {
         );
     }
 
-    /// The bug this exists for: `Path::join` on a POSIX-rooted base emits a
-    /// Windows separator, so a manifest entry reads `/work/cond\run.json`. The
-    /// verbatim `\\?\` prefix `canonicalize` returns is stripped too — it is an
-    /// OS-level escape hatch, not something an agent should ever be handed.
+    /// `Path::join` on a POSIX-rooted base emits a Windows separator, so a
+    /// manifest entry would otherwise read `/work/cond\run.json`. A verbatim
+    /// `\\?\` prefix is stripped too — it is an OS-level escape hatch, not
+    /// something an agent should ever be handed.
     #[cfg(windows)]
     #[test]
     fn artifact_path_rewrites_windows_separators_and_strips_verbatim_prefixes() {

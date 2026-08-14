@@ -23,12 +23,10 @@ fn nested_read(prompt_path: &str, result: &str) -> TranscriptSummary {
     }
 }
 
-/// The dispatch records the prompt path as forward-slash wire format; the
-/// harness transcript echoes back whatever the agent's host spelled, which on
-/// Windows is the same path with backslashes. The two must still match, and the
-/// args have to be compared as *data*: serializing them to JSON re-escapes each
-/// separator to `\\`, so a raw-path `contains` over the serialized text can
-/// never match and the guard silently stops firing.
+/// The dispatch records the prompt path as forward-slash wire format while the
+/// harness transcript echoes back the agent's host spelling, so the two must
+/// still match — and the args have to be compared as data, since serializing
+/// them re-escapes each Windows separator to `\\`.
 #[test]
 fn flags_a_failed_read_when_dispatch_and_transcript_spell_the_path_differently() {
     let summary = nested_read(

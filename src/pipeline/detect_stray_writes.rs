@@ -184,11 +184,9 @@ pub fn detect_live_source_reads(
 ) -> Vec<StrayFinding> {
     let mut findings = Vec::new();
     let live_dir = lexically_absolute(live_skill_dir);
-    // Both sides of the shell-command comparison below are separator-normalized:
-    // the live directory is a host path, the command is whatever the agent
-    // typed, and on Windows those disagree. Left raw, an arm could read the live
-    // source and still come back clean — a contaminated arm reported as
-    // comparable data.
+    // Normalized for the shell-command comparison below: the live directory is a
+    // host path while the command is whatever the agent typed, so on Windows the
+    // two spell the same directory differently.
     let live_dir_str = normalize_separators(&live_dir.to_string_lossy());
     let rel = path_relative(repo_root, &live_dir);
     let rel_usable = !rel.starts_with("..");
@@ -774,11 +772,9 @@ mod tests {
         assert_eq!(f.len(), 1);
     }
 
-    /// The live directory is recorded as a host path while the command is
-    /// whatever the agent typed, and on Windows those two disagree by
-    /// separator. Comparing them raw meant an arm could read the live source
-    /// and the stray-write report still came back clean — a silent
-    /// eval-validity hole, since a contaminated arm is not comparable data.
+    /// A contaminated arm is not comparable data, so the scan has to hold when
+    /// the command spells the live directory with the other separator — which
+    /// on Windows is every command, since the recorded directory is a host path.
     #[test]
     fn a_bash_spelling_the_live_dir_with_the_other_separator_is_flagged() {
         let f = detect_live_source_reads(

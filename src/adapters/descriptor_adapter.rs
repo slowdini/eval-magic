@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use regex::Regex;
 
+use crate::core::fs::artifact_path;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
@@ -492,7 +493,9 @@ impl HarnessAdapter for DescriptorAdapter {
 
     fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
         let template = self.descriptor.dispatch.judge_command_template.as_ref()?;
-        let cwd = ctx.iteration_dir.display().to_string();
+        // Embedded in a shell command line, so it carries the wire-format
+        // spelling every other generated path uses.
+        let cwd = artifact_path(ctx.iteration_dir);
         let command_line = subst(
             template,
             // Judges run from the iteration metadata directory, outside every
