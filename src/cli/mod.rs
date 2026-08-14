@@ -112,6 +112,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         Commands::Guard { marker } => run_guard(marker),
         Commands::GuardCodex { marker } => run_guard_codex(marker),
         Commands::GuardHook { harness, marker } => run_guard_hook(&harness, marker),
+        Commands::Fixture(args) => run_fixture(args),
         Commands::RecordRuns(args) => run_record_runs(args),
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),

@@ -15,44 +15,58 @@ fn check(command: &str) -> AssertionCommandCheck {
     }
 }
 
-#[cfg(unix)]
+/// A `__fixture` invocation as a shell command line.
+///
+/// `execute_command_check` hands the string to the platform shell, so it has to
+/// parse identically under `sh -c` and `cmd /C`. A double-quoted program path
+/// followed by double-quoted arguments does: both shells strip the quotes and
+/// hand the tokens to the program unchanged. Writing one command per shell
+/// dialect instead invites silent divergence — `printf x` and `echo x` do not
+/// agree on the trailing newline.
+fn fixture(args: &[&str]) -> String {
+    let exe = assert_cmd::cargo::cargo_bin("eval-magic");
+    assert!(
+        exe.is_file(),
+        "the __fixture command needs the eval-magic binary at {}; \
+         run `cargo test`, which builds bins, or `cargo build` first",
+        exe.display()
+    );
+    let mut command = format!("\"{}\" __fixture", exe.display());
+    for arg in args {
+        command.push_str(&format!(" \"{arg}\""));
+    }
+    command
+}
+
 fn exit_command(code: i32) -> String {
-    format!("exit {code}")
+    fixture(&["--exit", &code.to_string()])
 }
 
-#[cfg(windows)]
-fn exit_command(code: i32) -> String {
-    format!("exit /B {code}")
+fn output_command() -> String {
+    fixture(&["--text", "hello world", "--stderr", "diagnostic"])
 }
 
-#[cfg(unix)]
-fn output_command() -> &'static str {
-    "printf 'hello world\\n'; printf 'diagnostic\\n' >&2"
+/// Echoes the override so the test can assert the child saw it. The `PATH`
+/// requirement keeps the check honest: a child handed an empty environment
+/// would echo an empty value and look like a pass.
+fn environment_output_command() -> String {
+    fixture(&[
+        "--require-env",
+        "PATH",
+        "--echo-env",
+        "EVAL_MAGIC_TEST_VALUE",
+    ])
 }
 
-#[cfg(windows)]
-fn output_command() -> &'static str {
-    "echo hello world & echo diagnostic 1>&2"
-}
-
-#[cfg(unix)]
-fn environment_output_command() -> &'static str {
-    "test -n \"$PATH\" && printf '%s' \"$EVAL_MAGIC_TEST_VALUE\""
-}
-
-#[cfg(windows)]
-fn environment_output_command() -> &'static str {
-    "if defined PATH (echo|set /p=\"%EVAL_MAGIC_TEST_VALUE%\") else (exit /B 1)"
-}
-
-#[cfg(unix)]
-fn append_command() -> &'static str {
-    "test -f holdout/secret.txt && printf x >> command-runs.txt"
-}
-
-#[cfg(windows)]
-fn append_command() -> &'static str {
-    "if exist holdout\\secret.txt (echo x>>command-runs.txt) else (exit /B 1)"
+fn append_command() -> String {
+    fixture(&[
+        "--require-file",
+        "holdout/secret.txt",
+        "--text",
+        "x",
+        "--append",
+        "command-runs.txt",
+    ])
 }
 
 fn evals(command: &str) -> EvalsConfig {
@@ -120,10 +134,23 @@ fn expected_and_unexpected_exit_codes_are_assertion_results() {
     assert!(failed.evidence.contains("got 3"));
 }
 
+/// An eval author's `command_check` reaches the shell with its own quoting
+/// intact. Windows makes this easy to get wrong: Rust escapes a command's
+/// embedded quotes as `\"`, which `cmd.exe` does not understand, so a quoted
+/// argument silently arrives split at the space.
+#[test]
+fn command_reaches_the_platform_shell_with_its_quoting_intact() {
+    let root = tempfile::TempDir::new().unwrap();
+    let result =
+        execute_command_check(&check(&fixture(&["--text", "spaced value"])), root.path()).unwrap();
+    assert!(result.passed, "{}", result.evidence);
+    assert_eq!(result.stdout, "spaced value");
+}
+
 #[test]
 fn stdout_regex_must_match_complete_lossy_stdout() {
     let root = tempfile::TempDir::new().unwrap();
-    let mut passing = check(output_command());
+    let mut passing = check(&output_command());
     passing.expect_stdout = Some("hello\\s+world".into());
     assert!(execute_command_check(&passing, root.path()).unwrap().passed);
 
@@ -136,7 +163,7 @@ fn stdout_regex_must_match_complete_lossy_stdout() {
 #[test]
 fn command_environment_overrides_are_visible_to_the_child_process() {
     let root = tempfile::TempDir::new().unwrap();
-    let mut assertion = check(environment_output_command());
+    let mut assertion = check(&environment_output_command());
     assertion.env = Some(std::collections::BTreeMap::from([(
         "EVAL_MAGIC_TEST_VALUE".into(),
         "configured".into(),
@@ -148,17 +175,21 @@ fn command_environment_overrides_are_visible_to_the_child_process() {
     assert_eq!(result.stdout, "configured");
 }
 
-#[cfg(unix)]
 #[test]
 fn command_checks_clear_inherited_git_routing_before_explicit_overlays() {
     const CHILD_MARKER: &str = "EVAL_MAGIC_GIT_ENV_CHILD";
     if std::env::var_os(CHILD_MARKER).is_some() {
         let root = tempfile::TempDir::new().unwrap();
-        let inherited =
-            execute_command_check(&check("printf '%s' \"${GIT_DIR-unset}\""), root.path()).unwrap();
+        // `--default unset` distinguishes a cleared variable from one set to the
+        // empty string, which is the property `clear_git_environment` promises.
+        let inherited = execute_command_check(
+            &check(&fixture(&["--echo-env", "GIT_DIR", "--default", "unset"])),
+            root.path(),
+        )
+        .unwrap();
         assert_eq!(inherited.stdout, "unset");
 
-        let mut restored = check("printf '%s' \"$GIT_DIR\"");
+        let mut restored = check(&fixture(&["--echo-env", "GIT_DIR"]));
         restored.env = Some(std::collections::BTreeMap::from([(
             "GIT_DIR".into(),
             "/declared/repository.git".into(),
@@ -215,7 +246,7 @@ fn invalid_direct_environment_configuration_returns_an_error_instead_of_panickin
 #[test]
 fn stdout_expectation_is_applied_to_every_matrix_cell() {
     let root = tempfile::TempDir::new().unwrap();
-    let mut assertion = check(environment_output_command());
+    let mut assertion = check(&environment_output_command());
     assertion.matrix = Some(std::collections::BTreeMap::from([(
         "EVAL_MAGIC_TEST_VALUE".into(),
         vec!["expected".into(), "unexpected".into()],
@@ -266,14 +297,26 @@ fn matrix_environment_expansion_is_deterministic_and_overrides_fixed_values() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn matrix_runs_every_cartesian_cell_in_deterministic_order_and_reports_results() {
     let root = tempfile::TempDir::new().unwrap();
-    let mut assertion = check(
-        "printf '%s|%s|%s\\n' \"$FIXED\" \"$LOCALE\" \"$TZ\" >> matrix-runs.txt; \
-         test \"$TZ\" != Europe/Berlin",
-    );
+    // The append must happen for every cell, including the ones that fail —
+    // `matrix-runs.txt` is the evidence that all four ran, and in what order.
+    let mut assertion = check(&fixture(&[
+        "--echo-env",
+        "FIXED",
+        "--echo-env",
+        "LOCALE",
+        "--echo-env",
+        "TZ",
+        "--separator",
+        "|",
+        "--newline",
+        "--append",
+        "matrix-runs.txt",
+        "--require-env",
+        "TZ=UTC",
+    ]));
     assertion.env = Some(std::collections::BTreeMap::from([
         ("FIXED".into(), "configured".into()),
         ("TZ".into(), "base".into()),
@@ -322,7 +365,7 @@ fn matrix_runs_every_cartesian_cell_in_deterministic_order_and_reports_results()
 #[test]
 fn invalid_stdout_regex_is_a_failed_assertion_with_evidence() {
     let root = tempfile::TempDir::new().unwrap();
-    let mut assertion = check(output_command());
+    let mut assertion = check(&output_command());
     assertion.expect_stdout = Some("(".into());
 
     let result = execute_command_check(&assertion, root.path()).unwrap();
@@ -333,19 +376,17 @@ fn invalid_stdout_regex_is_a_failed_assertion_with_evidence() {
 #[test]
 fn stdout_and_stderr_diagnostics_are_retained_and_capped_at_two_kib() {
     let root = tempfile::TempDir::new().unwrap();
-    let result = execute_command_check(&check(output_command()), root.path()).unwrap();
+    let result = execute_command_check(&check(&output_command()), root.path()).unwrap();
     assert!(result.stdout.contains("hello world"));
     assert!(result.stderr.contains("diagnostic"));
     assert!(result.stdout.len() <= 2048);
     assert!(result.stderr.len() <= 2048);
 }
 
-#[cfg(unix)]
 #[test]
 fn stdout_regex_uses_complete_output_before_diagnostics_are_truncated() {
     let root = tempfile::TempDir::new().unwrap();
-    let mut assertion =
-        check("i=0; while [ \"$i\" -lt 3000 ]; do printf x; i=$((i + 1)); done; printf TAIL");
+    let mut assertion = check(&fixture(&["--pad", "3000", "--text", "TAIL"]));
     assertion.expect_stdout = Some("TAIL$".into());
     let result = execute_command_check(&assertion, root.path()).unwrap();
     assert!(result.passed);
@@ -353,9 +394,29 @@ fn stdout_regex_uses_complete_output_before_diagnostics_are_truncated() {
     assert!(!result.stdout.contains("TAIL"));
 }
 
-#[cfg(unix)]
+/// The evidence wording is host-independent even though reading a signal is
+/// not, so it is pinned on every platform rather than only where signals exist.
+#[test]
+fn termination_message_names_the_signal_when_there_is_one() {
+    assert_eq!(
+        termination_message(Some(15)),
+        "command terminated by signal 15"
+    );
+    assert_eq!(
+        termination_message(None),
+        "command terminated without an exit code"
+    );
+}
+
 #[test]
 fn signal_termination_is_an_ordinary_failed_assertion() {
+    // Windows has no signals: a child always reports an exit code, so there is
+    // no way to reach the no-code path from the outside. The wording it would
+    // produce is pinned by `termination_message_names_the_signal_when_there_is_one`
+    // instead, which runs everywhere.
+    if cfg!(windows) {
+        return;
+    }
     let root = tempfile::TempDir::new().unwrap();
     let result = execute_command_check(&check("kill -TERM $$"), root.path()).unwrap();
     assert!(!result.passed);
@@ -376,7 +437,7 @@ fn persisted_results_are_reused_and_overwrite_reruns_in_declaration_order() {
     assert!(!eval_root.join("holdout/secret.txt").exists());
 
     let first =
-        grade_command_checks(&iteration_dir, &evals(append_command()), &skill_dir, false).unwrap();
+        grade_command_checks(&iteration_dir, &evals(&append_command()), &skill_dir, false).unwrap();
     assert_eq!(first.executed, 1);
     assert_eq!(first.reused, 0);
     assert_eq!(
@@ -391,7 +452,7 @@ fn persisted_results_are_reused_and_overwrite_reruns_in_declaration_order() {
     assert!(result_path.exists());
 
     let reused =
-        grade_command_checks(&iteration_dir, &evals(append_command()), &skill_dir, false).unwrap();
+        grade_command_checks(&iteration_dir, &evals(&append_command()), &skill_dir, false).unwrap();
     assert_eq!(reused.executed, 0);
     assert_eq!(reused.reused, 1);
     assert_eq!(
@@ -400,7 +461,7 @@ fn persisted_results_are_reused_and_overwrite_reruns_in_declaration_order() {
     );
 
     let overwritten =
-        grade_command_checks(&iteration_dir, &evals(append_command()), &skill_dir, true).unwrap();
+        grade_command_checks(&iteration_dir, &evals(&append_command()), &skill_dir, true).unwrap();
     assert_eq!(overwritten.executed, 1);
     assert_eq!(overwritten.reused, 0);
     assert_eq!(
@@ -420,7 +481,7 @@ fn persisted_matrix_results_are_schema_gated_and_reused() {
     fs::write(skill_dir.join("evals/holdout/secret.txt"), "held out").unwrap();
     write_dispatch(&iteration_dir, &eval_root, false);
 
-    let mut config = evals(append_command());
+    let mut config = evals(&append_command());
     let crate::core::Assertion::CommandCheck(check) = config.evals[0]
         .assertions
         .as_mut()
@@ -474,14 +535,13 @@ fn shared_eval_root_is_rejected_with_fresh_iteration_guidance() {
     fs::write(skill_dir.join("evals/holdout/secret.txt"), "held out").unwrap();
     write_dispatch(&iteration_dir, &eval_root, true);
 
-    let error = grade_command_checks(&iteration_dir, &evals("true"), &skill_dir, false)
+    let error = grade_command_checks(&iteration_dir, &evals(&exit_command(0)), &skill_dir, false)
         .unwrap_err()
         .to_string();
     assert!(error.contains("shares eval_root"), "{error}");
     assert!(error.contains("fresh iteration"), "{error}");
 }
 
-#[cfg(unix)]
 #[test]
 fn multiple_checks_execute_in_declaration_order_against_one_env() {
     let root = tempfile::TempDir::new().unwrap();
@@ -501,12 +561,12 @@ fn multiple_checks_execute_in_declaration_order_against_one_env() {
                 {
                     "id": "first",
                     "type": "command_check",
-                    "command": "printf ready > state.txt"
+                    "command": fixture(&["--text", "ready", "--write", "state.txt"])
                 },
                 {
                     "id": "second",
                     "type": "command_check",
-                    "command": "test \"$(cat state.txt)\" = ready"
+                    "command": fixture(&["--require-file-text", "state.txt", "ready"])
                 }
             ]
         }]

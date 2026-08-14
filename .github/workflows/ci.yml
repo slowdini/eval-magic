@@ -30,6 +30,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
+        # Capability-gated tests (the POSIX recipe pipelines, symlink round-trips)
+        # skip with a printed reason on a host that lacks the tool. This turns
+        # every such skip into a failure, so CI can never quietly stop covering
+        # them. Ubuntu runners ship jq, xargs, tr, and wc.
+        env:
+          EVAL_MAGIC_REQUIRE_POSIX_TOOLS: 1
         run: cargo test --all-targets
       - name: Build release
         run: cargo build --release

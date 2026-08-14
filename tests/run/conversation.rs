@@ -3,14 +3,8 @@
 use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
-// Every `#[cfg(unix)]` import below exists solely for
-// `dispatch_task_runs_all_scripted_turns_in_one_native_session` — see the note on that test.
-#[cfg(unix)]
 use serde_json::Value;
 use std::fs;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
 use std::path::Path;
 
 #[test]
@@ -69,10 +63,11 @@ fn multi_turn_eval_dispatch_records_followups_and_conversation_artifact_path() {
     }
 }
 
-// The harness stub below is a `#!/bin/sh` script invoked directly through the descriptor's
-// exec_template, which needs both a POSIX shell and an executable bit. Windows has neither, so the
-// scripted-turn path is covered on Unix only until a portable stub replaces it.
-#[cfg(unix)]
+// The harness stub below is a POSIX shell script, because that is what a real `exec_template` is —
+// every descriptor in `harnesses/` ships one (`</dev/null`, `\` continuations, `>` redirection).
+// The driver resolves an `sh` on every host, and the template invokes the stub *through* that `sh`
+// rather than executing it directly, so no executable bit is involved and the scripted-turn path is
+// covered everywhere.
 #[test]
 fn dispatch_task_runs_all_scripted_turns_in_one_native_session() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -143,19 +138,17 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
 "#,
     )
     .unwrap();
-    let mut permissions = fs::metadata(&fixture).unwrap().permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(&fixture, permissions).unwrap();
 
     let dispatch_path = iteration_dir(&cwd).join("dispatch.json");
     let mut dispatch = read_json(&dispatch_path);
-    let fixture = fixture.to_string_lossy();
+    // `sh <stub>` rather than `<stub>`: the script needs no executable bit that
+    // way, and the shell running it is the one the driver already resolved.
+    let stub = format!("sh \"{}\"", fixture.to_string_lossy());
     dispatch["harness_descriptor"]["dispatch"]["exec_template"] =
-        serde_json::json!(format!("{fixture} <outputs_dir> initial <eval-root>"));
-    dispatch["harness_descriptor"]["conversation"]["resume_exec_template"] =
-        serde_json::json!(format!(
-            "{fixture} <outputs_dir> resume-<round> <eval-root> {{session_arg}} {{prompt_arg}}"
-        ));
+        serde_json::json!(format!("{stub} <outputs_dir> initial <eval-root>"));
+    dispatch["harness_descriptor"]["conversation"]["resume_exec_template"] = serde_json::json!(
+        format!("{stub} <outputs_dir> resume-<round> <eval-root> {{session_arg}} {{prompt_arg}}")
+    );
     fs::write(
         &dispatch_path,
         format!("{}\n", serde_json::to_string_pretty(&dispatch).unwrap()),

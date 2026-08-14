@@ -4,6 +4,8 @@
 //! Flags are intentionally permissive (mostly optional); each handler tightens
 //! them to what it actually requires (see the handlers in [`super::commands`]).
 
+use std::path::PathBuf;
+
 use clap::{Args, Parser, Subcommand};
 
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
@@ -203,7 +205,7 @@ pub(crate) enum HarnessCommands {
     ///
     /// With `--probe`, and only after every static check passes, also exercises
     /// the descriptor end-to-end: renders `dispatch.exec_template` with a
-    /// trivial prompt in a throwaway temp dir, runs it via `/bin/sh -c` from
+    /// trivial prompt in a throwaway temp dir, runs it via `sh -c` from
     /// the temp `eval_root`, and verifies `outputs/final-message.md` is
     /// recovered (non-empty). It additionally render-only-validates
     /// `parallel_command_template` and `judge_command_template` for
@@ -797,6 +799,12 @@ pub(crate) enum Commands {
         /// `<cwd>/.agents/skills/.slow-powers-eval-guard.json`.
         marker: Option<String>,
     },
+    /// Internal test fixture. A predictable child process for the suite to
+    /// spawn — one that exits with a chosen code, emits chosen bytes, or writes
+    /// a chosen file — so tests never reach for `sh`, `true`, or `printf`, none
+    /// of which exist under `cmd.exe`. Not for users; hidden from help.
+    #[command(hide = true, name = "__fixture")]
+    Fixture(FixtureArgs),
     /// Internal generic PreToolUse hook entry point. Invoked by the installed
     /// write-guard hook as `eval-magic guard-hook --harness <name> <marker>`,
     /// not by users; hidden from help. `guard` / `guard-codex` are frozen
@@ -811,4 +819,63 @@ pub(crate) enum Commands {
         /// `<skills_dir>/.slow-powers-eval-guard.json` under the cwd.
         marker: Option<String>,
     },
+}
+
+/// Flags for the hidden `__fixture` subcommand.
+///
+/// Each flag stands in for a POSIX construct a test would otherwise spawn.
+/// The fixture emits one output string built from `--pad`, then `--text`, then
+/// `--echo-env` (in that order, joined by `--separator`), sends it to stdout and
+/// optionally to `--write`/`--append`, and exits with `--exit` — or `1` when any
+/// `--require-*` check failed.
+///
+/// Requirements never suppress the effects. The matrix suites read their append
+/// log to prove every cell ran, including the cells expected to fail.
+#[derive(Debug, Args, Default)]
+pub struct FixtureArgs {
+    /// Exit code to leave with when every requirement holds.
+    #[arg(long, default_value_t = 0)]
+    pub exit: i32,
+    /// Literal output fragment; repeatable.
+    #[arg(long)]
+    pub text: Vec<String>,
+    /// Emit the value of this environment variable; repeatable.
+    #[arg(long = "echo-env")]
+    pub echo_env: Vec<String>,
+    /// Value emitted by `--echo-env` for a variable that is not set. Without it
+    /// an unset variable contributes an empty fragment.
+    #[arg(long)]
+    pub default: Option<String>,
+    /// Emit this many `x` bytes ahead of the other fragments, for exercising
+    /// output larger than the diagnostic truncation limit.
+    #[arg(long)]
+    pub pad: Option<usize>,
+    /// Joins the fragments. Empty by default.
+    #[arg(long, default_value = "")]
+    pub separator: String,
+    /// Terminate the emitted output with a newline.
+    #[arg(long)]
+    pub newline: bool,
+    /// Write this text to stderr.
+    #[arg(long = "stderr")]
+    pub stderr: Option<String>,
+    /// Also write the emitted output to this path, replacing it.
+    #[arg(long)]
+    pub write: Option<PathBuf>,
+    /// Also append the emitted output to this path.
+    #[arg(long)]
+    pub append: Option<PathBuf>,
+    /// Fail unless this path exists; repeatable.
+    #[arg(long = "require-file")]
+    pub require_file: Vec<PathBuf>,
+    /// Fail unless `<path>` holds exactly `<text>`.
+    #[arg(long = "require-file-text", num_args = 2, value_names = ["PATH", "TEXT"])]
+    pub require_file_text: Vec<String>,
+    /// Fail unless the variable is set (`NAME`) or holds a value (`NAME=VALUE`);
+    /// repeatable.
+    #[arg(long = "require-env")]
+    pub require_env: Vec<String>,
+    /// Fail unless the two paths hold identical bytes.
+    #[arg(long = "files-equal", num_args = 2, value_names = ["LEFT", "RIGHT"])]
+    pub files_equal: Option<Vec<PathBuf>>,
 }

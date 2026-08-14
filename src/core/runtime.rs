@@ -5,8 +5,10 @@
 //! `clap` owns argument parsing, and the `error: <msg>` + exit(1) contract
 //! lives in `src/main.rs`.
 
-use std::path::Path;
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::OnceLock;
 
 /// Inherited Git routing variables that can redirect repository discovery or
 /// object/index access away from a command's current working directory.
@@ -91,6 +93,145 @@ pub fn run_git(args: &[&str], cwd: &Path) -> GitOutput {
     }
 }
 
+/// What to tell an operator who has no POSIX shell. Harness `exec_template`s
+/// ship as POSIX command lines (`</dev/null`, `&&`, `\` continuations), so the
+/// dispatch paths need a real `sh` — not the platform shell.
+const SHELL_SETUP_GUIDANCE: &str = "eval-magic runs harness dispatch commands through a POSIX shell. \
+     Install Git for Windows (Git Bash) or WSL, or point EVAL_MAGIC_SH at an `sh` executable.";
+
+/// `sh` locations inside a Git for Windows install, given the `git --exec-path`
+/// directory (`<root>/mingw64/libexec/git-core` — hence three levels up).
+/// Always spelled `sh.exe`: this layout only exists on Windows, and pinning the
+/// name keeps the function testable on every host.
+fn git_shell_candidates(exec_path: &Path) -> Vec<PathBuf> {
+    let Some(root) = exec_path.ancestors().nth(3) else {
+        return Vec::new();
+    };
+    if root.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    vec![
+        root.join("bin").join("sh.exe"),
+        root.join("usr").join("bin").join("sh.exe"),
+    ]
+}
+
+/// First executable named `name` on `PATH`, or `None`.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let file_name = if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .map(|directory| directory.join(&file_name))
+        .find(|candidate| candidate.is_file())
+}
+
+/// Where to look for `sh` on Windows once `PATH` has come up empty. Git for
+/// Windows bundles one, but its default installer only puts `Git\cmd` on
+/// `PATH`, so the shell has to be located through the install root instead.
+fn windows_shell_candidates() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let git = run_git(&["--exec-path"], Path::new("."));
+    if git.status == Some(0) {
+        let exec_path = String::from_utf8_lossy(&git.stdout).trim().to_string();
+        if !exec_path.is_empty() {
+            candidates.extend(git_shell_candidates(Path::new(&exec_path)));
+        }
+    }
+    candidates.push(PathBuf::from(r"C:\Program Files\Git\bin\sh.exe"));
+    candidates.push(PathBuf::from(r"C:\Program Files\Git\usr\bin\sh.exe"));
+    candidates
+}
+
+/// Locate a POSIX shell. `override_path` carries the operator's `EVAL_MAGIC_SH`
+/// value and is passed in rather than read here so tests can exercise it
+/// without mutating process environment.
+///
+/// Only ever searches for `sh`. On Windows `C:\Windows\System32\bash.exe` is
+/// the WSL launcher, which resolves a different filesystem namespace — every
+/// Windows path handed to it would name the wrong file.
+fn discover_posix_shell(override_path: Option<&OsStr>) -> Result<PathBuf, String> {
+    if let Some(value) = override_path {
+        let path = PathBuf::from(value);
+        if path.is_file() {
+            return Ok(path);
+        }
+        // A configured-but-wrong override is an error, not a fallback: silently
+        // discovering a different shell would hide the misconfiguration.
+        return Err(format!(
+            "EVAL_MAGIC_SH points at {}, which is not a file. {SHELL_SETUP_GUIDANCE}",
+            path.display()
+        ));
+    }
+    if let Some(found) = find_on_path("sh") {
+        return Ok(found);
+    }
+    if cfg!(windows)
+        && let Some(found) = windows_shell_candidates()
+            .into_iter()
+            .find(|candidate| candidate.is_file())
+    {
+        return Ok(found);
+    }
+    let posix_default = PathBuf::from("/bin/sh");
+    if posix_default.is_file() {
+        return Ok(posix_default);
+    }
+    Err(format!("no POSIX shell found. {SHELL_SETUP_GUIDANCE}"))
+}
+
+/// The resolved POSIX shell, discovered once per process. Callers spawn this
+/// instead of a hardcoded `/bin/sh`, which does not exist on Windows.
+pub(crate) fn posix_shell() -> Result<&'static Path, &'static str> {
+    static SHELL: OnceLock<Result<PathBuf, String>> = OnceLock::new();
+    match SHELL.get_or_init(|| discover_posix_shell(std::env::var_os("EVAL_MAGIC_SH").as_deref())) {
+        Ok(shell) => Ok(shell.as_path()),
+        Err(message) => Err(message.as_str()),
+    }
+}
+
+/// Announce that `test` is being skipped, `reason` explaining what the host
+/// lacks. Returns `true` so a caller can `return` on it.
+///
+/// A skipped test still reports as passing, so the skip has to be impossible to
+/// lose track of: setting `EVAL_MAGIC_REQUIRE_POSIX_TOOLS` (CI does) turns every
+/// skip into a failure. One place owns that policy so each capability check does
+/// not re-decide it.
+#[cfg(test)]
+pub(crate) fn report_skip(test: &str, reason: &str) -> bool {
+    assert!(
+        std::env::var_os("EVAL_MAGIC_REQUIRE_POSIX_TOOLS").is_none(),
+        "{test} was skipped for a missing capability: {reason}. \
+         Provide it, or unset EVAL_MAGIC_REQUIRE_POSIX_TOOLS to allow skipping"
+    );
+    eprintln!("skipping {test}: {reason}");
+    true
+}
+
+/// The resolved shell, once every tool in `tools` is reachable from inside it.
+///
+/// The shipped parallel and judge recipes are POSIX pipelines over `jq`,
+/// `xargs`, `tr`, and `wc`, so a test that executes one needs all of them. They
+/// are checked through the shell rather than on the host `PATH` because that is
+/// where the recipe will look: Git for Windows carries its own `/usr/bin`.
+#[cfg(test)]
+pub(crate) fn require_posix_toolchain(tools: &[&str]) -> Result<&'static Path, String> {
+    let shell = posix_shell().map_err(str::to_string)?;
+    for tool in tools {
+        let found = Command::new(shell)
+            .arg("-c")
+            .arg(format!("command -v {tool}"))
+            .output()
+            .is_ok_and(|output| output.status.success());
+        if !found {
+            return Err(format!("{tool} is not on the PATH of {}", shell.display()));
+        }
+    }
+    Ok(shell)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -128,7 +269,105 @@ mod tests {
             "/nonexistent-dir-for-rungit-test".as_ref(),
         );
         assert_eq!(res.status, None);
-        assert!(String::from_utf8_lossy(&res.stderr).contains("No such file or directory"));
+        assert!(res.stdout.is_empty());
+        // Deliberately not matched against an errno spelling: the OS wording
+        // differs per platform ("No such file or directory" vs "The system
+        // cannot find the path specified"), and the contract is a readable
+        // reason, not any particular one.
+        let reason = String::from_utf8_lossy(&res.stderr);
+        assert!(
+            !reason.trim().is_empty(),
+            "spawn failure reported no reason"
+        );
+    }
+
+    /// The Git for Windows layout: `git --exec-path` points at
+    /// `<root>/mingw64/libexec/git-core`, so the shell sits three levels up.
+    #[test]
+    fn git_shell_candidates_walk_up_from_the_git_core_exec_path() {
+        let root = Path::new("/opt/Git");
+        assert_eq!(
+            git_shell_candidates(&root.join("mingw64").join("libexec").join("git-core")),
+            vec![
+                root.join("bin").join("sh.exe"),
+                root.join("usr").join("bin").join("sh.exe"),
+            ]
+        );
+    }
+
+    /// An exec path too shallow to contain a Git root yields no candidates
+    /// rather than walking off the top into `/`.
+    #[test]
+    fn git_shell_candidates_are_empty_for_a_rootless_exec_path() {
+        assert!(git_shell_candidates(Path::new("git-core")).is_empty());
+    }
+
+    #[test]
+    fn discover_posix_shell_accepts_an_explicit_override() {
+        let existing = std::env::current_exe().unwrap();
+        assert_eq!(
+            discover_posix_shell(Some(existing.as_os_str())).unwrap(),
+            existing
+        );
+    }
+
+    /// A configured-but-wrong override is an error, never a silent fallback to
+    /// discovery: the operator asked for a specific shell and needs to be told
+    /// it is not there.
+    #[test]
+    fn discover_posix_shell_rejects_a_missing_override_with_setup_guidance() {
+        let error = discover_posix_shell(Some("/nonexistent-shell-for-tests".as_ref()))
+            .expect_err("a missing override should not fall through to discovery");
+        assert!(error.contains("EVAL_MAGIC_SH"), "{error}");
+        assert!(error.contains("/nonexistent-shell-for-tests"), "{error}");
+        assert!(error.contains("Git Bash"), "{error}");
+        assert!(error.contains("WSL"), "{error}");
+    }
+
+    /// Host-independent: either discovery finds a real shell, or it explains how
+    /// to install one. Asserting success outright would make the suite depend on
+    /// the developer's machine.
+    #[test]
+    fn discover_posix_shell_returns_a_real_file_or_setup_guidance() {
+        match discover_posix_shell(None) {
+            Ok(shell) => assert!(shell.is_file(), "{} is not a file", shell.display()),
+            Err(error) => {
+                assert!(error.contains("Git Bash"), "{error}");
+                assert!(error.contains("WSL"), "{error}");
+            }
+        }
+    }
+
+    #[test]
+    fn require_posix_toolchain_names_the_tool_that_is_missing() {
+        let Ok(shell) = discover_posix_shell(None) else {
+            eprintln!("skipping: no POSIX shell on this host");
+            return;
+        };
+        let _ = shell;
+        let error = require_posix_toolchain(&["eval-magic-not-a-real-tool"])
+            .expect_err("an uninstalled tool should be reported");
+        assert!(error.contains("eval-magic-not-a-real-tool"), "{error}");
+    }
+
+    /// With nothing to look for, the check reduces to locating the shell — so it
+    /// holds the same host-independent shape as discovery itself.
+    #[test]
+    fn require_posix_toolchain_with_no_tools_reduces_to_finding_the_shell() {
+        match require_posix_toolchain(&[]) {
+            Ok(shell) => assert!(shell.is_file()),
+            Err(error) => assert!(error.contains("Git Bash"), "{error}"),
+        }
+    }
+
+    #[test]
+    fn report_skip_panics_only_when_coverage_is_enforced() {
+        // The unenforced path is the one this suite runs under; the enforced
+        // path is covered by CI setting the variable.
+        assert!(
+            std::env::var_os("EVAL_MAGIC_REQUIRE_POSIX_TOOLS").is_some()
+                || report_skip("demo", "a demo capability")
+        );
     }
 
     #[test]

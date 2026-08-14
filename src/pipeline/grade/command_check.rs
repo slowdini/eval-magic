@@ -353,8 +353,17 @@ fn execute_command_check_cell(
     };
     #[cfg(windows)]
     let mut command = {
+        use std::os::windows::process::CommandExt;
         let mut command = Command::new("cmd");
-        command.arg("/C").arg(&assertion.command);
+        // `raw_arg` plus `/S` and one wrapping pair of quotes is the only
+        // spelling that hands `cmd` the command verbatim. `arg` would escape the
+        // command's own quotes as `\"`, which `cmd` does not understand — a
+        // quoted argument arrives split at its spaces — and `/S` makes `cmd`
+        // strip exactly the wrapping pair rather than guessing.
+        command
+            .arg("/S")
+            .arg("/C")
+            .raw_arg(format!("\"{}\"", assertion.command));
         command
     };
 
@@ -423,18 +432,27 @@ fn execute_command_check_cell(
     })
 }
 
-#[cfg(unix)]
-fn termination_evidence(status: &ExitStatus) -> String {
-    use std::os::unix::process::ExitStatusExt;
-    match status.signal() {
+/// The evidence line for a child that ended without an exit code. Split from
+/// [`termination_evidence`] so the wording is pinned on every platform, leaving
+/// the per-OS arms below with nothing to do but read the signal.
+fn termination_message(signal: Option<i32>) -> String {
+    match signal {
         Some(signal) => format!("command terminated by signal {signal}"),
         None => "command terminated without an exit code".to_string(),
     }
 }
 
+#[cfg(unix)]
+fn termination_evidence(status: &ExitStatus) -> String {
+    use std::os::unix::process::ExitStatusExt;
+    termination_message(status.signal())
+}
+
+/// Windows has no signals — `ExitStatus::code()` is always `Some`, so this arm
+/// exists only to keep the caller platform-agnostic.
 #[cfg(windows)]
 fn termination_evidence(_status: &ExitStatus) -> String {
-    "command terminated without an exit code".to_string()
+    termination_message(None)
 }
 
 fn truncate_diagnostic(value: &str) -> String {
