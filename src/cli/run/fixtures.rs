@@ -38,11 +38,32 @@ fn claim_fixture_dest(
     Ok(false)
 }
 
+/// True for a path that is absolute under *either* platform's rules.
+///
+/// `Path::is_absolute` answers for the host only: Windows has no root without a
+/// drive, so `/etc/passwd` reads as relative there and slips past a bare
+/// `is_absolute` check — then `Path::join`'s root-replacing behavior lands it
+/// outside the env entirely. Eval configs are committed and run on every
+/// platform, so the verdict must not depend on which host reads them.
+///
+/// A drive-relative Windows path (`C:fixture.txt`) is only detectable where the
+/// parser produces a `Prefix` component, so it is caught on Windows and treated
+/// as an ordinary relative name elsewhere.
+fn is_absolute_on_any_platform(raw: &str) -> bool {
+    let path = Path::new(raw);
+    path.has_root()
+        || raw.starts_with('\\')
+        || matches!(
+            path.components().next(),
+            Some(std::path::Component::Prefix(_))
+        )
+}
+
 /// Reject a fixture path that is absolute or escapes `env/` via `..`, so a fixture
 /// always lands inside the isolated env.
 fn validate_fixture_rel(f: &str) -> Result<(), RunError> {
     let p = Path::new(f);
-    let escapes = p.is_absolute()
+    let escapes = is_absolute_on_any_platform(f)
         || p.components()
             .any(|c| matches!(c, std::path::Component::ParentDir));
     if escapes {
@@ -67,7 +88,7 @@ fn validate_fixture_rel(f: &str) -> Result<(), RunError> {
 /// so a leading `.git` component is not runner-owned metadata.
 fn validate_files_root_rel(root: &str) -> Result<(), RunError> {
     let path = Path::new(root);
-    let escapes = path.is_absolute()
+    let escapes = is_absolute_on_any_platform(root)
         || path
             .components()
             .any(|component| matches!(component, std::path::Component::ParentDir));
@@ -335,7 +356,16 @@ mod tests {
         fs::create_dir_all(skill_dir.join("evals")).unwrap();
         let env_root = tmp.path().join("env");
 
-        for bad in ["../escape.txt", "/etc/passwd", "a/../../b.txt"] {
+        // `\etc\passwd` is absolute on Windows and a legal filename on Unix.
+        // Eval configs are committed and run on every platform, so the verdict
+        // must not depend on which host reads them — a fixture that validates
+        // on Linux and escapes the env on Windows is the worst of both.
+        for bad in [
+            "../escape.txt",
+            "/etc/passwd",
+            "a/../../b.txt",
+            r"\etc\passwd",
+        ] {
             let ev = eval_with_files("e1", &[bad]);
             let mut claims = FixtureClaims::new();
             let err = copy_fixtures(&ev, &skill_dir, &env_root, &mut claims).unwrap_err();

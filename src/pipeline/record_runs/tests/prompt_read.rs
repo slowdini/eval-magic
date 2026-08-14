@@ -3,6 +3,60 @@
 
 use super::*;
 
+use crate::core::ToolInvocation;
+
+/// One invocation whose args reach the prompt path through a nested shape —
+/// cline's `read_files` puts it under `files[].path` — with `result` attached.
+fn nested_read(prompt_path: &str, result: &str) -> TranscriptSummary {
+    TranscriptSummary {
+        tool_invocations: vec![ToolInvocation {
+            name: "read_files".to_string(),
+            args: Some(json!({"files": [{"path": prompt_path}]})),
+            ordinal: 0,
+            result: Some(json!(result)),
+        }],
+        events: Vec::new(),
+        session_id: None,
+        total_tokens: None,
+        duration_ms: None,
+        final_text: None,
+    }
+}
+
+/// The dispatch records the prompt path as forward-slash wire format while the
+/// harness transcript echoes back the agent's host spelling, so the two must
+/// still match — and the args have to be compared as data, since serializing
+/// them re-escapes each Windows separator to `\\`.
+#[test]
+fn flags_a_failed_read_when_dispatch_and_transcript_spell_the_path_differently() {
+    let summary = nested_read(
+        r"C:\work\cond\outputs\dispatch-prompt.txt",
+        "<tool_use_error>File is outside the allowed working directory.</tool_use_error>",
+    );
+
+    assert!(prompt_read_failed(
+        &summary,
+        "C:/work/cond/outputs/dispatch-prompt.txt",
+        PROMPT_SENTINEL
+    ));
+}
+
+/// The same spelling mismatch must not turn a *successful* read into a skip:
+/// the result carries the sentinel, so the dispatch is real data.
+#[test]
+fn records_a_successful_read_when_dispatch_and_transcript_spell_the_path_differently() {
+    let summary = nested_read(
+        r"C:\work\cond\outputs\dispatch-prompt.txt",
+        &format!("     1→{PROMPT_SENTINEL}"),
+    );
+
+    assert!(!prompt_read_failed(
+        &summary,
+        "C:/work/cond/outputs/dispatch-prompt.txt",
+        PROMPT_SENTINEL
+    ));
+}
+
 #[test]
 fn flags_dispatch_whose_prompt_read_failed() {
     // A dispatch that couldn't read its prompt still exits 0 and emits a

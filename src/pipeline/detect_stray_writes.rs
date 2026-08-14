@@ -14,19 +14,19 @@
 //!   into the separate schema-gated `guard-denials.json` artifact, even when a
 //!   task has no `run.json`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
-use crate::core::fs::write_json;
+use crate::core::fs::{normalize_separators, write_json};
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::guard_denials::collect_guard_denials;
 use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
 use crate::sandbox::policy::classify_bash_with_cwd;
-use crate::sandbox::{is_shell_tool, is_under, is_write_tool, path_arg};
+use crate::sandbox::{is_shell_tool, is_under, is_write_tool, lexically_absolute, path_arg};
 use crate::validation::{SchemaName, validate_against_schema};
 
 /// A read-only tool carrying a target path argument, in any harness's
@@ -113,11 +113,6 @@ pub fn detect_stray_writes(
     findings
 }
 
-/// Lexically absolutize a path (no disk access). Mirrors node's `resolve()`.
-fn absolutize(p: &Path) -> PathBuf {
-    std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
 /// Node-style lexical `path.relative(from, to)` over absolute, normalized paths.
 /// Returns forward-slash-joined components; starts with `..` when `to` is not
 /// under `from`.
@@ -188,8 +183,11 @@ pub fn detect_live_source_reads(
     repo_root: &Path,
 ) -> Vec<StrayFinding> {
     let mut findings = Vec::new();
-    let live_dir = absolutize(live_skill_dir);
-    let live_dir_str = live_dir.to_string_lossy();
+    let live_dir = lexically_absolute(live_skill_dir);
+    // Normalized for the shell-command comparison below: the live directory is a
+    // host path while the command is whatever the agent typed, so on Windows the
+    // two spell the same directory differently.
+    let live_dir_str = normalize_separators(&live_dir.to_string_lossy());
     let rel = path_relative(repo_root, &live_dir);
     let rel_usable = !rel.starts_with("..");
     let config_dirs = all_config_dir_names();
@@ -212,8 +210,9 @@ pub fn detect_live_source_reads(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
-            if command.contains(live_dir_str.as_ref())
-                || (rel_usable && references_bare_rel(command, &rel, &config_dirs))
+            let normalized = normalize_separators(command);
+            if normalized.contains(&live_dir_str)
+                || (rel_usable && references_bare_rel(&normalized, &rel, &config_dirs))
             {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -771,6 +770,24 @@ mod tests {
             repo(),
         );
         assert_eq!(f.len(), 1);
+    }
+
+    /// A contaminated arm is not comparable data, so the scan has to hold when
+    /// the command spells the live directory with the other separator — which
+    /// on Windows is every command, since the recorded directory is a host path.
+    #[test]
+    fn a_bash_spelling_the_live_dir_with_the_other_separator_is_flagged() {
+        let f = detect_live_source_reads(
+            &[inv(
+                "Bash",
+                json!({"command": r"cat \work\repo\skills\mr-review\SKILL.md"}),
+                0,
+            )],
+            live(),
+            repo(),
+        );
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].tool, "Bash");
     }
 
     #[test]

@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::core::GIT_ROUTING_ENV_VARS;
+use crate::core::fs::artifact_path;
 
 use super::policy::{BashClassification, is_under_any, resolve_path};
 use super::shell_targets::{ShellToken, ShellWord, lex_shell};
@@ -54,8 +55,7 @@ fn routing_value_is_allowed(
         return false;
     }
     values.into_iter().all(|value| {
-        let resolved = resolve_path(&value, cwd);
-        resolved_targets.push(resolved.display().to_string());
+        resolved_targets.push(artifact_path(&resolve_path(&value, cwd)));
         is_under_any(&value, allowed_roots, cwd)
     })
 }

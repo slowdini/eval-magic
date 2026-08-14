@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::adapters::{CliDispatchContext, CliJudgeContext, RUNBOOK_TEMPLATE, adapter_for};
+use crate::core::fs::artifact_path;
 use crate::core::{Harness, Mode};
 
 use super::util::{harness_label, mode_str};
@@ -51,16 +52,8 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
 
     let iteration = ctx.iteration.to_string();
     let num_tasks = ctx.num_tasks.to_string();
-    let dispatch_json = ctx
-        .iteration_dir
-        .join("dispatch.json")
-        .display()
-        .to_string();
-    let benchmark_path = ctx
-        .iteration_dir
-        .join("benchmark.json")
-        .display()
-        .to_string();
+    let dispatch_json = artifact_path(&ctx.iteration_dir.join("dispatch.json"));
+    let benchmark_path = artifact_path(&ctx.iteration_dir.join("benchmark.json"));
 
     // Shared identity tokens, present in both templates.
     let mut vars: Vec<(&str, &str)> = vec![

@@ -429,17 +429,9 @@ fn guard_marker_scopes_allowed_roots_to_private_env() {
         .iter()
         .map(|root| root.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(
-        roots,
-        vec![
-            fs::canonicalize(&env)
-                .unwrap()
-                .to_string_lossy()
-                .into_owned()
-        ]
-    );
+    assert_eq!(roots, vec![resolved(&env).to_string_lossy().into_owned()]);
 
-    let iter = fs::canonicalize(iteration_dir(&cwd)).unwrap();
+    let iter = resolved(&iteration_dir(&cwd));
     assert!(
         !roots.iter().any(|root| iter.starts_with(root)),
         "allowedRoots {roots:?} must not cover the meta tree above env at {iter:?}"

@@ -169,15 +169,39 @@ fn collect_patch_header_paths(text: &str, out: &mut Vec<String>) {
     }
 }
 
+/// Lexically absolutize `path`, leaving a rooted-but-prefixless path
+/// (`/work/env`) exactly as given.
+///
+/// Such a path is absolute on POSIX, but on Windows a root without a drive is
+/// incomplete, so `std::path::absolute` grafts the process's current one. The
+/// paths on both sides of these comparisons come from *agent* tool calls and
+/// eval config, which spell them POSIX-style whatever the host is — grafting
+/// `C:` would stop `/dev/null` reading as a device and would put a path that
+/// never existed (`C:\etc\passwd`) into the evidence a denial records.
+///
+/// Every caller that compares or reports these paths has to apply this same
+/// rule — [`resolve_path`] here and the stray-write scanner's live-directory
+/// resolution — or one side gains a drive the other lacks and the comparison
+/// silently stops matching.
+pub(crate) fn lexically_absolute(path: &Path) -> PathBuf {
+    if path.has_root() && !path.is_absolute() {
+        return path.to_path_buf();
+    }
+    std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// Lexically absolutize a path: join onto `repo_root` if relative, then normalize.
 /// Mirrors node's `resolve()` — no symlink resolution or existence requirement.
 pub(crate) fn resolve_path(target: &str, repo_root: &Path) -> PathBuf {
-    let joined = if Path::new(target).is_absolute() {
+    let path = Path::new(target);
+    let joined = if path.has_root() {
         PathBuf::from(target)
     } else {
         repo_root.join(target)
     };
-    let absolute = std::path::absolute(&joined).unwrap_or(joined);
+    // Applied to the *joined* path, so a relative target under a POSIX-rooted
+    // `repo_root` resolves the same way its allowed roots do.
+    let absolute = lexically_absolute(&joined);
     let mut normalized = PathBuf::new();
     for component in absolute.components() {
         match component {
@@ -371,6 +395,40 @@ mod tests {
                 "src/new.rs".to_string(),
             ]
         );
+    }
+
+    /// The paths the guard classifies come from *agent* tool calls, which spell
+    /// them POSIX-style whatever the host is. Windows has no root without a
+    /// drive, so `std::path::absolute` grafts the process's current one —
+    /// turning `/dev/null` into `C:\dev\null`, which stops reading as a device
+    /// and starts reading as a file the guard must block.
+    #[test]
+    fn resolve_path_keeps_a_posix_rooted_target_rooted() {
+        let repo = Path::new("/work");
+        assert_eq!(resolve_path("/dev/null", repo), PathBuf::from("/dev/null"));
+        assert_eq!(
+            resolve_path("/etc/passwd", repo),
+            PathBuf::from("/etc/passwd")
+        );
+    }
+
+    /// Keeping the target rooted must not cost the lexical normalization that
+    /// stops `/dev/..` from laundering an out-of-bounds write past the device
+    /// check.
+    #[test]
+    fn resolve_path_normalizes_parent_segments_in_a_posix_rooted_target() {
+        assert_eq!(
+            resolve_path("/dev/../etc/passwd", Path::new("/work")),
+            PathBuf::from("/etc/passwd")
+        );
+    }
+
+    /// The containment verdict is what actually protects the sandbox: a
+    /// POSIX-rooted target is still outside a drive-rooted allowed root.
+    #[test]
+    fn is_under_denies_a_posix_rooted_target_against_a_drive_rooted_root() {
+        let env = r"C:\work\env";
+        assert!(!is_under("/etc/passwd", env, Path::new(env)));
     }
 
     #[test]
