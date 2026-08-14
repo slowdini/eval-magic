@@ -3,9 +3,14 @@
 use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
+// Every `#[cfg(unix)]` import below exists solely for
+// `dispatch_task_runs_all_scripted_turns_in_one_native_session` — see the note on that test.
+#[cfg(unix)]
 use serde_json::Value;
 use std::fs;
+#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
 use std::path::Path;
 
 #[test]
@@ -64,6 +69,10 @@ fn multi_turn_eval_dispatch_records_followups_and_conversation_artifact_path() {
     }
 }
 
+// The harness stub below is a `#!/bin/sh` script invoked directly through the descriptor's
+// exec_template, which needs both a POSIX shell and an executable bit. Windows has neither, so the
+// scripted-turn path is covered on Unix only until a portable stub replaces it.
+#[cfg(unix)]
 #[test]
 fn dispatch_task_runs_all_scripted_turns_in_one_native_session() {
     let tmp = tempfile::TempDir::new().unwrap();
