@@ -14,7 +14,7 @@
 //!   into the separate schema-gated `guard-denials.json` artifact, even when a
 //!   task has no `run.json`.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
@@ -26,7 +26,7 @@ use crate::pipeline::guard_denials::collect_guard_denials;
 use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
 use crate::sandbox::policy::classify_bash_with_cwd;
-use crate::sandbox::{is_shell_tool, is_under, is_write_tool, path_arg};
+use crate::sandbox::{is_shell_tool, is_under, is_write_tool, lexically_absolute, path_arg};
 use crate::validation::{SchemaName, validate_against_schema};
 
 /// A read-only tool carrying a target path argument, in any harness's
@@ -113,11 +113,6 @@ pub fn detect_stray_writes(
     findings
 }
 
-/// Lexically absolutize a path (no disk access). Mirrors node's `resolve()`.
-fn absolutize(p: &Path) -> PathBuf {
-    std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
-}
-
 /// Node-style lexical `path.relative(from, to)` over absolute, normalized paths.
 /// Returns forward-slash-joined components; starts with `..` when `to` is not
 /// under `from`.
@@ -188,7 +183,7 @@ pub fn detect_live_source_reads(
     repo_root: &Path,
 ) -> Vec<StrayFinding> {
     let mut findings = Vec::new();
-    let live_dir = absolutize(live_skill_dir);
+    let live_dir = lexically_absolute(live_skill_dir);
     let live_dir_str = live_dir.to_string_lossy();
     let rel = path_relative(repo_root, &live_dir);
     let rel_usable = !rel.starts_with("..");
