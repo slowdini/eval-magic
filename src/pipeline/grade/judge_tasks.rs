@@ -13,7 +13,7 @@ use std::path::Path;
 use serde::Serialize;
 use serde_json::json;
 
-use crate::core::fs::write_json;
+use crate::core::fs::{artifact_path, write_json};
 use crate::core::{Assertion, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::now_iso8601;
@@ -204,7 +204,7 @@ fn build_judge_prompt(
         "",
         "# Task",
         "",
-        &format!("Write your verdict as a JSON file to: {}", response_path.display()),
+        &format!("Write your verdict as a JSON file to: {}", artifact_path(response_path)),
         "",
         "The JSON must match this schema (exactly these keys, no extra prose in the file):",
         "",
@@ -312,10 +312,10 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                         rubric: j.rubric.clone(),
                         model: j.model.clone().or_else(|| default_judge_model.clone()),
                         is_meta: false,
-                        run_record_path: run_record_path.to_string_lossy().into_owned(),
-                        outputs_dir: outputs_dir.to_string_lossy().into_owned(),
-                        response_path: response_path.to_string_lossy().into_owned(),
-                        dispatch_prompt_path: prompt_path.to_string_lossy().into_owned(),
+                        run_record_path: artifact_path(&run_record_path),
+                        outputs_dir: artifact_path(&outputs_dir),
+                        response_path: artifact_path(&response_path),
+                        dispatch_prompt_path: artifact_path(&prompt_path),
                         dispatch_prompt,
                     });
                 }
@@ -373,10 +373,10 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                             rubric,
                             model: default_judge_model.clone(),
                             is_meta: true,
-                            run_record_path: run_record_path.to_string_lossy().into_owned(),
-                            outputs_dir: outputs_dir.to_string_lossy().into_owned(),
-                            response_path: response_path.to_string_lossy().into_owned(),
-                            dispatch_prompt_path: prompt_path.to_string_lossy().into_owned(),
+                            run_record_path: artifact_path(&run_record_path),
+                            outputs_dir: artifact_path(&outputs_dir),
+                            response_path: artifact_path(&response_path),
+                            dispatch_prompt_path: artifact_path(&prompt_path),
                             dispatch_prompt,
                         });
                         summary.meta_injected += 1;

@@ -2,12 +2,13 @@
 
 use std::path::Path;
 
+use crate::core::fs::artifact_path;
 use crate::sandbox::TASK_SCRATCH_DIR;
 
 pub(super) fn context(eval_root: &str) -> String {
     format!(
         "Task environment: {eval_root}\nTask-local scratch directory: {}",
-        Path::new(eval_root).join(TASK_SCRATCH_DIR).display()
+        artifact_path(&Path::new(eval_root).join(TASK_SCRATCH_DIR))
     )
 }
 

@@ -10,6 +10,8 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use crate::core::fs::artifact_path;
+
 use serde::{Deserialize, Serialize};
 
 mod artifact;
@@ -142,7 +144,7 @@ impl ShadowRoot {
             scope: ShadowRootScope::Project,
             namespace,
             plugin: None,
-            path: skills_dir.to_string_lossy().into_owned(),
+            path: artifact_path(skills_dir),
             relation: ShadowRelation::Native,
         }
     }
@@ -197,7 +199,7 @@ impl ShadowSource {
             runtime_id: skill_name.clone(),
             skill_name,
             plugin: None,
-            discovery_path: path.to_string_lossy().into_owned(),
+            discovery_path: artifact_path(path),
             canonical_path: canonical_path(path),
             root,
             appearances: Vec::new(),
@@ -220,7 +222,7 @@ impl ShadowSource {
             skill_name: skill_name.into(),
             runtime_id: runtime_id.into(),
             plugin: Some(plugin.into()),
-            discovery_path: path.to_string_lossy().into_owned(),
+            discovery_path: artifact_path(path),
             canonical_path: canonical_path(path),
             root,
             appearances: Vec::new(),
@@ -241,7 +243,7 @@ impl ShadowSource {
             skill_name: skill_name.into(),
             runtime_id: runtime_id.into(),
             plugin: None,
-            discovery_path: path.to_string_lossy().into_owned(),
+            discovery_path: artifact_path(path),
             canonical_path: canonical_path(path),
             root,
             appearances: Vec::new(),
@@ -286,10 +288,11 @@ impl ShadowSource {
     }
 }
 
+/// The resolved real path, rendered as wire format. `canonicalize` returns a
+/// verbatim (`\\?\`) path on Windows, which `artifact_path` strips — an OS
+/// escape hatch has no business in a report an agent and a reviewer both read.
 fn canonical_path(path: &Path) -> Option<String> {
-    path.canonicalize()
-        .ok()
-        .map(|path| path.to_string_lossy().into_owned())
+    path.canonicalize().ok().map(|path| artifact_path(&path))
 }
 
 /// Severity for one finding, given the cells its live sources appear in.

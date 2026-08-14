@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use crate::core::fs::artifact_path;
+
 use super::policy::{BashClassification, OUTPUT_REDIRECTION_REASON, is_under_any, resolve_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -345,7 +347,7 @@ fn record_literal_target(
     if is_non_file_device(&resolved) {
         return true;
     }
-    resolved_targets.push(resolved.display().to_string());
+    resolved_targets.push(artifact_path(&resolved));
     is_under_any(&word.value, allowed_roots, invocation_cwd)
 }
 
