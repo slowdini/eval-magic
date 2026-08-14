@@ -1,5 +1,10 @@
-//! Shared filesystem + JSON helpers — the single home for artifact writing and
-//! tree copying, used by `pipeline`, `workspace`, `cli::run`, and `sandbox`.
+//! Shared filesystem + JSON helpers — the single home for artifact writing,
+//! artifact path rendering, and tree copying, used by `pipeline`, `workspace`,
+//! `cli::run`, `adapters`, and `sandbox`.
+//!
+//! [`artifact_path`] renders a path into the forward-slash wire format every
+//! generated artifact carries; [`normalize_separators`] is its comparison-side
+//! counterpart, for matching a path spelled by a different host.
 //!
 //! Copying comes in two flavors. Pick by what the destination is *for*:
 //!
@@ -21,6 +26,49 @@ use std::io;
 use std::path::Path;
 
 use serde::Serialize;
+
+/// Render `path` as the forward-slash string an artifact, manifest, or prompt
+/// carries.
+///
+/// Artifact path fields are a wire format: agents read them, downstream tools
+/// join them, and the golden fixtures compare them byte for byte. `Path::join`
+/// plus `Display` emits the *host's* separator, so on Windows a POSIX-rooted
+/// base yields `/work/cond\run.json` — malformed for every reader. Forward
+/// slashes are accepted by the Windows file APIs, so the result stays openable
+/// by the stages that read these fields back.
+///
+/// The rewrite is Windows-only: a POSIX filename may legally contain a literal
+/// backslash, and rewriting it there would name a different file. A verbatim
+/// (`\\?\`) prefix — what `Path::canonicalize` returns on Windows — is stripped
+/// first, since it is an OS escape hatch rather than a path to hand an agent.
+///
+/// Not for paths handed to a process: a spawned command's argv and the guard
+/// hook command line must keep the host's own spelling.
+pub fn artifact_path(path: &Path) -> String {
+    let rendered = path.to_string_lossy();
+    if !cfg!(windows) {
+        return rendered.into_owned();
+    }
+    let unprefixed = match rendered.strip_prefix(r"\\?\UNC\") {
+        // Verbatim UNC collapses back to the `\\server\share` form; dropping
+        // the whole prefix would leave a bare `UNC\` component.
+        Some(rest) => format!(r"\\{rest}"),
+        None => rendered
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&rendered)
+            .to_string(),
+    };
+    normalize_separators(&unprefixed)
+}
+
+/// Rewrite Windows separators to forward slashes for *comparison*.
+///
+/// Unconditional, unlike [`artifact_path`]: this exists to match a foreign
+/// spelling — a path a Windows agent recorded, read back on any host — rather
+/// than to preserve the local one.
+pub fn normalize_separators(value: &str) -> String {
+    value.replace('\\', "/")
+}
 
 /// Write `value` to `path` as pretty JSON with a two-space indent and a
 /// trailing newline — the stable on-disk format for every artifact this binary
@@ -106,6 +154,67 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::TempDir;
+
+    /// A path already in wire form passes through unchanged on every host —
+    /// the fixtures and goldens that spell paths POSIX-style stay byte-stable.
+    #[test]
+    fn artifact_path_leaves_a_forward_slash_path_alone() {
+        assert_eq!(
+            artifact_path(Path::new("/work/cond/run.json")),
+            "/work/cond/run.json"
+        );
+    }
+
+    /// The bug this exists for: `Path::join` on a POSIX-rooted base emits a
+    /// Windows separator, so a manifest entry reads `/work/cond\run.json`. The
+    /// verbatim `\\?\` prefix `canonicalize` returns is stripped too — it is an
+    /// OS-level escape hatch, not something an agent should ever be handed.
+    #[cfg(windows)]
+    #[test]
+    fn artifact_path_rewrites_windows_separators_and_strips_verbatim_prefixes() {
+        assert_eq!(
+            artifact_path(Path::new(r"/work/cond\run.json")),
+            "/work/cond/run.json"
+        );
+        assert_eq!(
+            artifact_path(Path::new(r"C:\work\cond\run.json")),
+            "C:/work/cond/run.json"
+        );
+        assert_eq!(
+            artifact_path(Path::new(r"\\?\C:\work\run.json")),
+            "C:/work/run.json"
+        );
+        assert_eq!(
+            artifact_path(Path::new(r"\\?\UNC\host\share\run.json")),
+            "//host/share/run.json"
+        );
+    }
+
+    /// The rewrite is Windows-only: a POSIX filename may legally contain a
+    /// literal backslash, and rewriting it would name a different file.
+    #[cfg(unix)]
+    #[test]
+    fn artifact_path_preserves_a_literal_backslash_in_a_posix_filename() {
+        assert_eq!(
+            artifact_path(Path::new(r"/work/od\dity.json")),
+            r"/work/od\dity.json"
+        );
+    }
+
+    /// Comparison normalization is unconditional, unlike [`artifact_path`]: its
+    /// job is matching a *foreign* spelling — a Windows-recorded transcript read
+    /// on any host — rather than preserving the local one.
+    #[test]
+    fn normalize_separators_rewrites_backslashes_on_every_host() {
+        assert_eq!(
+            normalize_separators(r"C:\work\cond\run.json"),
+            "C:/work/cond/run.json"
+        );
+        assert_eq!(
+            normalize_separators("/work/cond/run.json"),
+            "/work/cond/run.json"
+        );
+    }
 
     /// The on-disk format is a contract: artifacts are diffed across runs and
     /// read by agents, so indent and the trailing newline are pinned.
