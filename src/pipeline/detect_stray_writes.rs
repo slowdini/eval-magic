@@ -19,7 +19,7 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
-use crate::core::fs::write_json;
+use crate::core::fs::{normalize_separators, write_json};
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::guard_denials::collect_guard_denials;
@@ -184,7 +184,12 @@ pub fn detect_live_source_reads(
 ) -> Vec<StrayFinding> {
     let mut findings = Vec::new();
     let live_dir = lexically_absolute(live_skill_dir);
-    let live_dir_str = live_dir.to_string_lossy();
+    // Both sides of the shell-command comparison below are separator-normalized:
+    // the live directory is a host path, the command is whatever the agent
+    // typed, and on Windows those disagree. Left raw, an arm could read the live
+    // source and still come back clean — a contaminated arm reported as
+    // comparable data.
+    let live_dir_str = normalize_separators(&live_dir.to_string_lossy());
     let rel = path_relative(repo_root, &live_dir);
     let rel_usable = !rel.starts_with("..");
     let config_dirs = all_config_dir_names();
@@ -207,8 +212,9 @@ pub fn detect_live_source_reads(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
-            if command.contains(live_dir_str.as_ref())
-                || (rel_usable && references_bare_rel(command, &rel, &config_dirs))
+            let normalized = normalize_separators(command);
+            if normalized.contains(&live_dir_str)
+                || (rel_usable && references_bare_rel(&normalized, &rel, &config_dirs))
             {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -766,6 +772,26 @@ mod tests {
             repo(),
         );
         assert_eq!(f.len(), 1);
+    }
+
+    /// The live directory is recorded as a host path while the command is
+    /// whatever the agent typed, and on Windows those two disagree by
+    /// separator. Comparing them raw meant an arm could read the live source
+    /// and the stray-write report still came back clean — a silent
+    /// eval-validity hole, since a contaminated arm is not comparable data.
+    #[test]
+    fn a_bash_spelling_the_live_dir_with_the_other_separator_is_flagged() {
+        let f = detect_live_source_reads(
+            &[inv(
+                "Bash",
+                json!({"command": r"cat \work\repo\skills\mr-review\SKILL.md"}),
+                0,
+            )],
+            live(),
+            repo(),
+        );
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].tool, "Bash");
     }
 
     #[test]

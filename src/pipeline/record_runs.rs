@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
-use crate::core::fs::write_json;
+use crate::core::fs::{normalize_separators, write_json};
 use crate::core::{
     ConversationEvent, ConversationRecord, Harness, RunRecord, TimingRecord, TimingSource,
 };
@@ -367,13 +367,14 @@ fn prompt_read_failed(summary: &TranscriptSummary, prompt_path: &str, sentinel: 
     if sentinel.is_empty() {
         return false;
     }
+    let needle = normalize_separators(prompt_path);
     let mut referenced = false;
     let mut delivered = false;
     for inv in &summary.tool_invocations {
         let mentions_prompt = inv
             .args
             .as_ref()
-            .is_some_and(|a| a.to_string().contains(prompt_path));
+            .is_some_and(|a| args_name_path(a, &needle));
         if !mentions_prompt {
             continue;
         }
@@ -386,6 +387,23 @@ fn prompt_read_failed(summary: &TranscriptSummary, prompt_path: &str, sentinel: 
         }
     }
     referenced && !delivered
+}
+
+/// True when any string leaf of a tool call's `args` names `needle`, which the
+/// caller has already separator-normalized.
+///
+/// Walked leaf by leaf rather than searched over `args.to_string()`: serializing
+/// to JSON escapes each Windows separator to `\\`, so the serialized text never
+/// contains the path as written and the search silently answered "no". Recursing
+/// also reaches nested shapes — cline's `read_files` carries the path at
+/// `files[].path` — which is why the serialized form was searched to begin with.
+fn args_name_path(args: &serde_json::Value, needle: &str) -> bool {
+    match args {
+        serde_json::Value::String(text) => normalize_separators(text).contains(needle),
+        serde_json::Value::Array(items) => items.iter().any(|item| args_name_path(item, needle)),
+        serde_json::Value::Object(map) => map.values().any(|value| args_name_path(value, needle)),
+        _ => false,
+    }
 }
 
 /// The dispatch prompt's distinctive first non-empty line, used as the sentinel
