@@ -96,14 +96,8 @@ pub fn copy_entry(source: &Path, destination: &Path) -> io::Result<()> {
     if metadata.file_type().is_symlink() {
         create_parent(destination)?;
         let target = fs::read_link(source)?;
-        #[cfg(unix)]
-        std::os::unix::fs::symlink(target, destination)?;
-        #[cfg(windows)]
-        if source.metadata().is_ok_and(|metadata| metadata.is_dir()) {
-            std::os::windows::fs::symlink_dir(target, destination)?;
-        } else {
-            std::os::windows::fs::symlink_file(target, destination)?;
-        }
+        let to_directory = source.metadata().is_ok_and(|metadata| metadata.is_dir());
+        create_symlink(&target, destination, to_directory)?;
     } else if metadata.is_dir() {
         fs::create_dir_all(destination)?;
         for entry in fs::read_dir(source)? {
@@ -141,6 +135,26 @@ pub fn copy_entry_materialized(source: &Path, destination: &Path) -> io::Result<
     Ok(())
 }
 
+/// Create a symlink at `link` pointing at `target`.
+///
+/// `to_directory` is consulted only on Windows, which has separate file and
+/// directory link kinds; POSIX has one. Creating a symlink there also needs
+/// either Developer Mode or elevation, so this can fail for reasons that have
+/// nothing to do with the paths involved.
+pub(crate) fn create_symlink(target: &Path, link: &Path, to_directory: bool) -> io::Result<()> {
+    #[cfg(unix)]
+    {
+        let _ = to_directory;
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(windows)]
+    if to_directory {
+        std::os::windows::fs::symlink_dir(target, link)
+    } else {
+        std::os::windows::fs::symlink_file(target, link)
+    }
+}
+
 /// Create `path`'s parent directory chain, when it has one.
 fn create_parent(path: &Path) -> io::Result<()> {
     match path.parent() {
@@ -155,6 +169,31 @@ mod tests {
     use serde_json::json;
     use tempfile::TempDir;
 
+    /// Whether this host lets the test process create a symlink at all.
+    ///
+    /// A capability, not a platform: Windows can create symlinks, but only under
+    /// Developer Mode or elevation. Probing beats gating on the OS — the tests
+    /// then run wherever the capability exists instead of wherever the OS name
+    /// matches.
+    fn symlinks_available(scratch: &Path) -> bool {
+        let target = scratch.join("probe-target.txt");
+        let link = scratch.join("probe-link.txt");
+        if fs::write(&target, "probe").is_err() {
+            return false;
+        }
+        create_symlink(&target, &link, false).is_ok()
+    }
+
+    /// Report a skipped symlink test, deferring to the shared skip policy so the
+    /// enforcement switch is decided in exactly one place.
+    fn skip_without_symlinks(scratch: &Path, test: &str) -> bool {
+        !symlinks_available(scratch)
+            && crate::core::runtime::report_skip(
+                test,
+                "this host does not permit symlink creation (Windows needs Developer Mode)",
+            )
+    }
+
     /// A path already in wire form passes through unchanged on every host —
     /// the fixtures and goldens that spell paths POSIX-style stay byte-stable.
     #[test]
@@ -165,40 +204,39 @@ mod tests {
         );
     }
 
-    /// `Path::join` on a POSIX-rooted base emits a Windows separator, so a
-    /// manifest entry would otherwise read `/work/cond\run.json`. A verbatim
-    /// `\\?\` prefix is stripped too — it is an OS-level escape hatch, not
-    /// something an agent should ever be handed.
-    #[cfg(windows)]
+    /// A backslash means different things per host, so `artifact_path` does too,
+    /// and both halves belong in one place.
+    ///
+    /// On Windows it is a separator: `Path::join` on a POSIX-rooted base emits
+    /// one, so a manifest entry would otherwise read `/work/cond\run.json`. A
+    /// verbatim `\\?\` prefix is stripped as well — an OS-level escape hatch, not
+    /// something an agent should ever be handed. On POSIX a backslash is a legal
+    /// filename character, so rewriting it would name a different file.
     #[test]
-    fn artifact_path_rewrites_windows_separators_and_strips_verbatim_prefixes() {
-        assert_eq!(
-            artifact_path(Path::new(r"/work/cond\run.json")),
-            "/work/cond/run.json"
-        );
-        assert_eq!(
-            artifact_path(Path::new(r"C:\work\cond\run.json")),
-            "C:/work/cond/run.json"
-        );
-        assert_eq!(
-            artifact_path(Path::new(r"\\?\C:\work\run.json")),
-            "C:/work/run.json"
-        );
-        assert_eq!(
-            artifact_path(Path::new(r"\\?\UNC\host\share\run.json")),
-            "//host/share/run.json"
-        );
-    }
-
-    /// The rewrite is Windows-only: a POSIX filename may legally contain a
-    /// literal backslash, and rewriting it would name a different file.
-    #[cfg(unix)]
-    #[test]
-    fn artifact_path_preserves_a_literal_backslash_in_a_posix_filename() {
-        assert_eq!(
-            artifact_path(Path::new(r"/work/od\dity.json")),
-            r"/work/od\dity.json"
-        );
+    fn artifact_path_applies_host_separator_rules() {
+        if cfg!(windows) {
+            assert_eq!(
+                artifact_path(Path::new(r"/work/cond\run.json")),
+                "/work/cond/run.json"
+            );
+            assert_eq!(
+                artifact_path(Path::new(r"C:\work\cond\run.json")),
+                "C:/work/cond/run.json"
+            );
+            assert_eq!(
+                artifact_path(Path::new(r"\\?\C:\work\run.json")),
+                "C:/work/run.json"
+            );
+            assert_eq!(
+                artifact_path(Path::new(r"\\?\UNC\host\share\run.json")),
+                "//host/share/run.json"
+            );
+        } else {
+            assert_eq!(
+                artifact_path(Path::new(r"/work/od\dity.json")),
+                r"/work/od\dity.json"
+            );
+        }
     }
 
     /// Comparison normalization is unconditional, unlike [`artifact_path`]: its
@@ -301,14 +339,19 @@ mod tests {
     /// be recreated as a link, not resolved into its target's content. Following
     /// it would inline whatever the link pointed at — possibly from outside the
     /// tree being copied.
-    #[cfg(unix)]
     #[test]
     fn copy_entry_recreates_symlinks_instead_of_following_them() {
         let tmp = TempDir::new().unwrap();
+        if skip_without_symlinks(
+            tmp.path(),
+            "copy_entry_recreates_symlinks_instead_of_following_them",
+        ) {
+            return;
+        }
         let target = tmp.path().join("target.txt");
         fs::write(&target, "target contents").unwrap();
         let link = tmp.path().join("link.txt");
-        std::os::unix::fs::symlink(&target, &link).unwrap();
+        create_symlink(&target, &link, false).unwrap();
 
         let destination = tmp.path().join("copied-link.txt");
         copy_entry(&link, &destination).unwrap();
@@ -325,14 +368,19 @@ mod tests {
 
     /// A symlink nested inside a copied directory survives too — the recursion
     /// arm must route back through the symlink arm, not through `fs::copy`.
-    #[cfg(unix)]
     #[test]
     fn copy_entry_preserves_symlinks_nested_inside_a_directory() {
         let tmp = TempDir::new().unwrap();
+        if skip_without_symlinks(
+            tmp.path(),
+            "copy_entry_preserves_symlinks_nested_inside_a_directory",
+        ) {
+            return;
+        }
         let source = tmp.path().join("tree");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("real.txt"), "real").unwrap();
-        std::os::unix::fs::symlink("real.txt", source.join("alias.txt")).unwrap();
+        create_symlink(Path::new("real.txt"), &source.join("alias.txt"), false).unwrap();
 
         let destination = tmp.path().join("copied");
         copy_entry(&source, &destination).unwrap();
@@ -354,14 +402,19 @@ mod tests {
     /// The counterpart semantic: a snapshot must freeze content, so a symlink is
     /// resolved and its target's bytes are written. Preserving the link would
     /// make the "frozen" copy track whatever the link points at later.
-    #[cfg(unix)]
     #[test]
     fn copy_entry_materialized_resolves_symlinks_into_their_content() {
         let tmp = TempDir::new().unwrap();
+        if skip_without_symlinks(
+            tmp.path(),
+            "copy_entry_materialized_resolves_symlinks_into_their_content",
+        ) {
+            return;
+        }
         let source = tmp.path().join("tree");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("real.txt"), "frozen").unwrap();
-        std::os::unix::fs::symlink("real.txt", source.join("alias.txt")).unwrap();
+        create_symlink(Path::new("real.txt"), &source.join("alias.txt"), false).unwrap();
 
         let destination = tmp.path().join("copied");
         copy_entry_materialized(&source, &destination).unwrap();

@@ -34,37 +34,25 @@ fn dispatch_tasks(cwd: &Path) -> Vec<Value> {
         .clone()
 }
 
-#[cfg(unix)]
-fn setup_exists_command() -> &'static str {
-    "test -f holdout/secret.txt"
+fn setup_exists_command() -> String {
+    fixture(&["--require-file", "holdout/secret.txt"])
 }
 
-#[cfg(windows)]
-fn setup_exists_command() -> &'static str {
-    "if exist holdout\\secret.txt (exit /B 0) else (exit /B 1)"
-}
-
-#[cfg(unix)]
-fn held_out_compare_command() -> &'static str {
-    "test \"$(cat answer.txt)\" = \"$(cat holdout/expected.txt)\""
-}
-
-#[cfg(windows)]
-fn held_out_compare_command() -> &'static str {
-    "fc /B answer.txt holdout\\expected.txt >NUL"
+fn held_out_compare_command() -> String {
+    fixture(&["--files-equal", "answer.txt", "holdout/expected.txt"])
 }
 
 #[test]
 fn auto_isolates_and_multi_run_tasks_get_distinct_hidden_envs() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let evals = r#"{ "skill_name": "mr-review", "evals": [
+    let evals = json!({ "skill_name": "mr-review", "evals": [
         { "id": "ordinary-1", "prompt": "p1", "expected_output": "o" },
         { "id": "held-out", "prompt": "p2", "expected_output": "o", "runs": 2,
           "assertions": [{ "id": "secret-test", "type": "command_check",
-            "setup_files": ["holdout/secret.txt"], "command": "test -f holdout/secret.txt" }] },
+            "setup_files": ["holdout/secret.txt"], "command": setup_exists_command() }] },
         { "id": "ordinary-2", "prompt": "p3", "expected_output": "o" }
-    ] }"#;
-    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    ] });
+    let (skill_dir, cwd) = setup(tmp.path(), &serde_json::to_string(&evals).unwrap());
     fs::create_dir_all(skill_dir.join("mr-review/evals/holdout")).unwrap();
     fs::write(
         skill_dir.join("mr-review/evals/holdout/secret.txt"),
@@ -134,7 +122,7 @@ fn missing_setup_source_fails_before_staging() {
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "held-out", "prompt": "p", "expected_output": "o",
           "assertions": [{ "id": "secret-test", "type": "command_check",
-            "setup_files": ["holdout/missing.txt"], "command": "true" }] }
+            "setup_files": ["holdout/missing.txt"], "command": "exit 0" }] }
     ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
 
@@ -159,7 +147,7 @@ fn root_git_setup_path_is_rejected_before_staging() {
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "held-out", "prompt": "p", "expected_output": "o",
           "assertions": [{ "id": "secret-test", "type": "command_check",
-            "setup_files": [".GIT/config"], "command": "true" }] }
+            "setup_files": [".GIT/config"], "command": "exit 0" }] }
     ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
     fs::create_dir_all(skill_dir.join("mr-review/evals/.GIT")).unwrap();
@@ -458,5 +446,4 @@ fn ingests_without_transcripts_while_guard_is_armed_and_aggregates() {
     );
 }
 
-#[cfg(unix)]
 mod matrix;

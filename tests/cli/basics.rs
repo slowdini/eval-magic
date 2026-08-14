@@ -17,6 +17,46 @@ fn write_evals(root: &std::path::Path, skill: &str, contents: &str) {
     fs::write(dir.join("evals.json"), contents).unwrap();
 }
 
+/// The hidden `__fixture` subcommand is the suite's stand-in for `sh`, `true`,
+/// and `printf`, so its wiring — parsing, effects, exit code, and stream
+/// flushing before `process::exit` — has to hold end to end, not just in the
+/// unit tests that drive it with in-memory buffers.
+#[test]
+fn hidden_fixture_subcommand_emits_and_exits() {
+    let tmp = TempDir::new().unwrap();
+    let target = tmp.path().join("written.txt");
+
+    skill_eval()
+        .args([
+            "__fixture",
+            "--exit",
+            "3",
+            "--text",
+            "hello world",
+            "--stderr",
+            "diagnostic",
+        ])
+        .arg("--write")
+        .arg(&target)
+        .assert()
+        .code(3)
+        .stdout("hello world")
+        .stderr("diagnostic");
+
+    assert_eq!(fs::read_to_string(&target).unwrap(), "hello world");
+}
+
+/// Hidden means hidden: `__fixture` must never surface in the help tree a user
+/// reads, the way `guard-hook` does not.
+#[test]
+fn hidden_fixture_subcommand_is_absent_from_help() {
+    skill_eval()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("__fixture").not());
+}
+
 /// `--help` succeeds and lists the subcommands.
 #[test]
 fn help_lists_subcommands() {
