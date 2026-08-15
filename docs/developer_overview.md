@@ -75,8 +75,9 @@ boundaries unless the evidence requires a named harness capability.
 
 Development carries the host requirement the tool itself declares: a POSIX shell with `jq`. The
 scripted-turn tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so
-the suite cannot pass without one. Tests needing `jq` or symlink creation report a skip instead;
-`EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into failures, as CI sets it to do.
+the suite cannot pass without one. Tests needing `jq`, symlink creation, or a path past Windows'
+259-character limit report a skip instead; `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into
+failures, as CI sets it to do on both its Ubuntu and its Windows runner.
 
 Before handing work off, run:
 

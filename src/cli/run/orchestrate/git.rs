@@ -333,11 +333,28 @@ mod tests {
         root
     }
 
+    /// `base` spelled the way git will report it.
+    ///
+    /// `std::env::temp_dir()` can hand back an 8.3 short name — `RUNNER~1` for
+    /// `runneradmin` on a GitHub runner — which git expands before it measures.
+    /// Those three characters are invisible to a length computed from the short
+    /// spelling, and three is enough to push `.git/config` past the limit on a
+    /// host where the same target fits locally. Measure what git measures.
+    fn long_form(base: &Path) -> PathBuf {
+        let Ok(canonical) = base.canonicalize() else {
+            return base.to_path_buf();
+        };
+        let text = canonical.to_string_lossy().into_owned();
+        // Canonicalising on Windows yields a `\\?\` verbatim path; git reports
+        // the plain spelling, so drop the prefix to keep the two comparable.
+        PathBuf::from(text.strip_prefix(r"\\?\").unwrap_or(&text))
+    }
+
     /// A `target`-character task root holding a staged `SKILL.md`, or `None`
     /// when this host cannot write that deep. The probe is the same `std::fs`
     /// write staging performs, so the gate is the capability, not the OS.
     fn deep_task_root(base: &Path, target: usize, test: &str) -> Option<PathBuf> {
-        let root = padded_to(base, target);
+        let root = padded_to(&long_form(base), target);
         let staged = root.join(STAGED_SKILL);
         let written = fs::create_dir_all(staged.parent().expect("the staged path has a parent"))
             .and_then(|()| fs::write(&staged, "---\nname: widget-skill\n---\n\nbody\n"));
@@ -421,14 +438,35 @@ mod tests {
     /// A root deep enough that `.git/objects/pack` crosses the budget: `git
     /// init` creates it before any repository-local configuration exists, so the
     /// lift has to reach that invocation too.
+    ///
+    /// 244 is not arbitrary and not the maximum. Git's long-path awareness is
+    /// per-operation: creating `.git/objects/pack` survives well past the
+    /// budget, `git init` writing `.git/config` stops at exactly
+    /// `WINDOWS_USABLE_PATH`, and the `git config --local` that follows gives up
+    /// two characters earlier still. 244 puts `pack` at 262 — past the budget,
+    /// which is the point — while leaving `.git/config` at 256, a deliberate
+    /// three inside the tightest of those ceilings. The assertions below pin the
+    /// window so a future edit cannot silently slide the root out of it.
     #[test]
     fn task_repository_initializes_when_its_git_directory_exceeds_the_windows_path_limit() {
+        const GIT_CONFIG: &str = ".git/config";
+        const GIT_PACK: &str = ".git/objects/pack";
         let test =
             "task_repository_initializes_when_its_git_directory_exceeds_the_windows_path_limit";
         let tmp = tempfile::TempDir::new().unwrap();
-        let Some(root) = deep_task_root(tmp.path(), 245, test) else {
+        let Some(root) = deep_task_root(tmp.path(), 244, test) else {
             return;
         };
+
+        let length = root.as_os_str().len();
+        assert!(
+            length + 1 + GIT_PACK.len() > WINDOWS_USABLE_PATH,
+            "{length}-character root leaves `.git/objects/pack` inside the budget, testing nothing"
+        );
+        assert!(
+            length + 1 + GIT_CONFIG.len() + 3 <= WINDOWS_USABLE_PATH,
+            "{length}-character root leaves `.git/config` no margin below the budget"
+        );
         initialize_task_repository(&root)
             .expect("a task root deeper than `.git` needs initializes");
     }
