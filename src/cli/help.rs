@@ -9,9 +9,12 @@
 pub(super) const AFTER_HELP: &str = "\
 REQUIREMENTS:
   Git, plus a POSIX shell with jq, xargs, tr, and wc. The dispatch and judge
-  recipes in the generated RUNBOOK.md are POSIX command lines — on Windows,
-  run them in Git Bash (Git for Windows) or WSL, and install jq separately.
-  Set EVAL_MAGIC_SH to select a specific sh.
+  recipes in the generated RUNBOOK.md are POSIX command lines, and the shell
+  that runs them has to resolve the same paths the workspace was prepared
+  with. On Windows that is Git Bash (Git for Windows), with jq installed
+  separately. WSL resolves a different filesystem namespace, so run
+  eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH
+  to select a specific sh.
 
 EXAMPLES:
   # Scaffold a first eval and prepare its isolated comparison environments

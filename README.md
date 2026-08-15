@@ -38,9 +38,13 @@ The installed CLI is the primary manual. Start with `eval-magic --help`, and use
 ## Install
 
 Git is required at runtime, plus a POSIX shell with `jq`: the dispatch and judge recipes eval-magic
-generates are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. On Windows, run them in
-Git Bash (Git for Windows) or WSL, and install `jq` separately — Git for Windows does not bundle it.
+generates are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. The shell that runs them
+has to resolve the same paths the workspace was prepared with. On Windows that is Git Bash (Git for
+Windows), with `jq` installed separately — Git for Windows does not bundle it. WSL resolves a
+different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it.
 Set `EVAL_MAGIC_SH` to select a specific `sh`.
+
+Windows support runs through Git Bash and is deprecated: a future release will require WSL.
 
 Prebuilt binaries for macOS, Linux, and Windows are attached to each
 [GitHub release](https://github.com/slowdini/eval-magic/releases).
