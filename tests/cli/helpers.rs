@@ -2,7 +2,7 @@
 
 use assert_cmd::Command;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Build a `Command` for the built `eval-magic` binary.
@@ -14,17 +14,24 @@ pub fn skill_eval() -> Command {
     cmd
 }
 
-/// A canonicalized temp root (resolves macOS /var → /private/var so the binary's
-/// cwd-derived workspace path matches the fixtures it reads).
+/// `fs::canonicalize` with Windows' verbatim (`\\?\`) prefix removed — the
+/// spelling the CLI itself resolves paths to, and the one a child process
+/// reports as its cwd. Fixtures built on any other spelling of the same
+/// directory will not match the paths the CLI emits.
+///
+/// Both halves matter, and each is a different host's problem: the resolution
+/// covers macOS (/var → /private/var), the stripping covers Windows.
+pub fn resolved(path: &Path) -> PathBuf {
+    let canonical = fs::canonicalize(path).unwrap();
+    match canonical.to_string_lossy().strip_prefix(r"\\?\") {
+        Some(plain) => PathBuf::from(plain),
+        None => canonical,
+    }
+}
+
+/// A temp root already in the spelling [`resolved`] describes.
 pub fn canonical_root() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
-    let root = fs::canonicalize(tmp.path()).unwrap();
-    // `canonicalize` returns a verbatim (`\\?\`) path on Windows, but a child
-    // process launched with it reports the plain form as its cwd — so paths the
-    // CLI emits would never match ones a test joins onto this root.
-    let root = match root.to_string_lossy().strip_prefix(r"\\?\") {
-        Some(plain) => PathBuf::from(plain),
-        None => root,
-    };
+    let root = resolved(tmp.path());
     (tmp, root)
 }
