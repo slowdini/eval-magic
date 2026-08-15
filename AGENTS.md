@@ -86,6 +86,10 @@ Markdown-carrying surfaces reuse: the shell-discovery errors, the `run` prefligh
 it. `--help` is the one deliberate restatement (`AFTER_HELP` in `src/cli/help.rs`), hard-wrapped and
 backtick-free because clap renders into a terminal; keep the two in step by hand.
 
+Which platforms that requirement is honored on — and why preparing on Windows but dispatching from
+WSL is a correctness boundary rather than a preference — is stated once under "Platform support" in
+`docs/developer_overview.md`.
+
 **Where user-facing warnings come from.** Library modules (`pipeline`, `workspace`, `sandbox`,
 `adapters`) never print. They return warning strings on their result struct — `#[serde(skip)]` when
 that struct is also a serialized artifact — and the `cli` handler prints them with the `⚠ ` prefix.

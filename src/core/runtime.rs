@@ -105,9 +105,19 @@ pub fn run_git(args: &[&str], cwd: &Path) -> GitOutput {
 /// for Windows supplies `sh`, `xargs`, `tr`, and `wc` but not `jq`, so guidance
 /// naming only the shell would send an operator to a setup that still walls out
 /// at the judge step.
+///
+/// It also separates the two Windows options rather than listing them side by
+/// side. A generated recipe carries the preparing host's absolute paths, so the
+/// dispatching shell has to resolve those same paths. Git Bash does — it shares
+/// the Windows filesystem. WSL does not: `C:\…` names nothing in its namespace,
+/// so WSL is correct only when eval-magic itself runs inside it. Nothing here
+/// translates between the two, and a split across that boundary fails quietly
+/// rather than loudly.
 pub(crate) const POSIX_TOOLING_REQUIREMENT: &str = "eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, \
-     `tr`, and `wc`. Run them in a POSIX shell with `jq` installed — on Windows, use Git Bash \
-     (Git for Windows) or WSL. Set EVAL_MAGIC_SH to select a specific `sh`.";
+     `tr`, and `wc`. Run them in a POSIX shell with `jq` installed that resolves the same paths \
+     this workspace was prepared with — on Windows, Git Bash (Git for Windows). WSL resolves a \
+     different filesystem namespace, so run eval-magic inside WSL rather than dispatching into \
+     it. Set EVAL_MAGIC_SH to select a specific `sh`.";
 
 /// `sh` locations inside a Git for Windows install, given the `git --exec-path`
 /// directory (`<root>/mingw64/libexec/git-core` — hence three levels up).
@@ -356,6 +366,25 @@ mod tests {
             panic!("a POSIX shell is required to develop eval-magic: {error}")
         });
         assert!(shell.is_file(), "{} is not a file", shell.display());
+    }
+
+    /// The declared requirement has to separate the two Windows options rather
+    /// than list them as equivalent. Git Bash shares the Windows filesystem, so a
+    /// workspace prepared by a native run dispatches from it correctly. WSL
+    /// resolves a different namespace, where the `C:\…` paths a native run wrote
+    /// name nothing — so WSL is only correct when eval-magic itself runs inside
+    /// it. Listing the two side by side invites a split that silently cannot work.
+    #[test]
+    fn the_declared_requirement_places_wsl_around_eval_magic_not_downstream_of_it() {
+        assert!(
+            POSIX_TOOLING_REQUIREMENT.contains("Git Bash"),
+            "{POSIX_TOOLING_REQUIREMENT}"
+        );
+        assert!(
+            POSIX_TOOLING_REQUIREMENT.contains("inside WSL"),
+            "WSL must be named as where eval-magic runs, not somewhere to dispatch \
+             into: {POSIX_TOOLING_REQUIREMENT}"
+        );
     }
 
     #[test]

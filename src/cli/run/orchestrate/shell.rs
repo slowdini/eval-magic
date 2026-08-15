@@ -3,8 +3,13 @@
 //!
 //! Unlike [`super::git`], a missing shell is a warning rather than an error.
 //! `run` never dispatches — it prepares a workspace, and that workspace is
-//! correct whatever shell prepared it. Preparing on Windows and dispatching from
-//! WSL is a legitimate split, so this reports the gap and lets the run finish.
+//! correct whatever shell prepared it, so this reports the gap and lets the run
+//! finish.
+//!
+//! The shell that eventually dispatches still has to resolve the paths this host
+//! wrote into the recipes, which keeps the gap host-local: Git Bash shares the
+//! Windows filesystem, WSL resolves its own. See [`POSIX_TOOLING_REQUIREMENT`]
+//! for the declared rule the warnings below defer to.
 
 use std::path::Path;
 
@@ -39,8 +44,8 @@ pub(super) fn preflight_posix_tooling() -> Vec<String> {
 fn tooling_warning(shell: Result<&Path, &str>, missing: Option<&str>) -> Option<String> {
     if let Err(reason) = shell {
         return Some(format!(
-            "{reason} The workspace and recipes below are still correct — prepare here and \
-             dispatch them from a POSIX shell."
+            "{reason} The workspace and recipes below are still correct — dispatch them from a \
+             POSIX shell on this host."
         ));
     }
     let reason = missing?;
@@ -71,6 +76,19 @@ mod tests {
             .expect("a host with no POSIX shell must be told");
         assert!(warning.contains("no POSIX shell found"), "{warning}");
         assert!(warning.contains("Git Bash"), "{warning}");
+    }
+
+    /// An unqualified "dispatch them from a POSIX shell" reads as an invitation
+    /// to prepare here and dispatch from WSL — the one split
+    /// [`POSIX_TOOLING_REQUIREMENT`] rules out, and the one that fails quietly.
+    #[test]
+    fn a_missing_shell_confines_dispatch_to_the_host_that_prepared_the_workspace() {
+        let warning = tooling_warning(Err("no POSIX shell found. Use Git Bash."), None)
+            .expect("a host with no POSIX shell must be told");
+        assert!(
+            warning.contains("this host"),
+            "the warning must keep dispatch on the preparing host: {warning}"
+        );
     }
 
     /// A shell that is missing a recipe tool names the tool and the shell whose
