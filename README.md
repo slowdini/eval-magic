@@ -37,7 +37,12 @@ The installed CLI is the primary manual. Start with `eval-magic --help`, and use
 
 ## Install
 
-Git is required at runtime. Prebuilt binaries for macOS, Linux, and Windows are attached to each
+Git is required at runtime, plus a POSIX shell with `jq`: the dispatch and judge recipes eval-magic
+generates are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. On Windows, run them in
+Git Bash (Git for Windows) or WSL, and install `jq` separately — Git for Windows does not bundle it.
+Set `EVAL_MAGIC_SH` to select a specific `sh`.
+
+Prebuilt binaries for macOS, Linux, and Windows are attached to each
 [GitHub release](https://github.com/slowdini/eval-magic/releases).
 
 macOS or Linux:
@@ -142,6 +147,10 @@ Issues and planned work are tracked in the
 [GitHub issue tracker](https://github.com/slowdini/eval-magic/issues).
 
 ## Development
+
+Development carries the same host requirement as use: a POSIX shell with `jq`. The scripted-turn
+tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite
+cannot pass without one. Tests that need `jq` or symlink creation report a skip instead.
 
 ```bash
 cargo fmt --check

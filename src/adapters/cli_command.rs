@@ -191,10 +191,6 @@ mod tests {
         .unwrap();
     }
 
-    /// The tools the rendered judge recipe shells out to. Git for Windows
-    /// bundles every one of these except `jq`.
-    const RECIPE_TOOLS: &[&str] = &["jq", "xargs", "tr", "wc"];
-
     /// The shell to run a rendered recipe in, or `None` after reporting a skip.
     ///
     /// These three tests execute shipped POSIX pipeline text, so no portable
@@ -203,7 +199,7 @@ mod tests {
     /// that has the tools (including Windows with `jq` installed) and stops them
     /// failing inscrutably on a Linux box that happens to lack `jq`.
     fn recipe_shell(test: &str) -> Option<&'static Path> {
-        match crate::core::runtime::require_posix_toolchain(RECIPE_TOOLS) {
+        match crate::core::runtime::require_posix_toolchain(crate::core::POSIX_RECIPE_TOOLS) {
             Ok(shell) => Some(shell),
             Err(missing) => {
                 crate::core::runtime::report_skip(test, &missing);

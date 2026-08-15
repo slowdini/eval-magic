@@ -63,15 +63,26 @@ binary, `cargo test --lib` alone does not build it — run `cargo test`, or `car
 compilation and clippy on the other host and hides the coverage gap. Instead, probe for what the
 test actually needs and call `report_skip` (`src/core/runtime.rs`), which prints the reason and
 returns `true`. Setting `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns every skip into a failure; CI sets
-it, so a runner cannot quietly stop covering something. Two capabilities are gated today: the POSIX
-toolchain the shipped dispatch recipes need (`require_posix_toolchain`), and symlink creation, which
-Windows allows only under Developer Mode. Where a genuine per-OS difference is the behavior under
+it, so a runner cannot quietly stop covering something. Two capabilities are gated today: the recipe
+tools beyond the shell itself (`require_posix_toolchain` — in practice `jq`), and symlink creation,
+which Windows allows only under Developer Mode. The shell is not one of them; it is a hard
+requirement, per the section below. `require_posix_toolchain` is not test-only either — the `run`
+preflight uses it to warn about the same gap. Where a genuine per-OS difference is the behavior under
 test — signals, path separators — branch on `cfg!(windows)` at runtime so both arms still compile
 everywhere.
 
-**Finding a POSIX shell.** Harness `exec_template`s are POSIX command lines, so the dispatch and
-probe paths spawn `sh` via `posix_shell()` (`src/core/runtime.rs`) rather than a hardcoded
-`/bin/sh`: it searches `PATH`, then a Git for Windows install. Set `EVAL_MAGIC_SH` to override it.
+**A POSIX shell is required, for use and for development.** Harness `exec_template`s are POSIX
+command lines, so the dispatch and probe paths spawn `sh` via `posix_shell()`
+(`src/core/runtime.rs`) rather than a hardcoded `/bin/sh`: it searches `PATH`, then a Git for
+Windows install. Set `EVAL_MAGIC_SH` to override it. `cargo test` inherits the requirement — the
+scripted-turn tests spawn a `#!/bin/sh` harness stub through the resolved shell and do not skip —
+so a host without `sh` fails the suite instead of quietly covering less. `jq` is required alongside
+it for the parallel-dispatch and judge recipes; Git for Windows supplies the shell, `xargs`, `tr`,
+and `wc`, but not `jq`. `POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is the one wording the
+Markdown-carrying surfaces reuse: the shell-discovery errors, the `run` preflight warnings,
+`RUNBOOK.md`, and `dispatch-manifest.md`. State the requirement from there rather than rephrasing
+it. `--help` is the one deliberate restatement (`AFTER_HELP` in `src/cli/help.rs`), hard-wrapped and
+backtick-free because clap renders into a terminal; keep the two in step by hand.
 
 **Where user-facing warnings come from.** Library modules (`pipeline`, `workspace`, `sandbox`,
 `adapters`) never print. They return warning strings on their result struct — `#[serde(skip)]` when

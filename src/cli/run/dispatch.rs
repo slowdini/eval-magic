@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
-use crate::core::{AvailableSkill, Eval, Harness, ScriptedTurn};
+use crate::core::{AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn};
 
 use super::RunError;
 
@@ -412,6 +412,10 @@ pub fn build_manifest(
         "## How to use this manifest".to_string(),
         String::new(),
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
+        String::new(),
+        // The recipes below are POSIX command lines, so the manifest states the
+        // requirement the same way RUNBOOK.md does (issue #248).
+        format!("**Requires:** {POSIX_TOOLING_REQUIREMENT}"),
         String::new(),
     ];
     let scripted: Vec<usize> = tasks

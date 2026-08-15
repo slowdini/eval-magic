@@ -93,11 +93,21 @@ pub fn run_git(args: &[&str], cwd: &Path) -> GitOutput {
     }
 }
 
-/// What to tell an operator who has no POSIX shell. Harness `exec_template`s
-/// ship as POSIX command lines (`</dev/null`, `&&`, `\` continuations), so the
-/// dispatch paths need a real `sh` — not the platform shell.
-const SHELL_SETUP_GUIDANCE: &str = "eval-magic runs harness dispatch commands through a POSIX shell. \
-     Install Git for Windows (Git Bash) or WSL, or point EVAL_MAGIC_SH at an `sh` executable.";
+/// eval-magic's declared host requirement, stated once and reused by every
+/// surface that can carry Markdown: the shell-discovery errors below, the `run`
+/// preflight warnings, and the generated `RUNBOOK.md` and `dispatch-manifest.md`.
+/// `--help` restates it in `cli::help::AFTER_HELP` instead, hard-wrapped and
+/// without backticks, because clap renders into a terminal rather than Markdown.
+///
+/// It names `jq` as well as the shell deliberately. Harness `exec_template`s ship
+/// as POSIX command lines (`</dev/null`, `&&`, `\` continuations), and the
+/// parallel-dispatch and judge recipes are `jq` pipelines on top of them — Git
+/// for Windows supplies `sh`, `xargs`, `tr`, and `wc` but not `jq`, so guidance
+/// naming only the shell would send an operator to a setup that still walls out
+/// at the judge step.
+pub(crate) const POSIX_TOOLING_REQUIREMENT: &str = "eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, \
+     `tr`, and `wc`. Run them in a POSIX shell with `jq` installed — on Windows, use Git Bash \
+     (Git for Windows) or WSL. Set EVAL_MAGIC_SH to select a specific `sh`.";
 
 /// `sh` locations inside a Git for Windows install, given the `git --exec-path`
 /// directory (`<root>/mingw64/libexec/git-core` — hence three levels up).
@@ -161,7 +171,7 @@ fn discover_posix_shell(override_path: Option<&OsStr>) -> Result<PathBuf, String
         // A configured-but-wrong override is an error, not a fallback: silently
         // discovering a different shell would hide the misconfiguration.
         return Err(format!(
-            "EVAL_MAGIC_SH points at {}, which is not a file. {SHELL_SETUP_GUIDANCE}",
+            "EVAL_MAGIC_SH points at {}, which is not a file. {POSIX_TOOLING_REQUIREMENT}",
             path.display()
         ));
     }
@@ -179,7 +189,7 @@ fn discover_posix_shell(override_path: Option<&OsStr>) -> Result<PathBuf, String
     if posix_default.is_file() {
         return Ok(posix_default);
     }
-    Err(format!("no POSIX shell found. {SHELL_SETUP_GUIDANCE}"))
+    Err(format!("no POSIX shell found. {POSIX_TOOLING_REQUIREMENT}"))
 }
 
 /// The resolved POSIX shell, discovered once per process. Callers spawn this
@@ -210,13 +220,20 @@ pub(crate) fn report_skip(test: &str, reason: &str) -> bool {
     true
 }
 
-/// The resolved shell, once every tool in `tools` is reachable from inside it.
+/// The toolchain a shipped recipe shells out to: the parallel-dispatch and judge
+/// recipes are `jq` pipelines over `xargs`, `tr`, and `wc`. Both the `run`
+/// preflight that warns about a gap and the tests that execute a rendered recipe
+/// check this same list, so neither can drift from what the recipes actually use.
+pub(crate) const POSIX_RECIPE_TOOLS: &[&str] = &["jq", "xargs", "tr", "wc"];
+
+/// The resolved shell, once every tool in `tools` is reachable from inside it,
+/// otherwise an error naming the first one that is not.
 ///
 /// The shipped parallel and judge recipes are POSIX pipelines over `jq`,
-/// `xargs`, `tr`, and `wc`, so a test that executes one needs all of them. They
-/// are checked through the shell rather than on the host `PATH` because that is
-/// where the recipe will look: Git for Windows carries its own `/usr/bin`.
-#[cfg(test)]
+/// `xargs`, `tr`, and `wc`, so both a test that executes one and the `run`
+/// preflight that warns about one need all of them. They are checked through the
+/// shell rather than on the host `PATH` because that is where the recipe will
+/// look: Git for Windows carries its own `/usr/bin`.
 pub(crate) fn require_posix_toolchain(tools: &[&str]) -> Result<&'static Path, String> {
     let shell = posix_shell().map_err(str::to_string)?;
     for tool in tools {
@@ -322,42 +339,38 @@ mod tests {
         assert!(error.contains("/nonexistent-shell-for-tests"), "{error}");
         assert!(error.contains("Git Bash"), "{error}");
         assert!(error.contains("WSL"), "{error}");
+        // The declared requirement is a POSIX shell *and* `jq`: Git for Windows
+        // supplies the shell but not `jq`, so naming only the shell would send
+        // an operator to a setup that still cannot run the judge recipe.
+        assert!(error.contains("jq"), "{error}");
     }
 
-    /// Host-independent: either discovery finds a real shell, or it explains how
-    /// to install one. Asserting success outright would make the suite depend on
-    /// the developer's machine.
+    /// A POSIX shell is a declared development requirement, not a capability the
+    /// suite probes for: the scripted-turn tests spawn a `#!/bin/sh` harness stub
+    /// through the resolved shell and cannot skip. Asserting discovery outright
+    /// makes that requirement fail here — one line, naming the fix — instead of
+    /// somewhere deeper in the run boundary.
     #[test]
-    fn discover_posix_shell_returns_a_real_file_or_setup_guidance() {
-        match discover_posix_shell(None) {
-            Ok(shell) => assert!(shell.is_file(), "{} is not a file", shell.display()),
-            Err(error) => {
-                assert!(error.contains("Git Bash"), "{error}");
-                assert!(error.contains("WSL"), "{error}");
-            }
-        }
+    fn discover_posix_shell_finds_a_real_shell() {
+        let shell = discover_posix_shell(None).unwrap_or_else(|error| {
+            panic!("a POSIX shell is required to develop eval-magic: {error}")
+        });
+        assert!(shell.is_file(), "{} is not a file", shell.display());
     }
 
     #[test]
     fn require_posix_toolchain_names_the_tool_that_is_missing() {
-        let Ok(shell) = discover_posix_shell(None) else {
-            eprintln!("skipping: no POSIX shell on this host");
-            return;
-        };
-        let _ = shell;
         let error = require_posix_toolchain(&["eval-magic-not-a-real-tool"])
             .expect_err("an uninstalled tool should be reported");
         assert!(error.contains("eval-magic-not-a-real-tool"), "{error}");
     }
 
-    /// With nothing to look for, the check reduces to locating the shell — so it
-    /// holds the same host-independent shape as discovery itself.
+    /// With nothing to look for, the check reduces to locating the shell — which
+    /// is required, so this succeeds wherever the suite is allowed to run.
     #[test]
     fn require_posix_toolchain_with_no_tools_reduces_to_finding_the_shell() {
-        match require_posix_toolchain(&[]) {
-            Ok(shell) => assert!(shell.is_file()),
-            Err(error) => assert!(error.contains("Git Bash"), "{error}"),
-        }
+        let shell = require_posix_toolchain(&[]).expect("the required POSIX shell resolves");
+        assert!(shell.is_file());
     }
 
     #[test]
