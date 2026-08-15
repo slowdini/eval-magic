@@ -94,9 +94,10 @@ pub enum ContextError {
     Io(#[from] std::io::Error),
 }
 
-/// Lexically absolutize a path (join onto cwd if relative; normalize `.`/`..`).
-/// Mirrors node's `resolve()` — it does NOT resolve symlinks or require
-/// existence, unlike `std::fs::canonicalize`.
+/// Absolutize a path (join onto `cwd` if relative) and resolve it to the one
+/// spelling every path in a [`RunContext`] shares — see
+/// [`crate::core::fs::real_path`]. Routing every path through here is what makes
+/// that a property of the struct rather than of the one field someone remembered.
 fn absolutize(cwd: &Path, p: &str) -> Result<PathBuf, ContextError> {
     let path = Path::new(p);
     let joined = if path.is_absolute() {
@@ -104,7 +105,7 @@ fn absolutize(cwd: &Path, p: &str) -> Result<PathBuf, ContextError> {
     } else {
         cwd.join(path)
     };
-    Ok(std::path::absolute(joined)?)
+    Ok(crate::core::fs::real_path(&joined)?)
 }
 
 fn skill_name_from_dir(skill_subdir: &Path) -> Result<String, ContextError> {
@@ -162,8 +163,10 @@ fn infer_only_skill_name(skill_dir: &Path) -> Result<String, ContextError> {
 /// validates `SKILL.md`, an optional existing `--bootstrap`, and defaults the
 /// workspace/stage roots from the current directory.
 pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError> {
-    let cwd = input.cwd.unwrap_or(std::env::current_dir()?);
-    let cwd = std::path::absolute(cwd)?;
+    let cwd = input.cwd.map_or_else(std::env::current_dir, Ok)?;
+    // Every root below derives from this one path, so resolving the alias here
+    // is what keeps a run's paths and an agent's paths comparable at all.
+    let cwd = crate::core::fs::real_path(&cwd)?;
     let (skill_dir, skill_name, skill_subdir, sibling_skill_names, stage_siblings) =
         match input.skill_dir {
             Some(skill_dir_raw) => {
@@ -292,7 +295,7 @@ mod tests {
         assert_eq!(ctx.skill_name, "mr-review");
         assert_eq!(
             ctx.skill_subdir,
-            std::path::absolute(&skill_subdir).unwrap()
+            crate::core::fs::real_path(&skill_subdir).unwrap()
         );
         assert!(ctx.sibling_skill_names.is_empty());
         assert!(!ctx.stage_siblings);
@@ -313,7 +316,7 @@ mod tests {
         assert_eq!(ctx.skill_name, "beta");
         assert_eq!(
             ctx.skill_subdir,
-            std::path::absolute(skill_dir.join("beta")).unwrap()
+            crate::core::fs::real_path(&skill_dir.join("beta")).unwrap()
         );
         assert!(ctx.sibling_skill_names.is_empty());
         assert!(!ctx.stage_siblings);
@@ -414,11 +417,14 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["mr-review"]);
         let ctx = detect_run_context(input(&skill_dir, "mr-review")).unwrap();
-        assert_eq!(ctx.skill_dir, std::path::absolute(&skill_dir).unwrap());
+        assert_eq!(
+            ctx.skill_dir,
+            crate::core::fs::real_path(&skill_dir).unwrap()
+        );
         assert_eq!(ctx.skill_name, "mr-review");
         assert_eq!(
             ctx.skill_subdir,
-            std::path::absolute(skill_dir.join("mr-review")).unwrap()
+            crate::core::fs::real_path(&skill_dir.join("mr-review")).unwrap()
         );
         assert!(ctx.sibling_skill_names.is_empty());
         assert!(ctx.bootstrap_path.is_none());
@@ -452,8 +458,8 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(input(&skill_dir, "foo")).unwrap();
-        let expected = std::env::current_dir().unwrap().join(".eval-magic");
-        assert_eq!(ctx.workspace_root, expected);
+        let cwd = crate::core::fs::real_path(&std::env::current_dir().unwrap()).unwrap();
+        assert_eq!(ctx.workspace_root, cwd.join(".eval-magic"));
     }
 
     #[test]
@@ -467,7 +473,10 @@ mod tests {
             ..input(&skill_dir, "foo")
         })
         .unwrap();
-        assert_eq!(ctx.workspace_root, std::path::absolute(&custom).unwrap());
+        assert_eq!(
+            ctx.workspace_root,
+            crate::core::fs::real_path(&custom).unwrap()
+        );
     }
 
     #[test]
@@ -475,7 +484,67 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(input(&skill_dir, "foo")).unwrap();
-        assert_eq!(ctx.stage_root, std::env::current_dir().unwrap());
+        assert_eq!(
+            ctx.stage_root,
+            crate::core::fs::real_path(&std::env::current_dir().unwrap()).unwrap()
+        );
+    }
+
+    /// Every root derives from the cwd, and the guard later compares those roots
+    /// against paths the agent's own tools report — so an alias of the cwd has to
+    /// collapse here, once, or the two sides disagree forever after.
+    ///
+    /// Windows spells one directory several ways (8.3 short names, junctions,
+    /// `subst` drives, redirected profiles); each is one `canonicalize` apart
+    /// from the real path, so exercising one exercises the mechanism.
+    #[test]
+    fn a_cwd_alias_collapses_so_every_derived_root_shares_one_spelling() {
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real-workspace");
+        fs::create_dir_all(&real).unwrap();
+        let alias = tmp.path().join("alias-workspace");
+        crate::core::fs::create_directory_alias(&real, &alias).unwrap();
+        make_skill_dir(&real, &["foo"]);
+
+        // Enter through the alias, exactly as a user whose workspace sits under a
+        // junction or a redirected profile directory does.
+        let ctx = detect_run_context(DetectInput {
+            skill: Some("foo".to_string()),
+            ..input_from(&alias.join("skill-dir"))
+        })
+        .unwrap();
+
+        let expected = crate::core::fs::real_path(&real).unwrap();
+        assert_eq!(ctx.stage_root, expected.join("skill-dir"));
+        assert_eq!(
+            ctx.workspace_root,
+            expected.join("skill-dir").join(".eval-magic")
+        );
+        assert_eq!(ctx.skill_dir, expected.join("skill-dir"));
+    }
+
+    /// `--workspace-dir` is the second way into the same tree: the guard's roots
+    /// descend from it, so an alias passed here would reintroduce the split the
+    /// cwd resolution just closed.
+    #[test]
+    fn an_aliased_workspace_dir_flag_resolves_to_the_same_spelling() {
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real-workspace");
+        fs::create_dir_all(&real).unwrap();
+        let alias = tmp.path().join("alias-workspace");
+        crate::core::fs::create_directory_alias(&real, &alias).unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
+
+        let ctx = detect_run_context(DetectInput {
+            workspace_dir: Some(alias.join("nested-ws").to_string_lossy().into_owned()),
+            ..input(&skill_dir, "foo")
+        })
+        .unwrap();
+
+        assert_eq!(
+            ctx.workspace_root,
+            crate::core::fs::real_path(&real).unwrap().join("nested-ws")
+        );
     }
 
     #[test]
@@ -491,7 +560,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             ctx.bootstrap_path,
-            Some(std::path::absolute(&bootstrap).unwrap())
+            Some(crate::core::fs::real_path(&bootstrap).unwrap())
         );
     }
 
