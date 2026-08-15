@@ -1,6 +1,6 @@
 //! The `detect-stray-writes` subcommand.
 
-use crate::helpers::skill_eval;
+use crate::helpers::{resolved, skill_eval};
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 use std::fs;
@@ -14,7 +14,7 @@ fn detect_stray_writes_reports_live_source_reads() {
     let tmp = TempDir::new().unwrap();
     // realpath: the binary reads its cwd resolved (macOS /var → /private/var), so
     // fixture paths must match that form for prefix checks to line up.
-    let root = fs::canonicalize(tmp.path()).unwrap();
+    let root = resolved(tmp.path());
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
     fs::create_dir_all(&skill_sub).unwrap();
@@ -106,7 +106,7 @@ fn detect_stray_writes_flags_unverifiable_when_nothing_was_inspected() {
     use serde_json::json;
 
     let tmp = TempDir::new().unwrap();
-    let root = fs::canonicalize(tmp.path()).unwrap();
+    let root = resolved(tmp.path());
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
     fs::create_dir_all(&skill_sub).unwrap();
@@ -181,7 +181,7 @@ fn detect_stray_writes_skips_write_classification_without_dispatch_eval_root() {
     use serde_json::json;
 
     let tmp = TempDir::new().unwrap();
-    let root = fs::canonicalize(tmp.path()).unwrap();
+    let root = resolved(tmp.path());
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
     fs::create_dir_all(&skill_sub).unwrap();
@@ -275,7 +275,7 @@ fn detect_stray_writes_uses_eval_root_boundary_from_dispatch() {
     use serde_json::json;
 
     let tmp = TempDir::new().unwrap();
-    let root = fs::canonicalize(tmp.path()).unwrap();
+    let root = resolved(tmp.path());
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
     fs::create_dir_all(&skill_sub).unwrap();
@@ -386,7 +386,7 @@ fn detect_stray_writes_scans_nested_run_dirs_and_reports_run_index() {
     use serde_json::json;
 
     let tmp = TempDir::new().unwrap();
-    let root = fs::canonicalize(tmp.path()).unwrap();
+    let root = resolved(tmp.path());
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
     fs::create_dir_all(&skill_sub).unwrap();

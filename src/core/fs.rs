@@ -23,7 +23,7 @@
 
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
@@ -49,16 +49,64 @@ pub fn artifact_path(path: &Path) -> String {
     if !cfg!(windows) {
         return rendered.into_owned();
     }
-    let unprefixed = match rendered.strip_prefix(r"\\?\UNC\") {
+    normalize_separators(&strip_verbatim_prefix(&rendered))
+}
+
+/// Drop Windows' verbatim (`\\?\`) prefix, keeping the host's own separators.
+fn strip_verbatim_prefix(rendered: &str) -> String {
+    match rendered.strip_prefix(r"\\?\UNC\") {
         // Verbatim UNC collapses back to the `\\server\share` form; dropping
         // the whole prefix would leave a bare `UNC\` component.
         Some(rest) => format!(r"\\{rest}"),
         None => rendered
             .strip_prefix(r"\\?\")
-            .unwrap_or(&rendered)
+            .unwrap_or(rendered)
             .to_string(),
-    };
-    normalize_separators(&unprefixed)
+    }
+}
+
+/// The one spelling of `path` that every participant in a run agrees on.
+///
+/// POSIX hands this out for free: `getcwd` resolves symlinks, so a Unix process
+/// and everything it spawns already share one spelling of the working directory.
+/// Windows makes no such promise — it hands back whatever spelling the cwd was
+/// set with — and one directory there has several valid names: an 8.3 short
+/// name (`RUNNER~1`), a junction, a `subst` drive, a redirected profile
+/// directory. Tools then disagree about which to report: `git` prints the
+/// resolved name, while node's `process.cwd()` and `cmd`'s `cd` echo the alias
+/// back. Anything comparing those strings — the write guard's allowed roots
+/// against the paths an agent's own tools hand it — silently stops matching.
+///
+/// Resolving once, at the point a run's roots are derived, gives Windows the
+/// guarantee POSIX already provides. The verbatim (`\\?\`) prefix comes off
+/// because a spawned child reports the plain form, so plain is the spelling the
+/// comparisons actually see.
+///
+/// A run names directories before it creates them, so resolution walks up to the
+/// deepest ancestor that exists and re-attaches the rest: the alias always lives
+/// in an ancestor — a temp dir, a junction, an 8.3 profile name — never in the
+/// leaf about to be created. With no ancestor on disk at all, the lexical form
+/// is all there is.
+pub fn real_path(path: &Path) -> io::Result<PathBuf> {
+    let absolute = std::path::absolute(path)?;
+    let mut unresolved = Vec::new();
+    let mut anchor = absolute.as_path();
+    loop {
+        if let Ok(canonical) = fs::canonicalize(anchor) {
+            let mut resolved = if cfg!(windows) {
+                PathBuf::from(strip_verbatim_prefix(&canonical.to_string_lossy()))
+            } else {
+                canonical
+            };
+            resolved.extend(unresolved.iter().rev());
+            return Ok(resolved);
+        }
+        let (Some(parent), Some(name)) = (anchor.parent(), anchor.file_name()) else {
+            return Ok(absolute);
+        };
+        unresolved.push(name.to_os_string());
+        anchor = parent;
+    }
 }
 
 /// Rewrite Windows separators to forward slashes for *comparison*.
@@ -163,6 +211,37 @@ fn create_parent(path: &Path) -> io::Result<()> {
     }
 }
 
+/// Make `link` a second name for the directory `target`, for tests that need one
+/// directory reachable by two spellings.
+///
+/// Deliberately *not* gated on the symlink capability. The paths that resolve
+/// aliases differently are a Windows problem, so a fixture that skips on a
+/// stock Windows box would leave that platform uncovered exactly where it
+/// matters. A junction is the Windows alias that needs no Developer Mode and no
+/// elevation, and `canonicalize` collapses it the same way it collapses a
+/// symlink, an 8.3 short name, or a `subst` drive.
+#[cfg(test)]
+pub(crate) fn create_directory_alias(target: &Path, link: &Path) -> io::Result<()> {
+    if !cfg!(windows) {
+        return create_symlink(target, link, true);
+    }
+    let status = std::process::Command::new("cmd")
+        .args(["/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    if status.success() {
+        return Ok(());
+    }
+    Err(io::Error::other(format!(
+        "mklink /J could not alias {} to {}",
+        link.display(),
+        target.display()
+    )))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +271,74 @@ mod tests {
                 test,
                 "this host does not permit symlink creation (Windows needs Developer Mode)",
             )
+    }
+
+    /// Two names for one directory have to come back as one path — that is the
+    /// entire point of the function.
+    #[test]
+    fn real_path_collapses_an_alias_onto_the_resolved_spelling() {
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real-dir");
+        fs::create_dir_all(&real).unwrap();
+        fs::create_dir_all(real.join("nested")).unwrap();
+        let alias = tmp.path().join("alias-dir");
+        create_directory_alias(&real, &alias).unwrap();
+
+        assert_eq!(
+            real_path(&alias.join("nested")).unwrap(),
+            real_path(&real.join("nested")).unwrap()
+        );
+    }
+
+    /// The verbatim prefix is an OS escape hatch: a spawned child reports the
+    /// plain form, so a root carrying `\\?\` would fail to match every path the
+    /// comparisons actually see.
+    #[test]
+    fn real_path_never_returns_a_verbatim_prefix() {
+        let tmp = TempDir::new().unwrap();
+        let resolved = real_path(tmp.path()).unwrap();
+        assert!(
+            !resolved.to_string_lossy().starts_with(r"\\?\"),
+            "{resolved:?} still carries the verbatim prefix"
+        );
+    }
+
+    /// A run names directories before it creates them — a workspace root, an
+    /// iteration dir. Resolving only whole existing paths would leave exactly
+    /// those unresolved, and the alias lives in the *ancestor* anyway (a temp
+    /// dir, a junction, an 8.3 profile name), never in the leaf about to be
+    /// created. So resolve as far down as the disk goes and re-attach the rest.
+    #[test]
+    fn real_path_resolves_the_existing_ancestor_of_a_path_not_yet_created() {
+        let tmp = TempDir::new().unwrap();
+        let real = tmp.path().join("real-dir");
+        fs::create_dir_all(&real).unwrap();
+        let alias = tmp.path().join("alias-dir");
+        create_directory_alias(&real, &alias).unwrap();
+
+        let unborn = alias.join("workspace").join("iteration-1");
+        assert_eq!(
+            real_path(&unborn).unwrap(),
+            real_path(&real)
+                .unwrap()
+                .join("workspace")
+                .join("iteration-1")
+        );
+    }
+
+    /// With nothing on disk to anchor to, the lexical form is all there is —
+    /// no worse than the spelling the caller passed in.
+    #[test]
+    fn real_path_falls_back_to_the_lexical_form_when_no_ancestor_exists() {
+        let absent = Path::new(if cfg!(windows) {
+            r"C:\no-such-root-here\child"
+        } else {
+            "/no-such-root-here/child"
+        });
+        assert_eq!(
+            real_path(absent).unwrap(),
+            std::path::absolute(absent).unwrap()
+        );
     }
 
     /// A path already in wire form passes through unchanged on every host —
