@@ -77,11 +77,9 @@ fn every_task_is_a_clean_local_git_repo_inside_a_dirty_ignored_parent_repo() {
         assert_eq!(git(eval_root, &["symbolic-ref", "--short", "HEAD"]), "work");
         assert_eq!(git(eval_root, &["status", "--porcelain"]), "");
         assert_eq!(git(eval_root, &["remote"]), "");
-        // A staged skill under a deep workspace crosses Windows' MAX_PATH
-        // (issue #270), and the repository's configuration isolation discards
-        // the `core.longpaths` an operator set globally — so the runner writes
-        // its own. Asserted on every host: CI runs Linux, where a deep path
-        // proves nothing but a dropped setting still would.
+        // Without this, a staged skill under a deep workspace hits Windows'
+        // MAX_PATH. Asserted on every host, since a Linux runner cannot prove it
+        // with a deep path but can still catch the setting going missing.
         assert_eq!(
             git(eval_root, &["config", "--local", "--get", "core.longpaths"]),
             "true"

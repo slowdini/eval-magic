@@ -22,10 +22,9 @@ const BASELINE_DATE: &str = "2000-01-01T00:00:00Z";
 /// what a tool that is not long-path aware can actually use.
 const WINDOWS_USABLE_PATH: usize = 259;
 
-/// What a run still writes below a task root before its deepest file:
-/// `\.claude\skills\<staged slug>\SKILL.md` — 68 characters for the short slug
-/// in issue #270, 85 for a long skill and condition pair. Rounded up so the
-/// hint below arrives while the budget is nearly gone rather than after.
+/// Length of what a run writes below a task root before its deepest file,
+/// `\.claude\skills\<staged slug>\SKILL.md`: 68 characters for a short slug, 85
+/// for a long skill and condition pair, rounded up.
 const STAGED_SUFFIX_BUDGET: usize = 96;
 
 pub(super) fn preflight_git(ctx: &RunContext) -> Result<(), RunError> {
@@ -62,13 +61,11 @@ pub(super) fn initialize_task_repositories(resolved: &Resolved) -> Result<(), Ru
     Ok(())
 }
 
-/// A sentence naming the Windows path budget, for a task root already deep
-/// enough that what a run stages below it will not fit.
+/// A sentence naming the Windows path budget, for a task root too deep to hold
+/// what a run stages below it.
 ///
-/// Keyed on the measured root rather than on git's `Filename too long`: that
-/// wording is git's own `strerror` mapping, so matching it would tie the hint to
-/// one locale. The root's length is a local fact, which lets the hint stay
-/// definite about the budget and hedged about the cause.
+/// Measures the root rather than matching git's `Filename too long`, which is a
+/// localizable `strerror` mapping.
 fn path_budget_hint(root: &Path, windows: bool) -> Option<String> {
     let length = root.as_os_str().to_string_lossy().chars().count();
     if !windows || length + STAGED_SUFFIX_BUDGET <= WINDOWS_USABLE_PATH {
@@ -123,13 +120,11 @@ fn initialize_task_repository(root: &Path) -> Result<(), String> {
         ("commit.gpgSign", OsString::from("false")),
         ("tag.gpgSign", OsString::from("false")),
         ("core.hooksPath", hooks_dir.into_os_string()),
-        // A staged skill under a deep workspace crosses Windows' `MAX_PATH`
-        // (issue #270), and the configuration isolation above discards the
-        // `core.longpaths` an operator set globally — so the runner writes its
-        // own. It belongs in the repository rather than on each invocation: the
-        // agent under test runs its own git in here, and the pipeline reads the
-        // repository back through `run_git`, so both inherit it. Written on
-        // every host; git ignores the key off Windows.
+        // Lifts Windows' `MAX_PATH`, which a staged skill under a deep workspace
+        // crosses. Task repositories run under isolated Git configuration, so an
+        // operator's own setting never reaches one. Written to the repository,
+        // not per invocation, so the agent under test and the pipeline inherit
+        // it; git ignores the key off Windows.
         ("core.longpaths", OsString::from("true")),
     ] {
         run_checked(
@@ -266,9 +261,8 @@ fn run_checked(
 ) -> Result<Output, String> {
     let mut command = Command::new("git");
     command
-        // `git init` creates `.git/objects/pack` before the repository-local
-        // `core.longpaths` exists to lift it, so that one invocation needs the
-        // setting passed transiently.
+        // `git init` creates `.git/objects/pack` before any repository-local
+        // configuration exists, so the long-path lift rides on the invocation.
         .args(["-c", "core.longpaths=true"])
         .args(args.iter().map(OsString::as_os_str))
         .current_dir(cwd)
@@ -319,9 +313,8 @@ mod tests {
 
     use crate::core::runtime::report_skip;
 
-    /// The staged path issue #270 failed on, relative to a task root: 68
-    /// characters, the shortest realistic shape of
-    /// `.claude/skills/<staged slug>/SKILL.md`.
+    /// A staged skill's path relative to its task root: 68 characters, the
+    /// shortest realistic shape of `.claude/skills/<staged slug>/SKILL.md`.
     const STAGED_SKILL: &str =
         ".claude/skills/slow-powers-eval-1-with_skill__widget-skill/SKILL.md";
 
@@ -341,11 +334,8 @@ mod tests {
     }
 
     /// A `target`-character task root holding a staged `SKILL.md`, or `None`
-    /// when this host cannot write that deep.
-    ///
-    /// Gated on the capability rather than the OS: the probe is the same
-    /// `std::fs` write staging performs, so a host that cannot do it says so
-    /// instead of failing somewhere inside git.
+    /// when this host cannot write that deep. The probe is the same `std::fs`
+    /// write staging performs, so the gate is the capability, not the OS.
     fn deep_task_root(base: &Path, target: usize, test: &str) -> Option<PathBuf> {
         let root = padded_to(base, target);
         let staged = root.join(STAGED_SKILL);
@@ -364,20 +354,16 @@ mod tests {
         Some(root)
     }
 
-    /// Issue #270: the run staged its skill correctly — Rust's own filesystem
-    /// calls pass verbatim paths, which lifts Windows' `MAX_PATH` — and then
-    /// aborted at the baseline `git add` with `Filename too long`. The
-    /// runner-owned repository has to carry `core.longpaths` itself: its
-    /// deliberate configuration isolation discards the one an operator set
-    /// globally.
+    /// Rust's filesystem calls pass verbatim paths, so a deep workspace stages
+    /// its skill fine and only git meets Windows' `MAX_PATH` — the baseline
+    /// `git add` aborts with `Filename too long`.
     #[test]
     fn task_repository_initializes_when_the_staged_skill_exceeds_the_windows_path_limit() {
         let test =
             "task_repository_initializes_when_the_staged_skill_exceeds_the_windows_path_limit";
         let tmp = tempfile::TempDir::new().unwrap();
-        // 195 characters puts the staged path past the 259 Windows allows a
-        // caller that is not long-path aware, while the repository's own `.git`
-        // bookkeeping stays under it — the shape reported in #270.
+        // 195 characters puts the staged path past the budget while the
+        // repository's own `.git` bookkeeping stays under it.
         let Some(root) = deep_task_root(tmp.path(), 195, test) else {
             return;
         };
@@ -410,20 +396,17 @@ mod tests {
         assert_eq!(path_budget_hint(Path::new("C:/w/iteration-1"), true), None);
     }
 
-    /// A few characters deeper the failure goes quiet instead of loud: git can
-    /// no longer open the staged directory to enumerate it, so `git add` warns,
-    /// exits zero, and leaves the skill under test out of the baseline — and the
-    /// cleanliness check that follows cannot report a file git could not read.
-    /// The baseline every later diff is measured against would silently lack the
-    /// thing under test.
+    /// Past a certain depth the failure goes quiet: git cannot open the staged
+    /// directory to enumerate it, so `git add` warns, exits zero, and leaves the
+    /// skill under test out of the baseline that later diffs are measured
+    /// against. Nothing downstream can flag a file git could not read.
     #[test]
     fn task_repository_baseline_tracks_a_staged_skill_past_the_windows_path_limit() {
         let test = "task_repository_baseline_tracks_a_staged_skill_past_the_windows_path_limit";
         let tmp = tempfile::TempDir::new().unwrap();
-        // 202 characters is the narrow band that isolates the quiet mode:
-        // enumerating the staged directory needs 261, past the budget, while the
-        // repository's own loose objects still fit at 256. Post-fix the
-        // assertion holds at any depth; the band is what makes it fail without.
+        // 202 characters isolates the quiet mode: enumerating the staged
+        // directory needs 261, past the budget, while the repository's own loose
+        // objects still fit at 256.
         let Some(root) = deep_task_root(tmp.path(), 202, test) else {
             return;
         };
@@ -435,9 +418,9 @@ mod tests {
         );
     }
 
-    /// One step deeper: the repository's own `.git/objects/pack` crosses the
-    /// budget too, so `git init` — which runs before the repository-local
-    /// configuration exists — has to be long-path aware in its own right.
+    /// A root deep enough that `.git/objects/pack` crosses the budget: `git
+    /// init` creates it before any repository-local configuration exists, so the
+    /// lift has to reach that invocation too.
     #[test]
     fn task_repository_initializes_when_its_git_directory_exceeds_the_windows_path_limit() {
         let test =
