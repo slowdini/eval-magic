@@ -5,6 +5,7 @@ The final `N/M verdicts present` summary exits nonzero until every task has one.
 ```bash
 JOBS=${JOBS:-4}
 jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // ""))' judge-tasks.json \
+  | tr -d '\r' \
   | tr '\n' '\0' \
   | xargs -0 -P "$JOBS" -n 3 sh -c '
     prompt_path="$1"
@@ -21,9 +22,10 @@ jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // 
       2> "$response_base.cline-stderr.log"
   ' sh
 judge_dispatch_status=$?
-judge_total=$(jq '.tasks | length' judge-tasks.json)
+judge_total=$(jq '.tasks | length' judge-tasks.json | tr -d '\r')
 judge_present=$(
   jq -r '.tasks[].response_path' judge-tasks.json \
+    | tr -d '\r' \
     | while IFS= read -r response_path; do
         if [ -s "$response_path" ]; then printf '%s\n' "$response_path"; fi
       done \

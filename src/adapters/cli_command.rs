@@ -70,6 +70,10 @@ pub(crate) fn render_cli_model_arg(flag: Option<&str>, model: Option<&str>) -> S
 /// instead, where they do not survive argument passing — jq then emits no
 /// separators and `xargs -0` collapses every field into one bogus dispatch
 /// that exits 0. Paths containing a newline remain unsupported, as before.
+///
+/// `tr -d '\r'` runs before that: jq's native Windows build writes CRLF, and
+/// `tr '\n' '\0'` converts only the newline, so without it every path reaches
+/// the dispatch with a carriage return on the end.
 pub(crate) fn render_parallel_dispatch_recipe(
     command_block: &str,
     one_shot_only: bool,
@@ -85,6 +89,7 @@ pub(crate) fn render_parallel_dispatch_recipe(
         format!(
             "jq -r '{tasks} | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \\"
         ),
+        "  | tr -d '\\r' \\".to_string(),
         "  | tr '\\n' '\\0' \\".to_string(),
         "  | xargs -0 -P \"$JOBS\" -n 3 sh -c '".to_string(),
         "    eval_root=\"$1\"".to_string(),
@@ -109,6 +114,11 @@ pub(crate) fn render_parallel_dispatch_recipe(
 /// model, `<flag> <model>` otherwise) and end with ` \`; `model_flag` fills the
 /// `model_arg` assignment; `capture_prefix` names the per-task
 /// `$response_base.<prefix>-events.jsonl` / `.<prefix>-stderr.log` captures.
+///
+/// Every jq call is piped through `tr -d '\r'`: jq's native Windows build
+/// writes CRLF, and none of the three readers here drop it — `read -r` keeps a
+/// carriage return by definition, `tr '\n' '\0'` converts only the newline, and
+/// `[ "$judge_present" -eq "$judge_total" ]` needs a bare integer.
 pub(crate) fn render_judge_dispatch_recipe(
     command_line: &str,
     model_flag: &str,
@@ -124,6 +134,7 @@ pub(crate) fn render_judge_dispatch_recipe(
         "```bash".to_string(),
         "JOBS=${JOBS:-4}".to_string(),
         "jq -r '.tasks[] | .dispatch_prompt_path, .response_path, (\"model=\" + (.model // \"\"))' judge-tasks.json \\".to_string(),
+        "  | tr -d '\\r' \\".to_string(),
         "  | tr '\\n' '\\0' \\".to_string(),
         "  | xargs -0 -P \"$JOBS\" -n 3 sh -c '".to_string(),
         "    prompt_path=\"$1\"".to_string(),
@@ -140,9 +151,10 @@ pub(crate) fn render_judge_dispatch_recipe(
         format!("      2> \"$response_base.{capture_prefix}-stderr.log\""),
         "  ' sh".to_string(),
         "judge_dispatch_status=$?".to_string(),
-        "judge_total=$(jq '.tasks | length' judge-tasks.json)".to_string(),
+        "judge_total=$(jq '.tasks | length' judge-tasks.json | tr -d '\\r')".to_string(),
         "judge_present=$(".to_string(),
         "  jq -r '.tasks[].response_path' judge-tasks.json \\".to_string(),
+        "    | tr -d '\\r' \\".to_string(),
         "    | while IFS= read -r response_path; do".to_string(),
         "        if [ -s \"$response_path\" ]; then printf '%s\\n' \"$response_path\"; fi"
             .to_string(),
@@ -208,7 +220,26 @@ mod tests {
         }
     }
 
+    /// A `jq` that ends every line with CRLF, the way jq's native Windows build
+    /// does with stdout in text mode. A shell function rather than a `PATH`
+    /// shim: nothing has to be marked executable, so it reads and behaves the
+    /// same on every host, and only the outer pipeline calls jq — the `xargs`
+    /// child never does, so it does not need the definition.
+    const CRLF_JQ: &str = "jq() { command jq \"$@\" | tr -d '\\r' \
+         | while IFS= read -r line; do printf '%s\\r\\n' \"$line\"; done; }\n";
+
     fn run_judge_recipe(shell: &Path, cwd: &Path, command_line: &str) -> Output {
+        run_judge_recipe_prefixed(shell, cwd, command_line, "")
+    }
+
+    /// Run the rendered recipe with `preamble` in front of it, so a test can
+    /// replace a tool the recipe shells out to.
+    fn run_judge_recipe_prefixed(
+        shell: &Path,
+        cwd: &Path,
+        command_line: &str,
+        preamble: &str,
+    ) -> Output {
         let recipe = render_judge_dispatch_recipe(command_line, "--model", "judge");
         let program = recipe
             .split_once("```bash\n")
@@ -218,7 +249,7 @@ mod tests {
             .unwrap();
         Command::new(shell)
             .arg("-c")
-            .arg(program)
+            .arg(format!("{preamble}{program}"))
             .current_dir(cwd)
             .env("JOBS", "1")
             .output()
@@ -371,6 +402,62 @@ mod tests {
             String::from_utf8(output.stdout).unwrap(),
             "1/2 verdicts present\n"
         );
+    }
+
+    /// jq's native Windows build opens stdout in text mode, so every `\n` it
+    /// writes arrives as `\r\n`. The recipes read that output as paths, and
+    /// neither reader drops the CR: `read -r` keeps it by definition, and
+    /// `tr '\n' '\0'` converts only the newline. The carriage return then rides
+    /// on the end of every path — `[ -s "$response_path" ]` matches nothing, the
+    /// summary reports zero verdicts present, and each dispatched task gets a
+    /// corrupted `$eval_root`. Git Bash with `jq` installed is the documented
+    /// Windows setup, so jq's output has to be normalised before anything reads
+    /// it. Same expectations as the plain-jq partial-completion test above; only
+    /// jq's line endings differ.
+    #[test]
+    fn judge_recipe_counts_verdicts_when_jq_emits_crlf() {
+        let Some(shell) = recipe_shell("judge_recipe_counts_verdicts_when_jq_emits_crlf") else {
+            return;
+        };
+        let tmp = tempfile::TempDir::new().unwrap();
+        let responses_dir = tmp.path().join("judge responses");
+        fs::create_dir_all(&responses_dir).unwrap();
+        let existing_response = responses_dir.join("existing.json");
+        let missing_response = responses_dir.join("missing.json");
+        fs::write(&existing_response, "{}\n").unwrap();
+        write_judge_tasks(tmp.path(), &[&existing_response, &missing_response]);
+
+        let output =
+            run_judge_recipe_prefixed(shell, tmp.path(), "    true $model_arg \\", CRLF_JQ);
+
+        assert!(!output.status.success(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            "1/2 verdicts present\n",
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// Every recipe that reads jq's output has to strip the carriage return
+    /// jq's Windows build adds, and it has to do so once per call: the judge
+    /// recipe pipes jq into `xargs`, into `read`, and into an arithmetic
+    /// comparison, and a CR left on any one of them breaks that stage alone.
+    #[test]
+    fn recipes_strip_the_carriage_return_a_windows_jq_emits() {
+        for recipe in [
+            render_parallel_dispatch_recipe("    run \"$eval_root\"", false, &BTreeMap::new()),
+            render_parallel_dispatch_recipe("    run \"$eval_root\"", true, &BTreeMap::new()),
+            render_judge_dispatch_recipe("    judge $model_arg \\", "--model", "judge"),
+        ] {
+            let calls = recipe.lines().filter(|line| line.contains("jq ")).count();
+            assert!(calls > 0, "{recipe}");
+            assert_eq!(
+                calls,
+                recipe.matches("tr -d '\\r'").count(),
+                "every jq call needs its own CR strip\n{recipe}"
+            );
+        }
     }
 
     #[test]

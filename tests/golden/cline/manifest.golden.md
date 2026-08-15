@@ -30,6 +30,7 @@ Parallel dispatch from this iteration directory:
 ```bash
 JOBS=${JOBS:-4}
 jq -r '.tasks[] | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \
+  | tr -d '\r' \
   | tr '\n' '\0' \
   | xargs -0 -P "$JOBS" -n 3 sh -c '
     eval_root="$1"
