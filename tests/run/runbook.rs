@@ -75,6 +75,47 @@ fn run_writes_headless_runbook_for_claude() {
         "headless does not use the in-session batch loop: {book}"
     );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
+
+    // Issue #248: the runbook is the manual for a campaign, so it names the
+    // shell it expects — and names it *above* the first command a reader would
+    // paste, which is the whole point of stating the requirement at all.
+    let requirement = book
+        .find("Git Bash")
+        .expect("the runbook states the POSIX shell requirement");
+    assert!(book.contains("jq"), "the requirement names jq too: {book}");
+    assert!(book.contains("WSL"), "{book}");
+    assert!(
+        requirement < book.find("claude -p").unwrap(),
+        "the requirement precedes the first pasteable command: {book}"
+    );
+}
+
+/// Issue #248: `run` used to succeed on a host with no POSIX shell and print
+/// recipes only a POSIX shell can execute, with nothing to say a different shell
+/// was expected. The prepared workspace is still correct, so this warns rather
+/// than failing — but it must warn, and it must name the way out.
+///
+/// `EVAL_MAGIC_SH` pointing at nothing reproduces the shell-less host on every
+/// platform, so the test does not depend on what the developer has installed.
+#[test]
+fn run_warns_when_the_host_has_no_posix_shell() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .env("EVAL_MAGIC_SH", tmp.path().join("no-shell-here"))
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--harness",
+            "claude-code",
+            "--dry-run",
+        ])
+        .assert()
+        .success()
+        .stderr(contains("⚠").and(contains("Git Bash")).and(contains("WSL")));
 }
 
 #[test]
@@ -109,5 +150,11 @@ fn run_writes_headless_runbook_for_opencode() {
     assert!(
         !manifest.contains("{{"),
         "no unsubstituted tokens: {manifest}"
+    );
+    // The manifest carries the same POSIX recipes, so it carries the same
+    // requirement (issue #248 names both artifacts).
+    assert!(
+        manifest.contains("Git Bash") && manifest.contains("jq"),
+        "the manifest states the POSIX tooling requirement: {manifest}"
     );
 }

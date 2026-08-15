@@ -73,6 +73,11 @@ editing. Add a focused failing test at the narrowest useful boundary, implement 
 run the focused test again. Cross-harness changes belong at shared descriptor, runner, or adapter
 boundaries unless the evidence requires a named harness capability.
 
+Development carries the host requirement the tool itself declares: a POSIX shell with `jq`. The
+scripted-turn tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so
+the suite cannot pass without one. Tests needing `jq` or symlink creation report a skip instead;
+`EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into failures, as CI sets it to do.
+
 Before handing work off, run:
 
 ```text

@@ -15,7 +15,7 @@ use std::path::Path;
 
 use crate::adapters::{CliDispatchContext, CliJudgeContext, RUNBOOK_TEMPLATE, adapter_for};
 use crate::core::fs::artifact_path;
-use crate::core::{Harness, Mode};
+use crate::core::{Harness, Mode, POSIX_TOOLING_REQUIREMENT};
 
 use super::util::{harness_label, mode_str};
 
@@ -65,6 +65,9 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         ("NUM_TASKS", &num_tasks),
         ("DISPATCH_JSON", &dispatch_json),
         ("BENCHMARK_PATH", &benchmark_path),
+        // Every recipe below this line is a POSIX command line, so the runbook
+        // names the shell it expects before the reader reaches one (issue #248).
+        ("POSIX_REQUIREMENT", POSIX_TOOLING_REQUIREMENT),
     ];
 
     // A human pastes commands. The harness-specific dispatch + judge recipes come

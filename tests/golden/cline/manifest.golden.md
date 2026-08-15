@@ -8,6 +8,8 @@ Total dispatches: 2
 
 In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short "read this file and follow it" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.
 
+**Requires:** eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. Run them in a POSIX shell with `jq` installed — on Windows, use Git Bash (Git for Windows) or WSL. Set EVAL_MAGIC_SH to select a specific `sh`.
+
 After all dispatches (Cline):
 
 Run one fresh `cline --cwd <eval-root> --act --json --auto-approve true` per task. Detach stdin with `</dev/null>` so piped task data cannot become extra prompt context; capture stdout as `outputs/cline-events.jsonl` and stderr as `outputs/cline-stderr.log`. The trailing jq step recovers `outputs/final-message.md` from the terminal `run_result` event.

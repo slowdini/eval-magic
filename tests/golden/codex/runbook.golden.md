@@ -4,6 +4,8 @@ This runbook is for a human driving the run from a terminal. Work from this iter
 and copy-paste each step. The workspace is self-contained — you should not need the surrounding
 repo.
 
+> **Requires:** eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. Run them in a POSIX shell with `jq` installed — on Windows, use Git Bash (Git for Windows) or WSL. Set EVAL_MAGIC_SH to select a specific `sh`.
+
 - **Skill under test:** widget-skill
 - **Mode:** revision — comparing `old_skill` vs `new_skill`
 - **Dispatches:** 6 (the `tasks[]` array in `/work/.eval-magic/widget-skill/iteration-2/dispatch.json`)

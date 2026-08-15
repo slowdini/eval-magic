@@ -27,6 +27,7 @@ mod envs;
 mod git;
 mod resolve;
 mod shadow_preflight;
+mod shell;
 mod stage;
 
 /// Run options parsed from the `run` subcommand flags (everything beyond the
@@ -104,6 +105,14 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     // Git is a hard runtime dependency for task-repository isolation. Probe it
     // before resolution chooses or creates any iteration workspace.
     git::preflight_git(ctx)?;
+
+    // The POSIX toolchain is a requirement of the *recipes* this run generates,
+    // not of the run itself, so it warns and continues (issue #248). Printed up
+    // front: an operator who has to install something should learn it before
+    // reading a runbook full of commands their shell cannot parse.
+    for warning in shell::preflight_posix_tooling() {
+        eprintln!("⚠ {warning}");
+    }
 
     // Resolve first (read-only): the preflight scopes its transcript warning
     // to the eval config actually selected for the run.

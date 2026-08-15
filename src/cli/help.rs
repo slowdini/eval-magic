@@ -7,6 +7,12 @@
 
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
+REQUIREMENTS:
+  Git, plus a POSIX shell with jq, xargs, tr, and wc. The dispatch and judge
+  recipes in the generated RUNBOOK.md are POSIX command lines — on Windows,
+  run them in Git Bash (Git for Windows) or WSL, and install jq separately.
+  Set EVAL_MAGIC_SH to select a specific sh.
+
 EXAMPLES:
   # Scaffold a first eval and prepare its isolated comparison environments
   eval-magic init
