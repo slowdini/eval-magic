@@ -63,13 +63,15 @@ binary, `cargo test --lib` alone does not build it — run `cargo test`, or `car
 compilation and clippy on the other host and hides the coverage gap. Instead, probe for what the
 test actually needs and call `report_skip` (`src/core/runtime.rs`), which prints the reason and
 returns `true`. Setting `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns every skip into a failure; CI sets
-it, so a runner cannot quietly stop covering something. Two capabilities are gated today: the recipe
-tools beyond the shell itself (`require_posix_toolchain` — in practice `jq`), and symlink creation,
-which Windows allows only under Developer Mode. The shell is not one of them; it is a hard
-requirement, per the section below. `require_posix_toolchain` is not test-only either — the `run`
-preflight uses it to warn about the same gap. Where a genuine per-OS difference is the behavior under
-test — signals, path separators — branch on `cfg!(windows)` at runtime so both arms still compile
-everywhere.
+it on both runners, so neither can quietly stop covering something. Three capabilities are gated
+today: the recipe tools beyond the shell itself (`require_posix_toolchain` — in practice `jq`),
+symlink creation, which Windows allows only under Developer Mode, and creating a path past
+Windows' 259-character limit (`deep_task_root`, `src/cli/run/orchestrate/git.rs`). The Windows
+runner is provisioned for those rather than exempted from them, so a skip there is a red build. The
+shell is not one of them; it is a hard requirement, per the section below.
+`require_posix_toolchain` is not test-only either — the `run` preflight uses it to warn about the
+same gap. Where a genuine per-OS difference is the behavior under test — signals, path separators —
+branch on `cfg!(windows)` at runtime so both arms still compile everywhere.
 
 **A POSIX shell is required, for use and for development.** Harness `exec_template`s are POSIX
 command lines, so the dispatch and probe paths spawn `sh` via `posix_shell()`
