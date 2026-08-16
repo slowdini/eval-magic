@@ -11,6 +11,10 @@
       "type": "string",
       "description": "Name of the skill being evaluated. Should match the skill directory name."
     },
+    "codebase": {
+      "$ref": "#/definitions/codebase",
+      "description": "Default codebase every eval's task environment is built from. A per-eval codebase overrides it."
+    },
     "evals": {
       "type": "array",
       "minItems": 1,
@@ -18,6 +22,41 @@
     }
   },
   "definitions": {
+    "codebase": {
+      "oneOf": [
+        { "$ref": "#/definitions/gitCodebase" },
+        { "$ref": "#/definitions/pathCodebase" }
+      ]
+    },
+    "pathCodebase": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Directory on this host to build the task environment from, resolved relative to this evals.json when relative. Unlike files_root it may be absolute or escape the skill tree, because it deliberately points outside it. A path source is host-local: another machine has the directory elsewhere or not at all, so a run recorded against one is not reproducible from this config alone. When the directory is a Git repository the runner also records its origin URL and resolved SHA, which are."
+        }
+      }
+    },
+    "gitCodebase": {
+      "type": "object",
+      "required": ["url", "ref"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git repository to clone the task environment from."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Branch, tag, or full commit SHA to check out. Required: the runner records the resolved SHA, so an eval tracking a moving branch could not be re-run against what it measured."
+        }
+      }
+    },
     "eval": {
       "type": "object",
       "required": ["id", "prompt", "expected_output"],
@@ -58,6 +97,10 @@
           "type": "integer",
           "minimum": 1,
           "description": "Runs per condition for this eval, for variance reduction; overrides the --runs flag. Defaults to the flag's value (1 unless raised)."
+        },
+        "codebase": {
+          "$ref": "#/definitions/codebase",
+          "description": "Codebase this eval's task environment is built from, overriding the config-level default."
         },
         "isolation": {
           "type": "string",

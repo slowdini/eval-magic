@@ -116,6 +116,11 @@ pub struct Eval {
     /// Ordered scripted user follow-ups. Absence preserves one-shot dispatch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turns: Option<Vec<ScriptedTurn>>,
+    /// Codebase this eval's task environment is built from, overriding the
+    /// config-level default. Appended last so an eval that declares none
+    /// serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseSource>,
 }
 
 /// One scripted user follow-up delivered after an assistant response.
@@ -143,10 +148,36 @@ pub enum Isolation {
     Isolated,
 }
 
+/// Where a task environment's contents come from: a Git repository at an
+/// explicit ref, or a directory on this host.
+///
+/// Untagged because the config spells the two apart by their keys (`url`+`ref`
+/// versus `path`) rather than by a discriminator. `evals.schema.json` rejects
+/// the ambiguous shapes before serde ever sees them, so the poor error messages
+/// untagged enums produce on their own never reach a user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CodebaseSource {
+    Git {
+        url: String,
+        /// Required: the runner records the *resolved* SHA, so an eval that
+        /// tracked a moving branch could not be re-run against what it measured.
+        #[serde(rename = "ref")]
+        reference: String,
+    },
+    Path {
+        path: String,
+    },
+}
+
 /// The parsed `evals.json` for one skill.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalsConfig {
     pub skill_name: String,
+    /// Default codebase for every eval in this config; a per-eval `codebase`
+    /// overrides it. Mirrors how `runs` defaults and is overridden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseSource>,
     pub evals: Vec<Eval>,
 }
 
@@ -442,6 +473,7 @@ mod tests {
             runs: None,
             isolation: None,
             turns: None,
+            codebase: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -465,6 +497,7 @@ mod tests {
             runs: None,
             isolation: Some(Isolation::Isolated),
             turns: None,
+            codebase: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert_eq!(
