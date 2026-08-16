@@ -5,14 +5,18 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
+use crate::adapters::registry::all_config_dir_names;
 use crate::core::{clear_git_environment, run_git};
+use crate::source::INITIALIZED_BRANCH;
 
 use super::super::RunError;
+use super::super::fixtures::fixture_pairs;
 use super::Resolved;
 use super::envs::{EnvLayoutInput, env_targets};
 use crate::core::RunContext;
 
-const BASELINE_BRANCH: &str = "work";
+/// Marks the state every environment starts from, for later diffing.
+const BASELINE_REF: &str = "refs/eval-magic/baseline";
 const BASELINE_MESSAGE: &str = "eval-magic task baseline";
 const BASELINE_NAME: &str = "eval-magic";
 const BASELINE_EMAIL: &str = "eval-magic@localhost";
@@ -38,7 +42,10 @@ pub(super) fn preflight_git(ctx: &RunContext) -> Result<(), RunError> {
     )))
 }
 
-pub(super) fn initialize_task_repositories(resolved: &Resolved) -> Result<(), RunError> {
+pub(super) fn initialize_task_repositories(
+    ctx: &RunContext,
+    resolved: &Resolved,
+) -> Result<(), RunError> {
     let targets = env_targets(&EnvLayoutInput {
         iteration_dir: &resolved.iteration_dir,
         groups: &resolved.groups,
@@ -48,7 +55,19 @@ pub(super) fn initialize_task_repositories(resolved: &Resolved) -> Result<(), Ru
         skill_path_b: resolved.skill_path_b.as_deref(),
     });
     for target in targets {
-        initialize_task_repository(&target.root).map_err(|error| {
+        let codebase = resolved.codebase_for(&target.eval_ids)?;
+        let plan = TaskRepository {
+            root: target.root.clone(),
+            // A sourced environment already *is* a repository, carrying the
+            // history the clone brought with it.
+            sourced: codebase.is_some(),
+            branch: codebase.map_or_else(
+                || INITIALIZED_BRANCH.to_string(),
+                |codebase| codebase.source.branch.clone(),
+            ),
+            forced_paths: runner_placed_paths(ctx, resolved, &target)?,
+        };
+        initialize_task_repository(&plan).map_err(|error| {
             let hint = path_budget_hint(&target.root, cfg!(windows))
                 .map(|hint| format!("\n{hint}"))
                 .unwrap_or_default();
@@ -59,6 +78,51 @@ pub(super) fn initialize_task_repositories(resolved: &Resolved) -> Result<(), Ru
         })?;
     }
     Ok(())
+}
+
+/// Env-relative paths the runner placed, which must reach the baseline commit
+/// even when the sourced codebase's own `.gitignore` covers them.
+///
+/// A real repository ignores its build output, and a blanket forced add would
+/// sweep `target/` or `node_modules/` into the baseline. So the baseline add
+/// respects `.gitignore` and these paths — the harness config directories, and
+/// the declared fixture overlay — are forced on top of it.
+fn runner_placed_paths(
+    ctx: &RunContext,
+    resolved: &Resolved,
+    target: &super::envs::EnvTarget,
+) -> Result<Vec<String>, RunError> {
+    let mut paths: Vec<String> = all_config_dir_names()
+        .into_iter()
+        .filter(|name| target.root.join(name).exists())
+        .collect();
+    for eval_id in &target.eval_ids {
+        let Some(eval) = resolved
+            .selected_evals
+            .iter()
+            .find(|candidate| &candidate.id == eval_id)
+        else {
+            continue;
+        };
+        for (dest, _source) in fixture_pairs(eval, &ctx.skill_subdir)? {
+            if target.root.join(&dest).exists() {
+                paths.push(dest);
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// One task repository to establish.
+struct TaskRepository {
+    root: PathBuf,
+    /// Whether a codebase already put a repository here. A sourced environment
+    /// keeps its `.git`; a fixture-only one is initialized from nothing.
+    sourced: bool,
+    branch: String,
+    forced_paths: Vec<String>,
 }
 
 /// A sentence naming the Windows path budget, for a task root too deep to hold
@@ -79,8 +143,8 @@ fn path_budget_hint(root: &Path, windows: bool) -> Option<String> {
     ))
 }
 
-fn initialize_task_repository(root: &Path) -> Result<(), String> {
-    remove_existing_git_dir(root)?;
+fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
+    let root = plan.root.as_path();
 
     let isolated = tempfile::TempDir::new()
         .map_err(|error| format!("could not create isolated Git configuration: {error}"))?;
@@ -91,20 +155,27 @@ fn initialize_task_repository(root: &Path) -> Result<(), String> {
     fs::write(&global_config, "")
         .map_err(|error| format!("could not create empty Git configuration: {error}"))?;
 
-    run_checked(
-        root,
-        &[
-            OsString::from("init"),
-            OsString::from("--quiet"),
-            OsString::from("--initial-branch"),
-            OsString::from(BASELINE_BRANCH),
-            OsString::from("--template"),
-            template_dir.into_os_string(),
-            OsString::from("."),
-        ],
-        &global_config,
-        &[],
-    )?;
+    if plan.sourced {
+        // The clone's history is the point of sourcing a codebase, so this is
+        // the one case that must not reset `.git`.
+        strip_remotes(root, &global_config)?;
+    } else {
+        remove_existing_git_dir(root)?;
+        run_checked(
+            root,
+            &[
+                OsString::from("init"),
+                OsString::from("--quiet"),
+                OsString::from("--initial-branch"),
+                OsString::from(&plan.branch),
+                OsString::from("--template"),
+                template_dir.into_os_string(),
+                OsString::from("."),
+            ],
+            &global_config,
+            &[],
+        )?;
+    }
 
     let hooks_dir = root.join(".git/eval-magic-disabled-hooks");
     fs::create_dir_all(root.join(".git/info"))
@@ -140,20 +211,36 @@ fn initialize_task_repository(root: &Path) -> Result<(), String> {
         )?;
     }
 
+    // Respects the sourced codebase's `.gitignore`: a real repository ignores
+    // its build output, and a forced add here would commit `target/` or
+    // `node_modules/` into the baseline every environment starts from.
+    //
+    // No exclude pathspec for `.eval-magic-outputs`: `.git/info/exclude` above
+    // already ignores it, and an unforced add honors that. The pathspecs this
+    // replaces existed only to carve it back out of a forced add.
     run_checked(
         root,
         &[
             OsString::from("add"),
-            OsString::from("--force"),
             OsString::from("--all"),
             OsString::from("--"),
             OsString::from("."),
-            OsString::from(":(exclude,top).eval-magic-outputs"),
-            OsString::from(":(exclude,top).eval-magic-outputs/**"),
         ],
         &global_config,
         &[],
     )?;
+    // What the runner itself placed is forced in on top, so a codebase that
+    // ignores `.claude/` cannot hide the staged skill from the baseline — which
+    // would leave the condition under test outside every later diff.
+    if !plan.forced_paths.is_empty() {
+        let mut args = vec![
+            OsString::from("add"),
+            OsString::from("--force"),
+            OsString::from("--"),
+        ];
+        args.extend(plan.forced_paths.iter().map(OsString::from));
+        run_checked(root, &args, &global_config, &[])?;
+    }
     run_checked(
         root,
         &[
@@ -176,7 +263,47 @@ fn initialize_task_repository(root: &Path) -> Result<(), String> {
         ],
     )?;
 
+    // The start state, named. Everything the agent does afterwards is measurable
+    // as the difference from this ref, whether the environment has one commit or
+    // a codebase's entire history behind it.
+    //
+    // Deliberately outside `refs/heads/`: it never appears in `git branch`, so
+    // it adds nothing to what the agent under test sees.
+    run_checked(
+        root,
+        &[
+            OsString::from("update-ref"),
+            OsString::from(BASELINE_REF),
+            OsString::from("HEAD"),
+        ],
+        &global_config,
+        &[],
+    )?;
+
     verify_task_repository(root, &global_config)
+}
+
+/// Drop every remote, so nothing in the environment can reach the source it was
+/// cloned from — or push to it.
+fn strip_remotes(root: &Path, global_config: &Path) -> Result<(), String> {
+    let listed = run_checked(root, &[OsString::from("remote")], global_config, &[])?;
+    for remote in String::from_utf8_lossy(&listed.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+    {
+        run_checked(
+            root,
+            &[
+                OsString::from("remote"),
+                OsString::from("remove"),
+                OsString::from(remote),
+            ],
+            global_config,
+            &[],
+        )?;
+    }
+    Ok(())
 }
 
 fn remove_existing_git_dir(root: &Path) -> Result<(), String> {
@@ -313,6 +440,17 @@ mod tests {
 
     use crate::core::runtime::report_skip;
 
+    /// A repository with no codebase behind it — the shape these path-budget
+    /// tests exercise, and what a fixture-only run has always produced.
+    fn fixture_only(root: &Path) -> TaskRepository {
+        TaskRepository {
+            root: root.to_path_buf(),
+            sourced: false,
+            branch: INITIALIZED_BRANCH.to_string(),
+            forced_paths: Vec::new(),
+        }
+    }
+
     /// A staged skill's path relative to its task root: 68 characters, the
     /// shortest realistic shape of `.claude/skills/<staged slug>/SKILL.md`.
     const STAGED_SKILL: &str =
@@ -388,7 +526,7 @@ mod tests {
             root.join(STAGED_SKILL).as_os_str().len() > WINDOWS_USABLE_PATH,
             "the fixture must exceed the Windows path budget to exercise anything"
         );
-        initialize_task_repository(&root)
+        initialize_task_repository(&fixture_only(&root))
             .expect("a task root with a deep staged skill initializes");
     }
 
@@ -427,7 +565,8 @@ mod tests {
         let Some(root) = deep_task_root(tmp.path(), 202, test) else {
             return;
         };
-        initialize_task_repository(&root).expect("a task root in the quiet band initializes");
+        initialize_task_repository(&fixture_only(&root))
+            .expect("a task root in the quiet band initializes");
         let tracked = run_git(&["ls-files"], &root);
         assert!(
             String::from_utf8_lossy(&tracked.stdout).contains("SKILL.md"),
@@ -467,7 +606,7 @@ mod tests {
             length + 1 + GIT_CONFIG.len() + 3 <= WINDOWS_USABLE_PATH,
             "{length}-character root leaves `.git/config` no margin below the budget"
         );
-        initialize_task_repository(&root)
+        initialize_task_repository(&fixture_only(&root))
             .expect("a task root deeper than `.git` needs initializes");
     }
 }

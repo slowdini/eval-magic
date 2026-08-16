@@ -1,10 +1,12 @@
 //! Phase 2 — create the iteration dir, (re)stage the condition skills + their
 //! siblings, and resolve the shared dispatch-prompt inputs.
 
+use std::collections::HashMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::core::RunContext;
+use crate::core::fs::copy_entry_materialized;
 use crate::sandbox::teardown_guard;
 
 use super::super::RunError;
@@ -83,13 +85,31 @@ pub(super) fn stage_conditions(
 
     let mut cond_a_slug = None;
     let mut cond_b_slug = None;
+    // Distinct codebases materialized so far this iteration, by key. Every
+    // environment sharing a codebase is provisioned from one materialization.
+    let mut materialized: HashMap<String, PathBuf> = HashMap::new();
 
     for target in &targets {
         // Disarm a prior run's guard before re-staging, so a crashed run can't leave
         // the write-blocking hook armed across runs. Created unconditionally — even
         // under --no-stage, each env's fixtures still land here.
         teardown_guard(&target.root);
+
+        let codebase = r.codebase_for(&target.eval_ids)?;
+        if codebase.is_some() && target.root.exists() {
+            // An explicit `--iteration N` rebuild would otherwise lay a fresh
+            // codebase over the last run's tree, including whatever the previous
+            // agent left behind. Start from nothing instead.
+            fs::remove_dir_all(&target.root)?;
+        }
         fs::create_dir_all(&target.root)?;
+
+        // The codebase goes down first: staged skills and the `files` overlay are
+        // both applied *on top* of it.
+        if let Some(codebase) = codebase {
+            let source_tree = materialize_codebase(&r.iteration_dir, codebase, &mut materialized)?;
+            copy_entry_materialized(&source_tree, &target.root)?;
+        }
 
         if !opts.no_stage {
             cleanup_staged_skills(&target.root, ctx.harness)?;
@@ -158,6 +178,29 @@ pub(super) fn stage_conditions(
         bootstrap_content,
         plan_mode_content,
     })
+}
+
+/// The materialized tree for `codebase`, creating it on first use.
+///
+/// One materialization per distinct codebase per iteration; each environment is
+/// then provisioned from it by copy. Cloning per environment instead would mean
+/// one network round trip per `(group, condition, run)` cell.
+fn materialize_codebase(
+    iteration_dir: &Path,
+    codebase: &super::RunCodebase,
+    materialized: &mut HashMap<String, PathBuf>,
+) -> Result<PathBuf, RunError> {
+    if let Some(existing) = materialized.get(&codebase.key) {
+        return Ok(existing.clone());
+    }
+    let tree = iteration_dir.join(".codebase").join(&codebase.key);
+    if tree.exists() {
+        fs::remove_dir_all(&tree)?;
+    }
+    crate::source::materialize(&codebase.source, &tree)
+        .map_err(|error| RunError::msg(error.to_string()))?;
+    materialized.insert(codebase.key.clone(), tree.clone());
+    Ok(tree)
 }
 
 /// Stage one condition's skill into `root` and return its slug; `Ok(None)` when

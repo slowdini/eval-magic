@@ -14,6 +14,7 @@ mod byoh;
 mod claude_cli;
 mod cline;
 mod cline_permission_denials;
+mod codebase;
 mod codex;
 mod codex_guard;
 mod codex_permission_denials;
