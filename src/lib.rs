@@ -11,5 +11,6 @@ pub mod cli;
 pub mod core;
 pub mod pipeline;
 pub mod sandbox;
+pub mod source;
 pub mod validation;
 pub mod workspace;
