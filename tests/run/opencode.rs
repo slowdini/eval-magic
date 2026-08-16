@@ -377,10 +377,7 @@ fn opencode_warns_when_live_skill_shadows_staged_skill() {
     assert_eq!(live["kind"], "skill");
     assert_eq!(live["root"]["namespace"], "claude");
     assert_eq!(live["root"]["relation"], "cross-harness");
-    assert_eq!(
-        live["discovery_path"],
-        live_skill.to_string_lossy().as_ref()
-    );
+    assert_eq!(live["discovery_path"], wire_path(&live_skill).as_str());
 }
 
 /// Resolve a dispatch.json path field (absolute, or relative to the run cwd).

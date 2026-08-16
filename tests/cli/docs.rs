@@ -278,6 +278,32 @@ fn repository_documentation_map_names_each_surface() {
     assert!(agents.contains("docs/guides/"));
     assert!(agents.contains("docs/developer_overview.md"));
     assert!(!agents.contains("docs/README.md"));
+
+    // A POSIX shell is a development requirement, not a probed capability: the
+    // scripted-turn tests spawn a `#!/bin/sh` stub through it and cannot skip.
+    // Both contributor-facing docs have to say so, or the next contributor on
+    // Windows rediscovers it as a test failure (issue #248).
+    for (name, text) in [("AGENTS.md", &agents), ("developer overview", &overview)] {
+        assert!(
+            text.contains("POSIX shell") && text.contains("jq"),
+            "{name} should record the POSIX shell + jq development requirement"
+        );
+    }
+}
+
+/// `--help` is the primary discovery surface, so the host requirement is
+/// reachable there without installing anything or preparing a run first.
+#[test]
+fn help_states_the_posix_tooling_requirement() {
+    skill_eval()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(contains("REQUIREMENTS:"))
+        .stdout(contains("POSIX shell"))
+        .stdout(contains("jq"))
+        .stdout(contains("Git Bash"))
+        .stdout(contains("WSL"));
 }
 
 #[test]
@@ -296,12 +322,18 @@ fn readme_is_a_concise_first_run_path() {
         "eval-magic docs byoh",
         "eval-magic docs isolation",
         "docs/developer_overview.md",
+        // The declared host requirement, stated for both audiences the README
+        // serves: installing the tool, and developing it (issue #248).
+        "POSIX shell",
+        "Git Bash",
+        "WSL",
+        "jq",
     ] {
         assert!(readme.contains(expected), "README is missing {expected}");
     }
 
     assert!(
-        readme.lines().count() <= 160,
+        readme.lines().count() <= 175,
         "README should hand detail to shipped docs instead of duplicating it"
     );
     assert!(!readme.contains("## Harnesses"));

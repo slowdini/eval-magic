@@ -26,6 +26,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail};
 use clap::Parser;
 
+use crate::core::fs::artifact_path;
 use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
 mod args;
@@ -111,6 +112,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         Commands::Guard { marker } => run_guard(marker),
         Commands::GuardCodex { marker } => run_guard_codex(marker),
         Commands::GuardHook { harness, marker } => run_guard_hook(&harness, marker),
+        Commands::Fixture(args) => run_fixture(args),
         Commands::RecordRuns(args) => run_record_runs(args),
         Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
@@ -172,9 +174,9 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
     format!(
         " --skill-dir {} --skill {} --workspace-dir {}",
-        ctx.skill_dir.display(),
+        artifact_path(&ctx.skill_dir),
         ctx.skill_name,
-        ctx.workspace_root.display(),
+        artifact_path(&ctx.workspace_root),
     )
 }
 
@@ -324,7 +326,10 @@ mod tests {
 
         let args = command_target_args(&ctx);
         assert!(
-            args.contains(&format!("--workspace-dir {}", ctx.workspace_root.display())),
+            args.contains(&format!(
+                "--workspace-dir {}",
+                artifact_path(&ctx.workspace_root)
+            )),
             "selector names absolute --workspace-dir: {args}"
         );
         assert!(

@@ -66,12 +66,39 @@ following authorities:
   infer one harness's flags or event shapes from another harness.
 - Tests and golden artifacts for behavior that crosses a module or CLI boundary.
 
+## Platform support
+
+| Tier | Platform | Verified by |
+| --- | --- | --- |
+| Supported | Linux, macOS | the `ubuntu-latest` CI job |
+| Deprecated | Windows, through Git Bash (Git for Windows) | the `windows-latest` CI job |
+| Unsupported | preparing a workspace on Windows and dispatching it from WSL | — |
+
+Windows support is deprecated in favor of WSL, and its removal is gated on #256, which replaces
+the generated POSIX recipes with a runner-driven `eval-magic dispatch`. Until that lands, the
+Windows runner stays green and Windows-native behavior is held to the same bar as any other
+platform: a Windows failure is a real failure, not an accepted gap. Do not add new Windows-native
+accommodation in the meantime.
+
+The unsupported row is a correctness boundary rather than a preference. A generated recipe carries
+the absolute paths of the host that prepared the workspace. Git Bash shares the Windows filesystem,
+so those paths resolve; WSL resolves its own namespace, where a `C:\…` path names nothing. Nothing
+in the tree translates between the two, so the split fails quietly instead of loudly.
+`POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is the single wording every user-facing surface
+reuses to state this; `src/cli/help.rs` restates it for clap by hand.
+
 ## Make and verify a change
 
 Trace the user-visible behavior from the CLI handler into library-owned logic and artifacts before
 editing. Add a focused failing test at the narrowest useful boundary, implement the change, then
 run the focused test again. Cross-harness changes belong at shared descriptor, runner, or adapter
 boundaries unless the evidence requires a named harness capability.
+
+Development carries the host requirement the tool itself declares: a POSIX shell with `jq`. The
+scripted-turn tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so
+the suite cannot pass without one. Tests needing `jq`, symlink creation, or a path past Windows'
+259-character limit report a skip instead; `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into
+failures, as CI sets it to do on both its Ubuntu and its Windows runner.
 
 Before handing work off, run:
 

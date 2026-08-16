@@ -24,7 +24,7 @@ use super::super::util::unguarded_notice;
 use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_indices};
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
-use crate::core::fs::write_json;
+use crate::core::fs::{artifact_path, write_json};
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.
@@ -35,18 +35,24 @@ pub(super) fn write_dispatch(
     r: &Resolved,
     staged: &Staged,
 ) -> Result<usize, RunError> {
+    // `conditions.json` is echoed into `dispatch.json` beside the tasks, which
+    // carry the same skill path — spelling it differently in the two places
+    // would put one field in two forms in one file.
+    let condition_skill_path = |path: &Option<String>| -> Option<String> {
+        path.as_deref().map(|p| artifact_path(Path::new(p)))
+    };
     let conditions = ConditionsRecord {
         mode: r.mode,
         baseline: r.baseline.clone(),
         conditions: vec![
             ConditionEntry {
                 name: r.cond_a.to_string(),
-                skill_path: r.skill_path_a.clone(),
+                skill_path: condition_skill_path(&r.skill_path_a),
                 staged_skill_slug: Some(staged.cond_a_slug.clone()),
             },
             ConditionEntry {
                 name: r.cond_b.to_string(),
-                skill_path: r.skill_path_b.clone(),
+                skill_path: condition_skill_path(&r.skill_path_b),
                 staged_skill_slug: Some(staged.cond_b_slug.clone()),
             },
         ],
@@ -63,11 +69,11 @@ pub(super) fn write_dispatch(
 
     let staged_skill_path_for = |env_root: &Path, cond_slug: Option<&str>| -> Option<String> {
         cond_slug.map(|slug| {
-            skills_dir_for_harness(env_root, ctx.harness)
-                .join(slug)
-                .join("SKILL.md")
-                .to_string_lossy()
-                .into_owned()
+            artifact_path(
+                &skills_dir_for_harness(env_root, ctx.harness)
+                    .join(slug)
+                    .join("SKILL.md"),
+            )
         })
     };
 
@@ -85,11 +91,11 @@ pub(super) fn write_dispatch(
             .iter()
             .map(|(name, description)| AvailableSkill {
                 name: name.clone(),
-                path: skills_dir_for_harness(env_root, ctx.harness)
-                    .join(name)
-                    .join("SKILL.md")
-                    .to_string_lossy()
-                    .into_owned(),
+                path: artifact_path(
+                    &skills_dir_for_harness(env_root, ctx.harness)
+                        .join(name)
+                        .join("SKILL.md"),
+                ),
                 description: description.clone(),
             })
             .collect();
@@ -254,7 +260,7 @@ pub(super) fn write_dispatch(
         "skill_name": ctx.skill_name,
         "iteration": r.iteration,
         "run_nonce": r.run_nonce,
-        "iteration_dir": r.iteration_dir.to_string_lossy(),
+        "iteration_dir": artifact_path(&r.iteration_dir),
         "mode": r.mode,
         "baseline": r.baseline,
         "plan_mode": opts.plan_mode,
@@ -293,13 +299,15 @@ pub(super) fn write_dispatch(
                     task_run_indices(g).into_iter().map(move |run_index| {
                         let mut env = json!({
                             "condition": cond,
-                            "dir": task_env_root_for_run(
+                            // Same env, same spelling as the task's `eval_root`
+                            // — the two fields are joined on by readers of
+                            // dispatch.json.
+                            "dir": artifact_path(&task_env_root_for_run(
                                 &r.iteration_dir,
                                 &g.id,
                                 cond,
                                 run_index,
-                            )
-                            .to_string_lossy(),
+                            )),
                         });
                         if let Some(run_index) = run_index {
                             env.as_object_mut()

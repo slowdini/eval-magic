@@ -56,6 +56,42 @@ pub fn env_staged_entries(cwd: &Path) -> Vec<String> {
     staged_entries(&cli_env_dir(cwd, "g1", "with_skill").join(".claude/skills"))
 }
 
+/// A local path as the artifacts spell it: forward slashes on every host, since
+/// generated artifacts are a wire format shared across platforms. Mirrors
+/// `eval_magic::core::fs::artifact_path` for the integration tests, which build
+/// their expectations with `Path::join`.
+pub fn wire_path(path: &Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// A `__fixture` invocation as a `command_check` command line.
+///
+/// The grader hands the string to the platform shell, so it has to parse the
+/// same under `sh -c` and `cmd /C`: a double-quoted program path followed by
+/// double-quoted arguments does. One such command covers what `test`, `true`,
+/// and `fc` would each have to spell differently per shell.
+pub fn fixture(args: &[&str]) -> String {
+    let mut command = format!("\"{}\" __fixture", env!("CARGO_BIN_EXE_eval-magic"));
+    for arg in args {
+        command.push_str(&format!(" \"{arg}\""));
+    }
+    command
+}
+
+/// `fs::canonicalize` with Windows' verbatim (`\\?\`) prefix removed.
+///
+/// The symlink resolution matters — a macOS temp dir lives under a symlinked
+/// `/var`, so the CLI's own paths resolve to `/private/var/...`. The prefix does
+/// not: a child process reports the plain form as its cwd, so plain is the
+/// spelling every path the CLI emits actually carries.
+pub fn resolved(path: &Path) -> PathBuf {
+    let canonical = fs::canonicalize(path).unwrap();
+    match canonical.to_string_lossy().strip_prefix(r"\\?\") {
+        Some(plain) => PathBuf::from(plain),
+        None => canonical,
+    }
+}
+
 pub fn read_json(path: &Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
 }

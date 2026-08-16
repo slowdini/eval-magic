@@ -117,6 +117,11 @@ fn shows(source: &ShadowSource, dispatch: &dyn DispatchEvidence) -> bool {
 /// Compares the recorded `runtime_id` and, belt-and-braces, the staged
 /// directory name: harnesses that advertise a staged skill by its directory
 /// rather than its logical name would otherwise slip past.
+///
+/// The basename is split on either separator. `discovery_path` is wire format
+/// (forward slashes) while the host separator may be `\`, so keying off
+/// `MAIN_SEPARATOR` would find no basename at all and let a refutation through
+/// on the very collision this exists to block.
 fn colliding_staged_source<'a>(
     finding: &'a ShadowFinding,
     live: &ShadowSource,
@@ -137,7 +142,7 @@ fn colliding_staged_source<'a>(
             staged.runtime_id == live.runtime_id
                 || staged
                     .discovery_path
-                    .rsplit(std::path::MAIN_SEPARATOR)
+                    .rsplit(['/', '\\'])
                     .next()
                     .is_some_and(|basename| basename == live.runtime_id)
         })

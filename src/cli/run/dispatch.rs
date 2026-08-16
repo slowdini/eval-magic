@@ -13,7 +13,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
-use crate::core::{AvailableSkill, Eval, Harness, ScriptedTurn};
+use crate::core::fs::artifact_path;
+use crate::core::{AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn};
 
 use super::RunError;
 
@@ -105,6 +106,14 @@ fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) ->
 /// Construct one dispatch task and its full prompt.
 pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunError> {
     let harness = opts.harness;
+    // Every path this function emits — into `dispatch.json`, the manifest, and
+    // the prompt the agent reads — is wire format, so render them all the same
+    // way whatever the host separator is. Rendered once up front so the
+    // serialized fields and the prompt text can never disagree.
+    let outputs_dir = artifact_path(Path::new(opts.outputs_dir));
+    let eval_root = opts.eval_root.map(|root| artifact_path(Path::new(root)));
+    let skill_path = opts.skill_path.map(|p| artifact_path(Path::new(p)));
+    let staged_skill_path = opts.staged_skill_path.map(|p| artifact_path(Path::new(p)));
     let mut staged_skills = opts.available_skills.clone();
     staged_skills.sort_by(|a, b| a.name.cmp(&b.name));
 
@@ -118,14 +127,14 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
             "The `{}` skill is registered under the identifier `{slug}` and is discoverable {surface}. If you invoke it, use that identifier.",
             opts.skill_name
         )];
-        if let Some(staged_path) = opts.staged_skill_path {
+        if let Some(staged_path) = &staged_skill_path {
             let cannot_resolve = adapter.skill_unresolved_phrase();
             lines.push(format!(
                 "{cannot_resolve}, read the skill from `{staged_path}` instead."
             ));
         }
         lines.join("\n")
-    } else if let Some(skill_path) = opts.skill_path {
+    } else if let Some(skill_path) = &skill_path {
         let content = fs::read_to_string(skill_path)?;
         let dir_name = Path::new(skill_path)
             .parent()
@@ -165,7 +174,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     // A condition that does not load the skill-under-test must carry zero
     // reference to it: the available-skills block auto-omits it, and a
     // user-supplied bootstrap that names it in prose is redacted here.
-    let skill_absent = opts.skill_path.is_none() && opts.staged_skill_slug.is_none();
+    let skill_absent = skill_path.is_none() && opts.staged_skill_slug.is_none();
     let effective_bootstrap: Option<String> = match opts.bootstrap_content {
         Some(b) if !b.is_empty() => Some(if skill_absent {
             redact_skill_from_bootstrap(b, opts.skill_name)
@@ -214,22 +223,21 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     }
     task_lines.push(String::new());
     task_lines.push(fixtures_block);
-    if let Some(eval_root) = opts.eval_root {
+    if let Some(eval_root) = &eval_root {
         task_lines.push(super::scratch::context(eval_root));
     }
-    task_lines.push(format!("Framework output directory: {}", opts.outputs_dir));
+    task_lines.push(format!("Framework output directory: {outputs_dir}"));
     task_lines.push(String::new());
     task_lines.push("Instructions:".to_string());
     task_lines.push(
         "- Work normally on the task: you may edit existing files and create new files inside the task environment."
             .to_string(),
     );
-    super::scratch::push_instruction(&mut task_lines, opts.eval_root);
+    super::scratch::push_instruction(&mut task_lines, eval_root.as_deref());
     task_lines
         .push("- Use the framework output directory only for framework artifacts.".to_string());
     task_lines.push(format!(
-        "- After completing the task, write your final user-facing response to {}/final-message.md.",
-        opts.outputs_dir
+        "- After completing the task, write your final user-facing response to {outputs_dir}/final-message.md."
     ));
     task_lines.push("- Do not write outside the task environment.".to_string());
     task_lines.push(String::new());
@@ -251,27 +259,21 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         eval_id: opts.eval_id.to_string(),
         condition: opts.condition.to_string(),
         run_index: opts.run_index,
-        skill_path: opts.skill_path.map(str::to_string),
+        skill_path,
         staged_skill_slug: opts.staged_skill_slug.map(str::to_string),
         user_prompt: opts.user_prompt.to_string(),
         fixtures: opts.fixtures.clone(),
-        outputs_dir: opts.outputs_dir.to_string(),
-        run_record_path: cond_dir.join("run.json").to_string_lossy().into_owned(),
-        timing_path: cond_dir.join("timing.json").to_string_lossy().into_owned(),
+        run_record_path: artifact_path(&cond_dir.join("run.json")),
+        timing_path: artifact_path(&cond_dir.join("timing.json")),
         turns: opts.turns.map(<[ScriptedTurn]>::to_vec),
-        conversation_path: opts.turns.map(|_| {
-            cond_dir
-                .join("conversation.json")
-                .to_string_lossy()
-                .into_owned()
-        }),
+        conversation_path: opts
+            .turns
+            .map(|_| artifact_path(&cond_dir.join("conversation.json"))),
         agent_description,
-        dispatch_prompt_path: Path::new(opts.outputs_dir)
-            .join("dispatch-prompt.txt")
-            .to_string_lossy()
-            .into_owned(),
+        dispatch_prompt_path: artifact_path(&Path::new(&outputs_dir).join("dispatch-prompt.txt")),
+        outputs_dir,
         group: opts.group.map(str::to_string),
-        eval_root: opts.eval_root.map(str::to_string),
+        eval_root,
         dispatch_prompt: sections.join(""),
     })
 }
@@ -410,6 +412,10 @@ pub fn build_manifest(
         "## How to use this manifest".to_string(),
         String::new(),
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
+        String::new(),
+        // The recipes below are POSIX command lines, so the manifest states the
+        // requirement the same way RUNBOOK.md does (issue #248).
+        format!("**Requires:** {POSIX_TOOLING_REQUIREMENT}"),
         String::new(),
     ];
     let scripted: Vec<usize> = tasks

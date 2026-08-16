@@ -70,6 +70,28 @@ fn ci_publishes_default_branch_coverage_for_readme_badge() {
     }
 }
 
+/// Releases attach a Windows binary, so the suite has to run on Windows — but
+/// the matrix entry alone proves nothing. Six of those tests are gated on
+/// capabilities the runner has to be handed: `jq` for the judge recipes, and
+/// symlink creation for the `core::fs` round-trips. Without the enforcement
+/// variable they skip in silence, and the job reports green while covering
+/// strictly less than it looks like it is. Every string below is load-bearing,
+/// which is why they are pinned together rather than one standing for the rest.
+#[test]
+fn ci_runs_the_suite_on_windows_with_capability_skips_enforced() {
+    let workflow = read_repo_file(".github/workflows/ci.yml");
+
+    for expected in [
+        "os: [ubuntu-latest, windows-latest]",
+        "fail-fast: false",
+        "EVAL_MAGIC_REQUIRE_POSIX_TOOLS: 1",
+        "choco install jq",
+        "AllowDevelopmentWithoutDevLicense",
+    ] {
+        assert!(workflow.contains(expected), "CI is missing {expected}");
+    }
+}
+
 #[test]
 fn cargo_package_excludes_repo_local_authoring_files() {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
@@ -119,7 +141,12 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         if path.extension().and_then(|value| value.to_str()) != Some("md") {
             continue;
         }
-        let relative = path.strip_prefix(repo_root()).unwrap().to_string_lossy();
+        // `cargo package --list` prints forward slashes on every platform.
+        let relative = path
+            .strip_prefix(repo_root())
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
         assert!(
             files.lines().any(|line| line == relative),
             "{relative} should be packaged"

@@ -11,6 +11,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
+use crate::core::fs::artifact_path;
+
 use super::policy::{
     OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_with_cwd, is_patch_tool,
     is_shell_tool, is_under_any, is_write_tool, path_arg, resolve_path,
@@ -89,9 +91,20 @@ fn scratch_hint(roots: &[String]) -> String {
     roots.first().map_or_else(String::new, |root| {
         format!(
             ". For temporary or scratch files, use {}.",
-            Path::new(root).join(super::TASK_SCRATCH_DIR).display()
+            artifact_path(&Path::new(root).join(super::TASK_SCRATCH_DIR))
         )
     })
+}
+
+/// The allowed roots as the deny reason names them. Rendered the same way as
+/// the scratch hint beside it, so one sentence never shows the agent a root in
+/// one spelling and a directory under it in another.
+fn allowed_roots_hint(roots: &[String]) -> String {
+    roots
+        .iter()
+        .map(|root| artifact_path(Path::new(root)))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// True when the marker is active and unexpired at `now_ms` (epoch milliseconds).
@@ -152,10 +165,10 @@ pub(crate) fn decide_with_cwd(
             return GuardEvaluation::deny(
                 format!(
                     "{GUARD_REASON_PREFIX}{tool_name} to {p} is outside the eval sandbox (allowed: {}){}",
-                    roots.join(", "),
+                    allowed_roots_hint(&roots),
                     scratch_hint(&roots),
                 ),
-                vec![resolve_path(p, invocation_cwd).display().to_string()],
+                vec![artifact_path(&resolve_path(p, invocation_cwd))],
             );
         }
         return GuardEvaluation::allow();
@@ -178,13 +191,13 @@ pub(crate) fn decide_with_cwd(
         {
             let resolved_targets = paths
                 .iter()
-                .map(|target| resolve_path(target, invocation_cwd).display().to_string())
+                .map(|target| artifact_path(&resolve_path(target, invocation_cwd)))
                 .collect();
             return GuardEvaluation::deny(
                 format!(
                     "{GUARD_REASON_PREFIX}{tool_name} target {path} is outside the eval sandbox \
                      (allowed: {}){}",
-                    roots.join(", "),
+                    allowed_roots_hint(&roots),
                     scratch_hint(&roots),
                 ),
                 resolved_targets,

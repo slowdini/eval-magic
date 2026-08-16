@@ -1,6 +1,6 @@
 //! Guard-denial collection and benchmark validity warnings.
 
-use crate::helpers::{canonical_root, skill_eval};
+use crate::helpers::{canonical_root, resolved, skill_eval};
 use assert_cmd::Command;
 use predicates::str::contains;
 use std::fs;
@@ -79,7 +79,7 @@ fn write_conditions(iteration_dir: &Path, skill_md: &str) {
 fn setup_guard_denial_iteration(tmp: &TempDir) -> (PathBuf, PathBuf, PathBuf) {
     use serde_json::json;
 
-    let root = fs::canonicalize(tmp.path()).unwrap();
+    let root = resolved(tmp.path());
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
     fs::create_dir_all(&skill_sub).unwrap();

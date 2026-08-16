@@ -479,10 +479,12 @@ fn grade_emits_and_finalizes_per_nested_run_dir() {
             .join(format!("run-{k}"))
             .join("judge-responses")
             .join("a1.json");
+        // `judge-tasks.json` carries paths as forward-slash wire format, so the
+        // locally-joined expectation is compared in the same spelling.
         assert!(
             a1_response_paths
                 .iter()
-                .any(|p| *p == expected.to_string_lossy()),
+                .any(|p| *p == expected.to_string_lossy().replace('\\', "/")),
             "missing judge task for run-{k}"
         );
         fs::write(

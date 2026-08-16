@@ -114,7 +114,6 @@ fn ingest_writes_diff_scope_for_every_run_without_an_assertion() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn diff_scope_is_captured_before_command_check_setup_and_reused() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -122,7 +121,7 @@ fn diff_scope_is_captured_before_command_check_setup_and_reused() {
         { "id": "held-out", "prompt": "fix source.txt", "expected_output": "fixed",
           "skill_should_trigger": false, "files": ["source.txt"],
           "assertions": [{ "id": "secret", "type": "command_check",
-            "setup_files": ["holdout/secret.txt"], "command": "true" }] } ] }"#;
+            "setup_files": ["holdout/secret.txt"], "command": "exit 0" }] } ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
     fs::write(skill_dir.join("mr-review/evals/source.txt"), "old\n").unwrap();
     fs::create_dir_all(skill_dir.join("mr-review/evals/holdout")).unwrap();

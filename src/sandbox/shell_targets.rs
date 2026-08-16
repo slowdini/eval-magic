@@ -2,6 +2,8 @@
 
 use std::path::Path;
 
+use crate::core::fs::artifact_path;
+
 use super::policy::{BashClassification, OUTPUT_REDIRECTION_REASON, is_under_any, resolve_path};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -307,16 +309,21 @@ fn fd_duplication_end(chars: &[char], at: usize) -> Option<usize> {
 /// to one writes nothing to the filesystem, so it is never a write target.
 /// Applied to the *resolved* path, so `/dev/../etc/passwd` cannot launder an
 /// out-of-bounds target through the `/dev` prefix.
+///
+/// Matched by path component rather than by string: a resolved path renders
+/// with the host's separator, so `/dev/fd/1` reads back as `fd\1` on Windows
+/// and a `"fd/"` string prefix would miss it.
 fn is_non_file_device(resolved: &Path) -> bool {
     let Ok(rest) = resolved.strip_prefix("/dev") else {
         return false;
     };
-    match rest.to_str() {
-        Some("null" | "stdout" | "stderr") => true,
-        Some(other) => other
-            .strip_prefix("fd/")
-            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())),
-        None => false,
+    let mut parts = rest.components().map(|c| c.as_os_str().to_str());
+    match (parts.next(), parts.next(), parts.next()) {
+        (Some(Some("null" | "stdout" | "stderr")), None, None) => true,
+        (Some(Some("fd")), Some(Some(n)), None) => {
+            !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+        }
+        _ => false,
     }
 }
 
@@ -340,7 +347,7 @@ fn record_literal_target(
     if is_non_file_device(&resolved) {
         return true;
     }
-    resolved_targets.push(resolved.display().to_string());
+    resolved_targets.push(artifact_path(&resolved));
     is_under_any(&word.value, allowed_roots, invocation_cwd)
 }
 

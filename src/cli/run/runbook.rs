@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use crate::adapters::{CliDispatchContext, CliJudgeContext, RUNBOOK_TEMPLATE, adapter_for};
-use crate::core::{Harness, Mode};
+use crate::core::fs::artifact_path;
+use crate::core::{Harness, Mode, POSIX_TOOLING_REQUIREMENT};
 
 use super::util::{harness_label, mode_str};
 
@@ -51,16 +52,8 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
 
     let iteration = ctx.iteration.to_string();
     let num_tasks = ctx.num_tasks.to_string();
-    let dispatch_json = ctx
-        .iteration_dir
-        .join("dispatch.json")
-        .display()
-        .to_string();
-    let benchmark_path = ctx
-        .iteration_dir
-        .join("benchmark.json")
-        .display()
-        .to_string();
+    let dispatch_json = artifact_path(&ctx.iteration_dir.join("dispatch.json"));
+    let benchmark_path = artifact_path(&ctx.iteration_dir.join("benchmark.json"));
 
     // Shared identity tokens, present in both templates.
     let mut vars: Vec<(&str, &str)> = vec![
@@ -72,6 +65,9 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         ("NUM_TASKS", &num_tasks),
         ("DISPATCH_JSON", &dispatch_json),
         ("BENCHMARK_PATH", &benchmark_path),
+        // Every recipe below this line is a POSIX command line, so the runbook
+        // names the shell it expects before the reader reaches one (issue #248).
+        ("POSIX_REQUIREMENT", POSIX_TOOLING_REQUIREMENT),
     ];
 
     // A human pastes commands. The harness-specific dispatch + judge recipes come

@@ -4,6 +4,8 @@ This runbook is for a human driving the run from a terminal. Work from this iter
 and copy-paste each step. The workspace is self-contained — you should not need the surrounding
 repo.
 
+> **Requires:** eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. Run them in a POSIX shell with `jq` installed that resolves the same paths this workspace was prepared with — on Windows, Git Bash (Git for Windows). WSL resolves a different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH to select a specific `sh`.
+
 - **Skill under test:** widget-skill
 - **Mode:** revision — comparing `old_skill` vs `new_skill`
 - **Dispatches:** 6 (the `tasks[]` array in `/work/.eval-magic/widget-skill/iteration-2/dispatch.json`)
@@ -32,6 +34,7 @@ The final `N/M verdicts present` summary exits nonzero until every task has one.
 ```bash
 JOBS=${JOBS:-4}
 jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // ""))' judge-tasks.json \
+  | tr -d '\r' \
   | tr '\n' '\0' \
   | xargs -0 -P "$JOBS" -n 3 sh -c '
     prompt_path="$1"
@@ -48,9 +51,10 @@ jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // 
       2> "$response_base.opencode-stderr.log"
   ' sh
 judge_dispatch_status=$?
-judge_total=$(jq '.tasks | length' judge-tasks.json)
+judge_total=$(jq '.tasks | length' judge-tasks.json | tr -d '\r')
 judge_present=$(
   jq -r '.tasks[].response_path' judge-tasks.json \
+    | tr -d '\r' \
     | while IFS= read -r response_path; do
         if [ -s "$response_path" ]; then printf '%s\n' "$response_path"; fi
       done \

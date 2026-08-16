@@ -18,6 +18,7 @@ use crate::adapters::cli_command::{
     render_agent_dispatch_command, render_cli_model_arg, shell_quote_arg,
 };
 use crate::adapters::descriptor::{HarnessDescriptor, subst};
+use crate::core::posix_shell;
 
 /// Options carried from the parsed `--probe` flags into [`run_probe`].
 #[derive(Debug, Clone, Copy)]
@@ -86,16 +87,20 @@ fn render_probe_exec(
     )
 }
 
-/// Execute `command` via `/bin/sh -c` with `cwd` as the subprocess working
-/// directory, killing the child if it exceeds `timeout`. The child's stdin is
-/// `null`: the parent reads the `y/N` confirm on its own stdin and never wants
-/// the dispatched agent CLI to consume it.
+/// Execute `command` via the resolved POSIX shell with `cwd` as the subprocess
+/// working directory, killing the child if it exceeds `timeout`. The child's
+/// stdin is `null`: the parent reads the `y/N` confirm on its own stdin and
+/// never wants the dispatched agent CLI to consume it.
+///
+/// Only the direct child is killed on timeout, not its process group — a shell
+/// that has already forked leaves the grandchild running until it exits.
 fn execute_with_timeout(
     command: &str,
     cwd: &Path,
     timeout: Duration,
 ) -> Result<ExitStatus, ProbeError> {
-    let mut child = Command::new("/bin/sh")
+    let shell = posix_shell().map_err(|message| ProbeError::SpawnFailed(message.to_string()))?;
+    let mut child = Command::new(shell)
         .arg("-c")
         .arg(command)
         .current_dir(cwd)
@@ -157,15 +162,21 @@ fn render_only_check(template: &str, vars: &[(&str, &str)]) -> Result<(), ProbeE
 const PROBE_PROMPT: &str = "Reply with the single word: ok\n";
 
 /// Stand-in `{var}` values used by the render-only checks so a missing backing
-/// field never masquerades as a clean render.
-const RENDER_STAND_INS: [(&str, &str); 2] = [
+/// field never masquerades as a clean render. Every placeholder the dispatch
+/// path fills needs an entry here, or the check reports a token the real run
+/// resolves. The values are visible markers rather than faithful fragments —
+/// the rendered text is only scanned for leftover braces, never executed — so
+/// `{guard_args}` carries one too instead of the empty fragment the probe hands
+/// the exec template.
+const RENDER_STAND_INS: [(&str, &str); 3] = [
     ("cwd", "/probe/stand-in/cwd"),
     ("model_arg", "stand-in-model"),
+    ("guard_args", "--stand-in-guard"),
 ];
 
 /// The live dispatch probe. Renders `dispatch.exec_template` with a trivial
 /// prompt in a throwaway temp dir, asks for confirmation, runs it under a
-/// timeout through `/bin/sh -c` from that dir, then verifies the final-message
+/// timeout through the resolved POSIX shell from that dir, then verifies the final-message
 /// recovery contract. Also render-only-validates `parallel_command_template`
 /// and `judge_command_template` for placeholder-shape errors. Invokes the real
 /// harness CLI and is opt-in; never part of standard CI checks.
@@ -295,6 +306,7 @@ pub(crate) fn run_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::descriptor::{EMBEDDED_DESCRIPTORS, load_descriptor};
     use std::fs;
     use std::path::PathBuf;
 
@@ -421,5 +433,40 @@ mod tests {
         let template = "xargs -I{} sh -c 'echo ${JOBS:-4}' {cwd}";
         let vars = [("cwd", "/work"), ("model_arg", "gpt-x")];
         render_only_check(template, &vars).expect("shell braces plus a resolved {cwd} should pass");
+    }
+
+    #[test]
+    fn render_stand_ins_cover_guard_args() {
+        // Guarded harnesses splice {guard_args} onto a preceding flag value.
+        // A stand-in must back it or the probe reports a placeholder the real
+        // dispatch path resolves.
+        let template = "agent exec --sandbox workspace-write{guard_args} --cd {cwd}";
+        render_only_check(template, &RENDER_STAND_INS).expect("{guard_args} must have a stand-in");
+    }
+
+    #[test]
+    fn render_stand_ins_cover_every_shipped_dispatch_template() {
+        // The render-only checks run against the shipped descriptors, so the
+        // stand-ins have to cover every placeholder those descriptors use.
+        // Anything missing surfaces as a false `✗ render:` failure.
+        for (source, toml_src) in EMBEDDED_DESCRIPTORS {
+            let descriptor = load_descriptor(toml_src, source)
+                .unwrap_or_else(|e| panic!("embedded descriptor {source} is invalid: {e}"));
+            let dispatch = &descriptor.dispatch;
+            for (field, template) in [
+                (
+                    "parallel_command_template",
+                    dispatch.parallel_command_template.as_deref(),
+                ),
+                (
+                    "judge_command_template",
+                    dispatch.judge_command_template.as_deref(),
+                ),
+            ] {
+                let Some(template) = template else { continue };
+                render_only_check(template, &RENDER_STAND_INS)
+                    .unwrap_or_else(|e| panic!("{source} {field}: {e}"));
+            }
+        }
     }
 }

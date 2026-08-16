@@ -4,6 +4,8 @@ This runbook is for a human driving the run from a terminal. Work from this iter
 and copy-paste each step. The workspace is self-contained — you should not need the surrounding
 repo.
 
+> **Requires:** {{POSIX_REQUIREMENT}}
+
 - **Skill under test:** {{SKILL_NAME}}
 - **Mode:** {{MODE}} — comparing `{{COND_A}}` vs `{{COND_B}}`
 - **Dispatches:** {{NUM_TASKS}} (the `tasks[]` array in `{{DISPATCH_JSON}}`)

@@ -16,7 +16,13 @@ env:
 jobs:
   test:
     name: Test suite
-    runs-on: ubuntu-latest
+    strategy:
+      # Windows is the platform this matrix exists to cover, so a Linux failure
+      # must not cancel it — that is exactly when its result is worth having.
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - name: Install Rust toolchain
@@ -25,11 +31,35 @@ jobs:
           components: rustfmt, clippy
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
+      - name: Install jq
+        # Git for Windows supplies sh, xargs, tr, and wc, but not jq, and the
+        # judge-recipe tests execute the shipped pipeline text rather than a
+        # stand-in for it.
+        if: runner.os == 'Windows'
+        run: choco install jq --yes --no-progress
+      - name: Permit symlink creation
+        # Windows creates symlinks only under Developer Mode or elevation, and
+        # the core::fs round-trips need one. Asking for it explicitly beats
+        # depending on how the runner's token happens to be built.
+        if: runner.os == 'Windows'
+        run: >
+          reg add "HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
+          /t REG_DWORD /f /v AllowDevelopmentWithoutDevLicense /d 1
       - name: Format check
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Test
+        # Capability-gated tests (the POSIX recipe pipelines, symlink
+        # round-trips, long-path staging) skip with a printed reason on a host
+        # that lacks the capability. This turns every such skip into a failure,
+        # so neither runner can quietly stop covering them. Ubuntu ships the
+        # recipe tools; the steps above provide them on Windows. Long paths need
+        # no provisioning — the runner passes core.longpaths to git itself.
+        # EVAL_MAGIC_SH stays unset deliberately: discovering the shell from the
+        # Git install root is what a Windows user hits, so CI should run it too.
+        env:
+          EVAL_MAGIC_REQUIRE_POSIX_TOOLS: 1
         run: cargo test --all-targets
       - name: Build release
         run: cargo build --release

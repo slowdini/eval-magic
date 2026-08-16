@@ -1,7 +1,16 @@
 use super::*;
 
-fn timezone_matrix_command() -> &'static str {
-    "printf '%s:%s' \"$FIXED\" \"$TZ\"; test \"$TZ\" = UTC"
+fn timezone_matrix_command() -> String {
+    fixture(&[
+        "--echo-env",
+        "FIXED",
+        "--echo-env",
+        "TZ",
+        "--separator",
+        ":",
+        "--require-env",
+        "TZ=UTC",
+    ])
 }
 
 #[test]

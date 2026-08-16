@@ -18,6 +18,10 @@
 //! iteration-level `permission-denials.json` written here (see
 //! [`crate::pipeline::permission_denials`]); harnesses that cannot detect a
 //! refusal get no file at all, so its absence never reads as "nothing refused".
+//!
+//! Two sub-concerns live beside this module: [`conversation`] assembles a
+//! scripted task's ordered rounds, and [`prompt_read`] decides whether a
+//! dispatch ever received its instructions.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -34,8 +38,10 @@ use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
 use crate::pipeline::session_surface::{self, RoundSurface, TaskSessionSurface};
 use crate::pipeline::shadow_verification;
 use crate::validation::{SchemaName, validate_against_schema};
+use prompt_read::{prompt_read_failed, prompt_sentinel};
 
 mod conversation;
+mod prompt_read;
 
 /// The `dispatch.json` envelope record-runs reads.
 #[derive(Debug, Deserialize)]
@@ -349,59 +355,6 @@ pub fn record_runs(
     }
 
     Ok(result)
-}
-
-/// Positive evidence that the agent tried to read its dispatch prompt and
-/// failed: the transcript has a tool call referencing `prompt_path`, yet no such
-/// call returned the prompt's content (its distinctive first-line `sentinel`).
-///
-/// A run that never references the prompt path is NOT flagged — absence is not
-/// proof of failure (the agent can receive the prompt another way),
-/// and requiring positive evidence keeps the check free of false positives.
-/// An invocation without a string result is not judged either: transcript
-/// readers that leave results unjoined (the declarative extract tier) carry no
-/// delivery evidence, and treating that as failure flags every successful read.
-/// Returns `false` when `sentinel` is empty (the prompt file was missing or
-/// unreadable, so the read cannot be judged).
-fn prompt_read_failed(summary: &TranscriptSummary, prompt_path: &str, sentinel: &str) -> bool {
-    if sentinel.is_empty() {
-        return false;
-    }
-    let mut referenced = false;
-    let mut delivered = false;
-    for inv in &summary.tool_invocations {
-        let mentions_prompt = inv
-            .args
-            .as_ref()
-            .is_some_and(|a| a.to_string().contains(prompt_path));
-        if !mentions_prompt {
-            continue;
-        }
-        let Some(result) = inv.result.as_ref().and_then(serde_json::Value::as_str) else {
-            continue;
-        };
-        referenced = true;
-        if result.contains(sentinel) {
-            delivered = true;
-        }
-    }
-    referenced && !delivered
-}
-
-/// The dispatch prompt's distinctive first non-empty line, used as the sentinel
-/// for [`prompt_read_failed`]. Empty when the prompt file is missing/unreadable.
-fn prompt_sentinel(prompt_path: &str) -> String {
-    if prompt_path.is_empty() {
-        return String::new();
-    }
-    fs::read_to_string(prompt_path)
-        .ok()
-        .and_then(|p| {
-            p.lines()
-                .find(|l| !l.trim().is_empty())
-                .map(|l| l.trim().to_string())
-        })
-        .unwrap_or_default()
 }
 
 /// Resolve a task's transcript summary: read the events file the harness CLI
