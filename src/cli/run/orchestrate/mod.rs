@@ -12,11 +12,15 @@
 //! stateless helpers in [`super::util`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{Eval, Mode, RunContext};
+use crate::core::fs::artifact_path;
+use crate::core::{
+    CodebaseKind, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, Mode, RunContext,
+};
+use crate::source::ResolvedSource;
 
 use super::RunError;
 use super::statistics::format_minimum_attainable_fisher_p_value;
@@ -72,6 +76,9 @@ impl RunOptions<'_> {
 struct Resolved {
     mode: Mode,
     baseline: Option<String>,
+    /// Distinct codebases the selection declares, already resolved to a commit.
+    /// Empty for a fixture-only run, which is what keeps that path unchanged.
+    codebases: Vec<RunCodebase>,
     skill_md_path: PathBuf,
     iteration: u32,
     iteration_dir: PathBuf,
@@ -86,6 +93,77 @@ struct Resolved {
     /// Task-scoped groups computed from the selected evals in config order.
     /// Always at least one group (`g1`) for a non-empty selection.
     groups: Vec<super::grouping::Group>,
+}
+
+/// One resolved codebase and the evals built from it.
+struct RunCodebase {
+    /// The declaration as written, which is what deduplication compares.
+    declared: CodebaseSource,
+    source: ResolvedSource,
+    /// Directory name under `iteration-N/.codebase/` this materializes into.
+    key: String,
+    eval_ids: Vec<String>,
+}
+
+impl RunCodebase {
+    /// The artifact form, shared by every provenance surface so a reader never
+    /// has to reconcile two spellings of the same resolution.
+    fn record(&self) -> CodebaseRecord {
+        CodebaseRecord {
+            kind: match self.declared {
+                CodebaseSource::Git { .. } => CodebaseKind::Git,
+                CodebaseSource::Path { .. } => CodebaseKind::Path,
+            },
+            source: self.source.source.clone(),
+            resolved_path: self
+                .source
+                .resolved_path
+                .as_deref()
+                .map(|path| artifact_path(Path::new(path))),
+            reference: self.source.reference.clone(),
+            revision: self.source.revision.clone(),
+            origin_url: self.source.origin_url.clone(),
+            branch: self.source.branch.clone(),
+            host_local: self.source.host_local,
+        }
+    }
+
+    fn usage(&self) -> CodebaseUse {
+        CodebaseUse {
+            codebase: self.record(),
+            evals: self.eval_ids.clone(),
+        }
+    }
+}
+
+impl Resolved {
+    /// The codebase backing an environment, given the evals sharing it.
+    ///
+    /// Production always task-scopes, so an environment carries exactly one
+    /// eval and the question is trivial. The error covers the planner's older
+    /// multi-eval grouping, where two evals with different codebases could not
+    /// share one working tree even in principle.
+    fn codebase_for(&self, eval_ids: &[String]) -> Result<Option<&RunCodebase>, RunError> {
+        let mut found: Option<&RunCodebase> = None;
+        for eval_id in eval_ids {
+            let codebase = self
+                .codebases
+                .iter()
+                .find(|candidate| candidate.eval_ids.contains(eval_id));
+            match (found, codebase) {
+                (None, next) => found = next,
+                (Some(previous), Some(next)) if !std::ptr::eq(previous, next) => {
+                    return Err(RunError::msg(format!(
+                        "evals {} share an environment but declare different codebases; \
+                         give them distinct environments",
+                        eval_ids.join(", ")
+                    )));
+                }
+                _ => {}
+            }
+        }
+        Ok(found)
+    }
 }
 
 /// The product of [`stage::stage_conditions`]: the staged slugs plus the

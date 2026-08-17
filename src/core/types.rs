@@ -116,6 +116,11 @@ pub struct Eval {
     /// Ordered scripted user follow-ups. Absence preserves one-shot dispatch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turns: Option<Vec<ScriptedTurn>>,
+    /// Codebase this eval's task environment is built from, overriding the
+    /// config-level default. Appended last so an eval that declares none
+    /// serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseSource>,
 }
 
 /// One scripted user follow-up delivered after an assistant response.
@@ -143,10 +148,84 @@ pub enum Isolation {
     Isolated,
 }
 
+/// Where a task environment's contents come from: a Git repository at an
+/// explicit ref, or a directory on this host.
+///
+/// Untagged because the config spells the two apart by their keys (`url`+`ref`
+/// versus `path`) rather than by a discriminator. `evals.schema.json` rejects
+/// the ambiguous shapes before serde ever sees them, so the poor error messages
+/// untagged enums produce on their own never reach a user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CodebaseSource {
+    Git {
+        url: String,
+        /// Required: the runner records the *resolved* SHA, so an eval that
+        /// tracked a moving branch could not be re-run against what it measured.
+        #[serde(rename = "ref")]
+        reference: String,
+    },
+    Path {
+        path: String,
+    },
+}
+
+/// Whether a codebase came from a repository URL or a directory on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodebaseKind {
+    Git,
+    Path,
+}
+
+/// A resolved codebase, as every provenance artifact records it.
+///
+/// The declared ref is not enough to identify what a run measured — a branch
+/// moves — so [`Self::revision`] is the field a report is read against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseRecord {
+    pub kind: CodebaseKind,
+    /// The url or path exactly as declared, so a reader can find it in the config.
+    pub source: String,
+    /// Where a path source resolved to on the host that ran it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<String>,
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// The commit the run actually ran against. Absent only for a directory
+    /// that carried no history to name one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// The source repository's `origin`. For a host-local path this is the only
+    /// handle another reader can resolve: `origin_url` + `revision` names the
+    /// same tree anywhere, where `source` names it only here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_url: Option<String>,
+    pub branch: String,
+    /// Set when the source cannot be resolved off the host that ran it, so a
+    /// published claim citing it is not reproducible from the config alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_local: bool,
+}
+
+/// One resolved codebase plus the evals built from it. `conditions.json` and
+/// `benchmark.json` carry a list of these; a `run.json` carries the bare
+/// [`CodebaseRecord`], having exactly one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseUse {
+    #[serde(flatten)]
+    pub codebase: CodebaseRecord,
+    pub evals: Vec<String>,
+}
+
 /// The parsed `evals.json` for one skill.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalsConfig {
     pub skill_name: String,
+    /// Default codebase for every eval in this config; a per-eval `codebase`
+    /// overrides it. Mirrors how `runs` defaults and is overridden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseSource>,
     pub evals: Vec<Eval>,
 }
 
@@ -217,6 +296,10 @@ pub struct ConditionsRecord {
     /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Codebases the iteration's environments were built from. Empty for a
+    /// fixture-only iteration, which keeps its `conditions.json` unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codebases: Vec<CodebaseUse>,
 }
 
 /// Comparison mode for a run.
@@ -261,6 +344,12 @@ pub struct RunRecord {
     /// legacy one-shot runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<ConversationRecord>,
+    /// The codebase this run's environment was built from. Grading reads
+    /// `run.json` and nothing else, so a result can only be tied to a tree if
+    /// the record names one. Appended last, and omitted when absent, so a
+    /// fixture-only record serializes as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseRecord>,
 }
 
 /// The completed outcome of one scripted conversation.
@@ -442,6 +531,7 @@ mod tests {
             runs: None,
             isolation: None,
             turns: None,
+            codebase: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -465,6 +555,7 @@ mod tests {
             runs: None,
             isolation: Some(Isolation::Isolated),
             turns: None,
+            codebase: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert_eq!(
@@ -489,6 +580,7 @@ mod tests {
             duration_ms: None,
             run_index: None,
             conversation: None,
+            codebase: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
@@ -557,6 +649,7 @@ mod tests {
             agent_env: BTreeMap::new(),
             judge_model: None,
             label: None,
+            codebases: Vec::new(),
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));

@@ -15,6 +15,7 @@ use crate::validation::schema::{SchemaName, validate_against_schema};
 /// supplemental duplicate-`id`, command environment, and held-out path guards,
 /// returning the typed config on success.
 pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig, ValidationError> {
+    validate_codebase_declarations(config, source)?;
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
     let mut seen = HashSet::new();
@@ -129,6 +130,67 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     Ok(validated)
 }
 
+/// Name what is wrong with a `codebase` block before the schema reports only
+/// that it matched neither `oneOf` branch.
+///
+/// This runs *ahead* of the structural check rather than beside it. The schema
+/// still owns the contract — an editor validating `evals.json` against it gets
+/// the full rules — but `oneOf` cannot explain itself: a git source missing its
+/// `ref` reports the whole block as unmatched and never mentions `ref`. Only the
+/// mistakes worth a sentence are repeated here, plus the whitespace rule
+/// `minLength: 1` cannot express.
+fn validate_codebase_declarations(config: &Value, source: &str) -> Result<(), ValidationError> {
+    if let Some(codebase) = config.get("codebase") {
+        validate_codebase(source, "codebase", codebase)?;
+    }
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        let Some(codebase) = eval.get("codebase") else {
+            continue;
+        };
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        validate_codebase(source, &format!("eval '{id}', codebase"), codebase)?;
+    }
+    Ok(())
+}
+
+fn validate_codebase(source: &str, label: &str, value: &Value) -> Result<(), ValidationError> {
+    // A non-object is a plain type error the schema words perfectly well.
+    let Some(fields) = value.as_object() else {
+        return Ok(());
+    };
+    let invalid = |message: String| ValidationError::InvalidConfig {
+        path: source.to_string(),
+        message,
+    };
+
+    if fields.contains_key("url") && fields.contains_key("path") {
+        return Err(invalid(format!(
+            "{label}: declares both 'url' and 'path'; a codebase is sourced from one or the other"
+        )));
+    }
+    if fields.contains_key("url") && !fields.contains_key("ref") {
+        return Err(invalid(format!(
+            "{label}: 'url' requires an explicit 'ref' (branch, tag, or commit SHA). The runner \
+             records the resolved SHA, so an eval tracking a moving branch could not be re-run \
+             against what it measured."
+        )));
+    }
+    for field in ["url", "ref", "path"] {
+        if let Some(Value::String(text)) = fields.get(field)
+            && text.trim().is_empty()
+        {
+            return Err(invalid(format!(
+                "{label}: '{field}' must contain non-whitespace text"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn validate_environment_name(
     source: &str,
     eval_id: &str,
@@ -185,6 +247,7 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::validate_evals_config;
+    use crate::core::CodebaseSource;
     use serde_json::{Value, json};
 
     /// The minimal valid config the cases below mutate.
@@ -627,5 +690,111 @@ mod tests {
     fn accepts_disjoint_visible_and_setup_paths() {
         let config = with_command_check(&["src/main.rs"], &["holdout/test.txt"]);
         validate_evals_config(&config, "evals.json").unwrap();
+    }
+
+    #[test]
+    fn accepts_a_top_level_git_codebase_as_the_default() {
+        let mut config = base();
+        config["codebase"] = json!({ "url": "https://example.com/project.git", "ref": "main" });
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+
+        assert_eq!(
+            parsed.codebase,
+            Some(CodebaseSource::Git {
+                url: "https://example.com/project.git".to_string(),
+                reference: "main".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn accepts_a_per_eval_path_codebase_overriding_the_default() {
+        let mut config = base();
+        config["codebase"] = json!({ "url": "https://example.com/project.git", "ref": "main" });
+        config["evals"][0]["codebase"] = json!({ "path": "../fixtures/legacy-service" });
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+
+        assert_eq!(
+            parsed.evals[0].codebase,
+            Some(CodebaseSource::Path {
+                path: "../fixtures/legacy-service".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn accepts_a_top_level_path_codebase() {
+        let mut config = base();
+        config["codebase"] = json!({ "path": "/srv/projects/legacy-service" });
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+
+        assert_eq!(
+            parsed.codebase,
+            Some(CodebaseSource::Path {
+                path: "/srv/projects/legacy-service".to_string(),
+            })
+        );
+    }
+
+    /// `minLength: 1` admits `" "`, so the schema cannot carry this on its own.
+    #[test]
+    fn rejects_whitespace_only_codebase_values() {
+        for (field, codebase) in [
+            ("url", json!({ "url": "   ", "ref": "main" })),
+            (
+                "ref",
+                json!({ "url": "https://example.com/p.git", "ref": "\t" }),
+            ),
+            ("path", json!({ "path": " " })),
+        ] {
+            let mut config = base();
+            config["codebase"] = codebase.clone();
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("codebase"), "{field}: error was: {error}");
+            assert!(error.contains(field), "{field}: error was: {error}");
+
+            // The per-eval override runs through the same guard, and names the eval.
+            let mut config = base();
+            config["evals"][0]["codebase"] = codebase;
+            let error = validate_evals_config(&config, "evals.json")
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("e1"), "{field}: error was: {error}");
+            assert!(error.contains(field), "{field}: error was: {error}");
+        }
+    }
+
+    /// A source is one thing or the other. The schema's `oneOf` plus
+    /// `additionalProperties: false` on each branch is what rejects the hybrid;
+    /// this pins that so a later schema edit cannot quietly admit it.
+    #[test]
+    fn rejects_a_codebase_that_is_both_git_and_path() {
+        let mut config = base();
+        config["codebase"] = json!({
+            "url": "https://example.com/p.git",
+            "ref": "main",
+            "path": "/srv/p"
+        });
+
+        assert!(validate_evals_config(&config, "evals.json").is_err());
+    }
+
+    /// #244 decision 5: the runner records the resolved SHA, so a git source
+    /// without an explicit ref could not be re-run against what it measured.
+    #[test]
+    fn rejects_a_git_codebase_without_a_ref() {
+        let mut config = base();
+        config["codebase"] = json!({ "url": "https://example.com/p.git" });
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("ref"), "error was: {error}");
     }
 }

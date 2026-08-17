@@ -6,7 +6,8 @@ use std::fs;
 use serde_json::Value;
 
 use crate::cli::command_target_args;
-use crate::core::{Assertion, Mode, RunContext};
+use crate::core::{Assertion, CodebaseSource, Eval, EvalsConfig, Mode, RunContext};
+use crate::source::{SourceSpec, resolve as resolve_source};
 use crate::validation::validate_evals_config;
 
 use super::super::RunError;
@@ -14,7 +15,62 @@ use super::super::dispatch::select_evals;
 use super::super::fixtures::{fixture_pairs, setup_file_pairs};
 use super::super::grouping::{GroupInput, compute_groups};
 use super::super::util::{condition_names_for, make_run_nonce, next_iteration};
-use super::{Resolved, RunOptions};
+use super::{Resolved, RunCodebase, RunOptions};
+
+/// Resolve every distinct codebase the selected evals declare, deduplicated so
+/// a config-level default shared by ten evals is one resolution and, later, one
+/// materialization.
+///
+/// The `CodebaseSource` → `SourceSpec` translation lives here rather than as a
+/// `From` impl in [`crate::source`]: that module resolves skills for #253 too,
+/// and stays useful precisely because it does not know what a codebase is.
+fn resolve_codebases(
+    ctx: &RunContext,
+    config: &EvalsConfig,
+    selected: &[Eval],
+) -> Result<Vec<RunCodebase>, RunError> {
+    // A declared relative path is relative to the config that declares it, so a
+    // committed `evals.json` means the same thing in every clone of the skill.
+    let base_dir = ctx.skill_subdir.join("evals");
+    let mut codebases: Vec<RunCodebase> = Vec::new();
+
+    for eval in selected {
+        let Some(declared) = eval.codebase.as_ref().or(config.codebase.as_ref()) else {
+            continue;
+        };
+        if let Some(existing) = codebases
+            .iter_mut()
+            .find(|candidate| &candidate.declared == declared)
+        {
+            existing.eval_ids.push(eval.id.clone());
+            continue;
+        }
+
+        let spec = match declared {
+            CodebaseSource::Git { url, reference } => SourceSpec::Git {
+                url: url.clone(),
+                reference: reference.clone(),
+            },
+            CodebaseSource::Path { path } => SourceSpec::Path { path: path.clone() },
+        };
+        let source = resolve_source(&spec, &base_dir)
+            .map_err(|error| RunError::msg(format!("eval '{}': {error}", eval.id)))?;
+        // Keyed on the resolved commit so two evals naming the same tree by
+        // different refs still materialize once. A directory with no history has
+        // no commit to key on and falls back to declaration order.
+        let key = source
+            .revision
+            .clone()
+            .unwrap_or_else(|| format!("local-{}", codebases.len() + 1));
+        codebases.push(RunCodebase {
+            declared: declared.clone(),
+            source,
+            key,
+            eval_ids: vec![eval.id.clone()],
+        });
+    }
+    Ok(codebases)
+}
 
 pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Resolved, RunError> {
     let mode = match opts.mode {
@@ -56,6 +112,14 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
 
     let selected_evals = select_evals(&config.evals, opts.only, opts.skip)?;
     let total_evals = config.evals.len();
+
+    // Resolve declared codebases here, while the run has still created nothing:
+    // an unreachable repository or a ref that does not exist has to fail before
+    // any environment exists, not halfway through building one.
+    let codebases = resolve_codebases(ctx, &config, &selected_evals)?;
+    for warning in codebases.iter().flat_map(|c| c.source.warnings.iter()) {
+        eprintln!("⚠ {warning}");
+    }
 
     // Resolve held-out setup sources before creating the iteration. The files
     // are deliberately not copied here; command grading injects them during
@@ -129,6 +193,7 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     Ok(Resolved {
         mode,
         baseline,
+        codebases,
         skill_md_path,
         iteration,
         iteration_dir,

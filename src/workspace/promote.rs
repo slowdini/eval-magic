@@ -228,6 +228,50 @@ fn label(value: &impl Serialize) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// Provenance-table rows naming each codebase the iteration ran against, or an
+/// empty string when it ran against none.
+///
+/// A reader deciding whether to believe a published baseline needs the commit,
+/// not the ref: a branch has moved by the time they read it. Where the source is
+/// a directory on the machine that ran it, the row says so — that reader cannot
+/// resolve the path, and the row should not imply otherwise.
+fn codebase_rows(conditions: Option<&ConditionsRecord>) -> String {
+    let codebases = conditions.map(|c| c.codebases.as_slice()).unwrap_or(&[]);
+    if codebases.is_empty() {
+        return String::new();
+    }
+    let multiple = codebases.len() > 1;
+    codebases
+        .iter()
+        .map(|used| {
+            // One codebase needs no disambiguation; several do, and the eval ids
+            // are what tie a row to the cells it covers.
+            let label = if multiple {
+                format!("Codebase ({})", used.evals.join(", "))
+            } else {
+                "Codebase".to_string()
+            };
+            let mut cell = used.codebase.source.clone();
+            if let Some(reference) = &used.codebase.reference {
+                cell.push('@');
+                cell.push_str(reference);
+            }
+            if let Some(revision) = &used.codebase.revision {
+                let short: String = revision.chars().take(7).collect();
+                cell.push_str(&format!(" ({short})"));
+            }
+            if used.codebase.host_local {
+                cell.push_str(" — host-local path, not reproducible from this config alone");
+                if let Some(origin) = &used.codebase.origin_url {
+                    cell.push_str(&format!("; origin {origin}"));
+                }
+            }
+            format!("| {label} | {cell} |")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Build the `BASELINE.md` provenance document — byte-for-byte the layout of
 /// `promote-baseline.ts`.
 fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head: &str) -> String {
@@ -262,6 +306,8 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         .or_else(|| conditions.and_then(|c| c.label.as_deref()))
         .unwrap_or("(none)");
 
+    let codebase_rows = codebase_rows(conditions);
+
     let lines = [
         format!("# Baseline — {}", opts.skill_name),
         String::new(),
@@ -284,6 +330,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Conditions | {conditions_cell} |"),
         format!("| Run timestamp | {timestamp} |"),
         format!("| Label | {run_label} |"),
+        codebase_rows,
         format!("| Promoted from commit | {head} |"),
         String::new(),
         "Files:".to_string(),
@@ -301,6 +348,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
     use tempfile::TempDir;
 
     /// Write `body` to `path`, creating parent dirs.
@@ -544,6 +592,79 @@ mod tests {
         assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
         assert!(provenance.contains("Judge model | claude-opus-4-8"));
         assert!(provenance.contains("Label | canonical-run"));
+    }
+
+    /// A published baseline is read by people deciding whether to believe it.
+    /// Naming the commit is what lets them check.
+    #[test]
+    fn provenance_names_the_codebase_and_the_commit_it_resolved_to() {
+        let f = fixture(1);
+        let conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+        let mut conditions = conditions;
+        conditions["codebases"] = serde_json::json!([{
+            "kind": "git",
+            "source": "https://example.com/project.git",
+            "ref": "v1.4.0",
+            "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+            "branch": "v1.4.0",
+            "evals": ["e1"]
+        }]);
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            &serde_json::to_string(&conditions).unwrap(),
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        promote_baseline(&opts(&f, 1)).unwrap();
+
+        let provenance =
+            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+        assert!(provenance.contains("Codebase"), "{provenance}");
+        assert!(
+            provenance.contains("https://example.com/project.git"),
+            "{provenance}"
+        );
+        assert!(provenance.contains("v1.4.0"), "{provenance}");
+        assert!(provenance.contains("a1b2c3d"), "{provenance}");
+    }
+
+    /// A host-local path is not reproducible by the reader, so the row says so
+    /// rather than presenting it like a resolvable reference.
+    #[test]
+    fn provenance_marks_a_host_local_codebase_as_unreproducible() {
+        let f = fixture(1);
+        let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+        conditions["codebases"] = serde_json::json!([{
+            "kind": "path",
+            "source": "../fixtures/legacy-service",
+            "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+            "origin_url": "https://example.com/legacy.git",
+            "branch": "main",
+            "host_local": true,
+            "evals": ["e1"]
+        }]);
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            &serde_json::to_string(&conditions).unwrap(),
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        promote_baseline(&opts(&f, 1)).unwrap();
+
+        let provenance =
+            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+        assert!(provenance.contains("host-local"), "{provenance}");
+        // The origin is what a reader elsewhere can actually resolve.
+        assert!(
+            provenance.contains("https://example.com/legacy.git"),
+            "{provenance}"
+        );
     }
 
     #[test]

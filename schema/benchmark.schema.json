@@ -48,6 +48,11 @@
         }
       }
     },
+    "codebases": {
+      "type": "array",
+      "description": "Codebases the compared conditions ran against, echoed from conditions.json. Absent for fixture-only iterations.",
+      "items": { "$ref": "#/definitions/codebaseUse" }
+    },
     "diff_scope": {
       "type": "object",
       "description": "Raw final-environment diff metrics per condition, ordered by eval id and then run index. Omitted for iterations created before diff-scope capture.",
@@ -69,6 +74,42 @@
     }
   },
   "definitions": {
+    "codebaseUse": {
+      "type": "object",
+      "required": ["kind", "source", "branch", "evals"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["git", "path"],
+          "description": "Whether the codebase came from a repository URL or a directory on the host that ran it."
+        },
+        "source": { "type": "string", "description": "The url or path exactly as declared in evals.json." },
+        "resolved_path": {
+          "type": "string",
+          "description": "Absolute directory a path source resolved to on the host that ran it."
+        },
+        "ref": { "type": "string", "description": "Declared branch, tag, or commit SHA, for a git source." },
+        "revision": {
+          "type": "string",
+          "description": "The commit the run actually ran against. A declared ref does not identify this on its own, because a branch moves. Absent only for a directory carrying no history."
+        },
+        "origin_url": {
+          "type": "string",
+          "description": "The source repository's origin. For a host-local path this is the only handle another reader can resolve: origin_url plus revision names the same tree anywhere."
+        },
+        "branch": { "type": "string", "description": "Branch the task environment was checked out on." },
+        "host_local": {
+          "type": "boolean",
+          "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
+        },
+        "evals": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ids of the evals whose environments were built from this codebase."
+        }
+      }
+    },
     "assertionCount": {
       "type": "object",
       "required": ["passed", "n"],

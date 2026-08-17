@@ -91,11 +91,15 @@ fn every_task_is_a_clean_local_git_repo_inside_a_dirty_ignored_parent_repo() {
             ),
             ".eval-magic-outputs/probe.txt"
         );
+        // Git spells a zero UTC offset either `+00:00` (2.43) or `Z` (newer).
+        // Both name the same instant, so normalize rather than pin a version.
+        let log = git(
+            eval_root,
+            &["log", "-1", "--format=%an|%ae|%aI|%cn|%ce|%cI|%s"],
+        )
+        .replace("+00:00", "Z");
         assert_eq!(
-            git(
-                eval_root,
-                &["log", "-1", "--format=%an|%ae|%aI|%cn|%ce|%cI|%s"]
-            ),
+            log,
             "eval-magic|eval-magic@localhost|2000-01-01T00:00:00Z|\
              eval-magic|eval-magic@localhost|2000-01-01T00:00:00Z|\
              eval-magic task baseline"

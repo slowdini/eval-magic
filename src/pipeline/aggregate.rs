@@ -20,7 +20,7 @@ use serde_json::Value;
 use self::assertions::AssertionRollup;
 use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::core::fs::write_json;
-use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
+use crate::core::{CodebaseUse, ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::git_isolation;
@@ -114,6 +114,12 @@ pub struct Benchmark {
     pub warnings: Vec<String>,
     pub run_summary: Value,
     pub assertions: Value,
+    /// Codebases the compared conditions ran against, echoed from
+    /// `conditions.json` so a published benchmark names the trees it measured
+    /// without a reader having to hold two artifacts side by side. Empty for a
+    /// fixture-only iteration, which keeps its benchmark unchanged.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub codebases: Vec<CodebaseUse>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_scope: Option<Value>,
     delta: Delta,
@@ -408,6 +414,7 @@ pub fn aggregate(
         generated: now_iso8601(),
         mode: conditions.mode,
         baseline: conditions.baseline.clone(),
+        codebases: conditions.codebases.clone(),
         conditions_compared: vec![a.clone(), b.clone()],
         missing_gradings,
         validity_warnings,

@@ -43,6 +43,9 @@ preconditions, handoffs, and recovery commands.
   few named capabilities that require harness-specific code.
 - `src/sandbox/`, `src/workspace/`, and `src/validation/` own task isolation, filesystem/workspace
   mechanics, and configuration checks.
+- `src/source/` resolves a declared source — a git URL and ref, or a local directory — to a commit,
+  and materializes it as a tree. It knows nothing about what is being sourced, so both the codebase
+  a task environment is built from and the skills under test resolve through it.
 - `schema/` contains the JSON schemas for user input and generated artifacts.
 - `harnesses/` contains built-in descriptors, descriptor scaffolding, and embedded harness assets.
 - `profiles/` contains shared prompt profiles.
@@ -143,3 +146,5 @@ implementation evidence in an internal note.
   `eval-magic docs byoh`.
 - [Shipped isolation guide](guides/isolation.md) is the repository source for
   `eval-magic docs isolation`.
+- [Shipped codebase guide](guides/codebase.md) is the repository source for
+  `eval-magic docs codebase`.

@@ -14,7 +14,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
-use crate::core::{AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn};
+use crate::core::{
+    AvailableSkill, CodebaseRecord, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn,
+};
 
 use super::RunError;
 
@@ -53,6 +55,10 @@ pub struct DispatchTask {
     /// recipe's `<eval-root>` placeholder resolves to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_root: Option<String>,
+    /// The codebase this task's environment was built from. Carried here so the
+    /// run record written at ingest names the tree the agent actually worked in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseRecord>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -90,6 +96,8 @@ pub struct DispatchTaskOpts<'a> {
     /// The task's env dir (the agent-under-test's cwd); `None` only for legacy
     /// callers that do not carry an environment manifest.
     pub eval_root: Option<&'a str>,
+    /// The codebase this task's environment was built from, if any.
+    pub codebase: Option<&'a CodebaseRecord>,
 }
 
 fn render_available_skills_block_for_harness(
@@ -274,6 +282,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         outputs_dir,
         group: opts.group.map(str::to_string),
         eval_root,
+        codebase: opts.codebase.cloned(),
         dispatch_prompt: sections.join(""),
     })
 }
@@ -522,6 +531,7 @@ mod tests {
                 runs: None,
                 isolation: None,
                 turns: None,
+                codebase: None,
             })
             .collect()
     }

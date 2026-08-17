@@ -199,6 +199,7 @@ mod tests {
             runs: None,
             isolation: None,
             turns: None,
+            codebase: None,
         }
     }
 
