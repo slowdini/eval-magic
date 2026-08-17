@@ -134,6 +134,17 @@ harnesses by checking every rendered eval-agent command in `RUNBOOK.md` and
 dispatch's setting-source selection. A plugin can appear there and remain absent from the dispatch,
 or the reverse. Use the dispatch's init event.
 
+## The task repository is a separate boundary
+
+Skill-source isolation is about what a dispatch can *load*. The task repository is about what it can
+*reach*: every dispatch runs in its own private environment, a Git repository with no remotes and
+hooks disabled, marked with `refs/eval-magic/baseline` at the state the agent started from. That
+holds whether the environment was built from fixture files or from a sourced codebase — see
+`eval-magic docs codebase`.
+
+The two are independent. An environment can be a faithfully isolated repository while the dispatch
+still loads a live skill source, and a shadowed skill is not made safe by the repository boundary.
+
 ## When a source cannot be isolated
 
 Do not declare isolation. Retain the validity warning as the record of a known threat. A symmetric

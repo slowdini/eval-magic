@@ -30,6 +30,11 @@ EXAMPLES:
   # Reduce cost while iterating on the suite
   eval-magic run --only case-a,case-b
 
+  # Run the task against a real project instead of fixture files. The codebase
+  # is declared in evals.json, not on the command line, so it stays a reviewed
+  # property of the eval set
+  eval-magic docs codebase
+
   # Select a built-in harness; `run --help` documents models and environment options
   eval-magic run --harness codex
 

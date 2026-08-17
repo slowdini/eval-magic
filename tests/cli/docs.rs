@@ -161,6 +161,25 @@ fn docs_isolation_keeps_remedies_and_verification() {
         .stdout(contains("\"subtype\":\"init\""));
 }
 
+/// The codebase guide is the reference surface for a feature with no CLI flag,
+/// so the parts a config author cannot infer have to survive an edit: that a
+/// git ref is mandatory, that `files` layers over the checkout, and that a local
+/// path is not reproducible by anyone reading the results.
+#[test]
+fn docs_codebase_keeps_the_declaration_rules_and_reproducibility_caveat() {
+    skill_eval()
+        .args(["docs", "codebase"])
+        .assert()
+        .success()
+        .stdout(contains("# Sourcing a codebase into a task environment"))
+        .stdout(contains("\"ref\""))
+        .stdout(contains("`ref` is required"))
+        .stdout(contains("overlay"))
+        .stdout(contains("refs/eval-magic/baseline"))
+        .stdout(contains("host_local"))
+        .stdout(contains("not reproducible"));
+}
+
 #[test]
 fn shipped_guides_do_not_depend_on_repository_relative_links() {
     for (topic, _, body, path) in guide_sources() {
