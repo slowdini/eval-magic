@@ -294,10 +294,12 @@ fn a_path_codebase_is_recorded_as_host_local_with_its_origin_for_citation() {
     let tmp = tempfile::TempDir::new().unwrap();
     let upstream = codebase_repo(tmp.path(), "upstream", "main");
     let local = codebase_repo(tmp.path(), "local", "main");
-    git(
-        &local,
-        &["remote", "add", "origin", &upstream.to_string_lossy()],
-    );
+    // Git stores a remote URL byte-for-byte, and eval-magic cites it unchanged
+    // rather than rewriting what a user configured. Registering it in the host's
+    // own spelling is what pins that: on Windows the separators are backslashes,
+    // so any normalization on the way to the artifact shows up here.
+    let origin_url = upstream.to_string_lossy().to_string();
+    git(&local, &["remote", "add", "origin", &origin_url]);
     let revision = git(&local, &["rev-parse", "HEAD"]);
     let source = format!(r#"{{ "path": "{}" }}"#, wire_path(&local));
     let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
@@ -317,7 +319,7 @@ fn a_path_codebase_is_recorded_as_host_local_with_its_origin_for_citation() {
     assert_eq!(recorded["host_local"], true);
     assert_eq!(recorded["revision"], revision);
     // What makes it citable anyway: origin + revision resolve anywhere.
-    assert_eq!(recorded["origin_url"], wire_path(&upstream));
+    assert_eq!(recorded["origin_url"], origin_url);
 }
 
 /// The ticket's last acceptance criterion: an eval declaring no codebase keeps
