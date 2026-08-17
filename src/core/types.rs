@@ -170,6 +170,54 @@ pub enum CodebaseSource {
     },
 }
 
+/// Whether a codebase came from a repository URL or a directory on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CodebaseKind {
+    Git,
+    Path,
+}
+
+/// A resolved codebase, as every provenance artifact records it.
+///
+/// The declared ref is not enough to identify what a run measured — a branch
+/// moves — so [`Self::revision`] is the field a report is read against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseRecord {
+    pub kind: CodebaseKind,
+    /// The url or path exactly as declared, so a reader can find it in the config.
+    pub source: String,
+    /// Where a path source resolved to on the host that ran it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<String>,
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// The commit the run actually ran against. Absent only for a directory
+    /// that carried no history to name one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// The source repository's `origin`. For a host-local path this is the only
+    /// handle another reader can resolve: `origin_url` + `revision` names the
+    /// same tree anywhere, where `source` names it only here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_url: Option<String>,
+    pub branch: String,
+    /// Set when the source cannot be resolved off the host that ran it, so a
+    /// published claim citing it is not reproducible from the config alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_local: bool,
+}
+
+/// One resolved codebase plus the evals built from it. `conditions.json` and
+/// `benchmark.json` carry a list of these; a `run.json` carries the bare
+/// [`CodebaseRecord`], having exactly one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseUse {
+    #[serde(flatten)]
+    pub codebase: CodebaseRecord,
+    pub evals: Vec<String>,
+}
+
 /// The parsed `evals.json` for one skill.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalsConfig {
@@ -248,6 +296,10 @@ pub struct ConditionsRecord {
     /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Codebases the iteration's environments were built from. Empty for a
+    /// fixture-only iteration, which keeps its `conditions.json` unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codebases: Vec<CodebaseUse>,
 }
 
 /// Comparison mode for a run.
@@ -590,6 +642,7 @@ mod tests {
             agent_env: BTreeMap::new(),
             judge_model: None,
             label: None,
+            codebases: Vec::new(),
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));

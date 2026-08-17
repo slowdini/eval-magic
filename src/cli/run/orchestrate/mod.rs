@@ -12,11 +12,14 @@
 //! stateless helpers in [`super::util`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{CodebaseSource, Eval, Mode, RunContext};
+use crate::core::fs::artifact_path;
+use crate::core::{
+    CodebaseKind, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, Mode, RunContext,
+};
 use crate::source::ResolvedSource;
 
 use super::RunError;
@@ -100,6 +103,37 @@ struct RunCodebase {
     /// Directory name under `iteration-N/.codebase/` this materializes into.
     key: String,
     eval_ids: Vec<String>,
+}
+
+impl RunCodebase {
+    /// The artifact form, shared by every provenance surface so a reader never
+    /// has to reconcile two spellings of the same resolution.
+    fn record(&self) -> CodebaseRecord {
+        CodebaseRecord {
+            kind: match self.declared {
+                CodebaseSource::Git { .. } => CodebaseKind::Git,
+                CodebaseSource::Path { .. } => CodebaseKind::Path,
+            },
+            source: self.source.source.clone(),
+            resolved_path: self
+                .source
+                .resolved_path
+                .as_deref()
+                .map(|path| artifact_path(Path::new(path))),
+            reference: self.source.reference.clone(),
+            revision: self.source.revision.clone(),
+            origin_url: self.source.origin_url.clone(),
+            branch: self.source.branch.clone(),
+            host_local: self.source.host_local,
+        }
+    }
+
+    fn usage(&self) -> CodebaseUse {
+        CodebaseUse {
+            codebase: self.record(),
+            evals: self.eval_ids.clone(),
+        }
+    }
 }
 
 impl Resolved {

@@ -64,6 +64,7 @@ pub(super) fn write_dispatch(
         agent_env: opts.agent_env.clone(),
         judge_model: opts.judge_model.map(str::to_owned),
         label: opts.label.map(str::to_owned),
+        codebases: r.codebases.iter().map(super::RunCodebase::usage).collect(),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
 
@@ -157,6 +158,9 @@ pub(super) fn write_dispatch(
                     .iteration_dir
                     .join(format!("eval-{}", ev.id))
                     .join(cond_name);
+                let codebase_record = r
+                    .codebase_for(std::slice::from_ref(&ev.id))?
+                    .map(super::RunCodebase::record);
                 let runs = ev.runs.unwrap_or(opts.runs);
 
                 for run_idx in 1..=runs {
@@ -225,6 +229,7 @@ pub(super) fn write_dispatch(
                         // per-task cwd the CLI recipe `cd`s into.
                         group: multi_group.then_some(group.id.as_str()),
                         eval_root: Some(env_root_str.as_str()),
+                        codebase: codebase_record.as_ref(),
                     })?);
                 }
             }

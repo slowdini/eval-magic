@@ -239,6 +239,87 @@ fn sourcing_a_codebase_ignores_the_operators_git_configuration() {
     );
 }
 
+/// A report that cites a codebase has to say *which* tree it measured. The
+/// declared ref is not enough — a branch moves — so the resolved commit is what
+/// every provenance surface carries.
+#[test]
+fn the_resolved_codebase_reaches_conditions_and_every_dispatch_task() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = codebase_repo(tmp.path(), "origin", "main");
+    let revision = git(&origin, &["rev-parse", "HEAD"]);
+    let source = format!(r#"{{ "url": "{}", "ref": "main" }}"#, wire_path(&origin));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(skill_dir.join("mr-review/evals/TASK.md"), "task\n").unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    let codebases = conditions["codebases"].as_array().unwrap();
+    assert_eq!(codebases.len(), 1, "one declared codebase, resolved once");
+    let recorded = &codebases[0];
+    assert_eq!(recorded["kind"], "git");
+    assert_eq!(recorded["source"], wire_path(&origin));
+    assert_eq!(recorded["ref"], "main");
+    assert_eq!(recorded["revision"], revision);
+    assert_eq!(recorded["branch"], "main");
+    assert_eq!(recorded["evals"][0], "e1");
+    assert!(
+        recorded.get("host_local").is_none(),
+        "a git url is reproducible, so the flag stays off the artifact"
+    );
+
+    // Every dispatch task carries it, which is how it reaches each run.json.
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert!(!tasks.is_empty());
+    for task in tasks {
+        assert_eq!(
+            task["codebase"]["revision"], revision,
+            "each task records the tree it ran against"
+        );
+    }
+}
+
+/// A `path` source cannot be resolved by anyone else — a different machine has
+/// the directory somewhere else, or nowhere. That is unfixable, so the artifact
+/// says so rather than implying a reproducibility it does not have.
+#[test]
+fn a_path_codebase_is_recorded_as_host_local_with_its_origin_for_citation() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let upstream = codebase_repo(tmp.path(), "upstream", "main");
+    let local = codebase_repo(tmp.path(), "local", "main");
+    git(
+        &local,
+        &["remote", "add", "origin", &upstream.to_string_lossy()],
+    );
+    let revision = git(&local, &["rev-parse", "HEAD"]);
+    let source = format!(r#"{{ "path": "{}" }}"#, wire_path(&local));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(skill_dir.join("mr-review/evals/TASK.md"), "task\n").unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    let recorded = &conditions["codebases"][0];
+    assert_eq!(recorded["kind"], "path");
+    assert_eq!(recorded["host_local"], true);
+    assert_eq!(recorded["revision"], revision);
+    // What makes it citable anyway: origin + revision resolve anywhere.
+    assert_eq!(recorded["origin_url"], wire_path(&upstream));
+}
+
 /// The ticket's last acceptance criterion: an eval declaring no codebase keeps
 /// the environment it has always had.
 #[test]
