@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/run-record.schema.json",
   "title": "Portable Run Record",
-  "description": "Captures one subagent run. Harness-agnostic — each harness writes an adapter from its native transcript format to this shape. Downstream grading reads only this file.",
+  "description": "Captures one subagent run. Harness-agnostic \u2014 each harness writes an adapter from its native transcript format to this shape. Downstream grading reads only this file.",
   "type": "object",
   "required": [
     "eval_id",
@@ -24,7 +24,10 @@
       "description": "Reserved names: with_skill, without_skill, old_skill, new_skill."
     },
     "skill_path": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "description": "Absolute path to the SKILL.md the subagent could load, or null if no skill was provided (without_skill condition)."
     },
     "prompt": {
@@ -33,7 +36,9 @@
     },
     "files": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Fixture files the subagent had access to (absolute paths inside the run's workspace)."
     },
     "final_message": {
@@ -45,7 +50,10 @@
       "description": "Ordered list of tool calls during the run.",
       "items": {
         "type": "object",
-        "required": ["name", "ordinal"],
+        "required": [
+          "name",
+          "ordinal"
+        ],
         "additionalProperties": false,
         "properties": {
           "name": {
@@ -54,11 +62,20 @@
           },
           "args": {
             "description": "Tool arguments. Object for structured tools, string for raw command-style tools.",
-            "type": ["object", "string", "array", "null"]
+            "type": [
+              "object",
+              "string",
+              "array",
+              "null"
+            ]
           },
           "result": {
             "description": "Tool output, if captured. Truncate long outputs to ~2KB.",
-            "type": ["string", "object", "null"]
+            "type": [
+              "string",
+              "object",
+              "null"
+            ]
           },
           "ordinal": {
             "type": "integer",
@@ -69,11 +86,17 @@
       }
     },
     "total_tokens": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "From the harness's task completion event, or derived from the persisted transcript by record-runs using harness-specific normalization. Canonical timing lives in the sibling timing.json, whose `source` field records which origin produced it. May be null if neither source is available."
     },
     "duration_ms": {
-      "type": ["integer", "null"],
+      "type": [
+        "integer",
+        "null"
+      ],
       "description": "From the harness's task completion event, a native duration field, or enough persisted transcript timestamps to derive wall-clock time. Canonical timing lives in the sibling timing.json. May be null when the harness does not expose reliable timing."
     },
     "run_index": {
@@ -84,17 +107,72 @@
     "conversation": {
       "$ref": "#/definitions/conversation",
       "description": "Ordered multi-turn evidence and scripted-delivery outcome. Absent for one-shot runs."
+    },
+    "codebase": {
+      "type": "object",
+      "required": [
+        "kind",
+        "source",
+        "branch"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "git",
+            "path"
+          ],
+          "description": "Whether the codebase came from a repository URL or a directory on the host that ran it."
+        },
+        "source": {
+          "type": "string",
+          "description": "The url or path exactly as declared in evals.json."
+        },
+        "resolved_path": {
+          "type": "string",
+          "description": "Absolute directory a path source resolved to on the host that ran it."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Declared branch, tag, or commit SHA, for a git source."
+        },
+        "revision": {
+          "type": "string",
+          "description": "The commit the run actually ran against. A declared ref does not identify this on its own, because a branch moves. Absent only for a directory carrying no history."
+        },
+        "origin_url": {
+          "type": "string",
+          "description": "The source repository's origin. For a host-local path this is the only handle another reader can resolve: origin_url + revision names the same tree anywhere."
+        },
+        "branch": {
+          "type": "string",
+          "description": "Branch the task environment was checked out on."
+        },
+        "host_local": {
+          "type": "boolean",
+          "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
+        }
+      },
+      "description": "The codebase this run's environment was built from. Absent for a fixture-only run."
     }
   },
   "definitions": {
     "conversation": {
       "type": "object",
-      "required": ["status", "delivered_followups", "events"],
+      "required": [
+        "status",
+        "delivered_followups",
+        "events"
+      ],
       "additionalProperties": false,
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["completed", "stopped"]
+          "enum": [
+            "completed",
+            "stopped"
+          ]
         },
         "delivered_followups": {
           "type": "integer",
@@ -102,7 +180,10 @@
         },
         "stop_reason": {
           "type": "string",
-          "enum": ["agent_did_not_ask", "agent_response_mismatch"]
+          "enum": [
+            "agent_did_not_ask",
+            "agent_response_mismatch"
+          ]
         },
         "stopped_before_followup": {
           "type": "integer",
@@ -113,9 +194,15 @@
           "minItems": 2,
           "items": {
             "oneOf": [
-              { "$ref": "#/definitions/userMessage" },
-              { "$ref": "#/definitions/assistantMessage" },
-              { "$ref": "#/definitions/conversationTool" }
+              {
+                "$ref": "#/definitions/userMessage"
+              },
+              {
+                "$ref": "#/definitions/assistantMessage"
+              },
+              {
+                "$ref": "#/definitions/conversationTool"
+              }
             ]
           }
         }
@@ -123,23 +210,46 @@
       "allOf": [
         {
           "if": {
-            "properties": { "status": { "const": "stopped" } },
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "stopped"
+              }
+            },
+            "required": [
+              "status"
+            ]
           },
           "then": {
-            "required": ["stop_reason", "stopped_before_followup"]
+            "required": [
+              "stop_reason",
+              "stopped_before_followup"
+            ]
           }
         },
         {
           "if": {
-            "properties": { "status": { "const": "completed" } },
-            "required": ["status"]
+            "properties": {
+              "status": {
+                "const": "completed"
+              }
+            },
+            "required": [
+              "status"
+            ]
           },
           "then": {
             "not": {
               "anyOf": [
-                { "required": ["stop_reason"] },
-                { "required": ["stopped_before_followup"] }
+                {
+                  "required": [
+                    "stop_reason"
+                  ]
+                },
+                {
+                  "required": [
+                    "stopped_before_followup"
+                  ]
+                }
               ]
             }
           }
@@ -148,37 +258,95 @@
     },
     "userMessage": {
       "type": "object",
-      "required": ["type", "ordinal", "round", "text"],
+      "required": [
+        "type",
+        "ordinal",
+        "round",
+        "text"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "user_message" },
-        "ordinal": { "type": "integer", "minimum": 0 },
-        "round": { "type": "integer", "minimum": 1 },
-        "text": { "type": "string" }
+        "type": {
+          "const": "user_message"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string"
+        }
       }
     },
     "assistantMessage": {
       "type": "object",
-      "required": ["type", "ordinal", "round", "text"],
+      "required": [
+        "type",
+        "ordinal",
+        "round",
+        "text"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "assistant_message" },
-        "ordinal": { "type": "integer", "minimum": 0 },
-        "round": { "type": "integer", "minimum": 1 },
-        "text": { "type": "string" }
+        "type": {
+          "const": "assistant_message"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "text": {
+          "type": "string"
+        }
       }
     },
     "conversationTool": {
       "type": "object",
-      "required": ["type", "ordinal", "round", "name"],
+      "required": [
+        "type",
+        "ordinal",
+        "round",
+        "name"
+      ],
       "additionalProperties": false,
       "properties": {
-        "type": { "const": "tool_invocation" },
-        "ordinal": { "type": "integer", "minimum": 0 },
-        "round": { "type": "integer", "minimum": 1 },
-        "name": { "type": "string" },
-        "args": { "type": ["object", "string", "array", "null"] },
-        "result": { "type": ["string", "object", "null"] }
+        "type": {
+          "const": "tool_invocation"
+        },
+        "ordinal": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "round": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "args": {
+          "type": [
+            "object",
+            "string",
+            "array",
+            "null"
+          ]
+        },
+        "result": {
+          "type": [
+            "string",
+            "object",
+            "null"
+          ]
+        }
       }
     }
   }

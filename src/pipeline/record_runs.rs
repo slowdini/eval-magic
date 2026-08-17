@@ -31,7 +31,8 @@ use serde::Deserialize;
 use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
 use crate::core::fs::write_json;
 use crate::core::{
-    ConversationEvent, ConversationRecord, Harness, RunRecord, TimingRecord, TimingSource,
+    CodebaseRecord, ConversationEvent, ConversationRecord, Harness, RunRecord, TimingRecord,
+    TimingSource,
 };
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
@@ -72,6 +73,10 @@ struct DispatchTask {
     /// shadow finding names.
     #[serde(default)]
     group: Option<String>,
+    /// The codebase the environment was built from, copied through to the run
+    /// record so grading can name the tree a result came from.
+    #[serde(default)]
+    codebase: Option<CodebaseRecord>,
 }
 
 /// Tally of what record-runs did across the dispatch's tasks.
@@ -312,6 +317,7 @@ pub fn record_runs(
                 duration_ms: None,
                 run_index: task.run_index,
                 conversation: conversation.clone(),
+                codebase: task.codebase.clone(),
             };
             validate_against_schema::<RunRecord>(
                 SchemaName::RunRecord,

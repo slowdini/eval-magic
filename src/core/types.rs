@@ -344,6 +344,12 @@ pub struct RunRecord {
     /// legacy one-shot runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<ConversationRecord>,
+    /// The codebase this run's environment was built from. Grading reads
+    /// `run.json` and nothing else, so a result can only be tied to a tree if
+    /// the record names one. Appended last, and omitted when absent, so a
+    /// fixture-only record serializes as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseRecord>,
 }
 
 /// The completed outcome of one scripted conversation.
@@ -574,6 +580,7 @@ mod tests {
             duration_ms: None,
             run_index: None,
             conversation: None,
+            codebase: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
