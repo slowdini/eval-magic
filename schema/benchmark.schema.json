@@ -15,47 +15,27 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "generated": {
-      "type": "string",
-      "description": "ISO timestamp"
-    },
-    "mode": {
-      "type": "string",
-      "enum": [
-        "new-skill",
-        "revision"
-      ]
-    },
+    "generated": { "type": "string", "description": "ISO timestamp" },
+    "mode": { "type": "string", "enum": ["new-skill", "revision"] },
     "baseline": {
-      "type": [
-        "string",
-        "null"
-      ],
+      "type": ["string", "null"],
       "description": "Baseline label for revision mode; omitted otherwise."
     },
     "conditions_compared": {
       "type": "array",
-      "items": {
-        "type": "string"
-      },
+      "items": { "type": "string" },
       "minItems": 2,
       "maxItems": 2
     },
-    "missing_gradings": {
-      "type": "integer"
-    },
+    "missing_gradings": { "type": "integer" },
     "validity_warnings": {
       "type": "array",
-      "items": {
-        "type": "string"
-      }
+      "items": { "type": "string" }
     },
     "run_summary": {
       "type": "object",
       "description": "Per-condition rollup, keyed by condition name.",
-      "additionalProperties": {
-        "$ref": "#/definitions/conditionSummary"
-      }
+      "additionalProperties": { "$ref": "#/definitions/conditionSummary" }
     },
     "assertions": {
       "type": "object",
@@ -64,119 +44,78 @@
         "type": "object",
         "additionalProperties": {
           "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/assertionCount"
-          }
+          "additionalProperties": { "$ref": "#/definitions/assertionCount" }
         }
       }
+    },
+    "codebases": {
+      "type": "array",
+      "description": "Codebases the compared conditions ran against, echoed from conditions.json. Absent for fixture-only iterations.",
+      "items": { "$ref": "#/definitions/codebaseUse" }
     },
     "diff_scope": {
       "type": "object",
       "description": "Raw final-environment diff metrics per condition, ordered by eval id and then run index. Omitted for iterations created before diff-scope capture.",
       "additionalProperties": {
         "type": "array",
-        "items": {
-          "$ref": "#/definitions/diffScopeRun"
-        }
+        "items": { "$ref": "#/definitions/diffScopeRun" }
       }
     },
     "delta": {
       "type": "object",
-      "required": [
-        "direction",
-        "pass_rate",
-        "duration_ms",
-        "total_tokens"
-      ],
+      "required": ["direction", "pass_rate", "duration_ms", "total_tokens"],
       "additionalProperties": false,
       "properties": {
-        "direction": {
-          "type": "string"
-        },
-        "pass_rate": {
-          "type": "number"
-        },
-        "duration_ms": {
-          "type": "number"
-        },
-        "total_tokens": {
-          "type": "number"
-        }
-      }
-    },
-    "codebases": {
-      "type": "array",
-      "description": "Codebases the compared iterations ran against, echoed from conditions.json. Absent for fixture-only iterations.",
-      "items": {
-        "type": "object",
-        "required": [
-          "kind",
-          "source",
-          "branch",
-          "evals"
-        ],
-        "additionalProperties": false,
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": [
-              "git",
-              "path"
-            ],
-            "description": "Whether the codebase came from a repository URL or a directory on the host that ran it."
-          },
-          "source": {
-            "type": "string",
-            "description": "The url or path exactly as declared in evals.json."
-          },
-          "resolved_path": {
-            "type": "string",
-            "description": "Absolute directory a path source resolved to on the host that ran it."
-          },
-          "ref": {
-            "type": "string",
-            "description": "Declared branch, tag, or commit SHA, for a git source."
-          },
-          "revision": {
-            "type": "string",
-            "description": "The commit the run actually ran against. A declared ref does not identify this on its own, because a branch moves. Absent only for a directory carrying no history."
-          },
-          "origin_url": {
-            "type": "string",
-            "description": "The source repository's origin. For a host-local path this is the only handle another reader can resolve: origin_url + revision names the same tree anywhere."
-          },
-          "branch": {
-            "type": "string",
-            "description": "Branch the task environment was checked out on."
-          },
-          "host_local": {
-            "type": "boolean",
-            "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
-          },
-          "evals": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            },
-            "description": "Ids of the evals whose environments were built from this codebase."
-          }
-        }
+        "direction": { "type": "string" },
+        "pass_rate": { "type": "number" },
+        "duration_ms": { "type": "number" },
+        "total_tokens": { "type": "number" }
       }
     }
   },
   "definitions": {
-    "assertionCount": {
+    "codebaseUse": {
       "type": "object",
-      "required": [
-        "passed",
-        "n"
-      ],
+      "required": ["kind", "source", "branch", "evals"],
       "additionalProperties": false,
       "properties": {
-        "passed": {
-          "type": "integer",
-          "minimum": 0
+        "kind": {
+          "type": "string",
+          "enum": ["git", "path"],
+          "description": "Whether the codebase came from a repository URL or a directory on the host that ran it."
         },
+        "source": { "type": "string", "description": "The url or path exactly as declared in evals.json." },
+        "resolved_path": {
+          "type": "string",
+          "description": "Absolute directory a path source resolved to on the host that ran it."
+        },
+        "ref": { "type": "string", "description": "Declared branch, tag, or commit SHA, for a git source." },
+        "revision": {
+          "type": "string",
+          "description": "The commit the run actually ran against. A declared ref does not identify this on its own, because a branch moves. Absent only for a directory carrying no history."
+        },
+        "origin_url": {
+          "type": "string",
+          "description": "The source repository's origin. For a host-local path this is the only handle another reader can resolve: origin_url plus revision names the same tree anywhere."
+        },
+        "branch": { "type": "string", "description": "Branch the task environment was checked out on." },
+        "host_local": {
+          "type": "boolean",
+          "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
+        },
+        "evals": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Ids of the evals whose environments were built from this codebase."
+        }
+      }
+    },
+    "assertionCount": {
+      "type": "object",
+      "required": ["passed", "n"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
         "n": {
           "type": "integer",
           "minimum": 1,
@@ -186,11 +125,7 @@
     },
     "stats": {
       "type": "object",
-      "required": [
-        "mean",
-        "stddev",
-        "n"
-      ],
+      "required": ["mean", "stddev", "n"],
       "additionalProperties": false,
       "properties": {
         "mean": {
@@ -209,67 +144,27 @@
     },
     "conditionSummary": {
       "type": "object",
-      "required": [
-        "pass_rate",
-        "duration_ms",
-        "total_tokens"
-      ],
+      "required": ["pass_rate", "duration_ms", "total_tokens"],
       "additionalProperties": false,
       "properties": {
-        "pass_rate": {
-          "$ref": "#/definitions/stats"
-        },
-        "duration_ms": {
-          "$ref": "#/definitions/stats"
-        },
-        "total_tokens": {
-          "$ref": "#/definitions/stats"
-        },
-        "skill_invocation_n": {
-          "type": "integer"
-        },
-        "skill_invocation_rate": {
-          "type": [
-            "number",
-            "null"
-          ]
-        }
+        "pass_rate": { "$ref": "#/definitions/stats" },
+        "duration_ms": { "$ref": "#/definitions/stats" },
+        "total_tokens": { "$ref": "#/definitions/stats" },
+        "skill_invocation_n": { "type": "integer" },
+        "skill_invocation_rate": { "type": ["number", "null"] }
       }
     },
     "diffScopeRun": {
       "type": "object",
-      "required": [
-        "eval_id",
-        "files_touched",
-        "lines_added",
-        "lines_removed",
-        "hunks"
-      ],
+      "required": ["eval_id", "files_touched", "lines_added", "lines_removed", "hunks"],
       "additionalProperties": false,
       "properties": {
-        "eval_id": {
-          "type": "string"
-        },
-        "run_index": {
-          "type": "integer",
-          "minimum": 1
-        },
-        "files_touched": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "lines_added": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "lines_removed": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "hunks": {
-          "type": "integer",
-          "minimum": 0
-        }
+        "eval_id": { "type": "string" },
+        "run_index": { "type": "integer", "minimum": 1 },
+        "files_touched": { "type": "integer", "minimum": 0 },
+        "lines_added": { "type": "integer", "minimum": 0 },
+        "lines_removed": { "type": "integer", "minimum": 0 },
+        "hunks": { "type": "integer", "minimum": 0 }
       }
     }
   }
