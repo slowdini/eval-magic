@@ -201,6 +201,44 @@ fn the_baseline_respects_codebase_gitignore_but_still_tracks_runner_files() {
     );
 }
 
+/// Sourcing a codebase runs git against a URL the operator supplied, on a host
+/// whose git configuration the operator also controls. `insteadOf` rewrites that
+/// URL, so a leak here would silently source a *different* tree than the one the
+/// eval declared — and the report would still cite the declared one.
+///
+/// Injected through `GIT_CONFIG_COUNT` because that is the one mechanism a test
+/// can use without writing to the developer's real `~/.gitconfig`.
+#[test]
+fn sourcing_a_codebase_ignores_the_operators_git_configuration() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = codebase_repo(tmp.path(), "origin", "main");
+    let source = format!(r#"{{ "url": "{}", "ref": "main" }}"#, wire_path(&origin));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(skill_dir.join("mr-review/evals/TASK.md"), "task\n").unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        // Rewrites the codebase URL to somewhere that does not resolve.
+        .env("GIT_CONFIG_COUNT", "1")
+        .env(
+            "GIT_CONFIG_KEY_0",
+            "url.https://eval-magic.invalid/.insteadOf",
+        )
+        .env("GIT_CONFIG_VALUE_0", wire_path(&origin))
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    let env = cli_env_dir(&cwd, "g1", "with_skill");
+    assert_eq!(
+        fs::read_to_string(env.join("src/main.rs")).unwrap(),
+        "fn main() {}\n",
+        "the declared codebase must be the one sourced"
+    );
+}
+
 /// The ticket's last acceptance criterion: an eval declaring no codebase keeps
 /// the environment it has always had.
 #[test]

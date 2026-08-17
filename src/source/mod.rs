@@ -11,7 +11,9 @@
 
 use std::path::Path;
 
-use crate::core::run_git;
+mod git;
+
+use git::IsolatedGit;
 
 /// Branch a source that carries no Git history of its own is initialized on.
 /// Matches the branch a fixture-only task repository has always used, so a run
@@ -101,8 +103,9 @@ fn resolve_path(declared: &str, base_dir: &Path) -> Result<ResolvedSource, Sourc
         )));
     }
 
+    let git = IsolatedGit::new().map_err(SourceError::msg)?;
     let text = |args: &[&str]| {
-        let output = run_git(args, &directory);
+        let output = git.run(&directory, args);
         (output.status == Some(0))
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
             .filter(|value| !value.is_empty())
@@ -194,6 +197,7 @@ pub fn materialize(resolved: &ResolvedSource, dest: &Path) -> Result<(), SourceE
         })?;
     }
 
+    let git = IsolatedGit::new().map_err(SourceError::msg)?;
     match (&resolved.resolved_path, &resolved.revision) {
         // A directory carrying no history: copy it, then wrap it in a repository.
         (Some(directory), None) => {
@@ -206,23 +210,32 @@ pub fn materialize(resolved: &ResolvedSource, dest: &Path) -> Result<(), SourceE
                 },
             )?;
             checked(
+                &git,
                 dest.parent().unwrap_or(dest),
                 &[
                     "init",
                     "--quiet",
                     "--initial-branch",
                     &resolved.branch,
+                    // An empty template, so a configured `init.templateDir`
+                    // cannot seed hooks into a task repository.
+                    "--template",
+                    &git.template_dir().to_string_lossy(),
                     &dest.to_string_lossy(),
                 ],
                 "initialize the codebase directory as a repository",
             )?;
         }
-        _ => clone_repository(resolved, dest)?,
+        _ => clone_repository(&git, resolved, dest)?,
     }
     Ok(())
 }
 
-fn clone_repository(resolved: &ResolvedSource, dest: &Path) -> Result<(), SourceError> {
+fn clone_repository(
+    git: &IsolatedGit,
+    resolved: &ResolvedSource,
+    dest: &Path,
+) -> Result<(), SourceError> {
     let from = resolved
         .resolved_path
         .clone()
@@ -236,11 +249,15 @@ fn clone_repository(resolved: &ResolvedSource, dest: &Path) -> Result<(), Source
     // `--no-checkout` skips populating the working tree at the remote's default
     // branch only to replace it a moment later.
     checked(
+        git,
         Path::new("."),
         &[
             "clone",
             "--quiet",
             "--no-checkout",
+            // An empty template, for the same reason `init` uses one.
+            "--template",
+            &git.template_dir().to_string_lossy(),
             &from,
             &dest.to_string_lossy(),
         ],
@@ -249,11 +266,13 @@ fn clone_repository(resolved: &ResolvedSource, dest: &Path) -> Result<(), Source
     // `-B` both creates the branch at the resolved commit and checks it out, so a
     // tag or bare SHA never leaves the environment on a detached HEAD.
     checked(
+        git,
         dest,
         &["checkout", "--quiet", "-B", &resolved.branch, revision],
         &format!("check out {revision} of codebase {from}"),
     )?;
     checked(
+        git,
         dest,
         &["remote", "remove", "origin"],
         "remove the cloned remote",
@@ -262,8 +281,8 @@ fn clone_repository(resolved: &ResolvedSource, dest: &Path) -> Result<(), Source
 }
 
 /// Run git in `cwd`, turning a non-zero exit into an error naming the intent.
-fn checked(cwd: &Path, args: &[&str], intent: &str) -> Result<(), SourceError> {
-    let output = run_git(args, cwd);
+fn checked(git: &IsolatedGit, cwd: &Path, args: &[&str], intent: &str) -> Result<(), SourceError> {
+    let output = git.run(cwd, args);
     if output.status == Some(0) {
         return Ok(());
     }
@@ -301,7 +320,8 @@ fn default_branch(refs: &[(String, String)], url: &str) -> Result<String, Source
 /// line is the only way to learn the remote's default branch. One unfiltered
 /// call answers both questions in one round trip.
 fn list_remote(url: &str) -> Result<Vec<(String, String)>, SourceError> {
-    let output = run_git(&["ls-remote", "--symref", url], Path::new("."));
+    let git = IsolatedGit::new().map_err(SourceError::msg)?;
+    let output = git.run(Path::new("."), &["ls-remote", "--symref", url]);
     if output.status != Some(0) {
         return Err(SourceError::msg(format!(
             "could not read codebase repository {url}: {}",
