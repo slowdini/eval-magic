@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
 use crate::core::{
-    AvailableSkill, CodebaseRecord, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn,
+    AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn, SourceRecord,
 };
 
 use super::RunError;
@@ -58,7 +58,7 @@ pub struct DispatchTask {
     /// The codebase this task's environment was built from. Carried here so the
     /// run record written at ingest names the tree the agent actually worked in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codebase: Option<CodebaseRecord>,
+    pub codebase: Option<SourceRecord>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -97,7 +97,7 @@ pub struct DispatchTaskOpts<'a> {
     /// callers that do not carry an environment manifest.
     pub eval_root: Option<&'a str>,
     /// The codebase this task's environment was built from, if any.
-    pub codebase: Option<&'a CodebaseRecord>,
+    pub codebase: Option<&'a SourceRecord>,
 }
 
 fn render_available_skills_block_for_harness(

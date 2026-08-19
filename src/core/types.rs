@@ -170,21 +170,23 @@ pub enum CodebaseSource {
     },
 }
 
-/// Whether a codebase came from a repository URL or a directory on this host.
+/// Whether a source came from a repository URL or a directory on this host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CodebaseKind {
+pub enum SourceKind {
     Git,
     Path,
 }
 
-/// A resolved codebase, as every provenance artifact records it.
+/// A resolved source, as every provenance artifact records it. The codebase a
+/// task environment is built from and the skill under test are both recorded
+/// through this one shape, so a reader learns them the same way.
 ///
 /// The declared ref is not enough to identify what a run measured — a branch
 /// moves — so [`Self::revision`] is the field a report is read against.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CodebaseRecord {
-    pub kind: CodebaseKind,
+pub struct SourceRecord {
+    pub kind: SourceKind,
     /// The url or path exactly as declared, so a reader can find it in the config.
     pub source: String,
     /// Where a path source resolved to on the host that ran it.
@@ -210,11 +212,11 @@ pub struct CodebaseRecord {
 
 /// One resolved codebase plus the evals built from it. `conditions.json` and
 /// `benchmark.json` carry a list of these; a `run.json` carries the bare
-/// [`CodebaseRecord`], having exactly one.
+/// [`SourceRecord`], having exactly one.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodebaseUse {
     #[serde(flatten)]
-    pub codebase: CodebaseRecord,
+    pub codebase: SourceRecord,
     pub evals: Vec<String>,
 }
 
@@ -349,7 +351,7 @@ pub struct RunRecord {
     /// the record names one. Appended last, and omitted when absent, so a
     /// fixture-only record serializes as it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codebase: Option<CodebaseRecord>,
+    pub codebase: Option<SourceRecord>,
 }
 
 /// The completed outcome of one scripted conversation.

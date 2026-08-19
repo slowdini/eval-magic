@@ -31,7 +31,7 @@ use serde::Deserialize;
 use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
 use crate::core::fs::write_json;
 use crate::core::{
-    CodebaseRecord, ConversationEvent, ConversationRecord, Harness, RunRecord, TimingRecord,
+    ConversationEvent, ConversationRecord, Harness, RunRecord, SourceRecord, TimingRecord,
     TimingSource,
 };
 use crate::pipeline::error::PipelineError;
@@ -76,7 +76,7 @@ struct DispatchTask {
     /// The codebase the environment was built from, copied through to the run
     /// record so grading can name the tree a result came from.
     #[serde(default)]
-    codebase: Option<CodebaseRecord>,
+    codebase: Option<SourceRecord>,
 }
 
 /// Tally of what record-runs did across the dispatch's tasks.

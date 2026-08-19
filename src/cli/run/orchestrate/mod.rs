@@ -17,9 +17,7 @@ use std::path::{Path, PathBuf};
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
 use crate::core::fs::artifact_path;
-use crate::core::{
-    CodebaseKind, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, Mode, RunContext,
-};
+use crate::core::{CodebaseSource, CodebaseUse, Eval, Mode, RunContext, SourceKind, SourceRecord};
 use crate::source::ResolvedSource;
 
 use super::RunError;
@@ -108,11 +106,11 @@ struct RunCodebase {
 impl RunCodebase {
     /// The artifact form, shared by every provenance surface so a reader never
     /// has to reconcile two spellings of the same resolution.
-    fn record(&self) -> CodebaseRecord {
-        CodebaseRecord {
+    fn record(&self) -> SourceRecord {
+        SourceRecord {
             kind: match self.declared {
-                CodebaseSource::Git { .. } => CodebaseKind::Git,
-                CodebaseSource::Path { .. } => CodebaseKind::Path,
+                CodebaseSource::Git { .. } => SourceKind::Git,
+                CodebaseSource::Path { .. } => SourceKind::Path,
             },
             source: self.source.source.clone(),
             resolved_path: self
