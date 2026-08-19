@@ -100,6 +100,55 @@ fn carries_the_codebase_from_dispatch_task_into_each_run_record() {
     assert_eq!(recorded["codebase"], codebase);
 }
 
+/// Grading reads `run.json` and nothing else, so a result can only be tied to a
+/// skill revision if the record carries one.
+#[test]
+fn carries_the_skill_source_from_dispatch_task_into_each_run_record() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let cond_dir = iter.join("eval-crash").join("with_skill");
+    let outputs_dir = cond_dir.join("outputs");
+    fs::create_dir_all(&outputs_dir).unwrap();
+    fs::write(outputs_dir.join("final-message.md"), "Fixed it.").unwrap();
+    write_codex_events(&outputs_dir, "unused");
+    let skill_source = json!({
+        "kind": "path",
+        "source": "/work/skills/mr-review",
+        "resolved_path": "/work/skills/mr-review",
+        "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "branch": "main",
+        "host_local": true,
+        "dirty": true,
+        "siblings": ["helper-skill"]
+    });
+    fs::write(
+        iter.join("dispatch.json"),
+        serde_json::to_string_pretty(&json!({
+            "run_nonce": "nonce1",
+            "tasks": [{
+                "eval_id": "crash",
+                "condition": "with_skill",
+                "skill_path": "/staged/skill/SKILL.md",
+                "user_prompt": "Do the crash task",
+                "fixtures": [],
+                "outputs_dir": outputs_dir.to_string_lossy(),
+                "run_record_path": cond_dir.join("run.json").to_string_lossy(),
+                "timing_path": cond_dir.join("timing.json").to_string_lossy(),
+                "agent_description": "crash:with_skill:i1-nonce1",
+                "skill_source": skill_source,
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
+
+    let recorded: Value =
+        serde_json::from_str(&fs::read_to_string(cond_dir.join("run.json")).unwrap()).unwrap();
+    assert_eq!(recorded["skill_source"], skill_source);
+}
+
 /// A run with no codebase behind it serializes exactly as it did before the
 /// field existed, so historical records stay comparable.
 #[test]
