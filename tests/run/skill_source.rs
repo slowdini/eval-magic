@@ -285,3 +285,53 @@ fn grading_reads_the_eval_definitions_the_run_copied() {
         .assert()
         .success();
 }
+
+/// Mode B parity. The `old_skill` arm stages a snapshot the workspace already
+/// held; the `new_skill` arm must stage the copy, so both arms are things the
+/// runner placed and neither is read from the operator's tree.
+#[test]
+fn revision_mode_stages_the_snapshot_and_the_copy() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["snapshot", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--label", "baseline"])
+        .assert()
+        .success();
+
+    let iteration = prepare(&cwd, &skill_dir, &["--mode", "revision"]);
+
+    let conditions = read_json(&iteration.join("conditions.json"));
+    let arms = conditions["conditions"].as_array().unwrap();
+    assert_eq!(arms[0]["name"], "old_skill");
+    assert_eq!(arms[1]["name"], "new_skill");
+
+    let old_arm = arms[0]["skill_path"].as_str().unwrap();
+    assert!(
+        old_arm.contains("/snapshots/baseline/"),
+        "old arm should stage the snapshot, was {old_arm}"
+    );
+
+    let new_arm = arms[1]["skill_path"].as_str().unwrap();
+    assert_eq!(
+        new_arm,
+        wire_path(&iteration.join(".skills").join("mr-review").join("SKILL.md"))
+    );
+
+    // Both arms name something the runner placed inside the eval home.
+    for arm in [old_arm, new_arm] {
+        assert!(
+            arm.starts_with(&wire_path(&cwd.join(".eval-magic"))),
+            "arm reads from outside the eval home: {arm}"
+        );
+    }
+
+    assert_eq!(
+        conditions["skill_source"]["kind"],
+        Value::from("path"),
+        "revision mode records the skill source too"
+    );
+}
