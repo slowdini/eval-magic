@@ -57,8 +57,10 @@ pub struct CommonArgs {
     /// Use this when the skill under test needs sibling skills available. The
     /// skill-under-test is staged under a unique slug, and every *other* skill
     /// folder inside this directory is staged under its natural name so
-    /// cross-references resolve. Omit it for the default single-skill isolated
-    /// run.
+    /// cross-references resolve. The roster is read once, when the run resolves,
+    /// and copied into the eval home with the skill itself; `conditions.json`
+    /// records it, so what a report claims and what the environments held cannot
+    /// disagree. Omit it for the default single-skill isolated run.
     #[arg(long)]
     pub skill_dir: Option<String>,
     /// Skill under evaluation.

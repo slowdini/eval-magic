@@ -134,6 +134,41 @@ harnesses by checking every rendered eval-agent command in `RUNBOOK.md` and
 dispatch's setting-source selection. A plugin can appear there and remain absent from the dispatch,
 or the reverse. Use the dispatch's init event.
 
+## The skill under test is a copy
+
+Every skill an eval stages is copied into the eval home before any dispatch runs, and
+each condition stages from that copy. Nothing the agent can reach is read from your own
+skill directory, so editing a skill mid-campaign cannot change what a prepared iteration
+measures.
+
+The copy is the working tree as it sits on disk, not a checkout of a commit —
+evaluating an uncommitted revision is the ordinary case, and in a `--mode revision` run
+the edit under test is uncommitted by definition. What the run measured is recorded rather than inferred, in
+`conditions.json`, each `run.json`, `benchmark.json`, and the `BASELINE.md` written by
+`promote-baseline`:
+
+```sh
+jq '.skill_source' conditions.json
+```
+
+`dirty: true` means the recorded revision alone does not identify what ran. Commit the
+skill before a run whose result you intend to publish.
+
+Sibling skills staged by `--skill-dir` are copied the same way, and the roster is
+captured once when the run resolves. The `siblings` field names exactly what every
+environment received.
+
+The eval home sits outside the skill's own repository: under `$XDG_DATA_HOME/eval-magic`
+(or `~/.local/share/eval-magic`), in a directory named for the skill directory it serves.
+`run` prints the path it chose, and every command it suggests carries `--workspace-dir`,
+so there is nothing to remember. `EVAL_MAGIC_WORKSPACE_DIR` moves the default;
+`--workspace-dir` overrides both.
+
+Copying does not remove the live directory from the machine, so a dispatch can still read
+it by absolute path. `detect-stray-writes` reports that as a live-source read, and
+`aggregate` carries it into `validity_warnings` for the same reason a discoverable
+plugin copy is carried there: the arm may not be comparing what it claims to.
+
 ## The task repository is a separate boundary
 
 Skill-source isolation is about what a dispatch can *load*. The task repository is about what it can
