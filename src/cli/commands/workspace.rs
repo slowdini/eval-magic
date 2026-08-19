@@ -52,7 +52,6 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
         label: args.label.as_deref(),
         agent_model: args.agent_model.as_deref(),
         judge_model: args.judge_model.as_deref(),
-        git_cwd: &ctx.skill_subdir,
     })?;
 
     let n = result.gradings_copied;

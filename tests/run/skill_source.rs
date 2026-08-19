@@ -335,3 +335,28 @@ fn revision_mode_stages_the_snapshot_and_the_copy() {
         "revision mode records the skill source too"
     );
 }
+
+/// `--no-stage` puts nothing in the harness skills directory, so recording a
+/// roster of siblings "staged alongside" the skill would describe an environment
+/// that never existed.
+#[test]
+fn no_stage_records_no_sibling_roster() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let helper = skill_dir.join("helper-skill");
+    fs::create_dir_all(&helper).unwrap();
+    fs::write(
+        helper.join("SKILL.md"),
+        "---\nname: helper-skill\ndescription: helper\n---\n\nhelper\n",
+    )
+    .unwrap();
+
+    let iteration = prepare(&cwd, &skill_dir, &["--mode", "new-skill", "--no-stage"]);
+
+    let conditions = read_json(&iteration.join("conditions.json"));
+    assert!(
+        conditions["skill_source"]["siblings"].is_null(),
+        "recorded a roster nothing staged: {}",
+        conditions["skill_source"]
+    );
+}

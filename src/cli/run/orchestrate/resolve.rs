@@ -22,8 +22,8 @@ use super::{Resolved, RunCodebase, RunOptions, RunSkill, skills_copy_root};
 /// materialization.
 ///
 /// The `CodebaseSource` → `SourceSpec` translation lives here rather than as a
-/// `From` impl in [`crate::source`]: that module resolves skills for #253 too,
-/// and stays useful precisely because it does not know what a codebase is.
+/// `From` impl in [`crate::source`]: that module resolves the skill under test
+/// as well, and stays useful precisely because it does not know what a codebase is.
 fn resolve_codebases(
     ctx: &RunContext,
     config: &EvalsConfig,
@@ -106,7 +106,9 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     .map_err(|error| RunError::msg(error.to_string()))?;
     let skill = RunSkill {
         source: skill_source,
-        siblings: if ctx.stage_siblings {
+        // The roster describes what each environment received. `--no-stage`
+        // populates no skills directory at all, so there is nothing to name.
+        siblings: if ctx.stage_siblings && !opts.no_stage {
             ctx.sibling_skill_names.clone()
         } else {
             Vec::new()
