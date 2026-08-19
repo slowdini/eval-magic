@@ -142,14 +142,20 @@ pub(crate) fn run_context_with_bootstrap(
     // name harnesses clap never saw; resolution against the registry happens
     // here, after parsing.
     let harness = args.harness.as_deref().map(Harness::resolve).transpose()?;
-    Ok(detect_run_context(DetectInput {
+    let ctx = detect_run_context(DetectInput {
         skill_dir: args.skill_dir.clone(),
         skill: args.skill.clone(),
         bootstrap,
         workspace_dir: args.workspace_dir.clone(),
         harness,
         cwd: None,
-    })?)
+    })?;
+    // `core` returns warnings rather than printing them; this is the one place
+    // every run-loop command passes through, so it is where they are shown.
+    for warning in &ctx.warnings {
+        eprintln!("⚠ {warning}");
+    }
+    Ok(ctx)
 }
 
 /// Split a comma-separated `--only`/`--skip` value into trimmed, non-empty ids.
@@ -169,8 +175,9 @@ pub(crate) fn parse_id_list(v: Option<&str>) -> Option<Vec<String>> {
 /// "Next:" commands are copy-pasteable from any cwd — not just the one `run`
 /// happened to start in. The absolute `--workspace-dir` is what lets the human
 /// run `ingest`/`finalize` from a per-`(group, condition)` env dir: without it,
-/// `workspace_root` would default to `<cwd>/.eval-magic` (`detect_run_context`)
-/// and the iteration tree above the env would not resolve.
+/// `workspace_root` would fall back to the derived default (`detect_run_context`),
+/// which is keyed on the skill directory rather than on the cwd, and the
+/// iteration tree above the env would not resolve.
 pub(crate) fn command_target_args(ctx: &RunContext) -> String {
     format!(
         " --skill-dir {} --skill {} --workspace-dir {}",
@@ -310,7 +317,7 @@ mod tests {
 
     /// The human runs `ingest`/`finalize` from a per-`(group, condition)` env dir.
     /// Without an explicit workspace root those commands default `workspace_root`
-    /// to `<cwd>/.eval-magic` and bail "not found", so the selector must carry an
+    /// to the derived eval home and bail "not found", so the selector must carry an
     /// absolute `--workspace-dir` pointing at the real workspace above the env.
     #[test]
     fn target_args_carry_absolute_workspace_dir() {
@@ -340,7 +347,7 @@ mod tests {
 
         // Round-trip from an env-like cwd below the workspace: feeding the
         // selector's roots back resolves the SAME workspace, not
-        // `<cwd>/.eval-magic`.
+        // the derived eval home.
         let env_like = ctx
             .workspace_root
             .join("mr-review")

@@ -94,10 +94,16 @@ pub struct CommonArgs {
     /// parsing; an unknown name errors listing every registered harness.
     #[arg(long)]
     pub harness: Option<String>,
-    /// Workspace directory (defaults to `<cwd>/.eval-magic`).
+    /// Workspace directory — the eval home (defaults outside the skill's repo).
     ///
-    /// The artifact root. Pass the same value to every command of a run, including
-    /// `teardown`.
+    /// The artifact root. Iterations, envs, and campaign artifacts live here, so
+    /// it deliberately defaults outside the skill under test: a run never writes
+    /// into the repository it is measuring. The default is
+    /// `$XDG_DATA_HOME/eval-magic` (or `~/.local/share/eval-magic`) plus a
+    /// directory naming the skill directory it belongs to; `EVAL_MAGIC_WORKSPACE_DIR`
+    /// overrides that, and this flag overrides both. `run` prints the path it
+    /// chose, and every command it suggests already carries it. Pass the same
+    /// value to every command of a run, including `teardown`.
     #[arg(long)]
     pub workspace_dir: Option<String>,
     /// Restrict to these eval ids (comma-separated).

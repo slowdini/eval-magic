@@ -55,6 +55,9 @@ pub struct RunContext {
     pub stage_root: PathBuf,
     pub bootstrap_path: Option<PathBuf>,
     pub harness: Harness,
+    /// Things the operator should know about how this context resolved. `core`
+    /// never prints; `cli::run_context_with_bootstrap` owns the `⚠ ` prefix.
+    pub warnings: Vec<String>,
 }
 
 /// Already-parsed flag values handed to [`detect_run_context`]. `clap` owns the
@@ -157,6 +160,119 @@ fn infer_only_skill_name(skill_dir: &Path) -> Result<String, ContextError> {
     }
 }
 
+/// Directory name a derived eval home is namespaced by: the skill directory's
+/// own name, plus a digest of its full path.
+///
+/// The name alone would collide — two repositories can each hold a `code-review`
+/// — and colliding roots would interleave two skills' iterations under one tree,
+/// where `--iteration N` could reach the wrong one. The digest alone would be
+/// unreadable. Together they are recognizable and unambiguous.
+fn workspace_slug(skill_dir: &Path) -> String {
+    let raw = skill_dir
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut name: String = raw
+        .chars()
+        .take(32)
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_') {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    if name.is_empty() {
+        name.push_str("skills");
+    }
+    format!("{name}-{}", path_digest(skill_dir))
+}
+
+/// FNV-1a over `path`, as 8 hex characters.
+///
+/// Hand-rolled rather than `DefaultHasher`, which carries no stability guarantee
+/// across Rust releases. This digest names a directory the operator re-types and
+/// that every generated command embeds; a toolchain upgrade silently relocating
+/// someone's workspace is the one failure it must not have.
+fn path_digest(path: &Path) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in path.to_string_lossy().as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")[..8].to_string()
+}
+
+/// Resolve the eval home from explicit/environment inputs: `$EVAL_MAGIC_WORKSPACE_DIR`
+/// as given (empty reads as unset), else `$XDG_DATA_HOME/eval-magic/<slug>`, else
+/// `<home>/.local/share/eval-magic/<slug>`, else a temp-directory root.
+///
+/// The environment override is taken verbatim, exactly as `--workspace-dir` is:
+/// someone who names a directory means that directory. Only the *derived*
+/// default is namespaced, because only it has to serve every skill on the host.
+pub fn workspace_root_from(
+    env: Option<&str>,
+    xdg_data_home: Option<&str>,
+    home: Option<&Path>,
+    skill_dir: &Path,
+) -> PathBuf {
+    if let Some(explicit) = env.filter(|value| !value.is_empty()) {
+        return PathBuf::from(explicit);
+    }
+    let slug = workspace_slug(skill_dir);
+    if let Some(xdg) = xdg_data_home.filter(|value| !value.is_empty()) {
+        return Path::new(xdg).join("eval-magic").join(slug);
+    }
+    match home {
+        Some(home) => home
+            .join(".local")
+            .join("share")
+            .join("eval-magic")
+            .join(slug),
+        None => std::env::temp_dir().join("eval-magic").join(slug),
+    }
+}
+
+/// [`workspace_root_from`] over the live environment.
+pub fn default_workspace_root(skill_dir: &Path) -> PathBuf {
+    workspace_root_from(
+        std::env::var("EVAL_MAGIC_WORKSPACE_DIR").ok().as_deref(),
+        std::env::var("XDG_DATA_HOME").ok().as_deref(),
+        std::env::home_dir().as_deref(),
+        skill_dir,
+    )
+}
+
+/// The name of the pre-relocation eval home, and of the project-local descriptor
+/// layer. The two are unrelated uses of one name; only the first has moved.
+const LEGACY_WORKSPACE_DIR: &str = ".eval-magic";
+
+/// Notice for an operator whose in-flight campaign lives at the old default.
+///
+/// Only a `<cwd>/.eval-magic` holding something other than `harnesses/` counts:
+/// that subdirectory is the descriptor layer, which still belongs there.
+fn legacy_workspace_notice(cwd: &Path, workspace_root: &Path) -> Option<String> {
+    let legacy = cwd.join(LEGACY_WORKSPACE_DIR);
+    // Nothing was left behind if the run is using that very directory.
+    if workspace_root == legacy {
+        return None;
+    }
+    let has_campaign = std::fs::read_dir(&legacy)
+        .ok()?
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_name() != std::ffi::OsStr::new("harnesses"));
+    has_campaign.then(|| {
+        format!(
+            "a workspace from an earlier version exists at {}; artifacts now default to {}. \
+             Pass --workspace-dir {} to continue the campaign already there.",
+            legacy.display(),
+            workspace_root.display(),
+            legacy.display()
+        )
+    })
+}
+
 /// Validate the parsed flags against the filesystem and assemble a
 /// [`RunContext`]: resolves either a seeded `--skill-dir` environment or a direct
 /// single skill selected from `--skill <path-or-name>` / the current directory,
@@ -219,9 +335,17 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
         None => None,
     };
 
-    let workspace_root = match input.workspace_dir {
-        Some(raw) => absolutize(&cwd, &raw)?,
-        None => cwd.join(".eval-magic"),
+    // The eval home derives from the skill directory, not the cwd: artifacts
+    // belong to the skill under test, not to wherever the operator was standing.
+    let (workspace_root, warnings) = match input.workspace_dir {
+        Some(raw) => (absolutize(&cwd, &raw)?, Vec::new()),
+        None => {
+            let root = absolutize(&cwd, &default_workspace_root(&skill_dir).to_string_lossy())?;
+            let warnings = legacy_workspace_notice(&cwd, &root)
+                .map(|notice| vec![notice])
+                .unwrap_or_default();
+            (root, warnings)
+        }
     };
     let stage_root = cwd;
 
@@ -237,6 +361,7 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
         stage_root,
         bootstrap_path,
         harness,
+        warnings,
     })
 }
 
@@ -453,13 +578,162 @@ mod tests {
         assert!(ctx.sibling_skill_names.is_empty());
     }
 
+    /// The point of the relocation: eval artifacts stop landing inside whatever
+    /// repository the operator happened to be standing in.
     #[test]
-    fn workspace_default() {
+    fn workspace_default_is_outside_the_cwd_and_the_skill_tree() {
         let tmp = TempDir::new().unwrap();
         let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
         let ctx = detect_run_context(input(&skill_dir, "foo")).unwrap();
         let cwd = crate::core::fs::real_path(&std::env::current_dir().unwrap()).unwrap();
-        assert_eq!(ctx.workspace_root, cwd.join(".eval-magic"));
+
+        assert!(
+            !ctx.workspace_root.starts_with(&cwd),
+            "workspace {} is still under the cwd {}",
+            ctx.workspace_root.display(),
+            cwd.display()
+        );
+        assert!(
+            !ctx.workspace_root.starts_with(&skill_dir),
+            "workspace {} is still under the skill tree",
+            ctx.workspace_root.display()
+        );
+    }
+
+    /// `EVAL_MAGIC_WORKSPACE_DIR` sits between the flag and the derived default,
+    /// mirroring the `EVAL_MAGIC_CONFIG_DIR` ladder in `descriptor::layers`.
+    #[test]
+    fn workspace_root_env_override_is_taken_as_given() {
+        let root = workspace_root_from(
+            Some("/srv/evals"),
+            Some("/xdg/data"),
+            Some(Path::new("/home/u")),
+            Path::new("/home/u/skills"),
+        );
+        assert_eq!(root, PathBuf::from("/srv/evals"));
+    }
+
+    #[test]
+    fn workspace_root_prefers_xdg_data_home_over_the_home_fallback() {
+        let root = workspace_root_from(
+            None,
+            Some("/xdg/data"),
+            Some(Path::new("/home/u")),
+            Path::new("/home/u/skills"),
+        );
+        assert!(
+            root.starts_with("/xdg/data/eval-magic"),
+            "root was {}",
+            root.display()
+        );
+    }
+
+    #[test]
+    fn workspace_root_falls_back_to_the_home_data_directory() {
+        let root = workspace_root_from(
+            None,
+            None,
+            Some(Path::new("/home/u")),
+            Path::new("/home/u/skills"),
+        );
+        assert!(
+            root.starts_with("/home/u/.local/share/eval-magic"),
+            "root was {}",
+            root.display()
+        );
+    }
+
+    /// One global root would collide two skills that share a name and come from
+    /// different repositories, silently interleaving their iterations. The slug
+    /// is what keeps them apart.
+    #[test]
+    fn workspace_root_keeps_same_named_skill_dirs_apart() {
+        let home = Path::new("/home/u");
+        let a = workspace_root_from(None, None, Some(home), Path::new("/work/one/skills"));
+        let b = workspace_root_from(None, None, Some(home), Path::new("/work/two/skills"));
+        assert_ne!(a, b);
+    }
+
+    /// The slug is part of a path the operator will re-type and that generated
+    /// commands embed, so it has to be the same on every run — which rules out
+    /// any hash without a cross-release stability guarantee.
+    #[test]
+    fn workspace_root_is_stable_for_one_skill_dir() {
+        let home = Path::new("/home/u");
+        let skills = Path::new("/work/one/skills");
+        assert_eq!(
+            workspace_root_from(None, None, Some(home), skills),
+            workspace_root_from(None, None, Some(home), skills)
+        );
+    }
+
+    #[test]
+    fn workspace_root_slug_survives_a_basename_that_is_not_path_safe() {
+        let root = workspace_root_from(
+            None,
+            None,
+            Some(Path::new("/home/u")),
+            Path::new("/work/my skills:v2"),
+        );
+        let slug = root.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(
+            slug.chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_')),
+            "slug was {slug}"
+        );
+        assert!(slug.starts_with("my-skills-v2-"), "slug was {slug}");
+    }
+
+    /// An operator upgrading mid-campaign would otherwise find `ingest` unable to
+    /// see the iteration `run` had just built.
+    #[test]
+    fn a_legacy_workspace_in_the_cwd_is_reported() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
+        fs::create_dir_all(tmp.path().join(".eval-magic").join("foo")).unwrap();
+
+        let ctx = detect_run_context(DetectInput {
+            cwd: Some(tmp.path().to_path_buf()),
+            ..input(&skill_dir, "foo")
+        })
+        .unwrap();
+
+        assert!(
+            ctx.warnings.iter().any(|w| w.contains(".eval-magic")),
+            "warnings were: {:?}",
+            ctx.warnings
+        );
+    }
+
+    /// Advice to "pass --workspace-dir <x>" is worse than silence when the run is
+    /// already using `<x>`. Reachable whenever the resolved root lands on the old
+    /// path — an `EVAL_MAGIC_WORKSPACE_DIR` naming it, say.
+    #[test]
+    fn no_legacy_notice_when_the_resolved_workspace_is_that_directory() {
+        let tmp = TempDir::new().unwrap();
+        let legacy = tmp.path().join(".eval-magic");
+        fs::create_dir_all(legacy.join("mr-review")).unwrap();
+
+        assert_eq!(legacy_workspace_notice(tmp.path(), &legacy), None);
+        assert!(legacy_workspace_notice(tmp.path(), Path::new("/elsewhere/eval-magic")).is_some());
+    }
+
+    /// `.eval-magic/harnesses/` is the project-local descriptor layer — a
+    /// deliberate, unrelated use of the same name that does not move and must
+    /// not be mistaken for an orphaned campaign.
+    #[test]
+    fn a_descriptor_layer_alone_is_not_reported_as_a_legacy_workspace() {
+        let tmp = TempDir::new().unwrap();
+        let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
+        fs::create_dir_all(tmp.path().join(".eval-magic").join("harnesses")).unwrap();
+
+        let ctx = detect_run_context(DetectInput {
+            cwd: Some(tmp.path().to_path_buf()),
+            ..input(&skill_dir, "foo")
+        })
+        .unwrap();
+
+        assert!(ctx.warnings.is_empty(), "warnings were: {:?}", ctx.warnings);
     }
 
     #[test]
@@ -516,11 +790,17 @@ mod tests {
 
         let expected = crate::core::fs::real_path(&real).unwrap();
         assert_eq!(ctx.stage_root, expected.join("skill-dir"));
-        assert_eq!(
-            ctx.workspace_root,
-            expected.join("skill-dir").join(".eval-magic")
-        );
         assert_eq!(ctx.skill_dir, expected.join("skill-dir"));
+
+        // The workspace root now derives from the skill dir rather than the cwd,
+        // so the alias has to collapse there too: entering through the alias and
+        // entering directly must name one workspace, not two.
+        let direct = detect_run_context(DetectInput {
+            skill: Some("foo".to_string()),
+            ..input_from(&expected.join("skill-dir"))
+        })
+        .unwrap();
+        assert_eq!(ctx.workspace_root, direct.workspace_root);
     }
 
     /// `--workspace-dir` is the second way into the same tree: the guard's roots
