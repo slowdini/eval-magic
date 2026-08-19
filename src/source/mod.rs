@@ -37,6 +37,9 @@ pub enum SourceSpec {
 /// The read-only outcome of [`resolve`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSource {
+    /// The noun every message about this resolution uses. The caller names it,
+    /// because this module deliberately does not know what it is sourcing.
+    pub subject: &'static str,
     /// The url or path exactly as declared.
     pub source: String,
     /// The absolute directory a path source resolved to. Absent for a git url,
@@ -56,6 +59,10 @@ pub struct ResolvedSource {
     /// True when the declaration cannot be resolved off this host, so a report
     /// citing it is not reproducible from the config alone.
     pub host_local: bool,
+    /// True when the source tree carries uncommitted changes. A warning is
+    /// advice the operator may miss; this is evidence, and a subject copied as
+    /// it sits on disk cannot be cited without it.
+    pub dirty: bool,
     /// Things the operator should know about what this resolution did or did not
     /// carry. This module never prints; the `cli` layer owns the `⚠ ` prefix.
     pub warnings: Vec<String>,
@@ -73,15 +80,24 @@ impl SourceError {
     }
 }
 
-/// Resolve `spec` without creating anything on disk.
-pub fn resolve(spec: &SourceSpec, base_dir: &Path) -> Result<ResolvedSource, SourceError> {
+/// Resolve `spec` without creating anything on disk. `subject` is the noun the
+/// caller wants this resolution's messages to use — `codebase`, `skill`.
+pub fn resolve(
+    spec: &SourceSpec,
+    base_dir: &Path,
+    subject: &'static str,
+) -> Result<ResolvedSource, SourceError> {
     match spec {
-        SourceSpec::Git { url, reference } => resolve_git(url, reference),
-        SourceSpec::Path { path } => resolve_path(path, base_dir),
+        SourceSpec::Git { url, reference } => resolve_git(url, reference, subject),
+        SourceSpec::Path { path } => resolve_path(path, base_dir, subject),
     }
 }
 
-fn resolve_path(declared: &str, base_dir: &Path) -> Result<ResolvedSource, SourceError> {
+fn resolve_path(
+    declared: &str,
+    base_dir: &Path,
+    subject: &'static str,
+) -> Result<ResolvedSource, SourceError> {
     let joined = {
         let path = Path::new(declared);
         if path.is_absolute() {
@@ -92,13 +108,13 @@ fn resolve_path(declared: &str, base_dir: &Path) -> Result<ResolvedSource, Sourc
     };
     let directory = crate::core::fs::real_path(&joined).map_err(|error| {
         SourceError::msg(format!(
-            "codebase path '{declared}' could not be resolved ({}): {error}",
+            "{subject} path '{declared}' could not be resolved ({}): {error}",
             joined.display()
         ))
     })?;
     if !directory.is_dir() {
         return Err(SourceError::msg(format!(
-            "codebase path '{declared}' is not a directory: {}",
+            "{subject} path '{declared}' is not a directory: {}",
             directory.display()
         )));
     }
@@ -114,15 +130,20 @@ fn resolve_path(declared: &str, base_dir: &Path) -> Result<ResolvedSource, Sourc
     // Materialization takes a clean checkout of HEAD, so anything uncommitted in
     // the source is not carried. That is the chosen behavior, not a bug — but it
     // is invisible from the task environment, so it is said out loud here.
+    // `-- .` scopes the probe to the resolved directory's own subtree. A skill
+    // is one directory among many in a repository; reporting the repository's
+    // status would call it dirty the moment any *other* skill was edited.
+    let dirty = text(&["status", "--porcelain", "--", "."]).is_some();
     let mut warnings = Vec::new();
-    if text(&["status", "--porcelain"]).is_some() {
+    if dirty {
         warnings.push(format!(
-            "codebase path '{declared}' has uncommitted changes; the task environment is a clean \
+            "{subject} path '{declared}' has uncommitted changes; the task environment is a clean \
              checkout of its committed state and does not include them"
         ));
     }
 
     Ok(ResolvedSource {
+        subject,
         source: declared.to_string(),
         resolved_path: Some(directory.to_string_lossy().into_owned()),
         reference: None,
@@ -133,12 +154,17 @@ fn resolve_path(declared: &str, base_dir: &Path) -> Result<ResolvedSource, Sourc
         branch: text(&["symbolic-ref", "--short", "HEAD"])
             .unwrap_or_else(|| INITIALIZED_BRANCH.to_string()),
         host_local: true,
+        dirty,
         warnings,
     })
 }
 
-fn resolve_git(url: &str, reference: &str) -> Result<ResolvedSource, SourceError> {
-    let refs = list_remote(url)?;
+fn resolve_git(
+    url: &str,
+    reference: &str,
+    subject: &'static str,
+) -> Result<ResolvedSource, SourceError> {
+    let refs = list_remote(url, subject)?;
     let value_of = |name: &str| {
         refs.iter()
             .find(|(candidate, _)| candidate == name)
@@ -163,7 +189,7 @@ fn resolve_git(url: &str, reference: &str) -> Result<ResolvedSource, SourceError
                 .or_else(|| is_full_sha(reference).then(|| reference.to_string()))
                 .ok_or_else(|| {
                     SourceError::msg(format!(
-                        "codebase ref '{reference}' does not exist in {url}"
+                        "{subject} ref '{reference}' does not exist in {url}"
                     ))
                 })?;
             (revision, default_branch(&refs, url)?)
@@ -171,6 +197,7 @@ fn resolve_git(url: &str, reference: &str) -> Result<ResolvedSource, SourceError
     };
 
     Ok(ResolvedSource {
+        subject,
         source: url.to_string(),
         resolved_path: None,
         reference: Some(reference.to_string()),
@@ -180,6 +207,8 @@ fn resolve_git(url: &str, reference: &str) -> Result<ResolvedSource, SourceError
         origin_url: Some(url.to_string()),
         branch,
         host_local: false,
+        // A clone takes a named commit; there is no working tree to be dirty.
+        dirty: false,
         warnings: Vec::new(),
     })
 }
@@ -204,7 +233,8 @@ pub fn materialize(resolved: &ResolvedSource, dest: &Path) -> Result<(), SourceE
             crate::core::fs::copy_entry_materialized(Path::new(directory), dest).map_err(
                 |error| {
                     SourceError::msg(format!(
-                        "could not copy codebase directory {directory} into {}: {error}",
+                        "could not copy {} directory {directory} into {}: {error}",
+                        resolved.subject,
                         dest.display()
                     ))
                 },
@@ -223,7 +253,10 @@ pub fn materialize(resolved: &ResolvedSource, dest: &Path) -> Result<(), SourceE
                     &git.template_dir().to_string_lossy(),
                     &dest.to_string_lossy(),
                 ],
-                "initialize the codebase directory as a repository",
+                &format!(
+                    "initialize the {} directory as a repository",
+                    resolved.subject
+                ),
             )?;
         }
         _ => clone_repository(&git, resolved, dest)?,
@@ -242,7 +275,8 @@ fn clone_repository(
         .unwrap_or_else(|| resolved.source.clone());
     let revision = resolved.revision.as_deref().ok_or_else(|| {
         SourceError::msg(format!(
-            "codebase {from} resolved to no commit to check out"
+            "{} {from} resolved to no commit to check out",
+            resolved.subject
         ))
     })?;
 
@@ -261,7 +295,7 @@ fn clone_repository(
             &from,
             &dest.to_string_lossy(),
         ],
-        &format!("clone codebase {from}"),
+        &format!("clone {} {from}", resolved.subject),
     )?;
     // `-B` both creates the branch at the resolved commit and checks it out, so a
     // tag or bare SHA never leaves the environment on a detached HEAD.
@@ -269,7 +303,7 @@ fn clone_repository(
         git,
         dest,
         &["checkout", "--quiet", "-B", &resolved.branch, revision],
-        &format!("check out {revision} of codebase {from}"),
+        &format!("check out {revision} of {} {from}", resolved.subject),
     )?;
     checked(
         git,
@@ -319,12 +353,12 @@ fn default_branch(refs: &[(String, String)], url: &str) -> Result<String, Source
 /// matching refs, which drops the `ref: refs/heads/<x>\tHEAD` line — and that
 /// line is the only way to learn the remote's default branch. One unfiltered
 /// call answers both questions in one round trip.
-fn list_remote(url: &str) -> Result<Vec<(String, String)>, SourceError> {
+fn list_remote(url: &str, subject: &'static str) -> Result<Vec<(String, String)>, SourceError> {
     let git = IsolatedGit::new().map_err(SourceError::msg)?;
     let output = git.run(Path::new("."), &["ls-remote", "--symref", url]);
     if output.status != Some(0) {
         return Err(SourceError::msg(format!(
-            "could not read codebase repository {url}: {}",
+            "could not read {subject} repository {url}: {}",
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }

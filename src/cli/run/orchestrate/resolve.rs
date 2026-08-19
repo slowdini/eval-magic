@@ -53,7 +53,7 @@ fn resolve_codebases(
             },
             CodebaseSource::Path { path } => SourceSpec::Path { path: path.clone() },
         };
-        let source = resolve_source(&spec, &base_dir)
+        let source = resolve_source(&spec, &base_dir, "codebase")
             .map_err(|error| RunError::msg(format!("eval '{}': {error}", eval.id)))?;
         // Keyed on the resolved commit so two evals naming the same tree by
         // different refs still materialize once. A directory with no history has
