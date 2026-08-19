@@ -244,51 +244,6 @@ fn git_source_ref_that_does_not_exist_names_the_ref_and_the_url() {
     );
 }
 
-/// The user chose a clean checkout of HEAD over a verbatim copy, so a dirty
-/// working tree is silently *not* carried. Saying so is what keeps that from
-/// being a surprise.
-#[test]
-fn path_source_with_uncommitted_changes_warns_that_they_are_not_carried() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let local = source_repo(tmp.path(), "local", "main");
-    std::fs::write(local.join("README.md"), "edited but never committed\n").unwrap();
-
-    let resolved = resolve(
-        &SourceSpec::Path {
-            path: local.to_string_lossy().into_owned(),
-        },
-        tmp.path(),
-        "codebase",
-    )
-    .expect("a dirty repository still resolves");
-
-    assert!(
-        resolved
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("uncommitted")),
-        "warnings were: {:?}",
-        resolved.warnings
-    );
-}
-
-#[test]
-fn path_source_with_a_clean_tree_warns_about_nothing() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let local = source_repo(tmp.path(), "local", "main");
-
-    let resolved = resolve(
-        &SourceSpec::Path {
-            path: local.to_string_lossy().into_owned(),
-        },
-        tmp.path(),
-        "codebase",
-    )
-    .expect("a clean repository resolves");
-
-    assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
-}
-
 /// The module resolves whatever it is handed, so the noun in its messages is
 /// the caller's to supply. Without this the skill path reports itself as a
 /// codebase, which is the one thing the operator cannot act on.
@@ -377,11 +332,6 @@ fn a_subdirectory_source_ignores_uncommitted_changes_elsewhere_in_the_repository
     assert!(
         !resolved.dirty,
         "an edit outside the subject subtree is not the subject's dirtiness"
-    );
-    assert!(
-        resolved.warnings.is_empty(),
-        "warnings were: {:?}",
-        resolved.warnings
     );
 }
 

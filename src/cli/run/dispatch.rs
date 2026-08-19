@@ -15,7 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
 use crate::core::{
-    AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn, SourceRecord,
+    AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn, SkillSource,
+    SourceRecord,
 };
 
 use super::RunError;
@@ -59,6 +60,9 @@ pub struct DispatchTask {
     /// run record written at ingest names the tree the agent actually worked in.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codebase: Option<SourceRecord>,
+    /// The skill under test this task stages, as the run resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -98,6 +102,8 @@ pub struct DispatchTaskOpts<'a> {
     pub eval_root: Option<&'a str>,
     /// The codebase this task's environment was built from, if any.
     pub codebase: Option<&'a SourceRecord>,
+    /// The skill under test this task stages, if any.
+    pub skill_source: Option<&'a SkillSource>,
 }
 
 fn render_available_skills_block_for_harness(
@@ -283,6 +289,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         group: opts.group.map(str::to_string),
         eval_root,
         codebase: opts.codebase.cloned(),
+        skill_source: opts.skill_source.cloned(),
         dispatch_prompt: sections.join(""),
     })
 }

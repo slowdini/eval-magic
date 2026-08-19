@@ -20,7 +20,9 @@ use serde_json::Value;
 use self::assertions::AssertionRollup;
 use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::core::fs::write_json;
-use crate::core::{CodebaseUse, ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
+use crate::core::{
+    CodebaseUse, ConditionsRecord, GradingResult, Mode, SkillSource, TimingRecord, TimingSource,
+};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::git_isolation;
@@ -120,6 +122,11 @@ pub struct Benchmark {
     /// fixture-only iteration, which keeps its benchmark unchanged.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub codebases: Vec<CodebaseUse>,
+    /// The skill under test, echoed from `conditions.json` for the same reason
+    /// the codebases are: a published benchmark should name what it measured on
+    /// both sides without a reader holding two artifacts side by side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_scope: Option<Value>,
     delta: Delta,
@@ -415,6 +422,7 @@ pub fn aggregate(
         mode: conditions.mode,
         baseline: conditions.baseline.clone(),
         codebases: conditions.codebases.clone(),
+        skill_source: conditions.skill_source.clone(),
         conditions_compared: vec![a.clone(), b.clone()],
         missing_gradings,
         validity_warnings,

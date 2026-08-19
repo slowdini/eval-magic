@@ -63,9 +63,6 @@ pub struct ResolvedSource {
     /// advice the operator may miss; this is evidence, and a subject copied as
     /// it sits on disk cannot be cited without it.
     pub dirty: bool,
-    /// Things the operator should know about what this resolution did or did not
-    /// carry. This module never prints; the `cli` layer owns the `⚠ ` prefix.
-    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -127,20 +124,14 @@ fn resolve_path(
             .filter(|value| !value.is_empty())
     };
 
-    // Materialization takes a clean checkout of HEAD, so anything uncommitted in
-    // the source is not carried. That is the chosen behavior, not a bug — but it
-    // is invisible from the task environment, so it is said out loud here.
-    // `-- .` scopes the probe to the resolved directory's own subtree. A skill
-    // is one directory among many in a repository; reporting the repository's
-    // status would call it dirty the moment any *other* skill was edited.
+    // Reported, not interpreted: what a dirty tree *means* differs by subject —
+    // a codebase leaves the work behind at checkout, a skill is copied carrying
+    // it — so the caller phrases the consequence it owns.
+    //
+    // `-- .` scopes the probe to the resolved directory's own subtree. A skill is
+    // one directory among many in a repository; reporting the repository's status
+    // would call it dirty the moment any *other* skill was edited.
     let dirty = text(&["status", "--porcelain", "--", "."]).is_some();
-    let mut warnings = Vec::new();
-    if dirty {
-        warnings.push(format!(
-            "{subject} path '{declared}' has uncommitted changes; the task environment is a clean \
-             checkout of its committed state and does not include them"
-        ));
-    }
 
     Ok(ResolvedSource {
         subject,
@@ -155,7 +146,6 @@ fn resolve_path(
             .unwrap_or_else(|| INITIALIZED_BRANCH.to_string()),
         host_local: true,
         dirty,
-        warnings,
     })
 }
 
@@ -209,7 +199,6 @@ fn resolve_git(
         host_local: false,
         // A clone takes a named commit; there is no working tree to be dirty.
         dirty: false,
-        warnings: Vec::new(),
     })
 }
 

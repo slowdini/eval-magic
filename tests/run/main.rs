@@ -29,5 +29,6 @@ mod opencode;
 mod opencode_permission_denials;
 mod runbook;
 mod shadow_runtime_id;
+mod skill_source;
 mod staging;
 mod statistical_floor;

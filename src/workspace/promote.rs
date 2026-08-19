@@ -91,7 +91,13 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
         None
     };
 
-    let baseline_dir = opts.skill_subdir.join("evals").join("baseline");
+    // The baseline belongs to the skill this iteration measured, which the run
+    // recorded. Deriving it from the operator's current selection instead would
+    // write one skill's baseline into another whenever the two disagree — and the
+    // operator can promote from anywhere, long after the run.
+    let skill_subdir = recorded_skill_subdir(conditions.as_ref())?
+        .unwrap_or_else(|| opts.skill_subdir.to_path_buf());
+    let baseline_dir = skill_subdir.join("evals").join("baseline");
     let grading_dir = baseline_dir.join("grading");
     fs::create_dir_all(&grading_dir)?;
 
@@ -228,6 +234,63 @@ fn label(value: &impl Serialize) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// The skill directory the run recorded, when it recorded one.
+///
+/// A pointer to a directory that has since moved is a hard failure rather than a
+/// fall back to the caller's selection: quietly writing one skill's baseline into
+/// another is the outcome worth refusing.
+fn recorded_skill_subdir(
+    conditions: Option<&ConditionsRecord>,
+) -> Result<Option<PathBuf>, WorkspaceError> {
+    let Some(recorded) = conditions
+        .and_then(|c| c.skill_source.as_ref())
+        .and_then(|skill| skill.source.resolved_path.as_deref())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(recorded);
+    if !path.is_dir() {
+        return Err(WorkspaceError::Message(format!(
+            "the skill this iteration measured is no longer at {recorded}. Restore it, or promote \
+             from a workspace whose run recorded the skill you mean."
+        )));
+    }
+    Ok(Some(path))
+}
+
+/// The provenance-table row naming the skill under test, or an empty string for
+/// an iteration recorded before skills were sourced.
+///
+/// The gap this closes: a report could pin the codebase commit while the skill
+/// side was "whatever was on disk at the time". Where uncommitted work was in
+/// what ran, the revision alone does not identify it, and the row says so.
+fn skill_source_row(conditions: Option<&ConditionsRecord>) -> String {
+    let Some(skill) = conditions.and_then(|c| c.skill_source.as_ref()) else {
+        return String::new();
+    };
+    let source = &skill.source;
+    let mut cell = source
+        .resolved_path
+        .clone()
+        .unwrap_or_else(|| source.source.clone());
+    if let Some(revision) = &source.revision {
+        let short: String = revision.chars().take(7).collect();
+        cell.push_str(&format!(" ({short})"));
+    }
+    if source.dirty {
+        cell.push_str(
+            " — uncommitted changes were in what ran, so the revision alone does not identify it",
+        );
+    }
+    if let Some(origin) = &source.origin_url {
+        cell.push_str(&format!("; origin {origin}"));
+    }
+    if !skill.siblings.is_empty() {
+        cell.push_str(&format!("; staged alongside {}", skill.siblings.join(", ")));
+    }
+    format!("| Skill source | {cell} |")
+}
+
 /// Provenance-table rows naming each codebase the iteration ran against, or an
 /// empty string when it ran against none.
 ///
@@ -307,6 +370,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         .unwrap_or("(none)");
 
     let codebase_rows = codebase_rows(conditions);
+    let skill_source_row = skill_source_row(conditions);
 
     let lines = [
         format!("# Baseline — {}", opts.skill_name),
@@ -330,6 +394,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Conditions | {conditions_cell} |"),
         format!("| Run timestamp | {timestamp} |"),
         format!("| Label | {run_label} |"),
+        skill_source_row,
         codebase_rows,
         format!("| Promoted from commit | {head} |"),
         String::new(),
@@ -592,6 +657,115 @@ mod tests {
         assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
         assert!(provenance.contains("Judge model | claude-opus-4-8"));
         assert!(provenance.contains("Label | canonical-run"));
+    }
+
+    /// The gap this closes: a report could pin the codebase commit while the
+    /// skill side was "whatever was on disk", which is not a claim anyone can
+    /// check. The row says which skill revision was measured, and says out loud
+    /// when uncommitted work means the revision alone does not identify it.
+    #[test]
+    fn provenance_names_the_skill_source_and_its_uncommitted_state() {
+        let f = fixture(1);
+        let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+        conditions["skill_source"] = serde_json::json!({
+            "kind": "path",
+            "source": f.skill_subdir.to_string_lossy(),
+            "resolved_path": f.skill_subdir.to_string_lossy(),
+            "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+            "origin_url": "https://example.com/skills.git",
+            "branch": "main",
+            "host_local": true,
+            "dirty": true
+        });
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            &serde_json::to_string(&conditions).unwrap(),
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        promote_baseline(&opts(&f, 1)).unwrap();
+
+        let provenance =
+            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+        assert!(provenance.contains("Skill source"), "{provenance}");
+        assert!(provenance.contains("a1b2c3d"), "{provenance}");
+        assert!(provenance.contains("uncommitted"), "{provenance}");
+        assert!(
+            provenance.contains("https://example.com/skills.git"),
+            "{provenance}"
+        );
+    }
+
+    /// The baseline belongs to the skill the *run* measured. Deriving it from the
+    /// operator's current selection instead would write into whichever skill they
+    /// happen to be pointing at now.
+    #[test]
+    fn the_baseline_follows_the_skill_source_the_run_recorded() {
+        let f = fixture(1);
+        let recorded = f.skill_subdir.parent().unwrap().join("recorded-skill");
+        write(
+            &recorded.join("SKILL.md"),
+            "---\nname: recorded-skill\n---\n\nbody\n",
+        );
+        let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+        conditions["skill_source"] = serde_json::json!({
+            "kind": "path",
+            "source": recorded.to_string_lossy(),
+            "resolved_path": recorded.to_string_lossy(),
+            "branch": "main",
+            "host_local": true
+        });
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            &serde_json::to_string(&conditions).unwrap(),
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        promote_baseline(&opts(&f, 1)).unwrap();
+
+        assert!(
+            recorded.join("evals/baseline/BASELINE.md").exists(),
+            "baseline did not follow the recorded skill source"
+        );
+        assert!(
+            !f.skill_subdir.join("evals/baseline").exists(),
+            "baseline went to the operator's current selection instead"
+        );
+    }
+
+    /// A recorded pointer to a skill that has since moved is a hard failure: a
+    /// silent fall back to the current selection would write the baseline of one
+    /// skill into another.
+    #[test]
+    fn a_recorded_skill_source_that_no_longer_exists_fails_loudly() {
+        let f = fixture(1);
+        let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+        conditions["skill_source"] = serde_json::json!({
+            "kind": "path",
+            "source": "/nowhere/moved-skill",
+            "resolved_path": "/nowhere/moved-skill",
+            "branch": "main",
+            "host_local": true
+        });
+        write(
+            &f.iteration_dir.join("conditions.json"),
+            &serde_json::to_string(&conditions).unwrap(),
+        );
+        write(
+            &f.iteration_dir.join("benchmark.json"),
+            r#"{"delta":{"pass_rate":0}}"#,
+        );
+
+        let error = promote_baseline(&opts(&f, 1)).unwrap_err().to_string();
+
+        assert!(error.contains("/nowhere/moved-skill"), "{error}");
+        assert!(!f.skill_subdir.join("evals/baseline").exists());
     }
 
     /// A published baseline is read by people deciding whether to believe it.

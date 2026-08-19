@@ -257,6 +257,53 @@ fn aggregate_suppresses_declared_isolated_shadows_for_every_harness() {
 /// tree each condition ran against has to survive the aggregation step rather
 /// than stopping at `conditions.json`.
 #[test]
+fn aggregate_echoes_the_resolved_skill_source_into_the_benchmark() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    let conditions_path = iteration_dir.join("conditions.json");
+    let mut conditions: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&conditions_path).unwrap()).unwrap();
+    conditions.as_object_mut().unwrap().insert(
+        "skill_source".to_string(),
+        json!({
+            "kind": "path",
+            "source": "/work/skills/mr-review",
+            "resolved_path": "/work/skills/mr-review",
+            "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+            "branch": "main",
+            "host_local": true,
+            "dirty": true,
+            "siblings": ["helper-skill"]
+        }),
+    );
+    fs::write(
+        &conditions_path,
+        serde_json::to_string(&conditions).unwrap(),
+    )
+    .unwrap();
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+        write_timing(
+            &iteration_dir,
+            cond,
+            json!({"total_tokens": 100, "duration_ms": 1}),
+        );
+    }
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    assert_eq!(
+        b["skill_source"]["revision"],
+        "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
+    );
+    assert_eq!(b["skill_source"]["dirty"], true);
+    assert_eq!(b["skill_source"]["siblings"][0], "helper-skill");
+}
+
+#[test]
 fn aggregate_echoes_the_resolved_codebases_into_the_benchmark() {
     use serde_json::json;
     let (_tmp, root) = canonical_root();

@@ -88,6 +88,10 @@
     "codebase": {
       "$ref": "#/definitions/codebase",
       "description": "The codebase this run's environment was built from. Absent for a fixture-only run."
+    },
+    "skill_source": {
+      "$ref": "#/definitions/skillSource",
+      "description": "The skill under test this run staged, as the run resolved and copied it. Absent for a record written before skills were sourced."
     }
   },
   "definitions": {
@@ -200,6 +204,50 @@
         "host_local": {
           "type": "boolean",
           "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
+        },
+        "dirty": {
+          "type": "boolean",
+          "description": "True when the copy this record describes carries uncommitted work from its source, so revision alone does not name what ran. A codebase is checked out at a commit and is never dirty; a skill is copied as it sits on disk and can be."
+        }
+      }
+    },
+    "skillSource": {
+      "type": "object",
+      "required": ["kind", "source", "branch"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["git", "path"],
+          "description": "How the skill was named. A skill is named by a path on the host that ran it."
+        },
+        "source": { "type": "string", "description": "The skill directory exactly as it was resolved from." },
+        "resolved_path": {
+          "type": "string",
+          "description": "Absolute skill directory on the host that ran it. This is the pointer promote-baseline writes its baseline back through."
+        },
+        "ref": { "type": "string", "description": "Declared ref, for a source named by one." },
+        "revision": {
+          "type": "string",
+          "description": "The commit of the repository holding the skill. Absent when the skill is in no repository."
+        },
+        "origin_url": {
+          "type": "string",
+          "description": "The skill repository's origin. For a host-local path this is the only handle another reader can resolve: origin_url plus revision names the same tree anywhere."
+        },
+        "branch": { "type": "string", "description": "Branch the skill repository was on." },
+        "host_local": {
+          "type": "boolean",
+          "description": "True when the skill cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from a path alone."
+        },
+        "dirty": {
+          "type": "boolean",
+          "description": "True when the copy this record describes carries uncommitted work from its source, so revision alone does not name what ran. A codebase is checked out at a commit and is never dirty; a skill is copied as it sits on disk and can be."
+        },
+        "siblings": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Sibling skills staged alongside the skill under test, as the roster was captured at resolution."
         }
       }
     },

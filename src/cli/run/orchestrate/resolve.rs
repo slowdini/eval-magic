@@ -15,7 +15,7 @@ use super::super::dispatch::select_evals;
 use super::super::fixtures::{fixture_pairs, setup_file_pairs};
 use super::super::grouping::{GroupInput, compute_groups};
 use super::super::util::{condition_names_for, make_run_nonce, next_iteration};
-use super::{Resolved, RunCodebase, RunOptions};
+use super::{Resolved, RunCodebase, RunOptions, RunSkill, skills_copy_root};
 
 /// Resolve every distinct codebase the selected evals declare, deduplicated so
 /// a config-level default shared by ten evals is one resolution and, later, one
@@ -92,7 +92,26 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
             skill_md_path.display()
         )));
     }
-    let skill_md = skill_md_path.to_string_lossy().into_owned();
+
+    // Resolve the skill as a source, the same way a codebase is: this is what
+    // gives a report a revision to cite on the skill side. Read-only, like every
+    // resolution here — the copy itself is taken during staging.
+    let skill_source = resolve_source(
+        &SourceSpec::Path {
+            path: ctx.skill_subdir.to_string_lossy().into_owned(),
+        },
+        &ctx.skill_dir,
+        "skill",
+    )
+    .map_err(|error| RunError::msg(error.to_string()))?;
+    let skill = RunSkill {
+        source: skill_source,
+        siblings: if ctx.stage_siblings {
+            ctx.sibling_skill_names.clone()
+        } else {
+            Vec::new()
+        },
+    };
 
     let evals_path = ctx.skill_subdir.join("evals").join("evals.json");
     if !evals_path.exists() {
@@ -117,8 +136,15 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     // an unreachable repository or a ref that does not exist has to fail before
     // any environment exists, not halfway through building one.
     let codebases = resolve_codebases(ctx, &config, &selected_evals)?;
-    for warning in codebases.iter().flat_map(|c| c.source.warnings.iter()) {
-        eprintln!("⚠ {warning}");
+    // A codebase is materialized as a clean checkout of its committed state, so
+    // uncommitted work in the source is silently absent from the environment.
+    // Saying so is what keeps that from being a surprise.
+    for codebase in codebases.iter().filter(|c| c.source.dirty) {
+        eprintln!(
+            "⚠ codebase '{}' has uncommitted changes; the task environment is a clean checkout \
+             of its committed state and does not include them",
+            codebase.source.source
+        );
     }
 
     // Resolve held-out setup sources before creating the iteration. The files
@@ -167,8 +193,16 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     }
 
     let (cond_a, cond_b) = condition_names_for(mode);
+    // Conditions stage from the copy the eval home will hold, never from the
+    // operator's tree. The copy does not exist yet; `stage_conditions` creates it
+    // before anything reads these paths.
+    let copied_skill_md = skills_copy_root(&iteration_dir)
+        .join(&ctx.skill_name)
+        .join("SKILL.md")
+        .to_string_lossy()
+        .into_owned();
     let (skill_path_a, skill_path_b): (Option<String>, Option<String>) = match mode {
-        Mode::NewSkill => (Some(skill_md.clone()), None),
+        Mode::NewSkill => (Some(copied_skill_md.clone()), None),
         Mode::Revision => {
             let baseline = baseline.as_deref().expect("revision baseline set above");
             let baseline_skill = workspace_skill_dir
@@ -185,16 +219,27 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
             }
             (
                 Some(baseline_skill.to_string_lossy().into_owned()),
-                Some(skill_md.clone()),
+                Some(copied_skill_md.clone()),
             )
         }
     };
+
+    // The mirror image of the codebase warning: a skill is copied as it sits, so
+    // uncommitted work is in what ran, and the recorded revision alone does not
+    // name it.
+    if skill.source.dirty {
+        eprintln!(
+            "⚠ skill '{}' has uncommitted changes; the run measures them, so its recorded \
+             revision alone does not identify what was evaluated",
+            ctx.skill_name
+        );
+    }
 
     Ok(Resolved {
         mode,
         baseline,
         codebases,
-        skill_md_path,
+        skill,
         iteration,
         iteration_dir,
         run_nonce,

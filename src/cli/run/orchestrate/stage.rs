@@ -18,7 +18,7 @@ use super::super::staging::{
 };
 use super::super::util::{harness_label, resolve_plan_mode_profile};
 use super::envs::{EnvLayoutInput, env_targets};
-use super::{Resolved, RunOptions, Staged};
+use super::{Resolved, RunOptions, Staged, skills_copy_root};
 
 pub(super) fn stage_conditions(
     ctx: &RunContext,
@@ -26,7 +26,14 @@ pub(super) fn stage_conditions(
     r: &Resolved,
 ) -> Result<Staged, RunError> {
     fs::create_dir_all(&r.iteration_dir)?;
-    fs::copy(&r.skill_md_path, r.iteration_dir.join("skill-snapshot.md"))?;
+    // Before anything reads a skill: the copy every condition stages from. Made
+    // even under `--no-stage`, where the dispatch prompt inlines the skill body
+    // by reading the same path.
+    let skills = materialize_skills(ctx, r)?;
+    fs::copy(
+        skills.join(&ctx.skill_name).join("SKILL.md"),
+        r.iteration_dir.join("skill-snapshot.md"),
+    )?;
 
     let bootstrap_content = match &ctx.bootstrap_path {
         Some(path) => Some(fs::read_to_string(path)?),
@@ -49,12 +56,13 @@ pub(super) fn stage_conditions(
     let sibling_meta: Vec<(String, String)> = if opts.no_stage {
         Vec::new()
     } else {
-        ctx.sibling_skill_names
+        r.skill
+            .siblings
             .iter()
             .map(|name| {
                 (
                     name.clone(),
-                    get_skill_description(&ctx.skill_dir.join(name).join("SKILL.md")),
+                    get_skill_description(&skills.join(name).join("SKILL.md")),
                 )
             })
             .collect()
@@ -116,7 +124,7 @@ pub(super) fn stage_conditions(
             if ctx.stage_siblings {
                 stage_sibling_skills(&StageSiblingOpts {
                     skill_under_test: &ctx.skill_name,
-                    skills_source_dir: &ctx.skill_dir,
+                    skills_source_dir: &skills,
                     repo_root: &target.root,
                     harness: ctx.harness,
                 })?;
@@ -166,7 +174,7 @@ pub(super) fn stage_conditions(
         let mut claims = FixtureClaims::new();
         for eval_id in &target.eval_ids {
             if let Some(ev) = r.selected_evals.iter().find(|e| &e.id == eval_id) {
-                copy_fixtures(ev, &ctx.skill_subdir, &target.root, &mut claims)?;
+                copy_fixtures(ev, &skills.join(&ctx.skill_name), &target.root, &mut claims)?;
             }
         }
     }
@@ -178,6 +186,50 @@ pub(super) fn stage_conditions(
         bootstrap_content,
         plan_mode_content,
     })
+}
+
+/// Copy the skill under test and its recorded sibling roster into the iteration.
+///
+/// The resolver is not asked to materialize this: it would hand back a Git
+/// repository, and what a skill needs is the working tree as it sits — the
+/// uncommitted edit is usually the thing under test. The roster comes from the
+/// resolution rather than a fresh scan, so what the artifacts claim and what the
+/// environments hold cannot drift apart.
+fn materialize_skills(ctx: &RunContext, r: &Resolved) -> Result<PathBuf, RunError> {
+    let root = skills_copy_root(&r.iteration_dir);
+    if root.exists() {
+        fs::remove_dir_all(&root)?;
+    }
+    fs::create_dir_all(&root)?;
+    for name in std::iter::once(&ctx.skill_name).chain(r.skill.siblings.iter()) {
+        copy_skill_dir(&ctx.skill_dir.join(name), &root.join(name), &root)?;
+    }
+    Ok(root)
+}
+
+/// Copy one skill directory, minus its `.git` and minus whatever holds `root`.
+///
+/// A skill can be a repository root of its own; carrying the object store would
+/// copy a history nothing here reads and that staging would then have to filter
+/// out of every environment.
+///
+/// The `root` exclusion is what keeps the copy from swallowing itself.
+/// `--workspace-dir` may legitimately point inside the skill tree — at
+/// `.eval-magic` from inside a skill, say — and copying the directory the copy
+/// is being written into recurses until the path length gives out. Testing
+/// containment rather than matching a name covers every spelling the operator
+/// can choose.
+fn copy_skill_dir(source: &Path, dest: &Path, root: &Path) -> Result<(), RunError> {
+    fs::create_dir_all(dest)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let path = entry.path();
+        if entry.file_name() == ".git" || root.starts_with(&path) {
+            continue;
+        }
+        copy_entry_materialized(&path, &dest.join(entry.file_name()))?;
+    }
+    Ok(())
 }
 
 /// The materialized tree for `codebase`, creating it on first use.

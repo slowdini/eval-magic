@@ -208,6 +208,25 @@ pub struct SourceRecord {
     /// published claim citing it is not reproducible from the config alone.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub host_local: bool,
+    /// Set when the copy this record describes carries uncommitted work from its
+    /// source, so [`Self::revision`] alone does not name what ran. A codebase is
+    /// checked out at a commit and is never dirty; a skill is copied as it sits
+    /// on disk, which is the point of it, and can be.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dirty: bool,
+}
+
+/// The resolved skill under test, plus the sibling skills staged alongside it.
+///
+/// The roster is recorded here rather than rescanned per environment: it is a
+/// property of the resolution, and a later scan of the live tree could disagree
+/// with what the run actually staged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillSource {
+    #[serde(flatten)]
+    pub source: SourceRecord,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub siblings: Vec<String>,
 }
 
 /// One resolved codebase plus the evals built from it. `conditions.json` and
@@ -302,6 +321,11 @@ pub struct ConditionsRecord {
     /// fixture-only iteration, which keeps its `conditions.json` unchanged.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codebases: Vec<CodebaseUse>,
+    /// The skill under test, as the run resolved and copied it. Appended last,
+    /// and omitted when absent, so a record written before skills were sourced
+    /// still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
 }
 
 /// Comparison mode for a run.
@@ -352,6 +376,11 @@ pub struct RunRecord {
     /// fixture-only record serializes as it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codebase: Option<SourceRecord>,
+    /// The skill under test this run staged. Grading reads `run.json` and nothing
+    /// else, so a result can only be tied to a skill revision if the record names
+    /// one. Appended last, and omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
 }
 
 /// The completed outcome of one scripted conversation.
@@ -583,6 +612,7 @@ mod tests {
             run_index: None,
             conversation: None,
             codebase: None,
+            skill_source: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
@@ -652,6 +682,7 @@ mod tests {
             judge_model: None,
             label: None,
             codebases: Vec::new(),
+            skill_source: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));
