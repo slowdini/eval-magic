@@ -244,3 +244,44 @@ fn an_uncommitted_skill_warns_that_the_run_measures_it() {
     let conditions = read_json(&iteration.join("conditions.json"));
     assert_eq!(conditions["skill_source"]["dirty"], Value::from(true));
 }
+
+/// Grading reads the iteration's own copy, not the live tree. Editing the eval
+/// definitions between `run` and `grade` would otherwise silently change what a
+/// finished run is measured against — the provenance hole this ticket closes,
+/// one phase later.
+///
+/// The live copy is made *unreadable* rather than merely different: that is the
+/// difference an assertion can see, since `grade` does not echo eval ids.
+#[test]
+fn grading_reads_the_eval_definitions_the_run_copied() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+
+    let iteration = prepare(&cwd, &skill_dir, &["--mode", "new-skill"]);
+
+    fs::write(
+        skill_dir.join("mr-review").join("evals").join("evals.json"),
+        "{ not valid json at all",
+    )
+    .unwrap();
+
+    let copied: Value = read_json(
+        &iteration
+            .join(".skills")
+            .join("mr-review")
+            .join("evals")
+            .join("evals.json"),
+    );
+    assert_eq!(
+        copied["evals"][0]["id"], "e1",
+        "the copy should still hold what the run was built from"
+    );
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["grade", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .success();
+}

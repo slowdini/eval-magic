@@ -13,6 +13,7 @@ use crate::core::RunContext;
 use crate::pipeline;
 use crate::sandbox;
 use crate::validation;
+use std::path::{Path, PathBuf};
 
 const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
 
@@ -274,6 +275,23 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The skill directory a post-dispatch phase reads its inputs from: the copy the
+/// iteration holds, falling back to the live tree for iterations prepared before
+/// skills were sourced.
+///
+/// Eval definitions and held-out command-check setup files are inputs to what the
+/// run measured, so they have to come from what the run captured. Live-source
+/// detection is the deliberate exception — it needs the live path precisely
+/// because that is what it is looking for.
+fn graded_skill_subdir(ctx: &RunContext, iteration_dir: &Path) -> PathBuf {
+    let copied = iteration_dir.join(".skills").join(&ctx.skill_name);
+    if copied.is_dir() {
+        copied
+    } else {
+        ctx.skill_subdir.clone()
+    }
+}
+
 /// Grade run records. Default mode emits LLM judge tasks (+ the skill-invocation
 /// meta-check); `--finalize` folds judge responses into `grading.json`.
 pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
@@ -289,7 +307,11 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
     let conditions: crate::core::ConditionsRecord =
         serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
 
-    let evals_path = ctx.skill_subdir.join("evals").join("evals.json");
+    // Grade the run against the skill the run copied, not against the live tree.
+    // An edit between `run` and `grade` would otherwise change what a finished
+    // run is measured by, without anything recording that it had.
+    let skill_subdir = graded_skill_subdir(&ctx, &dir);
+    let evals_path = skill_subdir.join("evals").join("evals.json");
     let evals_value: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&evals_path)?)?;
     let evals = validation::validate_evals_config(&evals_value, &evals_path.to_string_lossy())?;
@@ -327,7 +349,7 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
         );
         let commands =
-            pipeline::grade_command_checks(&dir, &evals, &ctx.skill_subdir, common.overwrite)?;
+            pipeline::grade_command_checks(&dir, &evals, &skill_subdir, common.overwrite)?;
         if commands.executed + commands.reused > 0 {
             println!(
                 "Command checks: {} executed, {} reused, {} failed",
