@@ -4,7 +4,6 @@
 use std::path::Path;
 
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
-use crate::cli::run;
 use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
 };
@@ -100,7 +99,6 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
             torn |= sandbox::teardown_guard(&env);
         }
     }
-    run::staging::cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
     let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
 
     println!(

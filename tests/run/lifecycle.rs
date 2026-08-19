@@ -146,10 +146,15 @@ fn teardown_reclaims_workspace_and_env_guard() {
         .success();
     assert!(settings.exists());
     assert!(staged.exists());
+    // Staging is env-scoped: nothing is placed at the invocation cwd, which is why
+    // teardown no longer sweeps there.
+    assert!(
+        !cwd.join(".claude").exists(),
+        "run staged into the invocation cwd"
+    );
 
     // Full `teardown` reclaims the workspace iteration; the env (and its guard) lives
-    // inside it, so removing the workspace removes the env guard too — this is what makes
-    // deferring the cwd teardown-guard rework safe.
+    // inside it, so removing the workspace removes the env guard too.
     skill_eval()
         .current_dir(&cwd)
         .args(["teardown", "--skill-dir"])
@@ -160,7 +165,6 @@ fn teardown_reclaims_workspace_and_env_guard() {
     assert!(!cwd.join(".eval-magic").exists());
     assert!(!settings.exists());
     assert!(!staged.exists());
-    assert!(!cwd.join(".claude").exists());
 }
 
 #[test]

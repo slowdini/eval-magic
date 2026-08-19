@@ -18,7 +18,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
+use crate::adapters::all_tool_vocabulary;
 use crate::core::fs::{normalize_separators, write_json};
 use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
@@ -113,67 +113,6 @@ pub fn detect_stray_writes(
     findings
 }
 
-/// Node-style lexical `path.relative(from, to)` over absolute, normalized paths.
-/// Returns forward-slash-joined components; starts with `..` when `to` is not
-/// under `from`.
-fn path_relative(from: &Path, to: &Path) -> String {
-    let from_comps: Vec<_> = from.components().collect();
-    let to_comps: Vec<_> = to.components().collect();
-    let mut i = 0;
-    while i < from_comps.len() && i < to_comps.len() && from_comps[i] == to_comps[i] {
-        i += 1;
-    }
-    let mut parts: Vec<String> = vec!["..".to_string(); from_comps.len() - i];
-    for c in &to_comps[i..] {
-        parts.push(c.as_os_str().to_string_lossy().into_owned());
-    }
-    parts.join("/")
-}
-
-/// Leading boundary before a bare `rel` reference: start-of-string or one of
-/// `\s'"=:(/`.
-fn is_leading_boundary(b: u8) -> bool {
-    b.is_ascii_whitespace() || matches!(b, b'\'' | b'"' | b'=' | b':' | b'(' | b'/')
-}
-
-/// Trailing boundary after a bare `rel` reference: end-of-string or one of
-/// `/\s'")`.
-fn is_trailing_boundary(b: u8) -> bool {
-    b == b'/' || b.is_ascii_whitespace() || matches!(b, b'\'' | b'"' | b')')
-}
-
-/// True if `command` references `rel` as a bare path token — bounded as a path
-/// segment and **not** prefixed by any harness config dir (`config_dirs`, the
-/// caller-supplied `adapters::all_config_dir_names()` list). The `regex` crate
-/// has no lookbehind, so each occurrence is scanned directly for the boundary +
-/// preceding-segment conditions.
-fn references_bare_rel(command: &str, rel: &str, config_dirs: &[String]) -> bool {
-    if rel.is_empty() {
-        return false;
-    }
-    let bytes = command.as_bytes();
-    let mut search_from = 0;
-    while let Some(off) = command[search_from..].find(rel) {
-        let start = search_from + off;
-        let end = start + rel.len();
-
-        let leading_ok = start == 0 || is_leading_boundary(bytes[start - 1]);
-        // The lookbehind sits before the boundary char: the text up to (but not
-        // including) that char must not end with a staging-dir prefix.
-        let lookbehind_ok = start == 0 || {
-            let before = &command[..start - 1];
-            !config_dirs.iter().any(|dir| before.ends_with(dir.as_str()))
-        };
-        let trailing_ok = end == command.len() || is_trailing_boundary(bytes[end]);
-
-        if leading_ok && lookbehind_ok && trailing_ok {
-            return true;
-        }
-        search_from = start + 1;
-    }
-    false
-}
-
 /// Flag tool invocations that read the **live** skill-under-test directory
 /// instead of the staged copy. Reads are detected, not blocked, so this surfaces
 /// post-hoc as a validity warning. See `detect-stray-writes.ts` for the rationale.
@@ -188,9 +127,6 @@ pub fn detect_live_source_reads(
     // host path while the command is whatever the agent typed, so on Windows the
     // two spell the same directory differently.
     let live_dir_str = normalize_separators(&live_dir.to_string_lossy());
-    let rel = path_relative(repo_root, &live_dir);
-    let rel_usable = !rel.starts_with("..");
-    let config_dirs = all_config_dir_names();
 
     for inv in invocations {
         if is_read_tool(&inv.name) {
@@ -211,9 +147,7 @@ pub fn detect_live_source_reads(
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
             let normalized = normalize_separators(command);
-            if normalized.contains(&live_dir_str)
-                || (rel_usable && references_bare_rel(&normalized, &rel, &config_dirs))
-            {
+            if normalized.contains(&live_dir_str) {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
                     path: None,
@@ -721,44 +655,6 @@ mod tests {
     }
 
     #[test]
-    fn a_bash_referencing_the_live_dir_relatively_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat skills/mr-review/SKILL.md"}),
-                3,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "Bash");
-        assert_eq!(
-            f[0].command.as_deref(),
-            Some("cat skills/mr-review/SKILL.md")
-        );
-    }
-
-    #[test]
-    fn a_codex_command_referencing_the_live_dir_relatively_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "command_execution",
-                json!({"command": "cat skills/mr-review/SKILL.md"}),
-                3,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "command_execution");
-        assert_eq!(
-            f[0].command.as_deref(),
-            Some("cat skills/mr-review/SKILL.md")
-        );
-    }
-
-    #[test]
     fn a_bash_referencing_the_live_dir_absolutely_is_flagged() {
         let f = detect_live_source_reads(
             &[inv(
@@ -788,48 +684,6 @@ mod tests {
         );
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].tool, "Bash");
-    }
-
-    #[test]
-    fn a_bash_referencing_a_staged_copy_under_dot_claude_skills_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat .claude/skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn a_bash_referencing_a_staged_copy_under_dot_agents_skills_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat .agents/skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn a_bash_referencing_a_staged_copy_under_dot_opencode_skills_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat .opencode/skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
     }
 
     #[test]
