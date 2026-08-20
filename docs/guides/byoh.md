@@ -38,10 +38,10 @@ eval-magic run --harness-file ./cool-custom-harness.toml
 
 Its `label` becomes the default harness for that invocation.
 
-## Add a dispatch recipe first
+## Add a dispatch command first
 
-The highest-leverage field is `[dispatch].exec_template`. It lets the generated `RUNBOOK.md` and
-`dispatch-manifest.md` carry a copy-pasteable command for every task.
+The highest-leverage field is `[dispatch].exec_template`. It is the command `eval-magic dispatch`
+spawns for every task, so without it there is nothing for the runner to run.
 
 ```toml
 label = "cool-custom-harness"

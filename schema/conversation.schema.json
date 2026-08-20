@@ -1,15 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/conversation.schema.json",
-  "title": "Scripted Conversation Completion",
-  "description": "Runner-owned completion artifact for one scripted multi-turn eval task.",
+  "title": "Task Conversation Completion",
+  "description": "Runner-owned completion artifact for one dispatched eval task.",
   "type": "object",
   "required": ["status", "delivered_followups", "events"],
   "additionalProperties": false,
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["completed", "stopped"]
+      "enum": ["completed", "stopped", "timed_out"]
     },
     "delivered_followups": {
       "type": "integer",
@@ -23,9 +23,14 @@
       "type": "integer",
       "minimum": 1
     },
+    "timed_out_in_round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The round the dispatch was killed in, when it outran its per-task deadline."
+    },
     "events": {
       "type": "array",
-      "minItems": 2,
+      "minItems": 1,
       "items": {
         "oneOf": [
           { "$ref": "#/definitions/userMessage" },
@@ -42,7 +47,8 @@
         "required": ["status"]
       },
       "then": {
-        "required": ["stop_reason", "stopped_before_followup"]
+        "required": ["stop_reason", "stopped_before_followup"],
+        "not": { "required": ["timed_out_in_round"] }
       }
     },
     {
@@ -54,10 +60,33 @@
         "not": {
           "anyOf": [
             { "required": ["stop_reason"] },
+            { "required": ["stopped_before_followup"] },
+            { "required": ["timed_out_in_round"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "timed_out" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["timed_out_in_round"],
+        "not": {
+          "anyOf": [
+            { "required": ["stop_reason"] },
             { "required": ["stopped_before_followup"] }
           ]
         }
       }
+    },
+    {
+      "if": {
+        "properties": { "status": { "enum": ["completed", "stopped"] } },
+        "required": ["status"]
+      },
+      "then": { "properties": { "events": { "minItems": 2 } } }
     }
   ],
   "definitions": {

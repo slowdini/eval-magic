@@ -86,7 +86,7 @@ fn help_uses_published_binary_name() {
 fn every_visible_command_and_harness_subcommand_renders_help() {
     for args in [
         "run --help",
-        "dispatch-task --help",
+        "dispatch --help",
         "snapshot --help",
         "teardown --help",
         "teardown-guard --help",
@@ -152,9 +152,9 @@ fn top_level_examples_stop_after_orientation_and_handoffs() {
 }
 
 #[test]
-fn dispatch_task_help_documents_conversation_verification() {
+fn dispatch_help_documents_conversation_verification() {
     skill_eval()
-        .args(["dispatch-task", "--help"])
+        .args(["dispatch", "--help"])
         .assert()
         .success()
         .stdout(contains("delivered_followups"))
@@ -246,12 +246,14 @@ fn grade_and_ingest_help_document_runner_owned_command_checks() {
 }
 
 #[test]
-fn ingest_help_documents_judge_batch_completion() {
+fn dispatch_judges_help_documents_batch_completion() {
+    // `dispatch --judges` owns the batch-completion contract: it is what counts
+    // verdicts and decides the exit status.
     skill_eval()
-        .args(["ingest", "--help"])
+        .args(["dispatch", "--help"])
         .assert()
         .success()
-        .stdout(contains("skips existing nonempty responses"))
+        .stdout(contains("Skips existing nonempty responses"))
         .stdout(contains("verdicts present"))
         .stdout(contains("exits nonzero while any are missing"));
 }

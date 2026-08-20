@@ -280,9 +280,10 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         run_record_path: artifact_path(&cond_dir.join("run.json")),
         timing_path: artifact_path(&cond_dir.join("timing.json")),
         turns: opts.turns.map(<[ScriptedTurn]>::to_vec),
-        conversation_path: opts
-            .turns
-            .map(|_| artifact_path(&cond_dir.join("conversation.json"))),
+        // Unconditional: the runner drives every task, so every task ends with
+        // this completion artifact. Its presence is also what lets a rerun skip
+        // finished work, which a one-shot task needs as much as a scripted one.
+        conversation_path: Some(artifact_path(&cond_dir.join("conversation.json"))),
         agent_description,
         dispatch_prompt_path: artifact_path(&Path::new(&outputs_dir).join("dispatch-prompt.txt")),
         outputs_dir,
@@ -391,7 +392,8 @@ pub fn get_skill_description(skill_path: &Path) -> String {
 
 pub use crate::core::Mode;
 
-/// Harness-specific knobs for the human dispatch manifest.
+/// Harness-specific knobs for the human dispatch manifest: what the runner will
+/// spawn per task, and under what conditions.
 #[derive(Debug, Clone, Copy)]
 pub struct ManifestContext<'a> {
     pub harness: Harness,
@@ -410,6 +412,12 @@ pub fn build_manifest(
     tasks: &[DispatchTask],
     context: ManifestContext<'_>,
 ) -> String {
+    let ManifestContext {
+        harness,
+        guard,
+        agent_model,
+        agent_env,
+    } = context;
     let mode_str = match mode {
         Mode::NewSkill => "new-skill",
         Mode::Revision => "revision",
@@ -429,57 +437,43 @@ pub fn build_manifest(
         String::new(),
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
-        // The recipes below are POSIX command lines, so the manifest states the
+        // Dispatch shells out to POSIX command lines, so the manifest states the
         // requirement the same way RUNBOOK.md does (issue #248).
         format!("**Requires:** {POSIX_TOOLING_REQUIREMENT}"),
         String::new(),
     ];
-    let scripted: Vec<usize> = tasks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, task)| task.turns.as_ref().map(|_| index))
-        .collect();
-    if !scripted.is_empty() {
-        header.extend([
-            "## Scripted multi-turn dispatch".to_string(),
-            String::new(),
-            "Run these tasks through eval-magic's conversation driver. It resumes one native \
-             session, enforces each delivery gate, and writes the task's conversation.json. A \
-             gate stop is valid eval data; a task interrupted before conversation.json is \
-             incomplete and ingest skips it."
-                .to_string(),
-            String::new(),
-        ]);
-        for index in &scripted {
-            header.push(format!(
-                "eval-magic dispatch-task --dispatch dispatch.json --task-index {index}"
-            ));
-        }
-        header.push(String::new());
-    }
-    if scripted.len() < tasks.len()
-        && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
-            guard: context.guard,
-            agent_model: context.agent_model,
-            agent_env: context.agent_env,
-            one_shot_only: !scripted.is_empty(),
-        })
-    {
-        if !scripted.is_empty() {
-            header.extend([
-                "The harness recipe below applies only to task entries whose `turns` field is \
-                 absent."
-                    .to_string(),
-                String::new(),
-            ]);
-        }
+    header.extend([
+        "## Dispatch".to_string(),
+        String::new(),
+        "Every task is runner-driven — one-shot and scripted alike — so one command runs the \
+         whole plan from this iteration directory:"
+            .to_string(),
+        String::new(),
+        "eval-magic dispatch --iteration <n> --harness <harness>".to_string(),
+        String::new(),
+        "It runs `--jobs` tasks at a time, each in its own private environment, and writes each \
+         task's conversation.json. A task that already has one is skipped, so rerunning retries \
+         only what did not finish. A task exceeding `--timeout` is recorded as timed out, and a \
+         failing task is recorded while the rest of the batch continues. A conversation that \
+         stops at a scripted gate is valid eval data; a task with no conversation.json is \
+         incomplete and ingest skips it."
+            .to_string(),
+        String::new(),
+    ]);
+    // The harness section is what the descriptor still contributes: the command
+    // the runner will spawn, and whatever is peculiar about reading it back.
+    if let Some(lines) = adapter_for(harness).cli_manifest_section(CliManifestContext {
+        guard,
+        agent_model,
+        agent_env,
+    }) {
         header.extend(lines);
     }
     header.extend([
         "After all dispatches:".to_string(),
         String::new(),
-        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
-        "2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize` for the benchmark.".to_string(),
+        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/turn-<n>/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
+        "2. Run `eval-magic dispatch --judges --harness <harness>` to grade the judge tasks ingest listed, then `eval-magic finalize` for the benchmark.".to_string(),
         String::new(),
         "On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.".to_string(),
         String::new(),
@@ -752,6 +746,33 @@ mod tests {
         let out = serde_json::to_value(&without).unwrap();
         assert!(out.get("group").is_none());
         assert!(out.get("eval_root").is_none());
+    }
+
+    /// Every task is runner-driven, so every task has the completion artifact
+    /// the driver writes and `dispatch` reads to decide what a rerun may skip.
+    /// Gating this on `turns` would leave one-shot tasks with no resume marker.
+    #[test]
+    fn every_task_carries_a_conversation_path_whether_or_not_it_is_scripted() {
+        let turns = vec![ScriptedTurn {
+            prompt: "Use US timezones.".into(),
+            deliver_when: crate::core::DeliverWhen::AgentAsks,
+            agent_response_matches: None,
+        }];
+        let scripted = build_dispatch_task(&DispatchTaskOpts {
+            turns: Some(&turns),
+            ..base_opts()
+        })
+        .unwrap();
+        let one_shot = build_dispatch_task(&base_opts()).unwrap();
+        assert_eq!(
+            scripted.conversation_path.as_deref(),
+            Some("/tmp/cond/conversation.json")
+        );
+        assert_eq!(
+            one_shot.conversation_path.as_deref(),
+            Some("/tmp/cond/conversation.json"),
+            "a one-shot task needs the same completion artifact"
+        );
     }
 
     #[test]

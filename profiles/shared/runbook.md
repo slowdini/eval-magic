@@ -11,7 +11,21 @@ repo.
 - **Dispatches:** {{NUM_TASKS}} (the `tasks[]` array in `{{DISPATCH_JSON}}`)
 
 ## 1. Dispatch the eval agents, then ingest
-{{DISPATCH_RECIPE}}
+
+```
+{{DISPATCH_CMD}}
+```
+
+`dispatch` runs every task in its own private environment, `--jobs` of them at a time, and writes
+each task's `conversation.json`. A task that already has one is skipped, so rerunning the same
+command retries only what did not finish. A task that exceeds `--timeout` is recorded as timed out
+rather than left to stall the campaign, and a task that fails is recorded and named while the rest
+of the batch continues. A conversation that stops at a scripted gate is valid eval data, not a
+failure.
+
+```
+{{INGEST_CMD}}
+```
 
 `ingest` records each run, backfills transcripts, scans for stray writes, collects guarded-task
 blocks into `guard-denials.json`, and grades every mechanical assertion. Inspect any denial
@@ -19,7 +33,13 @@ warning before trusting the affected task. It then prints any `llm_judge` tasks 
 grade itself.
 
 ## 2. Dispatch the judge agents, then finalize
-{{JUDGE_RECIPE}}
+
+```
+{{JUDGE_CMD}}
+```
+
+Verdicts that are already present are skipped; the summary prints `N/M verdicts present` and exits
+nonzero until every task has one, so rerun the same command to fill the gaps.
 
 Then merge the verdicts and aggregate:
 

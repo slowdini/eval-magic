@@ -409,23 +409,8 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
-    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
-        let mix = r.selected_evals.iter().any(|eval| eval.turns.is_none());
-        println!(
-            "\nNext: read RUNBOOK.md and run every task with scripted `turns` through \
-             `eval-magic dispatch-task` so follow-ups resume the same native session.{} \
-             Then run `eval-magic ingest{target_args} --iteration {} --harness {}`.",
-            if mix {
-                " Use its harness recipe only for the remaining one-shot tasks."
-            } else {
-                ""
-            },
-            r.iteration,
-            adapter_for(ctx.harness).label()
-        );
-        return;
-    }
-    // One-shot CLI dispatch; the exact command is harness-specific.
+    // One command whatever the plan holds: scripted and one-shot tasks are both
+    // runner-driven.
     println!(
         "{}",
         adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {

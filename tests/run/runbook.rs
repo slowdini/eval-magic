@@ -5,6 +5,48 @@ use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
 use predicates::str::contains;
 
+/// One dispatch command, whatever the plan holds — a mixed plan of scripted and
+/// one-shot evals included. The runner drives every task, so the runbook has no
+/// per-plan-shape branch to render.
+#[test]
+fn the_runbook_names_exactly_one_task_dispatch_command() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{
+      "skill_name": "mr-review",
+      "evals": [
+        {"id": "one-shot", "prompt": "Fix it.", "expected_output": "fixed"},
+        {"id": "scripted", "prompt": "Fix it.", "expected_output": "asks first",
+         "turns": [{"prompt": "Use UTC.", "deliver_when": "always"}]}
+      ]
+    }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
+        .assert()
+        .success();
+
+    let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    assert_eq!(
+        book.matches("eval-magic dispatch --").count(),
+        2,
+        "one command for the eval tasks and one for the judges: {book}"
+    );
+    assert!(
+        book.contains("eval-magic dispatch --judges"),
+        "judges dispatch through the runner too: {book}"
+    );
+    for recipe_tool in ["xargs", "jq ", "tr -d"] {
+        assert!(
+            !book.contains(recipe_tool),
+            "no pasted shell pipeline survives ({recipe_tool}): {book}"
+        );
+    }
+    assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
+}
+
 #[test]
 fn run_writes_headless_runbook_for_codex() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -30,8 +72,8 @@ fn run_writes_headless_runbook_for_codex() {
         "frames the run for a human at a terminal: {book}"
     );
     assert!(
-        book.contains("codex --ask-for-approval never exec"),
-        "carries the Codex CLI dispatch recipe: {book}"
+        book.contains("eval-magic dispatch --skill-dir"),
+        "carries the runner-driven dispatch command: {book}"
     );
     assert!(
         book.contains("--harness codex"),
@@ -59,16 +101,17 @@ fn run_writes_headless_runbook_for_claude() {
         .success();
 
     let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
-    // A Claude Code run uses the shared human-followed template carrying the
-    // `claude -p` recipe. Each task dispatches from its own per-(group, condition)
-    // env, so the runbook lives in the iteration dir, above those envs.
+    // Every harness now uses the same shared template: the runner drives the
+    // dispatch, so the command differs only by its `--harness` selector. Each
+    // task still runs in its own per-(group, condition) env, so the runbook
+    // lives in the iteration dir, above those envs.
     assert!(
         book.contains("human driving"),
         "frames the run for a human at a terminal: {book}"
     );
     assert!(
-        book.contains("claude -p"),
-        "carries the claude -p dispatch recipe: {book}"
+        book.contains("--harness claude-code"),
+        "pipeline commands carry --harness claude-code: {book}"
     );
     assert!(
         !book.contains("switch-condition"),
@@ -82,10 +125,11 @@ fn run_writes_headless_runbook_for_claude() {
     let requirement = book
         .find("Git Bash")
         .expect("the runbook states the POSIX shell requirement");
-    assert!(book.contains("jq"), "the requirement names jq too: {book}");
     assert!(book.contains("WSL"), "{book}");
+    // Anchored at a line start: the requirement prose names the command too,
+    // and what this pins is the order of the *pasteable* line against it.
     assert!(
-        requirement < book.find("claude -p").unwrap(),
+        requirement < book.find("\neval-magic dispatch --skill-dir").unwrap(),
         "the requirement precedes the first pasteable command: {book}"
     );
 }
@@ -133,8 +177,8 @@ fn run_writes_headless_runbook_for_opencode() {
 
     let book = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
-        book.contains("opencode run --dir"),
-        "carries the opencode CLI dispatch recipe: {book}"
+        book.contains("--harness opencode"),
+        "pipeline commands carry --harness opencode: {book}"
     );
     assert!(
         book.contains("--harness opencode"),
@@ -151,10 +195,10 @@ fn run_writes_headless_runbook_for_opencode() {
         !manifest.contains("{{"),
         "no unsubstituted tokens: {manifest}"
     );
-    // The manifest carries the same POSIX recipes, so it carries the same
-    // requirement (issue #248 names both artifacts).
+    // Dispatch shells out to POSIX command lines, so the manifest states the
+    // same requirement the runbook does (issue #248 names both artifacts).
     assert!(
-        manifest.contains("Git Bash") && manifest.contains("jq"),
-        "the manifest states the POSIX tooling requirement: {manifest}"
+        manifest.contains("Git Bash"),
+        "the manifest states the POSIX shell requirement: {manifest}"
     );
 }

@@ -495,7 +495,7 @@ mod tests {
         let rendered = subst(INIT_TEMPLATE, &[("label", "demo")]);
         assert!(!rendered.contains("{label}"));
         // Placeholders that belong to the examples survive substitution.
-        for survivor in ["{prefix}", "{model_arg}", "{name}", "{cwd}"] {
+        for survivor in ["{prefix}", "{model_arg}", "{name}"] {
             assert!(
                 rendered.contains(survivor),
                 "{survivor} should pass through subst"

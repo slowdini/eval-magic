@@ -36,6 +36,11 @@ fn execute_fixture(
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> anyhow::Result<i32> {
+    // Ahead of every effect, so a caller waiting on this process overruns its
+    // deadline before any output or file write suggests progress.
+    if let Some(millis) = args.sleep_ms {
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
     let satisfied = requirements_met(args)?;
     let emitted = emitted_output(args);
 
@@ -152,6 +157,26 @@ mod tests {
             String::from_utf8(out).unwrap(),
             String::from_utf8(err).unwrap(),
         )
+    }
+
+    /// `--sleep-ms` delays the fixture before it does anything else, which is
+    /// what lets a dispatch-timeout test overrun a deadline on any host. `sleep`
+    /// is a POSIX binary Windows lacks, so the delay has to live in the fixture
+    /// itself.
+    #[test]
+    fn sleep_ms_delays_the_fixture_before_it_emits() {
+        let started = std::time::Instant::now();
+        let (code, out, _) = run(&FixtureArgs {
+            sleep_ms: Some(120),
+            text: vec!["done".into()],
+            ..args()
+        });
+        assert_eq!((code, out.as_str()), (0, "done"));
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(120),
+            "expected the fixture to sleep at least 120ms, took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

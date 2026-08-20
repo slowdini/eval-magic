@@ -39,7 +39,6 @@ const CHECKS: &[Check] = &[
     transcript::check_tiers,
     conversation::validate,
     check_tool_roles_disjoint,
-    check_judge_command_template,
     check_template_placeholder_backing,
     check_manifest_template_newline,
     check_skills_block_item,
@@ -364,56 +363,11 @@ fn check_tool_roles_disjoint(d: &HarnessDescriptor) -> Result<(), String> {
     Ok(())
 }
 
-/// The judge command line splices into the shared judge recipe; its contract
-/// (see cli_command::render_judge_dispatch_recipe) is checkable here rather
-/// than at render time.
-fn check_judge_command_template(d: &HarnessDescriptor) -> Result<(), String> {
-    let Some(judge) = &d.dispatch.judge_command_template else {
-        return Ok(());
-    };
-    if d.model.is_none() {
-        return Err(
-            "dispatch.judge_command_template requires model.flag — the judge recipe \
-             splices \"$model_arg\" from each task's model via the model flag"
-                .into(),
-        );
-    }
-    if d.dispatch.capture_prefix.is_none() {
-        return Err(
-            "dispatch.judge_command_template requires dispatch.capture_prefix — it names \
-             the per-task $response_base capture files"
-                .into(),
-        );
-    }
-    if !judge.contains("$model_arg") {
-        return Err(
-            "dispatch.judge_command_template must reference $model_arg (empty when a task \
-             declares no model)"
-                .into(),
-        );
-    }
-    if !judge.contains("{cwd}") {
-        return Err(
-            "dispatch.judge_command_template must contain {cwd} — judges run from the \
-             iteration dir"
-                .into(),
-        );
-    }
-    if !judge.ends_with(" \\") {
-        return Err(
-            "dispatch.judge_command_template must end with a shell line continuation \
-             (\" \\\") so the recipe's prompt line follows it"
-                .into(),
-        );
-    }
-    Ok(())
-}
-
 /// Placeholders must have a backing field, or the template renders with the
 /// token left in (the artifact tests' `!contains("{{")` rule, at load time).
 fn check_template_placeholder_backing(d: &HarnessDescriptor) -> Result<(), String> {
     let dispatch = &d.dispatch;
-    let pairings: [(&Option<String>, &str, &str, bool); 7] = [
+    let pairings: [(&Option<String>, &str, &str, bool); 4] = [
         (
             &dispatch.next_steps_template,
             "next_steps_template",
@@ -433,26 +387,8 @@ fn check_template_placeholder_backing(d: &HarnessDescriptor) -> Result<(), Strin
             dispatch.exec_template.is_some(),
         ),
         (
-            &dispatch.manifest_template,
-            "manifest_template",
-            "{parallel_recipe}",
-            dispatch.parallel_command_template.is_some(),
-        ),
-        (
             &dispatch.exec_template,
             "exec_template",
-            "{guard_args}",
-            dispatch.guard_args.is_some(),
-        ),
-        (
-            &dispatch.parallel_command_template,
-            "parallel_command_template",
-            "{guard_args}",
-            dispatch.guard_args.is_some(),
-        ),
-        (
-            &dispatch.judge_command_template,
-            "judge_command_template",
             "{guard_args}",
             dispatch.guard_args.is_some(),
         ),

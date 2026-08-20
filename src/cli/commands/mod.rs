@@ -23,6 +23,6 @@ pub(crate) use pipeline::{
     run_aggregate, run_detect_stray_writes, run_fill_transcripts, run_finalize, run_grade,
     run_ingest, run_record_runs,
 };
-pub(crate) use run::{run_dispatch_task, run_run};
+pub(crate) use run::{run_dispatch, run_run};
 pub(crate) use validate::run_validate;
 pub(crate) use workspace::{run_promote_baseline, run_snapshot, run_teardown};

@@ -313,6 +313,7 @@ mod tests {
             delivered_followups: 1,
             stop_reason: None,
             stopped_before_followup: None,
+            timed_out_in_round: None,
             events: vec![
                 ConversationEvent::UserMessage {
                     ordinal: 0,

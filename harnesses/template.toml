@@ -49,26 +49,17 @@ label = "{label}"
 # [dispatch]
 # exec_template = '{label} run --cd <eval-root>{model_arg} "Read the file at <dispatch_prompt_path> and follow its instructions exactly." > <outputs_dir>/final-message.md'
 
-## capture_prefix names the judge recipe's per-task capture files
-## ($response_base.<prefix>-events.jsonl); required by judge_command_template.
+## capture_prefix names this harness's transcript file (<prefix>-events.jsonl), which
+## `eval-magic dispatch` reads back after each round.
 # capture_prefix = "{label}"
-
-## parallel_command_template is the per-task command block spliced into the shared parallel
-## dispatch scaffold.
-# parallel_command_template = 'cd "$eval_root" && {label} run{model_arg} "Read the file at $prompt_path and follow its instructions exactly." > "$outputs_dir/final-message.md"'
-
-## judge_command_template splices into the shared judge recipe. Contract: requires [model].flag
-## and capture_prefix, must reference $model_arg and {cwd}, and must end with a shell line
-## continuation (" \") so the recipe's prompt line follows it.
-# judge_command_template = 'cd "{cwd}" && {label} run $model_arg \'
 
 ## next_steps_template is the post-run handoff text ({exec_command}, {target_args}, {iteration},
 ## {model_note} placeholders; referencing {model_note} requires the model_note field).
 # next_steps_template = "\nNext: dispatch each task in dispatch.json with:\n{exec_command}\nThen run `ingest --harness {label}`."
 
-## manifest_template is this harness's dispatch-manifest section ({exec_command} and
-## {parallel_recipe} placeholders); it must end with exactly one trailing newline.
-# manifest_template = "After all dispatches ({label}):\n\n{exec_command}\n\nParallel dispatch from the iteration directory:\n\n{parallel_recipe}\n"
+## manifest_template is this harness's dispatch-manifest section ({exec_command}
+## placeholder); it must end with exactly one trailing newline.
+# manifest_template = "Harness dispatch ({label}):\n\n{exec_command}\n"
 
 ## guard_args (guard-only args spliced at {guard_args}) and model_note (sentence spliced at
 ## {model_note}) are niche — see the schema; guard_args only matters to guarded built-ins.

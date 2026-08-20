@@ -522,36 +522,6 @@ fn harness_lint_probe_fails_when_final_message_missing() {
 }
 
 #[test]
-fn harness_lint_probe_renders_parallel_and_judge_templates() {
-    let tmp = TempDir::new().unwrap();
-    let file = tmp.path().join("probe-full.toml");
-    fs::write(
-        &file,
-        "label = \"probe-full\"\n\n\
-         [model]\nflag = \"-m\"\n\n\
-         [dispatch]\n\
-         exec_template = 'printf \"ok\\n\" > <outputs_dir>/final-message.md'\n\
-         capture_prefix = \"out\"\n\
-         parallel_command_template = \"agent --cd {cwd} run\"\n\
-         judge_command_template = \"judge --cd {cwd} $model_arg \\\\\"\n",
-    )
-    .unwrap();
-
-    skill_eval()
-        .current_dir(tmp.path())
-        .args(["harness", "lint"])
-        .arg(&file)
-        .args(["--probe", "--yes"])
-        .assert()
-        .success()
-        .stdout(
-            contains("✓ live exec template")
-                .and(contains("✓ render: parallel_command_template"))
-                .and(contains("✓ render: judge_command_template")),
-        );
-}
-
-#[test]
 fn harness_lint_probe_aborts_without_yes_on_non_yes_stdin() {
     let tmp = TempDir::new().unwrap();
     let file = tmp.path().join("probe-ok.toml");

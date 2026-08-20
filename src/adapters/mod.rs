@@ -39,7 +39,7 @@ mod skills_block;
 pub mod transcript;
 
 pub use harness::{
-    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
+    CliDispatchContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
     TokenUsageAggregation, ToolVocabulary,
 };
 pub use registry::{

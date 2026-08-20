@@ -288,7 +288,10 @@ pub(super) fn write_dispatch(
             .expect("dispatch envelope is an object")
             .insert("agent_env".to_string(), json!(conditions.agent_env));
     }
-    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
+    // Unconditional: `dispatch` drives every task from this envelope, so the
+    // descriptor it freezes and the guard state it dispatches under are needed
+    // whether or not any eval declares scripted turns.
+    {
         let descriptor = crate::adapters::registry::descriptor_value_for(ctx.harness);
         let envelope = dispatch_json
             .as_object_mut()
@@ -356,11 +359,7 @@ pub(super) fn write_dispatch(
         cond_a: r.cond_a,
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
-        multi_turn_tasks: tasks.iter().filter(|task| task.turns.is_some()).count(),
         target_args: &target_args,
-        guard: opts.guard_armed(),
-        agent_model: opts.agent_model,
-        agent_env: &opts.agent_env,
     });
     fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
 

@@ -383,7 +383,7 @@ pub struct RunRecord {
     pub skill_source: Option<SkillSource>,
 }
 
-/// The completed outcome of one scripted conversation.
+/// The completed outcome of one dispatched task's conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
     pub status: ConversationStatus,
@@ -392,6 +392,9 @@ pub struct ConversationRecord {
     pub stop_reason: Option<ConversationStopReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_before_followup: Option<u32>,
+    /// The round the dispatch was killed in, when it outran its deadline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timed_out_in_round: Option<u32>,
     pub events: Vec<ConversationEvent>,
 }
 
@@ -399,7 +402,11 @@ pub struct ConversationRecord {
 #[serde(rename_all = "snake_case")]
 pub enum ConversationStatus {
     Completed,
+    /// Halted at a scripted gate — a normal, recorded result.
     Stopped,
+    /// Killed at its deadline. Recorded rather than lost, so the campaign shows
+    /// what hung instead of silently missing a cell.
+    TimedOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

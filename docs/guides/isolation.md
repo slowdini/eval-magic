@@ -125,8 +125,8 @@ ID rather than the total list length because staged and bundled skills remain pr
 produce an init record under each `turn-N/`; inspect a resumed turn as well.
 
 Codex and OpenCode captures do not provide the equivalent roster used by eval-magic. Verify those
-harnesses by checking every rendered eval-agent command in `RUNBOOK.md` and
-`dispatch-manifest.md`, then use `isolates_live_sources` to record the operator assertion.
+harnesses by checking the eval-agent command `dispatch-manifest.md` says the runner will spawn,
+then use `isolates_live_sources` to record the operator assertion.
 
 ### `claude plugin list` does not prove isolation
 

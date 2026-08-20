@@ -8,20 +8,20 @@
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
 REQUIREMENTS:
-  Git, plus a POSIX shell with jq, xargs, tr, and wc. The dispatch and judge
-  recipes in the generated RUNBOOK.md are POSIX command lines, and the shell
-  that runs them has to resolve the same paths the workspace was prepared
-  with. On Windows that is Git Bash (Git for Windows), with jq installed
-  separately. WSL resolves a different filesystem namespace, so run
-  eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH
-  to select a specific sh.
+  Git, plus a POSIX shell. Harness dispatch commands are POSIX command
+  lines, and eval-magic dispatch runs them itself, so the host it runs on
+  needs a shell that resolves the workspace's own paths. On Windows that is
+  Git Bash (Git for Windows). WSL resolves a different filesystem namespace,
+  so run eval-magic inside WSL rather than dispatching into it. Set
+  EVAL_MAGIC_SH to select a specific sh.
 
 EXAMPLES:
   # Scaffold a first eval and prepare its isolated comparison environments
   eval-magic init
   eval-magic run
-  # run prepares the workspace but does not dispatch. Read the generated
-  # RUNBOOK.md end to end and follow it through ingest, judges, finalize, and teardown.
+  # run prepares the workspace but does not dispatch; eval-magic dispatch does.
+  # Read the generated RUNBOOK.md end to end and follow it through dispatch,
+  # ingest, judges, finalize, and teardown.
   # Artifacts land outside the skill's own repository; run prints the path, and
   # every command it suggests carries --workspace-dir. Set EVAL_MAGIC_WORKSPACE_DIR
   # to move the default. See: eval-magic docs isolation

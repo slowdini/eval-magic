@@ -7,6 +7,8 @@ use serde_json::Value;
 use std::fs;
 use std::path::Path;
 
+mod dispatch;
+
 #[test]
 fn multi_turn_eval_dispatch_records_followups_and_conversation_artifact_path() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -61,6 +63,212 @@ fn multi_turn_eval_dispatch_records_followups_and_conversation_artifact_path() {
                 .ends_with("/conversation.json")
         );
     }
+}
+
+/// The runner drives every task, so the frozen descriptor and guard state the
+/// driver needs must reach `dispatch.json` even when no eval declares `turns`.
+/// Gating them on scripted turns left a one-shot plan undispatchable.
+#[test]
+fn a_one_shot_only_plan_still_carries_the_descriptor_the_driver_needs() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{
+      "skill_name": "mr-review",
+      "evals": [{
+        "id": "one-shot",
+        "prompt": "Fix the date.",
+        "expected_output": "fixed"
+      }]
+    }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--no-guard",
+        ])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert_eq!(
+        dispatch["harness_descriptor"]["label"], "codex",
+        "a one-shot plan needs the frozen descriptor: {dispatch}"
+    );
+    assert_eq!(dispatch["guard"], false);
+    for task in dispatch["tasks"].as_array().unwrap() {
+        assert!(task["turns"].is_null(), "this plan declares no turns");
+        assert!(
+            task["conversation_path"]
+                .as_str()
+                .unwrap()
+                .ends_with("/conversation.json")
+        );
+    }
+}
+
+/// A task with no scripted turns is driven by the runner too, and leaves the
+/// same evidence a scripted one does: a turn-1 transcript and a completion
+/// artifact recording zero delivered follow-ups.
+#[test]
+fn the_driver_runs_a_task_that_declares_no_scripted_turns() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{
+      "skill_name": "mr-review",
+      "evals": [{
+        "id": "one-shot",
+        "prompt": "Fix the date.",
+        "expected_output": "fixed"
+      }]
+    }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "codex",
+            "--no-guard",
+        ])
+        .assert()
+        .success();
+
+    let dispatch_path = iteration_dir(&cwd).join("dispatch.json");
+    let mut dispatch = read_json(&dispatch_path);
+    dispatch["harness_descriptor"]["dispatch"]["exec_template"] =
+        serde_json::json!(one_shot_stub(tmp.path(), "Updated the date handling."));
+    fs::write(
+        &dispatch_path,
+        format!("{}\n", serde_json::to_string_pretty(&dispatch).unwrap()),
+    )
+    .unwrap();
+
+    dispatch_one(&skill_dir, &cwd, "codex", 0, false)
+        .assert()
+        .success();
+
+    let task = &dispatch["tasks"][0];
+    let conversation = read_json(Path::new(task["conversation_path"].as_str().unwrap()));
+    assert_eq!(conversation["status"], "completed");
+    assert_eq!(conversation["delivered_followups"], 0);
+
+    let outputs = Path::new(task["outputs_dir"].as_str().unwrap());
+    assert!(
+        outputs.join("turn-1").join("codex-events.jsonl").is_file(),
+        "a one-shot transcript belongs under turn-1 like every other round"
+    );
+    assert_eq!(
+        fs::read_to_string(outputs.join("final-message.md")).unwrap(),
+        "Updated the date handling.\n"
+    );
+}
+
+const ONE_SHOT_EVALS: &str = r#"{
+  "skill_name": "mr-review",
+  "evals": [{
+    "id": "one-shot",
+    "prompt": "Fix the date.",
+    "expected_output": "fixed"
+  }]
+}"#;
+
+/// Prepare an iteration with no scripted turns and no guard.
+fn prepare_one_shot_run(skill_dir: &Path, cwd: &Path, harness: &str) {
+    skill_eval()
+        .current_dir(cwd)
+        .args(["run", "--skill-dir"])
+        .arg(skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            harness,
+            "--no-guard",
+        ])
+        .assert()
+        .success();
+}
+
+/// Drive one task of a prepared iteration through `dispatch`. Returns the
+/// command so a caller can assert success or failure.
+fn dispatch_one(
+    skill_dir: &Path,
+    cwd: &Path,
+    harness: &str,
+    index: usize,
+    overwrite: bool,
+) -> assert_cmd::Command {
+    let mut command = skill_eval();
+    command
+        .current_dir(cwd)
+        .args(["dispatch", "--skill-dir"])
+        .arg(skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--iteration",
+            "1",
+            "--harness",
+            harness,
+            "--task-index",
+            &index.to_string(),
+        ]);
+    if overwrite {
+        command.arg("--overwrite");
+    }
+    command
+}
+
+/// Swap the frozen descriptor's `exec_template` for a stub, the way every
+/// driver test here substitutes a real harness CLI.
+fn stub_exec_template(cwd: &Path, template: &str) {
+    let dispatch_path = iteration_dir(cwd).join("dispatch.json");
+    let mut dispatch = read_json(&dispatch_path);
+    dispatch["harness_descriptor"]["dispatch"]["exec_template"] = serde_json::json!(template);
+    fs::write(
+        &dispatch_path,
+        format!("{}\n", serde_json::to_string_pretty(&dispatch).unwrap()),
+    )
+    .unwrap();
+}
+
+/// A one-shot harness stub: emits a session id, one agent message, and a usage
+/// event, which is the minimum a transcript needs to parse. Written as a POSIX
+/// script and invoked through `sh` for the same reason the scripted stub below
+/// is — that is the shape of a real `exec_template`, and it needs no executable
+/// bit on any host.
+fn one_shot_stub(dir: &Path, message: &str) -> String {
+    let script = dir.join("fake-one-shot.sh");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+outputs=$1
+message=$2
+printf '%s\n' '{"type":"thread.started","thread_id":"session-1"}' > "$outputs/codex-events.jsonl"
+printf '%s\n' "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"$message\"}}" >> "$outputs/codex-events.jsonl"
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":3}}' >> "$outputs/codex-events.jsonl"
+"#,
+    )
+    .unwrap();
+    format!(
+        "sh \"{}\" <outputs_dir> \"{message}\"",
+        script.to_string_lossy()
+    )
 }
 
 // The harness stub below is a POSIX shell script, because that is what a real `exec_template` is —
@@ -155,11 +363,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
     )
     .unwrap();
 
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["dispatch-task", "--dispatch"])
-        .arg(&dispatch_path)
-        .args(["--task-index", "0"])
+    dispatch_one(&skill_dir, &cwd, "codex", 0, false)
         .assert()
         .success();
 
@@ -185,11 +389,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
         "Updated the date handling.\n"
     );
 
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["dispatch-task", "--dispatch"])
-        .arg(&dispatch_path)
-        .args(["--task-index", "1"])
+    dispatch_one(&skill_dir, &cwd, "codex", 1, false)
         .assert()
         .success();
 
@@ -218,11 +418,7 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
     )
     .unwrap();
 
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["dispatch-task", "--dispatch"])
-        .arg(&dispatch_path)
-        .args(["--task-index", "0", "--overwrite"])
+    dispatch_one(&skill_dir, &cwd, "codex", 0, true)
         .assert()
         .failure();
     assert!(

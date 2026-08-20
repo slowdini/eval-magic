@@ -7,7 +7,7 @@
 //! - [`commands`] — one thin handler per subcommand, grouped by concern. Each
 //!   maps parsed args onto a library module and renders the result.
 //! - [`run`] — the `run` orchestrator. This is the bulk of the module: staging,
-//!   dispatch-task assembly, and the `ingest`/`finalize` chains. It lives here
+//!   dispatch plan assembly, and the `ingest`/`finalize` chains. It lives here
 //!   rather than in a library module because it is a CLI-shaped workflow —
 //!   it drives the operator hand-off, not just data transformation — and it
 //!   carries its own unit tests (`run/staging/tests/`, `run/dispatch/tests/`,
@@ -103,7 +103,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
 
     match command {
         Commands::Run(args) => run_run(args),
-        Commands::DispatchTask(args) => run_dispatch_task(args),
+        Commands::Dispatch(args) => run_dispatch(args),
         Commands::Ingest(args) => run_ingest(args),
         Commands::Finalize(args) => run_finalize(args),
         Commands::Init(args) => run_init(args),

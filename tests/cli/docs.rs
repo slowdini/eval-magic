@@ -232,7 +232,7 @@ fn every_guide_reference_in_shipped_help_resolves() {
     for help_args in [
         "--help",
         "run --help",
-        "dispatch-task --help",
+        "dispatch --help",
         "snapshot --help",
         "teardown --help",
         "teardown-guard --help",
@@ -308,13 +308,13 @@ fn repository_documentation_map_names_each_surface() {
     assert!(!agents.contains("docs/README.md"));
 
     // A POSIX shell is a development requirement, not a probed capability: the
-    // scripted-turn tests spawn a `#!/bin/sh` stub through it and cannot skip.
-    // Both contributor-facing docs have to say so, or the next contributor on
+    // dispatch tests spawn a `#!/bin/sh` stub through it and cannot skip. Both
+    // contributor-facing docs have to say so, or the next contributor on
     // Windows rediscovers it as a test failure (issue #248).
     for (name, text) in [("AGENTS.md", &agents), ("developer overview", &overview)] {
         assert!(
-            text.contains("POSIX shell") && text.contains("jq"),
-            "{name} should record the POSIX shell + jq development requirement"
+            text.contains("POSIX shell"),
+            "{name} should record the POSIX shell development requirement"
         );
     }
 }
@@ -329,9 +329,11 @@ fn help_states_the_posix_tooling_requirement() {
         .success()
         .stdout(contains("REQUIREMENTS:"))
         .stdout(contains("POSIX shell"))
-        .stdout(contains("jq"))
         .stdout(contains("Git Bash"))
-        .stdout(contains("WSL"));
+        .stdout(contains("WSL"))
+        // `jq` was a requirement only while operators pasted the generated
+        // recipes; the runner dispatches directly and needs no such toolchain.
+        .stdout(contains("jq").not());
 }
 
 #[test]
@@ -351,11 +353,12 @@ fn readme_is_a_concise_first_run_path() {
         "eval-magic docs isolation",
         "docs/developer_overview.md",
         // The declared host requirement, stated for both audiences the README
-        // serves: installing the tool, and developing it (issue #248).
+        // serves: installing the tool, and developing it (issue #248). `jq` is
+        // deliberately absent — it was a requirement only while operators
+        // pasted the generated recipes.
         "POSIX shell",
         "Git Bash",
         "WSL",
-        "jq",
     ] {
         assert!(readme.contains(expected), "README is missing {expected}");
     }

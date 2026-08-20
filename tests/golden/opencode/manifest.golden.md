@@ -8,11 +8,19 @@ Total dispatches: 2
 
 In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short "read this file and follow it" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.
 
-**Requires:** eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. Run them in a POSIX shell with `jq` installed that resolves the same paths this workspace was prepared with — on Windows, Git Bash (Git for Windows). WSL resolves a different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH to select a specific `sh`.
+**Requires:** harness dispatch commands are POSIX command lines, and `eval-magic dispatch` runs them itself, so the host it runs on needs a POSIX shell — on Windows, Git Bash (Git for Windows). WSL resolves a different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH to select a specific `sh`.
 
-After all dispatches (OpenCode):
+## Dispatch
 
-Run one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/opencode-events.jsonl` and stderr as `outputs/opencode-stderr.log`.
+Every task is runner-driven — one-shot and scripted alike — so one command runs the whole plan from this iteration directory:
+
+eval-magic dispatch --iteration <n> --harness <harness>
+
+It runs `--jobs` tasks at a time, each in its own private environment, and writes each task's conversation.json. A task that already has one is skipped, so rerunning retries only what did not finish. A task exceeding `--timeout` is recorded as timed out, and a failing task is recorded while the rest of the batch continues. A conversation that stops at a scripted gate is valid eval data; a task with no conversation.json is incomplete and ingest skips it.
+
+Harness dispatch (OpenCode):
+
+`eval-magic dispatch` runs one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/turn-<n>/opencode-events.jsonl` and stderr as `outputs/turn-<n>/opencode-stderr.log`.
 
 ```bash
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
@@ -23,33 +31,12 @@ opencode run --dir <eval-root> --format json --auto -m model-x \
   2> <outputs_dir>/opencode-stderr.log
 ```
 
-Parallel dispatch from this iteration directory:
-
-```bash
-JOBS=${JOBS:-4}
-jq -r '.tasks[] | .eval_root, .dispatch_prompt_path, .outputs_dir' dispatch.json \
-  | tr -d '\r' \
-  | tr '\n' '\0' \
-  | xargs -0 -P "$JOBS" -n 3 sh -c '
-    eval_root="$1"
-    prompt_path="$2"
-    outputs_dir="$3"
-    mkdir -p "$outputs_dir"
-    unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-    opencode run --dir "$eval_root" --format json --auto -m model-x \
-      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
-      </dev/null \
-      > "$outputs_dir/opencode-events.jsonl" \
-      2> "$outputs_dir/opencode-stderr.log"
-  ' sh
-```
-
-Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/opencode-events.jsonl`.
+Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/turn-<n>/opencode-events.jsonl`.
 
 After all dispatches:
 
-1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ "total_tokens": <n>, "duration_ms": <n>, "source": "completion-event" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.
-2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize` for the benchmark.
+1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/turn-<n>/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ "total_tokens": <n>, "duration_ms": <n>, "source": "completion-event" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.
+2. Run `eval-magic dispatch --judges --harness <harness>` to grade the judge tasks ingest listed, then `eval-magic finalize` for the benchmark.
 
 On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.
 
@@ -58,6 +45,7 @@ On a harness without persisted transcripts, instead write each task's `run.json`
 
 - run.json:    /work/cond/run.json
 - timing.json: /work/cond/timing.json
+- conversation.json: /work/cond/conversation.json
 
 ```
 <session-start-context>
@@ -108,6 +96,7 @@ Build me a widget.
 
 - run.json:    /work/cond-b/run.json
 - timing.json: /work/cond-b/timing.json
+- conversation.json: /work/cond-b/conversation.json
 
 ```
 You are executing a single test case for a skill evaluation framework.
