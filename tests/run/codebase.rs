@@ -390,7 +390,7 @@ fn an_object_file(repo: &Path) -> PathBuf {
     walk(&repo.join(".git/objects")).expect("a materialized repository has objects")
 }
 
-/// Issue #254: one cached materialization provisions every environment of a
+/// One cached materialization provisions every environment of a
 /// multi-run campaign, and the provisioning is a local clone — each
 /// environment's object store is hard-linked to the cache's, not copied.
 #[test]

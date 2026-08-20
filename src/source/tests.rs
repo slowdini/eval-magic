@@ -481,8 +481,8 @@ fn materializing_a_dirty_local_repository_carries_only_committed_state() {
     assert_eq!(git_text(&dest, &["remote"]), "");
 }
 
-/// The environment a run provisions from its cached materialization (issue
-/// #254): a local clone while the cache carries check-outable history and the
+/// The environment a run provisions from its cached materialization:
+/// a local clone while the cache carries check-outable history and the
 /// host allows hard links, a plain copy otherwise.
 #[test]
 fn provisioning_an_env_from_a_cached_checkout_clones_with_history_and_no_remote() {
@@ -565,8 +565,8 @@ fn provisioning_a_commitless_cache_falls_back_to_a_plain_copy() {
     );
 }
 
-/// The ticket's independence criterion: environments share the cache's objects
-/// by hard link, but each keeps a private working tree and private refs — a
+/// Environments share the cache's objects by hard link, but
+/// each keeps a private working tree and private refs — a
 /// write in one is invisible to the others and to the cache.
 #[test]
 fn envs_provisioned_from_one_cache_are_independent_working_trees() {

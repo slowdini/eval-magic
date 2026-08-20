@@ -187,10 +187,10 @@ pub fn copy_entry_materialized(source: &Path, destination: &Path) -> io::Result<
 /// capability `git clone --local` relies on to share an object store instead
 /// of copying it.
 ///
-/// Probed rather than assumed: two directories a run owns can sit on different
-/// filesystems (a workspace on a mounted volume, a cache on tmpfs), and
-/// `link(2)` is what says so. Any failure reads as unavailable, so the caller
-/// falls back to copying rather than provisioning wrong.
+/// Two directories a run owns can sit on different filesystems (a workspace
+/// on a mounted volume, a cache on tmpfs), and `link(2)` is what says so.
+/// Any failure reads as unavailable, so the caller falls back to copying rather
+/// than provisioning wrong.
 pub fn hardlinks_available(from: &Path, to: &Path) -> bool {
     let Ok(probe) = tempfile::NamedTempFile::new_in(from) else {
         return false;
