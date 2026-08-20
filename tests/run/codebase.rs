@@ -350,20 +350,68 @@ fn a_fixture_only_eval_still_gets_the_repository_it_always_had() {
 
 /// The number of hard links to `file` — the mechanism `git clone --local` uses
 /// to share the cache's object store with an environment instead of copying
-/// it. Unix and Windows expose the count through different std traits; the
-/// number is the same one.
+/// it. Straight from stat metadata on Unix.
+#[cfg(unix)]
 fn link_count(file: &Path) -> u32 {
-    let metadata = fs::metadata(file).unwrap();
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::MetadataExt;
-        metadata.nlink() as u32
-    }
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        metadata.number_of_links()
-    }
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(file).unwrap().nlink() as u32
+}
+
+/// The number of hard links to `file`, read from fsutil because Windows has no
+/// stable std route to it: `number_of_links` rides the unstable
+/// `windows_by_handle` trait. fsutil prints one path per hard link, sometimes
+/// behind a `Hardlink list on ...` header — the header is the only printed
+/// line that is not a path.
+#[cfg(windows)]
+fn link_count(file: &Path) -> u32 {
+    let output = Command::new("fsutil")
+        .args(["hardlink", "list"])
+        .arg(file)
+        .output()
+        .expect("fsutil hardlink list must run");
+    assert!(
+        output.status.success(),
+        "fsutil hardlink list failed for {}: {}",
+        file.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    hardlink_list_count(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Count the hard links in `fsutil hardlink list` output: one path per line,
+/// sometimes behind a `Hardlink list on ...` header — the header is the only
+/// printed line that is not a path.
+fn hardlink_list_count(output: &str) -> u32 {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains('\\') && !line.starts_with("Hardlink"))
+        .count() as u32
+}
+
+/// Both layouts `fsutil hardlink list` prints. Pinned here because the
+/// Windows arm of `link_count` runs only on Windows, while the counting is
+/// plain string logic every runner can execute.
+#[test]
+fn fsutil_link_list_output_is_counted_in_both_of_its_formats() {
+    // Modern Windows: one \?\-prefixed path per hard link, no header.
+    let modern = r"\\?\C:\cache\.git\objects\ab\cdef
+\\?\C:\env\.git\objects\ab\cdef
+";
+    assert_eq!(hardlink_list_count(modern), 2);
+    // Older Windows: the same paths behind a `Hardlink list on ...` header,
+    // CRLF-terminated.
+    let older_lf = r"Hardlink list on C:\cache\.git\objects\ab\cdef
+C:\cache\.git\objects\ab\cdef
+C:\env\.git\objects\ab\cdef
+";
+    let older = older_lf.replace('\n', "\r\n");
+    assert_eq!(hardlink_list_count(&older), 2);
+    // A file no other path shares lists exactly once — the count that fails
+    // the hard-link assertions when an environment was copied, not cloned.
+    let lone = r"\\?\C:\env\.git\objects\ab\cdef
+";
+    assert_eq!(hardlink_list_count(lone), 1);
 }
 
 /// A file from `repo`'s object store — a loose object or a pack — that a local
@@ -461,7 +509,7 @@ fn multi_run_envs_are_provisioned_from_one_cached_materialization() {
             );
             assert!(
                 link_count(&env.join(object_relative)) >= 2,
-                "{condition} run {run}: the object store must be hard-linked to the                  cache's, not copied byte by byte"
+                "{condition} run {run}: the object store must be hard-linked to the cache's, not copied byte by byte"
             );
         }
     }
