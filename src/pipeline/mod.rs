@@ -27,7 +27,7 @@ pub use detect_stray_writes::{
     detect_stray_writes_report,
 };
 pub use diff_scope::{
-    DiffScopeMetrics, DiffScopeSummary, capture_iteration_baselines, measure_iteration_diff_scopes,
+    DiffScopeMetrics, DiffScopeRecord, DiffScopeSummary, PatchRecord, measure_iteration_diff_scopes,
 };
 pub use error::PipelineError;
 pub use fill_transcripts::{FillTranscriptsResult, fill_transcripts};

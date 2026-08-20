@@ -164,8 +164,10 @@ fn docs_isolation_keeps_remedies_and_verification() {
 /// The codebase guide is the reference surface for a feature with no CLI flag,
 /// so the parts a config author cannot infer have to survive an edit: that a
 /// git ref is mandatory, that `files` layers over the checkout, that a local
-/// path is not reproducible by anyone reading the results, and how the
-/// per-iteration cache provisions environments.
+/// path is not reproducible by anyone reading the results, how the
+/// per-iteration cache provisions environments, and what the baseline ref is
+/// measured into — including the `.gitignore` rule, which silently decides
+/// whether a `diff_scope` threshold is reachable at all.
 #[test]
 fn docs_codebase_keeps_the_declaration_rules_caveat_and_provisioning_contract() {
     skill_eval()
@@ -181,7 +183,10 @@ fn docs_codebase_keeps_the_declaration_rules_caveat_and_provisioning_contract() 
         .stdout(contains("not reproducible"))
         .stdout(contains("materialized once"))
         .stdout(contains("hard-link"))
-        .stdout(contains("independent working tree"));
+        .stdout(contains("independent working tree"))
+        .stdout(contains("diff-scope.json"))
+        .stdout(contains("diff.patch"))
+        .stdout(contains(".gitignore"));
 }
 
 #[test]

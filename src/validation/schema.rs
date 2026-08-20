@@ -346,6 +346,36 @@ mod tests {
             validate_against_schema(SchemaName::DiffScope, &metrics, "diff-scope.json");
         assert!(valid.is_ok(), "{valid:?}");
 
+        // The changed-file list and the patch record are additive: a record
+        // carrying them validates, and one written before they existed still
+        // does, so an older iteration stays gradeable.
+        let mut complete = metrics.clone();
+        complete["files"] = json!([
+            { "path": "src/main.rs", "status": "modified", "lines_added": 4, "lines_removed": 1 }
+        ]);
+        complete["patch"] = json!({ "path": "diff.patch", "bytes": 512, "truncated": false });
+        let valid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &complete, "diff-scope.json");
+        assert!(valid.is_ok(), "{valid:?}");
+
+        let mut unknown_status = complete.clone();
+        unknown_status["files"][0]["status"] = json!("renamed");
+        let invalid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &unknown_status, "diff-scope.json");
+        assert!(
+            invalid.is_err(),
+            "renames are off, so no record may claim one"
+        );
+
+        let mut partial_patch = complete;
+        partial_patch["patch"] = json!({ "path": "diff.patch" });
+        let invalid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &partial_patch, "diff-scope.json");
+        assert!(
+            invalid.is_err(),
+            "a patch record without `truncated` cannot say whether it is whole"
+        );
+
         let mut extra = metrics;
         extra["paths"] = json!(["src/main.rs"]);
         let invalid: Result<Value, _> =

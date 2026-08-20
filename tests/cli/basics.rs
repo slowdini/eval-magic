@@ -270,6 +270,19 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
     }
 }
 
+/// The patch is an artifact an operator has to be able to find, and the two
+/// commands that produce it are the two that must name it.
+#[test]
+fn ingest_and_grade_help_document_the_captured_diff() {
+    for command in ["ingest", "grade"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("diff.patch"));
+    }
+}
+
 #[test]
 fn finalize_and_aggregate_help_document_per_assertion_rollups() {
     for command in ["finalize", "aggregate"] {

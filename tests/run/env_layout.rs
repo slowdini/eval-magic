@@ -201,7 +201,7 @@ fn dispatch_tasks_grouped_by_condition() {
 }
 
 #[test]
-fn every_dispatch_has_a_private_env_and_post_guard_diff_baseline() {
+fn every_dispatch_has_a_private_env_and_a_post_guard_baseline_ref() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review" },
@@ -229,20 +229,13 @@ fn every_dispatch_has_a_private_env_and_post_guard_diff_baseline() {
     );
 
     for task in tasks {
-        let run_dir = Path::new(task["run_record_path"].as_str().unwrap())
-            .parent()
-            .unwrap();
-        let manifest = read_json(&run_dir.join("diff-scope-baseline/manifest.json"));
+        let eval_root = Path::new(task["eval_root"].as_str().unwrap());
+        let tracked = git_stdout(eval_root, &["ls-tree", "-r", "--name-only", BASELINE_REF]);
         assert!(
-            manifest["preexisting_files"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|path| path
-                    .as_str()
-                    .unwrap()
-                    .ends_with(".slow-powers-eval-guard.json")),
-            "baseline must be captured after guard installation: {manifest}"
+            tracked
+                .lines()
+                .any(|path| path.ends_with(".slow-powers-eval-guard.json")),
+            "the baseline ref must be written after guard installation: {tracked}"
         );
     }
 }

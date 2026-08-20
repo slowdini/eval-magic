@@ -1,24 +1,31 @@
-//! Baseline capture and deterministic final-environment diff metrics.
+//! Deterministic final-environment diff metrics, measured with Git.
 //!
-//! A baseline snapshots every file in a task's private `eval_root` after
-//! framework setup. Measurement compares the completed task with that snapshot,
-//! excluding only the task's `.eval-magic-outputs` subtree.
+//! Every task environment is a Git repository marked with [`BASELINE_REF`] at
+//! the state the agent started from, so the difference between that ref and the
+//! finished working tree *is* the measurement. Nothing is copied and nothing is
+//! walked: Git already knows what changed, and it knows it while honoring the
+//! codebase's own `.gitignore` and the `.eval-magic-outputs` exclusion the
+//! runner writes.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use similar::{Algorithm, DiffTag, capture_diff_slices};
-use walkdir::{DirEntry, WalkDir};
 
-use crate::core::fs::{copy_entry, write_json};
+use crate::core::fs::write_json;
+use crate::core::{BASELINE_REF, IsolatedGit};
 use crate::pipeline::error::PipelineError;
 
-const BASELINE_DIR: &str = "diff-scope-baseline";
-const BASELINE_MANIFEST: &str = "manifest.json";
-const BASELINE_FILES: &str = "files";
 const RESULT_FILE: &str = "diff-scope.json";
+/// The diff itself, beside the metrics that summarize it. Named in the record
+/// rather than only known by convention, so a reader of `diff-scope.json` can
+/// find it without knowing this constant.
+const PATCH_FILE: &str = "diff.patch";
+/// How much of a run's diff is captured. A safety valve against an agent that
+/// rewrites a whole tree, not a judging budget — a realistic task diff is far
+/// below it, and bounding evidence for a judge is a separate concern.
+const PATCH_BYTE_LIMIT: usize = 1_048_576;
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiffScopeMetrics {
@@ -28,15 +35,56 @@ pub struct DiffScopeMetrics {
     pub hunks: u64,
 }
 
+/// One run's complete diff evidence: the counters, and where the patch is.
+///
+/// Written as `diff-scope.json`. The counters stay flattened at the top level —
+/// they are what `benchmark.json` aggregates and what a `diff_scope` assertion
+/// grades, and a reader that wants only those can still deserialize
+/// [`DiffScopeMetrics`] straight from this artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DiffScopeRecord {
+    #[serde(flatten)]
+    pub metrics: DiffScopeMetrics,
+    /// Every changed file, ordered by path as Git reports them.
+    pub files: Vec<ChangedFile>,
+    pub patch: PatchRecord,
+}
+
+/// One file the task changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ChangedFile {
+    /// Environment-relative path, spelled with forward slashes as Git spells it.
+    pub path: String,
+    pub status: ChangeStatus,
+    pub lines_added: u64,
+    pub lines_removed: u64,
+}
+
+/// What happened to a changed file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ChangeStatus {
+    Added,
+    Modified,
+    Deleted,
+}
+
+/// Where a run's patch is and whether it is the whole diff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PatchRecord {
+    /// Name of the patch file beside this record.
+    pub path: String,
+    pub bytes: u64,
+    /// True when the diff exceeded the cap and the file carries a marker in
+    /// place of the rest. A grader reading a truncated patch is reading part of
+    /// the story, and has to be able to tell.
+    pub truncated: bool,
+}
+
 impl DiffScopeMetrics {
     pub fn lines_changed(self) -> u64 {
         self.lines_added.saturating_add(self.lines_removed)
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct BaselineManifest {
-    preexisting_files: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,72 +114,6 @@ pub struct DiffScopeSummary {
     /// rather than printed so the stage stays silent and the CLI owns every
     /// user-facing line.
     pub warnings: Vec<String>,
-}
-
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct FileDiff {
-    lines_added: u64,
-    lines_removed: u64,
-    hunks: u64,
-}
-
-fn diff_bytes(old: &[u8], new: &[u8]) -> FileDiff {
-    let old_lines: Vec<&[u8]> = old.split_inclusive(|byte| *byte == b'\n').collect();
-    let new_lines: Vec<&[u8]> = new.split_inclusive(|byte| *byte == b'\n').collect();
-    let mut result = FileDiff::default();
-    let mut in_hunk = false;
-
-    for operation in capture_diff_slices(Algorithm::Myers, &old_lines, &new_lines) {
-        let (tag, old_range, new_range) = operation.as_tag_tuple();
-        match tag {
-            DiffTag::Equal => in_hunk = false,
-            DiffTag::Delete => {
-                if !in_hunk {
-                    result.hunks += 1;
-                    in_hunk = true;
-                }
-                result.lines_removed += old_range.len() as u64;
-            }
-            DiffTag::Insert => {
-                if !in_hunk {
-                    result.hunks += 1;
-                    in_hunk = true;
-                }
-                result.lines_added += new_range.len() as u64;
-            }
-            DiffTag::Replace => {
-                if !in_hunk {
-                    result.hunks += 1;
-                    in_hunk = true;
-                }
-                result.lines_removed += old_range.len() as u64;
-                result.lines_added += new_range.len() as u64;
-            }
-        }
-    }
-    result
-}
-
-pub fn capture_iteration_baselines(iteration_dir: &Path) -> Result<(), PipelineError> {
-    let dispatch_path = iteration_dir.join("dispatch.json");
-    let dispatch: DispatchFile = serde_json::from_str(&fs::read_to_string(&dispatch_path)?)?;
-    for task in dispatch.tasks {
-        let eval_root = task.eval_root.ok_or_else(|| {
-            PipelineError::Message(format!(
-                "dispatch task in {} has no eval_root for diff-scope capture",
-                dispatch_path.display()
-            ))
-        })?;
-        let run_dir = Path::new(&task.run_record_path).parent().ok_or_else(|| {
-            PipelineError::Message(format!(
-                "diff-scope task has no run directory in run_record_path: {}",
-                task.run_record_path
-            ))
-        })?;
-        fs::create_dir_all(run_dir)?;
-        capture_task_baseline(Path::new(&eval_root), run_dir)?;
-    }
-    Ok(())
 }
 
 pub fn measure_iteration_diff_scopes(
@@ -197,9 +179,9 @@ pub fn measure_iteration_diff_scopes(
             summary.shared_environment += 1;
             continue;
         }
-        if !run_dir.join(BASELINE_DIR).join(BASELINE_MANIFEST).exists() {
+        if !has_baseline(Path::new(eval_root))? {
             summary.warnings.push(format!(
-                "{}/{}{run_label} has no pre-dispatch baseline — diff-scope unavailable; rebuild the iteration to capture metrics",
+                "{}/{}{run_label} has no {BASELINE_REF} in its environment — diff-scope unavailable; the environment was removed, or the iteration predates the baseline ref and needs rebuilding",
                 task.eval_id, task.condition
             ));
             summary.missing_baseline += 1;
@@ -212,268 +194,251 @@ pub fn measure_iteration_diff_scopes(
             )));
         }
 
-        let metrics = measure_task_diff(Path::new(eval_root), run_dir)?;
-        crate::validation::validate_against_schema::<DiffScopeMetrics>(
+        let record = measure_task_diff(Path::new(eval_root), run_dir)?;
+        crate::validation::validate_against_schema::<DiffScopeRecord>(
             crate::validation::SchemaName::DiffScope,
-            &serde_json::to_value(metrics)?,
+            &serde_json::to_value(&record)?,
             &result_path.to_string_lossy(),
         )?;
-        write_json(&result_path, &metrics)?;
+        write_json(&result_path, &record)?;
         summary.measured += 1;
     }
     Ok(summary)
 }
 
-fn capture_task_baseline(eval_root: &Path, run_dir: &Path) -> Result<(), PipelineError> {
-    let baseline_dir = run_dir.join(BASELINE_DIR);
-    if baseline_dir.exists() {
-        fs::remove_dir_all(&baseline_dir)?;
-    }
-    let file_snapshot = baseline_dir.join(BASELINE_FILES);
-    fs::create_dir_all(&file_snapshot)?;
-
-    let excluded_roots = [
-        eval_root.join(".eval-magic-outputs"),
-        eval_root.join(".git"),
-    ];
-    let mut preexisting_paths = walk_files(eval_root, &excluded_roots)?;
-    preexisting_paths.sort();
-    let preexisting_files = preexisting_paths
-        .iter()
-        .map(|path| relative_key(eval_root, path))
-        .collect::<Result<Vec<_>, _>>()?;
-    write_json(
-        &baseline_dir.join(BASELINE_MANIFEST),
-        &BaselineManifest { preexisting_files },
-    )?;
-
-    for source in preexisting_paths {
-        let relative = source.strip_prefix(eval_root).map_err(|_| {
-            PipelineError::Message(format!(
-                "diff-scope baseline path {} is outside {}",
-                source.display(),
-                eval_root.display()
-            ))
-        })?;
-        copy_entry(&source, &file_snapshot.join(relative))?;
-    }
-    Ok(())
+/// Whether `eval_root` still carries the ref a measurement is taken against.
+///
+/// False for a torn-down environment, a root that is not a repository, and an
+/// iteration built before the baseline ref existed — all reported gaps rather
+/// than failures, so one unmeasurable task does not stop the stage. A host that
+/// cannot give git an isolated configuration is a different thing entirely, and
+/// errors rather than being reported as one more missing baseline.
+fn has_baseline(eval_root: &Path) -> Result<bool, PipelineError> {
+    let git = IsolatedGit::new().map_err(PipelineError::Message)?;
+    Ok(git
+        .run(
+            eval_root,
+            &["rev-parse", "--verify", "--quiet", BASELINE_REF],
+            &[],
+        )
+        .status
+        == Some(0))
 }
 
-fn measure_task_diff(eval_root: &Path, run_dir: &Path) -> Result<DiffScopeMetrics, PipelineError> {
-    let baseline_dir = run_dir.join(BASELINE_DIR);
-    let manifest: BaselineManifest =
-        serde_json::from_str(&fs::read_to_string(baseline_dir.join(BASELINE_MANIFEST))?)?;
-    let file_snapshot = baseline_dir.join(BASELINE_FILES);
-    let mut candidates = BTreeSet::new();
+/// Measure the final environment against the state the agent started from.
+///
+/// The environment is a Git repository whose start state is [`BASELINE_REF`], so
+/// Git supplies the metrics: a scratch index seeded from that ref, brought up to
+/// the working tree, is exactly "everything the agent changed". Creations,
+/// modifications, and deletions all fall out of one `git add`, and untracked
+/// creations are not missed.
+///
+/// The scratch index lives outside the repository so the environment's own index
+/// and `HEAD` are untouched — an eval may legitimately have run `git` itself. The
+/// blobs `git add` writes do land in the environment's object store; measurement
+/// runs post-dispatch against a disposable artifact, and re-running it over the
+/// same working tree yields the same tree, so that is harmless.
+fn measure_task_diff(eval_root: &Path, run_dir: &Path) -> Result<DiffScopeRecord, PipelineError> {
+    let git = IsolatedGit::new().map_err(PipelineError::Message)?;
+    let scratch = tempfile::TempDir::new()?;
+    let index = scratch.path().join("index").to_string_lossy().into_owned();
+    let env = [("GIT_INDEX_FILE", index.as_str())];
 
-    for relative in manifest.preexisting_files {
-        if fs::symlink_metadata(file_snapshot.join(&relative)).is_err() {
-            return Err(PipelineError::Message(format!(
-                "diff-scope baseline is incomplete: missing snapshot for {relative}"
-            )));
-        }
-        candidates.insert(relative);
+    git_checked(&git, eval_root, &["read-tree", BASELINE_REF], &env)?;
+    // Unforced, so the codebase's own `.gitignore` and the `.git/info/exclude`
+    // entry for `.eval-magic-outputs/` both hold — the same rules the baseline
+    // commit was built under. A path the runner force-added despite those rules
+    // is already tracked by `read-tree`, and stays measured.
+    git_checked(&git, eval_root, &["add", "--all", "--", "."], &env)?;
+    let measured = git_checked(&git, eval_root, &["write-tree"], &env)?;
+    let measured = String::from_utf8_lossy(&measured).trim().to_string();
+
+    let numstat = git_checked(
+        &git,
+        eval_root,
+        &diff_args(&["--numstat", "-z"], &measured),
+        &env,
+    )?;
+    let statuses = git_checked(
+        &git,
+        eval_root,
+        &diff_args(&["--name-status", "-z"], &measured),
+        &env,
+    )?;
+    let zero_context = git_checked(
+        &git,
+        eval_root,
+        &diff_args(&["--unified=0"], &measured),
+        &env,
+    )?;
+    let files = changed_files(&numstat, &statuses)?;
+    let metrics = DiffScopeMetrics {
+        files_touched: files.len() as u64,
+        lines_added: files.iter().map(|file| file.lines_added).sum(),
+        lines_removed: files.iter().map(|file| file.lines_removed).sum(),
+        hunks: count_hunks(&zero_context),
+    };
+
+    let patch = git_checked(
+        &git,
+        eval_root,
+        &diff_args(&["--unified=3"], &measured),
+        &env,
+    )?;
+    let (captured, truncated) = truncate_patch(&patch, PATCH_BYTE_LIMIT);
+    fs::write(run_dir.join(PATCH_FILE), &captured)?;
+    Ok(DiffScopeRecord {
+        metrics,
+        files,
+        patch: PatchRecord {
+            path: PATCH_FILE.to_string(),
+            bytes: captured.len() as u64,
+            truncated,
+        },
+    })
+}
+
+/// `patch` capped at `limit`, cut on a line boundary so the last diff line kept
+/// is whole, with a marker in place of the rest.
+///
+/// The marker is unconditional once the cap is crossed: a patch that stops
+/// early and does not say so reads as a complete, smaller diff, and a grader
+/// would draw the wrong conclusion from it. A single line longer than the whole
+/// cap has no boundary to cut on, so it is cut at the cap — an uncapped
+/// artifact is the thing being prevented.
+fn truncate_patch(patch: &[u8], limit: usize) -> (Vec<u8>, bool) {
+    if patch.len() <= limit {
+        return (patch.to_vec(), false);
     }
-    let excluded_roots = [
-        eval_root.join(".eval-magic-outputs"),
-        eval_root.join(".git"),
-    ];
-    for path in walk_files(eval_root, &excluded_roots)? {
-        candidates.insert(relative_key(eval_root, &path)?);
+    let head = &patch[..limit];
+    let end = match head.iter().rposition(|byte| *byte == b'\n') {
+        Some(newline) => newline + 1,
+        None => limit,
+    };
+    let mut captured = patch[..end].to_vec();
+    captured.extend_from_slice(
+        format!(
+            "[eval-magic] patch truncated at {limit} bytes of {}; the remainder is not captured\n",
+            patch.len()
+        )
+        .as_bytes(),
+    );
+    (captured, true)
+}
+
+/// A diff of the baseline against `measured`, with every configurable influence
+/// on the numbers pinned.
+///
+/// `--no-renames` because `diff.renames` defaults on: a detected rename reports
+/// one entry with no line changes, where a rename is two touched files — one
+/// created and one deleted. `--no-ext-diff` and `--no-textconv` keep a sourced
+/// codebase's `.gitattributes` from deciding what a measurement sees.
+fn diff_args<'a>(format: &[&'a str], measured: &'a str) -> Vec<&'a str> {
+    let mut args = vec!["diff", "--no-renames", "--no-ext-diff", "--no-textconv"];
+    args.extend_from_slice(format);
+    args.push(BASELINE_REF);
+    args.push(measured);
+    args
+}
+
+/// Every changed file, from the two views Git offers of one diff.
+///
+/// `--numstat -z` carries the line counts as `added\tremoved\tpath` per record;
+/// `--name-status -z` carries the status as a `status`, `path` pair. Neither
+/// format offers both, and no single `git diff` invocation emits both, so they
+/// are joined by path here.
+fn changed_files(numstat: &[u8], name_status: &[u8]) -> Result<Vec<ChangedFile>, PipelineError> {
+    // Keyed by the same lossy conversion the numstat side uses. A path Git spells
+    // in bytes that are not UTF-8 has to reach both sides identically, or it
+    // joins against nothing and loses its status.
+    let mut statuses: HashMap<String, ChangeStatus> = HashMap::new();
+    let mut fields = name_status
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+        statuses.insert(
+            String::from_utf8_lossy(path).into_owned(),
+            change_status(status),
+        );
     }
 
-    let mut metrics = DiffScopeMetrics::default();
-    for relative in candidates {
-        let before = file_snapshot.join(&relative);
-        let after = eval_root.join(&relative);
-        let old = file_content(&before)?;
-        let new = file_content(&after)?;
-        if old == new {
+    let mut files = Vec::new();
+    for record in numstat.split(|byte| *byte == 0) {
+        if record.is_empty() {
             continue;
         }
-        metrics.files_touched += 1;
-        let diff = match (old, new) {
-            (FileContent::Regular(old), FileContent::Regular(new)) => Some(diff_bytes(&old, &new)),
-            (FileContent::Missing, FileContent::Regular(new)) => Some(diff_bytes(&[], &new)),
-            (FileContent::Regular(old), FileContent::Missing) => Some(diff_bytes(&old, &[])),
-            _ => None,
+        let text = String::from_utf8_lossy(record);
+        let mut columns = text.splitn(3, '\t');
+        let (Some(added), Some(removed), Some(path)) =
+            (columns.next(), columns.next(), columns.next())
+        else {
+            return Err(PipelineError::Message(format!(
+                "could not read a diff-scope numstat record: {text:?}"
+            )));
         };
-        if let Some(diff) = diff {
-            metrics.lines_added += diff.lines_added;
-            metrics.lines_removed += diff.lines_removed;
-            metrics.hunks += diff.hunks;
-        }
+        files.push(ChangedFile {
+            path: path.to_string(),
+            status: statuses
+                .get(path)
+                .copied()
+                .unwrap_or(ChangeStatus::Modified),
+            lines_added: parse_count(added, &text)?,
+            lines_removed: parse_count(removed, &text)?,
+        });
     }
-    Ok(metrics)
+    Ok(files)
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum FileContent {
-    Missing,
-    Regular(Vec<u8>),
-    Symlink(PathBuf),
-}
-
-fn file_content(path: &Path) -> Result<FileContent, PipelineError> {
-    let metadata = match fs::symlink_metadata(path) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            return Ok(FileContent::Missing);
-        }
-        Err(error) => return Err(error.into()),
-    };
-    if metadata.file_type().is_symlink() {
-        return Ok(FileContent::Symlink(fs::read_link(path)?));
+/// Git's status letter for a path. Renames and copies are off, and a tree diff
+/// has no unmerged entries, so what remains beyond added and deleted is a change
+/// to a path that existed before — a content edit, a mode change, or a swap
+/// between a file and a symlink.
+fn change_status(letter: &[u8]) -> ChangeStatus {
+    match letter.first() {
+        Some(b'A') => ChangeStatus::Added,
+        Some(b'D') => ChangeStatus::Deleted,
+        _ => ChangeStatus::Modified,
     }
-    if metadata.is_file() {
-        return Ok(FileContent::Regular(fs::read(path)?));
+}
+
+fn parse_count(field: &str, record: &str) -> Result<u64, PipelineError> {
+    if field == "-" {
+        return Ok(0);
     }
-    Ok(FileContent::Missing)
-}
-
-fn walk_files(root: &Path, excluded_roots: &[PathBuf]) -> Result<Vec<PathBuf>, PipelineError> {
-    if !root.exists() {
-        return Ok(Vec::new());
-    }
-    WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|entry| !is_excluded(entry, excluded_roots))
-        .filter_map(|entry| match entry {
-            Ok(entry) if entry.file_type().is_file() || entry.file_type().is_symlink() => {
-                Some(Ok(entry.into_path()))
-            }
-            Ok(_) => None,
-            Err(error) => Some(Err(PipelineError::Message(format!(
-                "could not walk diff-scope path under {}: {error}",
-                root.display()
-            )))),
-        })
-        .collect()
-}
-
-fn is_excluded(entry: &DirEntry, excluded_roots: &[PathBuf]) -> bool {
-    excluded_roots
-        .iter()
-        .any(|excluded| entry.path().starts_with(excluded))
-}
-
-fn relative_key(root: &Path, path: &Path) -> Result<String, PipelineError> {
-    let relative = path.strip_prefix(root).map_err(|_| {
+    field.parse().map_err(|_| {
         PipelineError::Message(format!(
-            "diff-scope path {} is outside {}",
-            path.display(),
-            root.display()
+            "could not read a diff-scope line count from {record:?}"
         ))
-    })?;
-    Ok(relative
-        .components()
-        .map(|component| component.as_os_str().to_string_lossy())
-        .collect::<Vec<_>>()
-        .join("/"))
+    })
+}
+
+/// Contiguous non-equal groups, with zero context: at `--unified=0` every `@@`
+/// header is one such group. No content line can be mistaken for one — a diff
+/// prefixes those with `+`, `-`, or a space.
+fn count_hunks(patch: &[u8]) -> u64 {
+    patch
+        .split(|byte| *byte == b'\n')
+        .filter(|line| line.starts_with(b"@@"))
+        .count() as u64
+}
+
+fn git_checked(
+    git: &IsolatedGit,
+    cwd: &Path,
+    args: &[&str],
+    env: &[(&str, &str)],
+) -> Result<Vec<u8>, PipelineError> {
+    let output = git.run(cwd, args, env);
+    if output.status == Some(0) {
+        return Ok(output.stdout);
+    }
+    Err(PipelineError::Message(format!(
+        "git {} failed in {}: {}",
+        args.join(" "),
+        cwd.display(),
+        String::from_utf8_lossy(&output.stderr).trim()
+    )))
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::fs;
-
-    #[test]
-    fn byte_line_diff_counts_changes_and_zero_context_hunks() {
-        let diff = diff_bytes(b"old\nsame\nbefore\n", b"new\nsame\nafter\n");
-        assert_eq!(diff.lines_added, 2);
-        assert_eq!(diff.lines_removed, 2);
-        assert_eq!(diff.hunks, 2);
-    }
-
-    #[test]
-    fn byte_line_diff_handles_empty_trailing_newline_and_non_utf8_inputs() {
-        assert_eq!(diff_bytes(b"", b""), FileDiff::default());
-
-        let trailing = diff_bytes(b"value", b"value\n");
-        assert_eq!(trailing.lines_added, 1);
-        assert_eq!(trailing.lines_removed, 1);
-        assert_eq!(trailing.hunks, 1);
-
-        let binary = diff_bytes(&[0xff, b'\n'], &[0xfe, b'\n']);
-        assert_eq!(binary.lines_added, 1);
-        assert_eq!(binary.lines_removed, 1);
-        assert_eq!(binary.hunks, 1);
-    }
-
-    #[test]
-    fn lines_changed_saturates_untrusted_artifact_totals() {
-        let metrics = DiffScopeMetrics {
-            lines_added: u64::MAX,
-            lines_removed: 1,
-            ..DiffScopeMetrics::default()
-        };
-        assert_eq!(metrics.lines_changed(), u64::MAX);
-    }
-
-    #[test]
-    fn baseline_measurement_counts_all_task_changes_except_framework_outputs() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let eval_root = temp.path().join("env");
-        let run_dir = temp.path().join("run");
-        let outputs_dir = eval_root.join(".eval-magic-outputs/eval-e1/with_skill");
-        fs::create_dir_all(eval_root.join("src")).unwrap();
-        fs::create_dir_all(&outputs_dir).unwrap();
-        fs::write(eval_root.join("src/changed.txt"), "old\nsame\n").unwrap();
-        fs::write(eval_root.join("src/deleted.txt"), "gone\n").unwrap();
-        fs::write(eval_root.join("framework.txt"), "before\n").unwrap();
-
-        capture_task_baseline(&eval_root, &run_dir).unwrap();
-
-        fs::write(eval_root.join("src/changed.txt"), "new\nsame\n").unwrap();
-        fs::remove_file(eval_root.join("src/deleted.txt")).unwrap();
-        fs::write(eval_root.join("framework.txt"), "after\n").unwrap();
-        fs::write(eval_root.join("notes.txt"), "one\ntwo\n").unwrap();
-        fs::write(outputs_dir.join("final-message.md"), "ignored\n").unwrap();
-        fs::write(
-            eval_root.join(".eval-magic-outputs/agent-created.txt"),
-            "also ignored\n",
-        )
-        .unwrap();
-
-        let metrics = measure_task_diff(&eval_root, &run_dir).unwrap();
-        assert_eq!(
-            metrics,
-            DiffScopeMetrics {
-                files_touched: 4,
-                lines_added: 4,
-                lines_removed: 3,
-                hunks: 4,
-            }
-        );
-    }
-
-    #[test]
-    fn baseline_ignores_only_runner_owned_root_git_metadata() {
-        let temp = tempfile::TempDir::new().unwrap();
-        let eval_root = temp.path().join("env");
-        let run_dir = temp.path().join("run");
-        fs::create_dir_all(eval_root.join(".git")).unwrap();
-        fs::create_dir_all(eval_root.join("vendor/.git")).unwrap();
-        fs::write(eval_root.join(".git/config"), "root-before\n").unwrap();
-        fs::write(eval_root.join("vendor/.git/config"), "nested-before\n").unwrap();
-        fs::write(eval_root.join("source.txt"), "before\n").unwrap();
-
-        capture_task_baseline(&eval_root, &run_dir).unwrap();
-
-        fs::write(eval_root.join(".git/config"), "root-after\n").unwrap();
-        fs::write(eval_root.join("vendor/.git/config"), "nested-after\n").unwrap();
-        fs::write(eval_root.join("source.txt"), "after\n").unwrap();
-
-        assert_eq!(
-            measure_task_diff(&eval_root, &run_dir).unwrap(),
-            DiffScopeMetrics {
-                files_touched: 2,
-                lines_added: 2,
-                lines_removed: 2,
-                hunks: 2,
-            }
-        );
-    }
-}
+mod tests;

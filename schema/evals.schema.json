@@ -278,12 +278,12 @@
         "max_files_touched": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment. Framework files under the task root's .eval-magic-outputs and runner-owned .git are excluded; nested .git metadata remains measurable."
+          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment, as Git reports them against the refs/eval-magic/baseline ref. The codebase's own .gitignore applies, so ignored build output does not count; framework files under .eval-magic-outputs and anything under a .git directory never count; a rename counts as two files."
         },
         "max_lines_changed": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum total byte-lines added plus byte-lines removed allowed. Diffing uses Myers operations with zero-context hunks."
+          "description": "Maximum total lines added plus lines removed allowed, as git diff --numstat counts them. A binary file contributes no lines. Hunks are counted at zero context."
         }
       }
     }

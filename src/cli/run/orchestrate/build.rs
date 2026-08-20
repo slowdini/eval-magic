@@ -416,10 +416,12 @@ pub(super) fn post_build(
     // exist, but before project-local skill discovery inspects ancestor state.
     // Recreating `.git` also resets explicit iteration rebuilds to one clean,
     // runner-owned baseline with no inherited history or remotes.
+    //
+    // This is also where the diff baseline is captured: the `eval-magic/baseline`
+    // ref written here marks the state every later measurement is the difference
+    // from. Nothing below writes into an environment, so the ref stays exact.
     super::git::initialize_task_repositories(ctx, r)?;
 
     super::shadow_preflight::run(ctx, opts, r, staged, &targets)?;
-    crate::pipeline::capture_iteration_baselines(&r.iteration_dir)
-        .map_err(|error| RunError::msg(error.to_string()))?;
     Ok(())
 }

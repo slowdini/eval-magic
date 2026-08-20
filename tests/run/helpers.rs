@@ -102,8 +102,49 @@ pub fn resolved(path: &Path) -> PathBuf {
     }
 }
 
+/// The ref a task environment carries at the state the agent started from.
+/// Mirrors `eval_magic::core::BASELINE_REF` for the integration tests, which
+/// observe the environment through git rather than through the library.
+pub const BASELINE_REF: &str = "refs/eval-magic/baseline";
+
+/// Ask git about a task environment, as an operator inspecting one would.
+/// Panics with git's own diagnostic, so a broken environment names itself.
+pub fn git_stdout(root: &Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .args(args)
+        .current_dir(root)
+        .output()
+        .unwrap_or_else(|error| panic!("git {} could not start: {error}", args.join(" ")));
+    assert!(
+        output.status.success(),
+        "git {} failed in {}: {}",
+        args.join(" "),
+        root.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
 pub fn read_json(path: &Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// Every path under `root`, directories included. For asserting that
+/// something is absent from an artifact tree, where a targeted `exists()` check
+/// would only cover the one place it was expected.
+pub fn walk_paths(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let Ok(entries) = fs::read_dir(root) else {
+        return found;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            found.extend(walk_paths(&path));
+        }
+        found.push(path);
+    }
+    found
 }
 
 pub fn read_str(path: &Path) -> String {

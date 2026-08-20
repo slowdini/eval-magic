@@ -37,8 +37,9 @@ A harness qualifies at baseline with no harness-specific code beyond naming itse
 
 That baseline already yields a working eval: `llm_judge` assertions grade soft behavior,
 runner-owned `command_check` assertions can inject held-out files and execute deterministically,
-runner-owned final-environment metrics land in `diff-scope.json`, `diff_scope` assertions gate
-files/lines deterministically, and the `detect-stray-writes` post-pass (folded into `ingest`) audits
+runner-owned final-environment metrics land in `diff-scope.json` with the diff itself in
+`diff.patch`, `diff_scope` assertions gate files/lines deterministically, and the
+`detect-stray-writes` post-pass (folded into `ingest`) audits
 writes that leave the private task environment. Run records without transcript ingest are assembled
 from `outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
 
@@ -91,19 +92,34 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
 ## Runner-owned environment checks are baseline
 
 Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging, and
-guard installation, `run` recreates a runner-owned Git repository at that root, commits the task
-state on branch `work`, runs shadow preflight at the resulting repository boundary, and snapshots
-the task environment. Git is therefore a runtime prerequisite; each task starts clean and has no
-remotes. During `ingest`, before any held-out setup is injected, the runner compares that baseline
-with the final environment and writes raw `files_touched`, `lines_added`, `lines_removed`, and
-zero-context Myers `hunks` to `diff-scope.json`. Framework artifacts under the task root's
-`.eval-magic-outputs/` and runner-owned `.git/` are excluded; nested repository metadata and all
-other new files count. `benchmark.json` preserves these metrics per run even without a `diff_scope`
-assertion. An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or
-both.
+guard installation, `run` establishes a runner-owned Git repository at that root, commits the task
+state, marks it with `refs/eval-magic/baseline`, and runs shadow preflight at the resulting
+repository boundary. Git is therefore a runtime prerequisite; each task starts clean and has no
+remotes. Nothing writes into an environment after the ref is written, so it names exactly what the
+agent started from.
+
+During `ingest`, before any held-out setup is injected, Git measures the final environment against
+that ref. The runner seeds a scratch index from the baseline, brings it up to the working tree with
+one `git add`, and diffs the two trees — so creations, modifications, and deletions all fall out of
+one pass, and an untracked creation is not missed. Raw `files_touched`, `lines_added`,
+`lines_removed`, and zero-context `hunks` go to `diff-scope.json`, alongside the changed-file list;
+the diff itself goes to `diff.patch` beside it, capped and marked when a diff exceeds the cap.
+`benchmark.json` preserves the metrics per run even without a `diff_scope` assertion. An assertion
+may gate `max_files_touched`, `max_lines_changed` (added plus removed), or both.
+
+**What counts is what Git counts.** The measurement runs under the same rules the baseline commit
+was built under: the codebase's own `.gitignore` holds, so a run that compiles does not report its
+build output as thousands of touched files, and the `.git/info/exclude` entry keeps framework
+artifacts under `.eval-magic-outputs/` out. Paths the runner force-added despite those rules — the
+harness config directories and the declared fixture overlay — are tracked in the baseline and stay
+measured. Git indexes no path with a `.git` component, so a nested repository's internals are
+invisible, not just the runner-owned root `.git`. Renames are switched off deliberately: a rename is
+two touched files, one created and one deleted, which is what the metric has always meant. A binary
+file counts as one touched file with no countable lines.
 
 This is deliberately a secondary signal: a smaller diff can be focused, but it can also be
-incomplete. Pair a scope gate with a correctness assertion.
+incomplete. Pair a scope gate with a correctness assertion. The patch is the evidence that closes
+that gap — it is what a judge reads to answer whether the work was any good.
 
 `command_check` is intentionally not a harness enhancement. `run` detects the assertion before
 dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
