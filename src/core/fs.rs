@@ -183,6 +183,31 @@ pub fn copy_entry_materialized(source: &Path, destination: &Path) -> io::Result<
     Ok(())
 }
 
+/// Whether a file created under `from` can be hard-linked into `to` — the
+/// capability `git clone --local` relies on to share an object store instead
+/// of copying it.
+///
+/// Probed rather than assumed: two directories a run owns can sit on different
+/// filesystems (a workspace on a mounted volume, a cache on tmpfs), and
+/// `link(2)` is what says so. Any failure reads as unavailable, so the caller
+/// falls back to copying rather than provisioning wrong.
+pub fn hardlinks_available(from: &Path, to: &Path) -> bool {
+    let Ok(probe) = tempfile::NamedTempFile::new_in(from) else {
+        return false;
+    };
+    let Some(name) = probe.path().file_name() else {
+        return false;
+    };
+    let target = to.join(name);
+    match fs::hard_link(probe.path(), &target) {
+        Ok(()) => {
+            let _ = fs::remove_file(&target);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
 /// Create a symlink at `link` pointing at `target`.
 ///
 /// `to_directory` is consulted only on Windows, which has separate file and
@@ -604,5 +629,43 @@ mod tests {
         let err = copy_entry(&tmp.path().join("absent"), &tmp.path().join("dst")).unwrap_err();
 
         assert_eq!(err.kind(), io::ErrorKind::NotFound);
+    }
+
+    /// The probe both succeeds and cleans up after itself: it runs inside the
+    /// per-iteration codebase cache, where a leftover file would ship into the
+    /// next environment built from it.
+    #[test]
+    fn hardlinks_available_is_true_between_directories_on_one_filesystem() {
+        let tmp = TempDir::new().unwrap();
+        let from = tmp.path().join("from");
+        let to = tmp.path().join("to");
+        fs::create_dir_all(&from).unwrap();
+        fs::create_dir_all(&to).unwrap();
+
+        assert!(hardlinks_available(&from, &to));
+
+        assert_eq!(
+            fs::read_dir(&from).unwrap().count(),
+            0,
+            "no probe residue in from"
+        );
+        assert_eq!(
+            fs::read_dir(&to).unwrap().count(),
+            0,
+            "no probe residue in to"
+        );
+    }
+
+    /// Any failure — a missing directory on either side, a filesystem that
+    /// refuses the link — reads as "unavailable", so callers fall back to
+    /// copying rather than provisioning wrong.
+    #[test]
+    fn hardlinks_available_is_false_when_a_directory_is_missing() {
+        let tmp = TempDir::new().unwrap();
+        let present = tmp.path().join("present");
+        fs::create_dir_all(&present).unwrap();
+
+        assert!(!hardlinks_available(&tmp.path().join("absent"), &present));
+        assert!(!hardlinks_available(&present, &tmp.path().join("absent")));
     }
 }
