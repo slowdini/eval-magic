@@ -34,8 +34,57 @@ fn direct_iteration_dir(cwd: &Path) -> PathBuf {
         .join("iteration-1")
 }
 
+/// The relocation's acceptance criterion, end to end: a run started from inside
+/// a skills repository leaves nothing behind in it. `XDG_DATA_HOME` stands in
+/// for the operator's data directory so the derived default — slug and all — is
+/// the thing under test rather than something the harness pinned.
 #[test]
-fn stages_only_sut_and_writes_workspace_under_cwd() {
+fn a_run_from_inside_a_skills_repo_writes_no_workspace_into_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_skills, skill_sub, _cwd) = setup_direct_skill(tmp.path());
+    let data_home = tmp.path().join("xdg-data");
+
+    skill_eval()
+        .env_remove("EVAL_MAGIC_WORKSPACE_DIR")
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&skill_sub)
+        .args(["run", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    assert!(
+        !skill_sub.join(".eval-magic").exists(),
+        "the skill directory holds a workspace"
+    );
+    assert!(
+        !tmp.path().join("skills").join(".eval-magic").exists(),
+        "the skills repository holds a workspace"
+    );
+
+    let roots: Vec<PathBuf> = fs::read_dir(data_home.join("eval-magic"))
+        .expect("the derived eval home was created")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        roots.len(),
+        1,
+        "expected one per-source root, got {roots:?}"
+    );
+    assert!(
+        roots[0].join("mr-review").join("iteration-1").exists(),
+        "iteration missing under {}",
+        roots[0].display()
+    );
+
+    let slug = roots[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        slug.starts_with("skills-") && slug.len() > "skills-".len(),
+        "root should be namespaced by the skill directory, was {slug}"
+    );
+}
+
+#[test]
+fn stages_only_sut_and_writes_workspace_under_the_configured_home() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()

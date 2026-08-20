@@ -11,6 +11,11 @@ pub fn skill_eval() -> Command {
     // Disable user-global descriptor discovery so a developer's
     // ~/.config/eval-magic/harnesses never leaks into the tests.
     cmd.env("EVAL_MAGIC_CONFIG_DIR", "");
+    // Pin the eval home to the cwd the test runs in. The real default is a
+    // per-skill directory under the user's data dir; a test must never write
+    // there, and a relative value resolves against the cwd exactly as
+    // `--workspace-dir` does. Tests that assert the real default clear this.
+    cmd.env("EVAL_MAGIC_WORKSPACE_DIR", ".eval-magic");
     cmd
 }
 

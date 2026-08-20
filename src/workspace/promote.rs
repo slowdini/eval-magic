@@ -31,8 +31,6 @@ pub struct PromoteOptions<'a> {
     /// agent/judge itself, so it cannot observe these — record what was used.
     pub agent_model: Option<&'a str>,
     pub judge_model: Option<&'a str>,
-    /// Directory used to resolve the committing repo's git HEAD for provenance.
-    pub git_cwd: &'a Path,
 }
 
 /// What [`promote_baseline`] wrote.
@@ -91,7 +89,13 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
         None
     };
 
-    let baseline_dir = opts.skill_subdir.join("evals").join("baseline");
+    // The baseline belongs to the skill this iteration measured, which the run
+    // recorded. Deriving it from the operator's current selection instead would
+    // write one skill's baseline into another whenever the two disagree — and the
+    // operator can promote from anywhere, long after the run.
+    let skill_subdir = recorded_skill_subdir(conditions.as_ref())?
+        .unwrap_or_else(|| opts.skill_subdir.to_path_buf());
+    let baseline_dir = skill_subdir.join("evals").join("baseline");
     let grading_dir = baseline_dir.join("grading");
     fs::create_dir_all(&grading_dir)?;
 
@@ -99,7 +103,7 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
 
     let (gradings_copied, missing_gradings) = copy_gradings(&iteration_dir, &grading_dir)?;
 
-    let head = git_head(opts.git_cwd);
+    let head = git_head(&skill_subdir);
     fs::write(
         baseline_dir.join("BASELINE.md"),
         provenance(opts, conditions.as_ref(), &head),
@@ -228,6 +232,63 @@ fn label(value: &impl Serialize) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
+/// The skill directory the run recorded, when it recorded one.
+///
+/// A pointer to a directory that has since moved is a hard failure rather than a
+/// fall back to the caller's selection: quietly writing one skill's baseline into
+/// another is the outcome worth refusing.
+fn recorded_skill_subdir(
+    conditions: Option<&ConditionsRecord>,
+) -> Result<Option<PathBuf>, WorkspaceError> {
+    let Some(recorded) = conditions
+        .and_then(|c| c.skill_source.as_ref())
+        .and_then(|skill| skill.source.resolved_path.as_deref())
+    else {
+        return Ok(None);
+    };
+    let path = PathBuf::from(recorded);
+    if !path.is_dir() {
+        return Err(WorkspaceError::Message(format!(
+            "the skill this iteration measured is no longer at {recorded}. Restore it, or promote \
+             from a workspace whose run recorded the skill you mean."
+        )));
+    }
+    Ok(Some(path))
+}
+
+/// The provenance-table row naming the skill under test, or an empty string for
+/// an iteration recorded before skills were sourced.
+///
+/// The gap this closes: a report could pin the codebase commit while the skill
+/// side was "whatever was on disk at the time". Where uncommitted work was in
+/// what ran, the revision alone does not identify it, and the row says so.
+fn skill_source_row(conditions: Option<&ConditionsRecord>) -> String {
+    let Some(skill) = conditions.and_then(|c| c.skill_source.as_ref()) else {
+        return String::new();
+    };
+    let source = &skill.source;
+    let mut cell = source
+        .resolved_path
+        .clone()
+        .unwrap_or_else(|| source.source.clone());
+    if let Some(revision) = &source.revision {
+        let short: String = revision.chars().take(7).collect();
+        cell.push_str(&format!(" ({short})"));
+    }
+    if source.dirty {
+        cell.push_str(
+            " — uncommitted changes were in what ran, so the revision alone does not identify it",
+        );
+    }
+    if let Some(origin) = &source.origin_url {
+        cell.push_str(&format!("; origin {origin}"));
+    }
+    if !skill.siblings.is_empty() {
+        cell.push_str(&format!("; staged alongside {}", skill.siblings.join(", ")));
+    }
+    format!("| Skill source | {cell} |")
+}
+
 /// Provenance-table rows naming each codebase the iteration ran against, or an
 /// empty string when it ran against none.
 ///
@@ -307,6 +368,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         .unwrap_or("(none)");
 
     let codebase_rows = codebase_rows(conditions);
+    let skill_source_row = skill_source_row(conditions);
 
     let lines = [
         format!("# Baseline — {}", opts.skill_name),
@@ -330,6 +392,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Conditions | {conditions_cell} |"),
         format!("| Run timestamp | {timestamp} |"),
         format!("| Label | {run_label} |"),
+        skill_source_row,
         codebase_rows,
         format!("| Promoted from commit | {head} |"),
         String::new(),
@@ -346,395 +409,4 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::Value;
-    use tempfile::TempDir;
-
-    /// Write `body` to `path`, creating parent dirs.
-    fn write(path: &Path, body: &str) {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, body).unwrap();
-    }
-
-    struct Fixture {
-        _tmp: TempDir,
-        skill_subdir: PathBuf,
-        workspace_root: PathBuf,
-        iteration_dir: PathBuf,
-    }
-
-    /// Build a skill dir (with SKILL.md) and a workspace iteration dir.
-    fn fixture(iteration: u32) -> Fixture {
-        let tmp = TempDir::new().unwrap();
-        let skill_subdir = tmp.path().join("skill-dir").join("mr-review");
-        write(
-            &skill_subdir.join("SKILL.md"),
-            "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
-        );
-        let workspace_root = tmp.path().join("work").join(".eval-magic");
-        let iteration_dir = workspace_root
-            .join("mr-review")
-            .join(format!("iteration-{iteration}"));
-        fs::create_dir_all(&iteration_dir).unwrap();
-        Fixture {
-            _tmp: tmp,
-            skill_subdir,
-            workspace_root,
-            iteration_dir,
-        }
-    }
-
-    fn opts<'a>(f: &'a Fixture, iteration: u32) -> PromoteOptions<'a> {
-        PromoteOptions {
-            workspace_root: &f.workspace_root,
-            skill_name: "mr-review",
-            skill_subdir: &f.skill_subdir,
-            iteration,
-            harness: Harness::resolve("claude-code").unwrap(),
-            label: None,
-            agent_model: None,
-            judge_model: None,
-            git_cwd: &f.skill_subdir,
-        }
-    }
-
-    const CONDITIONS: &str = r#"{
-      "mode": "new-skill",
-      "conditions": [
-        { "name": "with_skill", "skill_path": "/x/SKILL.md" },
-        { "name": "without_skill", "skill_path": null }
-      ],
-      "timestamp": "2026-05-27T00:00:00.000Z",
-      "harness": "claude-code"
-    }"#;
-
-    #[test]
-    fn copies_benchmark_and_per_run_gradings_into_baseline() {
-        let f = fixture(2);
-        write(&f.iteration_dir.join("conditions.json"), CONDITIONS);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0.5}}"#,
-        );
-        write(
-            &f.iteration_dir.join("eval-e1/with_skill/grading.json"),
-            r#"{"summary":{"pass_rate":1}}"#,
-        );
-        write(
-            &f.iteration_dir.join("eval-e1/without_skill/grading.json"),
-            r#"{"summary":{"pass_rate":0}}"#,
-        );
-
-        let res = promote_baseline(&opts(&f, 2)).unwrap();
-        let baseline = &res.baseline_dir;
-
-        assert_eq!(res.gradings_copied, 2);
-        let benchmark = fs::read_to_string(baseline.join("benchmark.json")).unwrap();
-        assert!(benchmark.contains("\"pass_rate\":0.5"));
-        let with = fs::read_to_string(baseline.join("grading/e1__with_skill.json")).unwrap();
-        assert!(with.contains("\"pass_rate\":1"));
-        assert!(baseline.join("grading/e1__without_skill.json").exists());
-
-        let provenance = fs::read_to_string(baseline.join("BASELINE.md")).unwrap();
-        assert!(provenance.contains("new-skill"));
-        assert!(provenance.contains("iteration-2"));
-        assert!(provenance.contains("claude-code"));
-        assert!(provenance.contains("2026-05-27T00:00:00.000Z"));
-        assert!(provenance.contains("Agent model | unspecified"));
-        assert!(provenance.contains("Judge model | unspecified"));
-        assert!(provenance.contains("per-assertion pass counts"));
-    }
-
-    #[test]
-    fn captures_per_run_gradings_for_multi_run_cells() {
-        let f = fixture(4);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0.5}}"#,
-        );
-        // eval-e1: runs=3 → gradings nested under run-<k>/.
-        for cond in ["with_skill", "without_skill"] {
-            for k in 1..=3 {
-                write(
-                    &f.iteration_dir
-                        .join(format!("eval-e1/{cond}/run-{k}/grading.json")),
-                    r#"{"summary":{"pass_rate":1}}"#,
-                );
-            }
-        }
-        // eval-e2: runs=1 → flat legacy layout.
-        write(
-            &f.iteration_dir.join("eval-e2/with_skill/grading.json"),
-            r#"{"summary":{"pass_rate":0}}"#,
-        );
-
-        let res = promote_baseline(&opts(&f, 4)).unwrap();
-        let baseline = &res.baseline_dir;
-
-        assert_eq!(res.gradings_copied, 7);
-        // Nested cells carry an __r<k> suffix per run.
-        for k in 1..=3 {
-            assert!(
-                baseline
-                    .join(format!("grading/e1__with_skill__r{k}.json"))
-                    .exists()
-            );
-            assert!(
-                baseline
-                    .join(format!("grading/e1__without_skill__r{k}.json"))
-                    .exists()
-            );
-        }
-        // The flat runs=1 cell keeps the unsuffixed name.
-        assert!(baseline.join("grading/e2__with_skill.json").exists());
-        assert_eq!(res.missing_gradings, 0);
-    }
-
-    #[test]
-    fn reports_missing_gradings_for_incomplete_run_cells() {
-        let f = fixture(5);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-        // run-1 graded; run-2 dispatched but never graded (incomplete iteration).
-        write(
-            &f.iteration_dir
-                .join("eval-e1/with_skill/run-1/grading.json"),
-            r#"{"summary":{"pass_rate":1}}"#,
-        );
-        fs::create_dir_all(f.iteration_dir.join("eval-e1/with_skill/run-2")).unwrap();
-
-        let res = promote_baseline(&opts(&f, 5)).unwrap();
-
-        assert_eq!(res.gradings_copied, 1);
-        assert_eq!(res.missing_gradings, 1);
-    }
-
-    #[test]
-    fn drops_promoted_marker_into_iteration_dir() {
-        let f = fixture(3);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        promote_baseline(&opts(&f, 3)).unwrap();
-
-        let marker_path = f.iteration_dir.join(PROMOTED_MARKER);
-        assert!(marker_path.exists());
-        let marker: serde_json::Value =
-            serde_json::from_str(&fs::read_to_string(&marker_path).unwrap()).unwrap();
-        assert!(
-            marker["promoted_at"]
-                .as_str()
-                .is_some_and(|s| !s.is_empty())
-        );
-        assert_eq!(
-            marker["baseline_dir"].as_str().unwrap(),
-            f.skill_subdir
-                .join("evals")
-                .join("baseline")
-                .to_string_lossy()
-        );
-    }
-
-    #[test]
-    fn records_agent_and_judge_models_when_provided() {
-        let f = fixture(1);
-        write(&f.iteration_dir.join("conditions.json"), CONDITIONS);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        let mut o = opts(&f, 1);
-        o.agent_model = Some("claude-haiku-4-5-20251001");
-        o.judge_model = Some("claude-opus-4-7");
-        promote_baseline(&o).unwrap();
-
-        let provenance =
-            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
-        assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
-        assert!(provenance.contains("Judge model | claude-opus-4-7"));
-    }
-
-    const CONDITIONS_WITH_PROVENANCE: &str = r#"{
-      "mode": "new-skill",
-      "conditions": [
-        { "name": "with_skill", "skill_path": "/x/SKILL.md" },
-        { "name": "without_skill", "skill_path": null }
-      ],
-      "timestamp": "2026-05-27T00:00:00.000Z",
-      "harness": "claude-code",
-      "agent_model": "claude-haiku-4-5-20251001",
-      "judge_model": "claude-opus-4-8",
-      "label": "canonical-run"
-    }"#;
-
-    #[test]
-    fn provenance_falls_back_to_manifest_models_and_label() {
-        let f = fixture(1);
-        write(
-            &f.iteration_dir.join("conditions.json"),
-            CONDITIONS_WITH_PROVENANCE,
-        );
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        promote_baseline(&opts(&f, 1)).unwrap();
-
-        let provenance =
-            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
-        assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
-        assert!(provenance.contains("Judge model | claude-opus-4-8"));
-        assert!(provenance.contains("Label | canonical-run"));
-    }
-
-    /// A published baseline is read by people deciding whether to believe it.
-    /// Naming the commit is what lets them check.
-    #[test]
-    fn provenance_names_the_codebase_and_the_commit_it_resolved_to() {
-        let f = fixture(1);
-        let conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
-        let mut conditions = conditions;
-        conditions["codebases"] = serde_json::json!([{
-            "kind": "git",
-            "source": "https://example.com/project.git",
-            "ref": "v1.4.0",
-            "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
-            "branch": "v1.4.0",
-            "evals": ["e1"]
-        }]);
-        write(
-            &f.iteration_dir.join("conditions.json"),
-            &serde_json::to_string(&conditions).unwrap(),
-        );
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        promote_baseline(&opts(&f, 1)).unwrap();
-
-        let provenance =
-            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
-        assert!(provenance.contains("Codebase"), "{provenance}");
-        assert!(
-            provenance.contains("https://example.com/project.git"),
-            "{provenance}"
-        );
-        assert!(provenance.contains("v1.4.0"), "{provenance}");
-        assert!(provenance.contains("a1b2c3d"), "{provenance}");
-    }
-
-    /// A host-local path is not reproducible by the reader, so the row says so
-    /// rather than presenting it like a resolvable reference.
-    #[test]
-    fn provenance_marks_a_host_local_codebase_as_unreproducible() {
-        let f = fixture(1);
-        let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
-        conditions["codebases"] = serde_json::json!([{
-            "kind": "path",
-            "source": "../fixtures/legacy-service",
-            "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
-            "origin_url": "https://example.com/legacy.git",
-            "branch": "main",
-            "host_local": true,
-            "evals": ["e1"]
-        }]);
-        write(
-            &f.iteration_dir.join("conditions.json"),
-            &serde_json::to_string(&conditions).unwrap(),
-        );
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        promote_baseline(&opts(&f, 1)).unwrap();
-
-        let provenance =
-            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
-        assert!(provenance.contains("host-local"), "{provenance}");
-        // The origin is what a reader elsewhere can actually resolve.
-        assert!(
-            provenance.contains("https://example.com/legacy.git"),
-            "{provenance}"
-        );
-    }
-
-    #[test]
-    fn promote_flags_override_manifest_values() {
-        let f = fixture(1);
-        write(
-            &f.iteration_dir.join("conditions.json"),
-            CONDITIONS_WITH_PROVENANCE,
-        );
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        let mut o = opts(&f, 1);
-        o.agent_model = Some("claude-fable-5");
-        o.label = Some("override-label");
-        promote_baseline(&o).unwrap();
-
-        let provenance =
-            fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
-        assert!(provenance.contains("Agent model | claude-fable-5"));
-        // Judge model not overridden — manifest value still wins over "unspecified".
-        assert!(provenance.contains("Judge model | claude-opus-4-8"));
-        assert!(provenance.contains("Label | override-label"));
-    }
-
-    #[test]
-    fn writes_notes_stub_when_absent() {
-        let f = fixture(2);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-
-        let res = promote_baseline(&opts(&f, 2)).unwrap();
-
-        assert_eq!(res.notes, NotesStatus::StubWritten);
-        let notes = fs::read_to_string(res.baseline_dir.join("NOTES.md")).unwrap();
-        assert!(notes.contains("mr-review"));
-        assert!(notes.contains("iteration-2"));
-    }
-
-    #[test]
-    fn retains_existing_notes_untouched() {
-        let f = fixture(3);
-        write(
-            &f.iteration_dir.join("benchmark.json"),
-            r#"{"delta":{"pass_rate":0}}"#,
-        );
-        let notes_path = f.skill_subdir.join("evals/baseline/NOTES.md");
-        write(
-            &notes_path,
-            "human-authored observations from iteration-2\n",
-        );
-
-        let res = promote_baseline(&opts(&f, 3)).unwrap();
-
-        assert_eq!(res.notes, NotesStatus::RetainedFromPrior);
-        assert_eq!(
-            fs::read_to_string(&notes_path).unwrap(),
-            "human-authored observations from iteration-2\n"
-        );
-    }
-
-    #[test]
-    fn fails_clearly_when_iteration_dir_is_missing() {
-        let f = fixture(1); // creates iteration-1, but we promote iteration-9
-        let err = promote_baseline(&opts(&f, 9)).unwrap_err();
-        assert!(matches!(err, WorkspaceError::Message(_)));
-        assert!(err.to_string().contains("iteration-9"));
-    }
-}
+mod tests;

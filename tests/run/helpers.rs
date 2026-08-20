@@ -14,6 +14,11 @@ pub fn skill_eval() -> Command {
     // Disable user-global descriptor discovery so a developer's
     // ~/.config/eval-magic/harnesses never leaks into the tests.
     cmd.env("EVAL_MAGIC_CONFIG_DIR", "");
+    // Pin the eval home to the cwd the test runs in. The real default is a
+    // per-skill directory under the user's data dir; a test must never write
+    // there, and a relative value resolves against the cwd exactly as
+    // `--workspace-dir` does. Tests that assert the real default clear this.
+    cmd.env("EVAL_MAGIC_WORKSPACE_DIR", ".eval-magic");
     cmd
 }
 
@@ -80,10 +85,15 @@ pub fn fixture(args: &[&str]) -> String {
 
 /// `fs::canonicalize` with Windows' verbatim (`\\?\`) prefix removed.
 ///
-/// The symlink resolution matters — a macOS temp dir lives under a symlinked
-/// `/var`, so the CLI's own paths resolve to `/private/var/...`. The prefix does
-/// not: a child process reports the plain form as its cwd, so plain is the
-/// spelling every path the CLI emits actually carries.
+/// Mirrors `eval_magic::core::fs::real_path`, which the CLI applies to its own
+/// roots. A test that compares a path the CLI emitted against one it built from
+/// `TempDir` has to resolve its side the same way, because a temp dir reaches
+/// the test under an alias on both CI hosts: macOS puts it under a symlinked
+/// `/var`, so the CLI's paths resolve to `/private/var/...`, and Windows hands
+/// out the 8.3 short name, so `C:\Users\RUNNER~1\...` resolves to
+/// `C:\Users\runneradmin\...`. The verbatim prefix is the one part that does
+/// *not* survive: a child process reports the plain form as its cwd, so plain is
+/// the spelling every path the CLI emits actually carries.
 pub fn resolved(path: &Path) -> PathBuf {
     let canonical = fs::canonicalize(path).unwrap();
     match canonical.to_string_lossy().strip_prefix(r"\\?\") {

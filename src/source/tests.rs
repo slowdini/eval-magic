@@ -76,6 +76,7 @@ fn git_source_resolves_a_branch_ref_to_its_commit_and_default_branch() {
             reference: "main".to_string(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("a branch ref on a reachable repository resolves");
 
@@ -119,6 +120,7 @@ fn git_source_resolves_an_annotated_tag_to_its_commit_on_the_default_branch() {
             reference: "v1".to_string(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("an annotated tag resolves");
 
@@ -151,6 +153,7 @@ fn path_source_that_is_a_repository_records_its_revision_origin_and_branch() {
             path: "local".to_string(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("a local repository resolves");
 
@@ -186,6 +189,7 @@ fn path_source_that_is_not_a_repository_resolves_without_a_revision() {
             path: plain.to_string_lossy().into_owned(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("a directory that is not a repository still resolves");
 
@@ -209,6 +213,7 @@ fn git_source_accepts_a_full_sha_ref_on_the_default_branch() {
             reference: head.clone(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("a full commit SHA resolves");
 
@@ -227,6 +232,7 @@ fn git_source_ref_that_does_not_exist_names_the_ref_and_the_url() {
             reference: "no-such-branch".to_string(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect_err("an unresolvable ref fails")
     .to_string();
@@ -238,11 +244,32 @@ fn git_source_ref_that_does_not_exist_names_the_ref_and_the_url() {
     );
 }
 
-/// The user chose a clean checkout of HEAD over a verbatim copy, so a dirty
-/// working tree is silently *not* carried. Saying so is what keeps that from
-/// being a surprise.
+/// The module resolves whatever it is handed, so the noun in its messages is
+/// the caller's to supply. Without this the skill path reports itself as a
+/// codebase, which is the one thing the operator cannot act on.
 #[test]
-fn path_source_with_uncommitted_changes_warns_that_they_are_not_carried() {
+fn a_failure_is_reported_in_the_subject_the_caller_named() {
+    let tmp = tempfile::TempDir::new().unwrap();
+
+    let error = resolve(
+        &SourceSpec::Path {
+            path: "no-such-directory".to_string(),
+        },
+        tmp.path(),
+        "skill",
+    )
+    .expect_err("a path that does not exist cannot resolve");
+
+    let message = error.to_string();
+    assert!(message.contains("skill path"), "message was: {message}");
+    assert!(!message.contains("codebase"), "message was: {message}");
+}
+
+/// A warning is advice; the flag is evidence. A skill is copied as it sits on
+/// disk, so whether the tree was dirty changes what the run measured and has
+/// to survive into the artifacts rather than only into stderr.
+#[test]
+fn path_source_records_an_uncommitted_tree_as_dirty() {
     let tmp = tempfile::TempDir::new().unwrap();
     let local = source_repo(tmp.path(), "local", "main");
     std::fs::write(local.join("README.md"), "edited but never committed\n").unwrap();
@@ -252,21 +279,15 @@ fn path_source_with_uncommitted_changes_warns_that_they_are_not_carried() {
             path: local.to_string_lossy().into_owned(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("a dirty repository still resolves");
 
-    assert!(
-        resolved
-            .warnings
-            .iter()
-            .any(|warning| warning.contains("uncommitted")),
-        "warnings were: {:?}",
-        resolved.warnings
-    );
+    assert!(resolved.dirty, "an uncommitted edit makes the tree dirty");
 }
 
 #[test]
-fn path_source_with_a_clean_tree_warns_about_nothing() {
+fn path_source_records_a_clean_tree_as_not_dirty() {
     let tmp = tempfile::TempDir::new().unwrap();
     let local = source_repo(tmp.path(), "local", "main");
 
@@ -275,10 +296,43 @@ fn path_source_with_a_clean_tree_warns_about_nothing() {
             path: local.to_string_lossy().into_owned(),
         },
         tmp.path(),
+        "codebase",
     )
     .expect("a clean repository resolves");
 
-    assert!(resolved.warnings.is_empty(), "{:?}", resolved.warnings);
+    assert!(!resolved.dirty);
+}
+
+/// A skill is a subdirectory of a repository that holds many of them. Reporting
+/// the whole repository's status would call every skill dirty the moment any
+/// other one was edited, which is worse than not reporting at all.
+#[test]
+fn a_subdirectory_source_ignores_uncommitted_changes_elsewhere_in_the_repository() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let repo = source_repo(tmp.path(), "skills", "main");
+    let subject = repo.join("mr-review");
+    std::fs::create_dir_all(&subject).unwrap();
+    std::fs::write(subject.join("SKILL.md"), "subject\n").unwrap();
+    commit(
+        &repo,
+        "unrelated.md",
+        "add a sibling file and the subject skill",
+    );
+    std::fs::write(repo.join("unrelated.md"), "edited elsewhere\n").unwrap();
+
+    let resolved = resolve(
+        &SourceSpec::Path {
+            path: subject.to_string_lossy().into_owned(),
+        },
+        tmp.path(),
+        "skill",
+    )
+    .expect("a subdirectory of a repository resolves");
+
+    assert!(
+        !resolved.dirty,
+        "an edit outside the subject subtree is not the subject's dirtiness"
+    );
 }
 
 /// The ticket's first acceptance criterion, at the resolver boundary: a real
@@ -294,6 +348,7 @@ fn materializing_a_git_source_keeps_history_and_configures_no_remote() {
             reference: "main".to_string(),
         },
         tmp.path(),
+        "codebase",
     )
     .unwrap();
     let dest = tmp.path().join("materialized");
@@ -348,6 +403,7 @@ fn materializing_a_tag_lands_on_the_default_branch_not_a_detached_head() {
             reference: "v1".to_string(),
         },
         tmp.path(),
+        "codebase",
     )
     .unwrap();
     let dest = tmp.path().join("materialized");
@@ -374,6 +430,7 @@ fn materializing_a_plain_directory_initializes_a_repository_around_it() {
             path: plain.to_string_lossy().into_owned(),
         },
         tmp.path(),
+        "codebase",
     )
     .unwrap();
     let dest = tmp.path().join("materialized");
@@ -408,6 +465,7 @@ fn materializing_a_dirty_local_repository_carries_only_committed_state() {
             path: local.to_string_lossy().into_owned(),
         },
         tmp.path(),
+        "codebase",
     )
     .unwrap();
     let dest = tmp.path().join("materialized");

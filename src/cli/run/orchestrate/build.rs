@@ -65,8 +65,12 @@ pub(super) fn write_dispatch(
         judge_model: opts.judge_model.map(str::to_owned),
         label: opts.label.map(str::to_owned),
         codebases: r.codebases.iter().map(super::RunCodebase::usage).collect(),
+        skill_source: Some(r.skill.record()),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
+    // One record, cloned into every task: grading reads `run.json` alone, so a
+    // result can only be tied to a skill revision if each record names one.
+    let skill_source_record = r.skill.record();
 
     let staged_skill_path_for = |env_root: &Path, cond_slug: Option<&str>| -> Option<String> {
         cond_slug.map(|slug| {
@@ -230,6 +234,7 @@ pub(super) fn write_dispatch(
                         group: multi_group.then_some(group.id.as_str()),
                         eval_root: Some(env_root_str.as_str()),
                         codebase: codebase_record.as_ref(),
+                        skill_source: Some(&skill_source_record),
                     })?);
                 }
             }

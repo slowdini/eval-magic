@@ -4,7 +4,6 @@
 use std::path::Path;
 
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
-use crate::cli::run;
 use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
 };
@@ -53,7 +52,6 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
         label: args.label.as_deref(),
         agent_model: args.agent_model.as_deref(),
         judge_model: args.judge_model.as_deref(),
-        git_cwd: &ctx.skill_subdir,
     })?;
 
     let n = result.gradings_copied;
@@ -100,7 +98,6 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
             torn |= sandbox::teardown_guard(&env);
         }
     }
-    run::staging::cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
     let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
 
     println!(

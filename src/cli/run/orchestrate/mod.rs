@@ -18,7 +18,7 @@ use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
 use crate::core::fs::artifact_path;
 use crate::core::{
-    CodebaseKind, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, Mode, RunContext,
+    CodebaseSource, CodebaseUse, Eval, Mode, RunContext, SkillSource, SourceKind, SourceRecord,
 };
 use crate::source::ResolvedSource;
 
@@ -79,7 +79,8 @@ struct Resolved {
     /// Distinct codebases the selection declares, already resolved to a commit.
     /// Empty for a fixture-only run, which is what keeps that path unchanged.
     codebases: Vec<RunCodebase>,
-    skill_md_path: PathBuf,
+    /// The skill under test, resolved but not yet copied.
+    skill: RunSkill,
     iteration: u32,
     iteration_dir: PathBuf,
     run_nonce: String,
@@ -105,14 +106,57 @@ struct RunCodebase {
     eval_ids: Vec<String>,
 }
 
+/// Where an iteration keeps its copies of the skills under test.
+///
+/// A sibling of `.codebase/`, and scaffolding in the same sense: it holds inputs
+/// the runner placed, above every environment root, so an agent reaching it is
+/// already a stray write.
+pub(super) fn skills_copy_root(iteration_dir: &Path) -> PathBuf {
+    iteration_dir.join(".skills")
+}
+
+/// The resolved skill under test and the sibling roster staged with it.
+struct RunSkill {
+    source: ResolvedSource,
+    /// Captured at resolution. Staging copies exactly these names, so what the
+    /// record claims and what the environments hold cannot drift apart.
+    siblings: Vec<String>,
+}
+
+impl RunSkill {
+    fn record(&self) -> SkillSource {
+        SkillSource {
+            source: SourceRecord {
+                // A skill is named by a path on this host; there is no url form.
+                kind: SourceKind::Path,
+                source: self.source.source.clone(),
+                resolved_path: self
+                    .source
+                    .resolved_path
+                    .as_deref()
+                    .map(|path| artifact_path(Path::new(path))),
+                reference: self.source.reference.clone(),
+                revision: self.source.revision.clone(),
+                origin_url: self.source.origin_url.clone(),
+                branch: self.source.branch.clone(),
+                host_local: self.source.host_local,
+                // The copy is the working tree as it sits, so an uncommitted edit
+                // is in what ran and the revision alone does not name it.
+                dirty: self.source.dirty,
+            },
+            siblings: self.siblings.clone(),
+        }
+    }
+}
+
 impl RunCodebase {
     /// The artifact form, shared by every provenance surface so a reader never
     /// has to reconcile two spellings of the same resolution.
-    fn record(&self) -> CodebaseRecord {
-        CodebaseRecord {
+    fn record(&self) -> SourceRecord {
+        SourceRecord {
             kind: match self.declared {
-                CodebaseSource::Git { .. } => CodebaseKind::Git,
-                CodebaseSource::Path { .. } => CodebaseKind::Path,
+                CodebaseSource::Git { .. } => SourceKind::Git,
+                CodebaseSource::Path { .. } => SourceKind::Path,
             },
             source: self.source.source.clone(),
             resolved_path: self
@@ -125,6 +169,9 @@ impl RunCodebase {
             origin_url: self.source.origin_url.clone(),
             branch: self.source.branch.clone(),
             host_local: self.source.host_local,
+            // Materialization checks out a commit, so the environment never
+            // carries uncommitted work however the source directory looked.
+            dirty: false,
         }
     }
 
@@ -223,16 +270,6 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     }
     let opts = &preflight.opts;
 
-    // Redirect staging into the isolated env dir. `resolve_request` has now
-    // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
-    // staging root, so the existing root-parameterized staging path follows it.
-    // eval-magic metadata
-    // stays above the env in `iteration_dir`. Only `run` overrides the cwd default
-    // set in `detect_run_context`; teardown/finalize keep operating at cwd.
-    let mut owned_ctx = ctx.clone();
-    owned_ctx.stage_root = resolved.iteration_dir.join("env");
-    let ctx = &owned_ctx;
-
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
     let num_tasks = build::write_dispatch(ctx, opts, &resolved, &staged)?;
@@ -258,6 +295,18 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
         "  {}: {}",
         r.cond_b,
         r.skill_path_b.as_deref().unwrap_or("(no skill)")
+    );
+    // The conditions above name the copy; this names where the copy came from,
+    // which is what a reader of the report has to be able to find again.
+    let source = &r.skill.source;
+    let revision = match (source.revision.as_deref(), source.dirty) {
+        (Some(sha), true) => format!(" ({}, uncommitted changes)", &sha[..7.min(sha.len())]),
+        (Some(sha), false) => format!(" ({})", &sha[..7.min(sha.len())]),
+        (None, _) => String::new(),
+    };
+    println!(
+        "  skill source: {}{revision}",
+        source.resolved_path.as_deref().unwrap_or(&source.source)
     );
     if r.selected_evals.len() != r.total_evals {
         let (flag, ids) = match (opts.only, opts.skip) {

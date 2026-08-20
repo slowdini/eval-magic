@@ -116,8 +116,11 @@ git status --porcelain
 baseline ref names exactly what the agent started from.
 
 The resolved commit appears in `conditions.json`, each `run.json`, `benchmark.json`, and the
-`BASELINE.md` written by `promote-baseline`:
+`BASELINE.md` written by `promote-baseline` — alongside the skill the run measured, which
+is recorded the same way:
 
 ```sh
-jq '.codebases' conditions.json
+jq '.codebases, .skill_source' conditions.json
 ```
+
+See `eval-magic docs isolation` for what the skill side of that record means.

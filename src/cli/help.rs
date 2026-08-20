@@ -22,6 +22,9 @@ EXAMPLES:
   eval-magic run
   # run prepares the workspace but does not dispatch. Read the generated
   # RUNBOOK.md end to end and follow it through ingest, judges, finalize, and teardown.
+  # Artifacts land outside the skill's own repository; run prints the path, and
+  # every command it suggests carries --workspace-dir. Set EVAL_MAGIC_WORKSPACE_DIR
+  # to move the default. See: eval-magic docs isolation
 
   # Evaluate a revision: edit first, snapshot committed content, then compare
   eval-magic snapshot --ref HEAD

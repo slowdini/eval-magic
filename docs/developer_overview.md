@@ -13,10 +13,12 @@ focused internal notes instead of duplicating their details.
 
 1. `eval-magic init` scaffolds an eval workspace next to a skill. Eval definitions describe the
    task, fixtures, assertions, conditions, run count, and optional scripted follow-up turns.
-2. `eval-magic run` validates the configuration, creates isolated task roots, stages the requested
-   skill condition, snapshots the starting state, and writes `RUNBOOK.md`, `dispatch.json`, and
-   related campaign artifacts. The generated runbook—not a checked-in recipe—is the authority for
-   dispatching that particular campaign.
+2. `eval-magic run` validates the configuration, resolves and copies the skill under test into the
+   iteration, creates isolated task roots, stages the requested skill condition from that copy,
+   snapshots the starting state, and writes `RUNBOOK.md`, `dispatch.json`, and related campaign
+   artifacts. The iteration lives in the eval home, which defaults outside the skill's own
+   repository (`workspace_root_from`, `src/core/context.rs`). The generated runbook—not a
+   checked-in recipe—is the authority for dispatching that particular campaign.
 3. An operator or automation dispatches each task with the selected harness. One-shot tasks invoke
    the harness once; scripted conversations use `eval-magic dispatch-task` to preserve one native
    harness session across turns.
