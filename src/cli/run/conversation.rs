@@ -1,106 +1,89 @@
-//! Runner-owned execution of one scripted multi-turn dispatch task.
+//! Runner-owned execution of one dispatched task.
 //!
-//! The run workspace persists the resolved harness descriptor alongside each
-//! task. This driver uses that frozen descriptor to start one native session,
-//! gate and deliver each canned user follow-up, and write an ordered
-//! `conversation.json` completion artifact for ingest.
+//! Given a frozen harness descriptor and one task, this starts a native session,
+//! gates and delivers each canned user follow-up a scripted task declares, and
+//! writes the ordered `conversation.json` completion artifact ingest reads. A
+//! one-shot task takes the same path with no follow-ups to deliver.
+//!
+//! Loading the plan these tasks come from belongs to [`super::drive`].
 
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
 use regex::Regex;
-use serde::Deserialize;
 
 use crate::adapters::cli_command::shell_quote_arg;
-use crate::adapters::descriptor::{finalize_descriptor, subst};
+use crate::adapters::descriptor::subst;
 use crate::adapters::descriptor_adapter::DescriptorAdapter;
 use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::transcript::{TranscriptEvent, TranscriptSummary};
 use crate::core::{
     ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason, DeliverWhen,
-    ScriptedTurn, posix_shell, validate_agent_environment_entry,
+    ScriptedTurn, ShellOutcome, run_in_posix_shell,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::dispatch::DispatchTask;
 
-#[derive(Debug, Deserialize)]
-struct DispatchEnvelope {
-    #[serde(default)]
-    guard: bool,
-    #[serde(default)]
-    agent_model: Option<String>,
-    #[serde(default)]
-    agent_env: BTreeMap<String, String>,
-    harness_descriptor: serde_json::Value,
-    tasks: Vec<DispatchTask>,
+/// How one dispatched task ended. A failure is not represented here — it stays
+/// an `Err`, which the batch driver records per task rather than propagating.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TaskOutcome {
+    Completed { delivered_followups: u32 },
+    Stopped { before_followup: u32 },
+    TimedOut { round: u32 },
+    SkippedExisting,
 }
 
-/// Execute task `task_index` from a runner-generated dispatch plan.
-pub fn command_dispatch_task(
-    dispatch_path: &Path,
-    task_index: usize,
-    overwrite: bool,
-) -> anyhow::Result<()> {
-    let raw = fs::read_to_string(dispatch_path)
-        .with_context(|| format!("failed to read {}", dispatch_path.display()))?;
-    let envelope: DispatchEnvelope = serde_json::from_str(&raw)
-        .with_context(|| format!("failed to parse {}", dispatch_path.display()))?;
-    for (name, value) in &envelope.agent_env {
-        validate_agent_environment_entry(name, value).map_err(|message| {
-            anyhow!(
-                "invalid agent_env in {}: {message}",
-                dispatch_path.display()
-            )
-        })?;
+impl TaskOutcome {
+    /// The one-line human summary of this outcome.
+    pub fn summary(&self) -> String {
+        match self {
+            Self::Completed {
+                delivered_followups: 0,
+            } => "completed".to_string(),
+            Self::Completed {
+                delivered_followups,
+            } => format!("completed with {delivered_followups} scripted follow-up turn(s)"),
+            Self::Stopped { before_followup } => {
+                format!("stopped before scripted follow-up {before_followup}")
+            }
+            Self::TimedOut { round } => format!("timed out in round {round}"),
+            Self::SkippedExisting => "skipped (already complete)".to_string(),
+        }
     }
-    let descriptor = finalize_descriptor(
-        &envelope.harness_descriptor,
-        &format!("{}#harness_descriptor", dispatch_path.display()),
-    )?;
-    let adapter = DescriptorAdapter::from_descriptor(descriptor);
-    let task = envelope.tasks.get(task_index).ok_or_else(|| {
-        anyhow!(
-            "--task-index {task_index} is out of range for {} task(s)",
-            envelope.tasks.len()
-        )
-    })?;
-    run_task(
-        &adapter,
-        task,
-        envelope.guard,
-        envelope.agent_model.as_deref(),
-        &envelope.agent_env,
-        overwrite,
-    )
 }
 
-fn run_task(
+/// Execute one task: start a native session, deliver every scripted follow-up
+/// whose gate is met, and write the `conversation.json` completion artifact.
+pub fn run_task(
     adapter: &DescriptorAdapter,
     task: &DispatchTask,
     guard: bool,
     agent_model: Option<&str>,
     agent_env: &BTreeMap<String, String>,
     overwrite: bool,
-) -> anyhow::Result<()> {
-    let turns = task
-        .turns
-        .as_deref()
-        .filter(|turns| !turns.is_empty())
-        .ok_or_else(|| anyhow!("selected task does not declare scripted follow-up turns"))?;
+    timeout: Option<Duration>,
+) -> anyhow::Result<TaskOutcome> {
+    // One budget for the whole task, not per round: a scripted conversation is
+    // a single dispatch from the operator's point of view.
+    let deadline = timeout.map(|timeout| Instant::now() + timeout);
+    // Empty for a one-shot task: the runner drives every dispatch, so the
+    // follow-up loop below simply has nothing to deliver.
+    let turns = task.turns.as_deref().unwrap_or_default();
     let conversation_path = task
         .conversation_path
         .as_deref()
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("multi-turn task is missing conversation_path"))?;
+    // A finished task is skipped rather than refused: a rerun of `dispatch`
+    // is how an operator retries the failures in a batch, and the tasks that
+    // already completed must not be redone on the way.
     if conversation_path.exists() && !overwrite {
-        bail!(
-            "{} already exists; pass --overwrite to rerun this conversation",
-            conversation_path.display()
-        );
+        return Ok(TaskOutcome::SkippedExisting);
     }
     let eval_root = task
         .eval_root
@@ -112,9 +95,18 @@ fn run_task(
     let initial_template = adapter
         .cli_exec_command(guard, agent_model, agent_env)
         .ok_or_else(|| anyhow!("harness declares no initial dispatch command"))?;
-    let resume_template = adapter
-        .cli_resume_command(guard, agent_model, agent_env)
-        .ok_or_else(|| anyhow!("harness declares no native conversation resume command"))?;
+    // Only a scripted task resumes a session, and a harness may support one-shot
+    // dispatch without declaring `[conversation]` at all (cline does). Requiring
+    // the template up front would make those harnesses undispatchable.
+    let resume_template = if turns.is_empty() {
+        None
+    } else {
+        Some(
+            adapter
+                .cli_resume_command(guard, agent_model, agent_env)
+                .ok_or_else(|| anyhow!("harness declares no native conversation resume command"))?,
+        )
+    };
     if overwrite && conversation_path.exists() {
         fs::remove_file(&conversation_path).with_context(|| {
             format!(
@@ -142,13 +134,31 @@ fn run_task(
         None,
         1,
     );
-    execute_round(
+    if execute_round(
         &initial_command,
         Path::new(eval_root),
         &first_outputs,
         agent_env,
         1,
-    )?;
+        deadline,
+    )? == RoundOutcome::TimedOut
+    {
+        // Turn 1 never answered, so there is no transcript to parse and no
+        // session to resume. The seeded user message is the whole record.
+        return write_conversation(
+            &conversation_path,
+            base_outputs,
+            ConversationRecord {
+                status: ConversationStatus::TimedOut,
+                delivered_followups: 0,
+                stop_reason: None,
+                stopped_before_followup: None,
+                timed_out_in_round: Some(1),
+                events,
+            },
+            None,
+        );
+    }
     let first_summary = parse_round(adapter, &first_outputs, &events_filename, 1)?;
     let session_id = first_summary
         .session_id
@@ -165,6 +175,7 @@ fn run_task(
     let mut delivered_followups = 0_u32;
     let mut stop_reason = None;
     let mut stopped_before_followup = None;
+    let mut timed_out_in_round = None;
 
     for (index, turn) in turns.iter().enumerate() {
         let followup = u32::try_from(index + 1).unwrap_or(u32::MAX);
@@ -184,8 +195,11 @@ fn run_task(
         delivered_followups = delivered_followups.saturating_add(1);
 
         let round_outputs = base_outputs.join(format!("turn-{round}"));
+        let resume_template = resume_template
+            .as_deref()
+            .expect("a task with turns resolved a resume template above");
         let command = render_command(
-            &resume_template,
+            resume_template,
             eval_root,
             &task.dispatch_prompt_path,
             &round_outputs,
@@ -193,13 +207,18 @@ fn run_task(
             Some(&turn.prompt),
             round,
         );
-        execute_round(
+        if execute_round(
             &command,
             Path::new(eval_root),
             &round_outputs,
             agent_env,
             round,
-        )?;
+            deadline,
+        )? == RoundOutcome::TimedOut
+        {
+            timed_out_in_round = Some(round);
+            break;
+        }
         let summary = parse_round(adapter, &round_outputs, &events_filename, round)?;
         if let Some(observed) = summary.session_id.as_deref()
             && observed != session_id
@@ -214,45 +233,62 @@ fn run_task(
             .expect("append_summary_events requires final_text");
     }
 
-    let conversation = ConversationRecord {
-        status: if stop_reason.is_some() {
-            ConversationStatus::Stopped
-        } else {
-            ConversationStatus::Completed
-        },
-        delivered_followups,
-        stop_reason,
-        stopped_before_followup,
-        events,
+    // A timeout outranks a gate stop: the conversation was cut short, so what
+    // the last round would have gated on was never observed.
+    let status = match (timed_out_in_round, stop_reason) {
+        (Some(_), _) => ConversationStatus::TimedOut,
+        (None, Some(_)) => ConversationStatus::Stopped,
+        (None, None) => ConversationStatus::Completed,
     };
+    write_conversation(
+        &conversation_path,
+        base_outputs,
+        ConversationRecord {
+            status,
+            delivered_followups,
+            stop_reason: timed_out_in_round.map_or(stop_reason, |_| None),
+            stopped_before_followup: timed_out_in_round.map_or(stopped_before_followup, |_| None),
+            timed_out_in_round,
+            events,
+        },
+        Some(final_message),
+    )
+}
+
+/// Validate, commit, and report one task's completion artifact. `final_message`
+/// is absent when no round produced one, which is only possible for a task that
+/// timed out before its first answer.
+fn write_conversation(
+    conversation_path: &Path,
+    base_outputs: &Path,
+    conversation: ConversationRecord,
+    final_message: Option<String>,
+) -> anyhow::Result<TaskOutcome> {
     let _: ConversationRecord = validate_against_schema(
         SchemaName::Conversation,
         &serde_json::to_value(&conversation)?,
         &conversation_path.to_string_lossy(),
     )?;
-    write_json_atomic(&conversation_path, &conversation)?;
+    write_json_atomic(conversation_path, &conversation)?;
     fs::create_dir_all(base_outputs)?;
-    fs::write(
-        base_outputs.join("final-message.md"),
-        format!("{}\n", final_message.trim_end()),
-    )?;
-
-    match conversation.status {
-        ConversationStatus::Completed => println!(
-            "Completed {} scripted follow-up turn(s): {}",
-            delivered_followups,
-            conversation_path.display()
-        ),
-        ConversationStatus::Stopped => println!(
-            "Stopped before scripted follow-up {} ({:?}): {}",
-            conversation.stopped_before_followup.unwrap_or_default(),
-            conversation
-                .stop_reason
-                .expect("stopped conversations have a reason"),
-            conversation_path.display()
-        ),
+    if let Some(final_message) = final_message {
+        fs::write(
+            base_outputs.join("final-message.md"),
+            format!("{}\n", final_message.trim_end()),
+        )?;
     }
-    Ok(())
+
+    Ok(match conversation.status {
+        ConversationStatus::Completed => TaskOutcome::Completed {
+            delivered_followups: conversation.delivered_followups,
+        },
+        ConversationStatus::Stopped => TaskOutcome::Stopped {
+            before_followup: conversation.stopped_before_followup.unwrap_or_default(),
+        },
+        ConversationStatus::TimedOut => TaskOutcome::TimedOut {
+            round: conversation.timed_out_in_round.unwrap_or(1),
+        },
+    })
 }
 
 fn parse_round(
@@ -339,6 +375,26 @@ fn unmet_gate(
     Ok(None)
 }
 
+/// Render a one-shot dispatch command: the exec template with its task
+/// placeholders bound and no session to resume. Judge dispatch uses this too,
+/// binding the iteration directory and the judge prompt.
+pub fn render_dispatch_command(
+    template: &str,
+    eval_root: &str,
+    dispatch_prompt_path: &str,
+    outputs_dir: &Path,
+) -> String {
+    render_command(
+        template,
+        eval_root,
+        dispatch_prompt_path,
+        outputs_dir,
+        None,
+        None,
+        1,
+    )
+}
+
 fn render_command(
     template: &str,
     eval_root: &str,
@@ -364,27 +420,42 @@ fn render_command(
     )
 }
 
+/// Run one round's harness command. `deadline` is the whole task's, not this
+/// round's: a scripted conversation is one dispatch from the operator's point
+/// of view, so its budget spans every turn it delivers.
+///
+/// A round that outruns the deadline returns `Ok(RoundOutcome::TimedOut)`. That
+/// is a recorded result, unlike a nonzero exit, which is a failure.
 fn execute_round(
     command: &str,
     eval_root: &Path,
     outputs_dir: &Path,
     agent_env: &BTreeMap<String, String>,
     round: u32,
-) -> anyhow::Result<()> {
+    deadline: Option<Instant>,
+) -> anyhow::Result<RoundOutcome> {
     fs::create_dir_all(outputs_dir)
         .with_context(|| format!("failed to create turn {round} outputs"))?;
-    let shell = posix_shell().map_err(|message| anyhow!("{message}"))?;
-    let status = Command::new(shell)
-        .arg("-c")
-        .arg(command)
-        .current_dir(eval_root)
-        .envs(agent_env)
-        .status()
-        .with_context(|| format!("failed to start harness command for turn {round}"))?;
-    if !status.success() {
-        bail!("harness command for turn {round} exited with {status}");
+    // Saturating: a deadline already passed leaves zero budget, so a turn that
+    // cannot finish is not begun.
+    let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
+    let outcome = run_in_posix_shell(command, eval_root, agent_env, remaining)
+        .map_err(|message| anyhow!("turn {round}: {message}"))?;
+    match outcome {
+        ShellOutcome::Exited(status) if status.success() => Ok(RoundOutcome::Completed),
+        ShellOutcome::Exited(status) => {
+            bail!("harness command for turn {round} exited with {status}")
+        }
+        ShellOutcome::TimedOut => Ok(RoundOutcome::TimedOut),
     }
-    Ok(())
+}
+
+/// How one round's harness command ended, once a nonzero exit has been ruled
+/// out by [`execute_round`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RoundOutcome {
+    Completed,
+    TimedOut,
 }
 
 fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {
@@ -461,7 +532,7 @@ mod tests {
             shell_quote_arg(&events.to_string_lossy())
         );
 
-        execute_round(&command, tmp.path(), &outputs, &BTreeMap::new(), 1).unwrap();
+        execute_round(&command, tmp.path(), &outputs, &BTreeMap::new(), 1, None).unwrap();
 
         assert_eq!(
             std::fs::read_to_string(events).unwrap(),

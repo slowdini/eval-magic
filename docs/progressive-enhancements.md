@@ -14,15 +14,15 @@ an eval that declares scripted `turns` is rejected when the harness cannot prese
 
 ## One dispatch mechanism
 
-One-shot evals and judges dispatch through the harness CLI, one subprocess per task. Scripted evals
-use `eval-magic dispatch-task`, one subprocess per round while resuming one harness-native session
-and one `eval_root`. The **generated artifacts are the runtime source of truth** for how to
-dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` carrying the exact per-task recipe
-for the selected harness — hand-maintained docs never carry command recipes. Eval-agent environment
-defaults are harness-independent: `[dispatch.env]` layers merge by key and repeatable
-`run --agent-env KEY=VALUE` entries override them. The resolved map is exported by one-shot and
-scripted recipes and recorded in `conditions.json` / `dispatch.json`; judges and runner-owned
-`command_check` subprocesses remain separate.
+`eval-magic dispatch` runs every task — one-shot, scripted, and judge alike — through the harness
+CLI, one subprocess per round, `--jobs` tasks at a time. A scripted eval resumes one harness-native
+session across its rounds in one `eval_root`. The **generated artifacts are the runtime source of
+truth** for how to dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` naming the exact
+command for the selected harness — hand-maintained docs never carry command recipes. Eval-agent
+environment defaults are harness-independent: `[dispatch.env]` layers merge by key and repeatable
+`run --agent-env KEY=VALUE` entries override them. The resolved map is recorded in
+`conditions.json` / `dispatch.json` and applied by the runner when it spawns each task; judges and
+runner-owned `command_check` subprocesses remain separate.
 
 ## The baseline contract
 
@@ -84,7 +84,7 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
   the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
   and undeclared enhancements warn naming their fallback and adjust the options (guard forced
   off, missing `skills_dir` forces `--no-stage`, the no-transcript-parser warning scoped to eval
-  configs that actually use `transcript_check`, missing dispatch recipes noted); only
+  configs that actually use `transcript_check`, missing dispatch commands noted); only
   contradictory flag combinations (`--bootstrap`/`--stage-name` where the descriptor declares
   them incompatible with `--no-stage`) and an explicit `--guard` on a user-descriptor-only
   harness reject.
@@ -130,7 +130,7 @@ Git routing variables before optional `env` values override the environment; opt
 values execute every Cartesian-product cell and persist per-cell results. The files are never staged
 or mentioned to the agent, and therefore never inflate scope metrics.
 
-This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
+This path needs no transcript parser, tool vocabulary, or model flag, so it behaves
 the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed
 agent write guard can remain installed while the runner executes the command. `finalize` converts
 the schema-gated intermediate result into an ordinary grading result, leaving aggregation
@@ -207,9 +207,9 @@ combination.
 *Why harness-specific:* each CLI spells same-session continuation differently and exposes its
 session identifier in a different transcript event.
 
-*What it unlocks:* an eval's ordered `turns` array. `dispatch-task` starts the normal one-shot
-command, extracts the native session id, evaluates `agent_asks` (`?`) plus the optional response
-regex, and resumes the same session for each delivered follow-up. It writes raw round transcripts
+*What it unlocks:* an eval's ordered `turns` array. `dispatch` starts the normal one-shot command,
+extracts the native session id, evaluates `agent_asks` (`?`) plus the optional response regex, and
+resumes the same session for each delivered follow-up. It writes raw round transcripts
 under `outputs/turn-N/` and atomically commits `conversation.json` only after a complete or normal
 guardrail-stopped scenario. `ingest` skips an interrupted task with no completion artifact.
 
@@ -402,26 +402,25 @@ modes can't be reproduced exactly in a one-shot dispatch anyway.
 *Descriptor fields:* none yet — this is the trait default (`render_plan_mode_context`) with no
 descriptor surface; a harness with a real native plan mode would grow one.
 
-### Dispatch recipes
+### Dispatch commands
 
-*Why harness-specific:* the copy-pasteable command template is the harness's CLI.
+*Why harness-specific:* the command line the runner spawns is the harness's CLI.
 
-*What it unlocks:* `RUNBOOK.md`, `dispatch-manifest.md`, and the post-`run`/post-`ingest` handoffs
-carry exact per-task commands (including parallel and judge variants).
+*What it unlocks:* `eval-magic dispatch` itself. Without an `exec_template` there is nothing for the
+runner to run, and `dispatch` fails for that harness.
 
-*Fallback:* the generic handoff text; the operator constructs dispatch commands themselves. The
-`run` preflight warns naming this limitation when the descriptor declares no `exec_template`
-(`has_dispatch_recipes()`).
+*Fallback:* none — this is the one enhancement dispatch cannot work around. The `run` preflight
+warns at prep time when the descriptor declares no `exec_template` (`has_dispatch_recipes()`), so
+the gap surfaces before a workspace is built.
 
-*Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `parallel_command_template`,
-`judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
-`guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
-for eval-agent dispatches; judge commands deliberately render empty `guard_args` because they run
-outside the guarded task envs. `env` contains non-secret eval-agent defaults; the shared renderer
-adds sorted, shell-quoted exports to one-shot, parallel, resume, and probe commands. Unset keys
-inherit the host environment and no timezone default is imposed. The shared jq/xargs parallel and
-judge scaffolds stay code (`src/adapters/cli_command.rs`) with the per-harness command block spliced
-in. Validation rejects a template whose placeholder has no backing field.
+*Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `next_steps_template`,
+`manifest_template`, `capture_prefix`, `guard_args`, `model_note`. Templates carry
+`{model_arg}`/`{guard_args}` slots the renderer fills for eval-agent dispatches; a judge dispatch
+reuses `exec_template` with `guard_args` deliberately empty, because judges run from the iteration
+directory outside every guarded task env. `env` contains non-secret eval-agent defaults, applied
+per task when the runner spawns the command; unset keys inherit the host environment and no
+timezone default is imposed. Validation rejects a template whose placeholder has no backing
+field.
 
 ## Current support
 
@@ -447,7 +446,7 @@ data rather than a hand-maintained support table.
    requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
 4. Confirm `eval-magic harness list` and `harness show <label>` report the built-in and only the
    capabilities its descriptor actually declares.
-5. Wire enhancements in leverage order — dispatch recipes and transcript ingest first (they carry
+5. Wire enhancements in leverage order — the dispatch command and transcript ingest first (they carry
    the most fidelity and are prerequisites for conversation resume), then conversation resume,
    staging, model flag, guard (guard requires built-in status — user
    descriptors may not declare one). Most enhancements are

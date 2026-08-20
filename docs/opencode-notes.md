@@ -178,7 +178,7 @@ failed or unparseable probe remains `unknown` rather than guessing. Unique runti
 probe and are `selected`. The shared banner and `aggregate` validity warnings render this same
 report; historical unversioned artifacts remain readable.
 
-eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
+eval-magic detects but cannot unload these sources, and the dispatch commands the runner spawns never
 set the `OPENCODE_DISABLE_*` kill switches on the operator's behalf — parity with a real user
 session matters. The operator-facing recipes — both switches with their exact scopes, and
 move-or-rename as the only remedy for an `.opencode` root — are in the shipped

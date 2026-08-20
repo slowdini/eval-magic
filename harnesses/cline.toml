@@ -126,9 +126,8 @@ preflight = "cline-skills"
 capture_prefix = "cline"
 next_steps_template = '''
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
-{exec_command}
-Then run `ingest{target_args} --iteration {iteration} --harness cline`.'''
+Next: eval-magic dispatch{target_args} --iteration {iteration} --harness cline
+Then run `eval-magic ingest{target_args} --iteration {iteration} --harness cline`.'''
 exec_template = '''
 cline --cwd <eval-root> --act --json --auto-approve true{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
@@ -137,29 +136,14 @@ cline --cwd <eval-root> --act --json --auto-approve true{model_arg} \
   2> <outputs_dir>/cline-stderr.log; \
   jq -rj 'select(.type == "run_result") | .text' <outputs_dir>/cline-events.jsonl \
   > <outputs_dir>/final-message.md'''
-parallel_command_template = '''
-    cline --cwd "$eval_root" --act --json --auto-approve true{model_arg} \
-      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
-      </dev/null \
-      > "$outputs_dir/cline-events.jsonl" \
-      2> "$outputs_dir/cline-stderr.log"; \
-      jq -rj "select(.type == \"run_result\") | .text" "$outputs_dir/cline-events.jsonl" \
-      > "$outputs_dir/final-message.md"'''
-judge_command_template = '    cline --cwd "{cwd}" --act --json --auto-approve true $model_arg \'
 manifest_template = '''
-After all dispatches (Cline):
+Harness dispatch (Cline):
 
-Run one fresh `cline --cwd <eval-root> --act --json --auto-approve true` per task. Detach stdin with `</dev/null>` so piped task data cannot become extra prompt context; capture stdout as `outputs/cline-events.jsonl` and stderr as `outputs/cline-stderr.log`. The trailing jq step recovers `outputs/final-message.md` from the terminal `run_result` event.
+`eval-magic dispatch` runs one fresh `cline --cwd <eval-root> --act --json --auto-approve true` per task. Detach stdin with `</dev/null>` so piped task data cannot become extra prompt context; capture stdout as `outputs/turn-<n>/cline-events.jsonl` and stderr as `outputs/turn-<n>/cline-stderr.log`. `eval-magic dispatch` writes `outputs/final-message.md` itself from the parsed transcript; the template's trailing jq step is a belt-and-braces copy of the terminal `run_result` event.
 
 ```bash
 {exec_command}
 ```
 
-Parallel dispatch from this iteration directory:
-
-```bash
-{parallel_recipe}
-```
-
-Then run `eval-magic ingest --harness cline`; ingest reads each task's `outputs/cline-events.jsonl`.
+Then run `eval-magic ingest --harness cline`; ingest reads each task's `outputs/turn-<n>/cline-events.jsonl`.
 '''

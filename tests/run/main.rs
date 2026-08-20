@@ -24,6 +24,7 @@ mod diff_scope;
 mod env_layout;
 mod git_isolation;
 mod grouping;
+mod judges;
 mod lifecycle;
 mod opencode;
 mod opencode_permission_denials;

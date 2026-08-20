@@ -278,10 +278,6 @@ pub struct DispatchSection {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exec_template: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_command_template: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge_command_template: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_template: Option<String>,
 }
 
@@ -311,8 +307,6 @@ impl DispatchSection {
             && self.model_note.is_none()
             && self.next_steps_template.is_none()
             && self.exec_template.is_none()
-            && self.parallel_command_template.is_none()
-            && self.judge_command_template.is_none()
             && self.manifest_template.is_none()
     }
 }

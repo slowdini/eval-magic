@@ -228,13 +228,11 @@ fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
         ])
         .assert()
         .success();
+    // The post-run hand-off names the runner command; the harness CLI it will
+    // spawn is documented in the manifest, not pasted at the operator.
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("--dangerously-bypass-hook-trust"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(stdout.contains("codex-events.jsonl"));
-    assert!(stdout.contains("codex-stderr.log"));
+    assert!(stdout.contains("eval-magic dispatch"), "{stdout}");
+    assert!(stdout.contains("--harness codex"), "{stdout}");
 
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
@@ -242,7 +240,8 @@ fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
     assert!(manifest.contains("</dev/null"));
     assert!(manifest.contains("codex-events.jsonl"));
     assert!(manifest.contains("codex-stderr.log"));
-    assert!(manifest.contains("xargs -0 -P"));
+    // Concurrency is the runner's `--jobs`, not a pasted `xargs -P` pipeline.
+    assert!(manifest.contains("eval-magic dispatch"));
 }
 
 #[test]
@@ -265,18 +264,14 @@ fn codex_dispatch_guidance_includes_agent_model_when_provided() {
         ])
         .assert()
         .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("-m gpt-5-mini"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(stdout.contains("codex-events.jsonl"));
-    assert!(stdout.contains("codex-stderr.log"));
-
+    assert.success();
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(manifest.contains("-m gpt-5-mini"));
-    assert!(manifest.contains("xargs -0 -P"));
+    assert!(manifest.contains("</dev/null"));
+    assert!(manifest.contains("codex-events.jsonl"));
+    assert!(manifest.contains("codex-stderr.log"));
+    assert!(manifest.contains("eval-magic dispatch"));
 }
 
 #[test]
@@ -299,11 +294,11 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
         ])
         .assert()
         .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+    assert.success();
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
+    assert!(manifest.contains("</dev/null"));
+    assert!(!manifest.contains("--dangerously-bypass-hook-trust"));
 }
 
 #[test]
@@ -357,8 +352,8 @@ fn codex_run_writes_human_followed_runbook() {
         "uses the human-followed template: {runbook}"
     );
     assert!(
-        runbook.contains("codex --ask-for-approval never exec"),
-        "carries the Codex CLI dispatch recipe: {runbook}"
+        runbook.contains("eval-magic dispatch"),
+        "carries the dispatch command: {runbook}"
     );
 }
 

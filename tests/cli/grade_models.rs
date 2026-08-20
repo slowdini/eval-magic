@@ -85,9 +85,11 @@ fn grade_defaults_judge_tasks_to_recorded_judge_model() {
     let assert = grade_cmd(&cwd, &skill_dir, Some("codex"))
         .assert()
         .success();
+    // The hand-off is the runner's own command now, not a harness recipe with
+    // a `$model_arg` slot: each judge task carries its resolved model in
+    // judge-tasks.json, and `dispatch --judges` reads it from there.
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("codex --ask-for-approval never exec"));
-    assert!(stdout.contains("model_arg=\"-m $model\""));
+    assert!(stdout.contains("eval-magic dispatch --judges"), "{stdout}");
 
     let tasks: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(iteration_dir.join("judge-tasks.json")).unwrap())

@@ -399,15 +399,14 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
-    // ── Enhancement: dispatch recipes (defaulted) ────────────────────────────
-    // Fallback without them: `run` prints the generic handoff and the runbook
-    // carries no copy-pasteable per-task command.
+    // ── Enhancement: dispatch commands (defaulted) ───────────────────────────
+    // There is no fallback: without an exec template the runner has nothing to
+    // spawn, so `dispatch` fails for that harness and `run` warns at prep time.
 
-    /// **Enhancement: dispatch recipes.** Whether a copy-pasteable per-task
-    /// exec command is wired (the descriptor's `[dispatch] exec_template`).
-    /// `false` means `RUNBOOK.md` / `dispatch-manifest.md` carry handoff
-    /// guidance without a per-task command recipe, and the `run` preflight
-    /// warns naming that limitation.
+    /// **Enhancement: dispatch commands.** Whether a per-task exec command is
+    /// wired (the descriptor's `[dispatch] exec_template`). `false` means
+    /// `eval-magic dispatch` has nothing to run for this harness, and the `run`
+    /// preflight warns naming that.
     fn has_dispatch_recipes(&self) -> bool {
         false
     }
@@ -446,25 +445,18 @@ pub trait HarnessAdapter {
         None
     }
 
-    /// **Enhancement: dispatch recipes.** The `Next:` guidance printed after
-    /// `run`: how to dispatch each task through this harness's one-shot CLI
-    /// and then ingest. Empty when no dispatch recipe is wired.
+    /// **Enhancement: dispatch commands.** The `Next:` guidance printed after
+    /// `run`: the dispatch and ingest commands for this harness. Empty when the
+    /// descriptor wires no `next_steps_template`.
     fn cli_next_steps(&self, _ctx: CliDispatchContext<'_>) -> String {
         String::new()
     }
 
-    /// **Enhancement: dispatch recipes.** Extra `dispatch-manifest.md` lines
-    /// describing this harness's dispatch recipe (command template, parallel
-    /// recipe, ingest note). `None` when the harness contributes no manifest
-    /// section.
+    /// **Enhancement: dispatch commands.** Extra `dispatch-manifest.md` lines
+    /// describing what the runner will spawn for this harness (the command
+    /// template and any ingest note). `None` when the harness contributes no
+    /// manifest section.
     fn cli_manifest_section(&self, _ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        None
-    }
-
-    /// **Enhancement: dispatch recipes.** The post-`grade` / post-`ingest`
-    /// judge dispatch guidance for this harness. `None` leaves the generic
-    /// judge handoff in place.
-    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext<'_>) -> Option<String> {
         None
     }
 }
@@ -489,15 +481,6 @@ pub struct CliManifestContext<'a> {
     pub guard: bool,
     pub agent_model: Option<&'a str>,
     pub agent_env: &'a BTreeMap<String, String>,
-    /// Exclude scripted tasks from a mixed suite's one-shot recipe.
-    pub one_shot_only: bool,
-}
-
-/// Context for rendering a harness's one-shot CLI judge-dispatch guidance.
-#[derive(Debug, Clone, Copy)]
-pub struct CliJudgeContext<'a> {
-    pub guard: bool,
-    pub iteration_dir: &'a Path,
 }
 
 #[cfg(test)]

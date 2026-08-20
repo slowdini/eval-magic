@@ -215,9 +215,9 @@ pub(crate) fn harness_run_preflight<'a>(
     }
     if !adapter.has_dispatch_recipes() {
         warnings.push(format!(
-            "--harness {label} declares no dispatch exec recipe — RUNBOOK.md and \
-             dispatch-manifest.md carry handoff guidance without a copy-pasteable per-task \
-             command; construct each dispatch through the harness's one-shot CLI yourself."
+            "--harness {label} declares no dispatch exec template — `eval-magic dispatch` \
+             has no command to run for these tasks and will fail. Add \
+             `[dispatch].exec_template` to the descriptor (see `eval-magic docs byoh`)."
         ));
     }
     Ok(HarnessPreflight { opts, warnings })

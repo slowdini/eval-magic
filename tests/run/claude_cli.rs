@@ -26,16 +26,19 @@ fn claude_dispatch_guidance_uses_claude_p() {
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("claude -p --output-format stream-json"));
-    assert!(stdout.contains("--verbose"));
-    assert!(stdout.contains("cd <eval-root>"));
-    assert!(stdout.contains("claude-events.jsonl"));
-    assert!(!stdout.contains("--output-last-message"));
+    // The post-run hand-off names the runner command; the harness CLI it will
+    // spawn is documented in the manifest, not pasted at the operator.
+    assert!(stdout.contains("eval-magic dispatch"), "{stdout}");
+    assert!(stdout.contains("--harness claude-code"), "{stdout}");
 
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("claude -p --output-format stream-json"));
+    assert!(manifest.contains("--verbose"));
+    assert!(manifest.contains("cd <eval-root>"));
     assert!(manifest.contains("claude-events.jsonl"));
-    assert!(manifest.contains("xargs -0 -P"));
+    assert!(!manifest.contains("--output-last-message"));
+    // Concurrency is the runner's `--jobs`, not a pasted `xargs -P` pipeline.
+    assert!(manifest.contains("eval-magic dispatch"));
 
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
     assert_eq!(conditions["harness"], "claude-code");
@@ -59,9 +62,10 @@ fn claude_dispatch_guidance_includes_agent_model_when_provided() {
         ])
         .assert()
         .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("claude -p --output-format stream-json"));
-    assert!(stdout.contains("--model opus"));
+    assert.success();
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(manifest.contains("claude -p --output-format stream-json"));
+    assert!(manifest.contains("--model opus"), "{manifest}");
 }
 
 #[test]
@@ -87,15 +91,15 @@ fn claude_run_writes_human_followed_runbook() {
 
     // Each task dispatches from its own per-(group, condition) env, so the shared
     // human-followed runbook lives in the iteration dir, above those envs, and
-    // carries the claude -p recipe plus the --harness-threaded pipeline commands.
+    // carries the runner commands with --harness threaded through them.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
         "uses the human-followed template: {runbook}"
     );
     assert!(
-        runbook.contains("claude -p"),
-        "carries the claude -p dispatch recipe: {runbook}"
+        runbook.contains("eval-magic dispatch"),
+        "carries the dispatch command: {runbook}"
     );
     assert!(
         runbook.contains("--harness claude-code"),

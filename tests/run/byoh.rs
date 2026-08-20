@@ -82,11 +82,12 @@ fn descriptor_alone_carries_a_complete_run() {
                 .and(contains("provenance")),
         );
 
-    // The exec recipe reached both human-facing artifacts.
+    // The runbook drives through the runner, so it names the command rather
+    // than the harness CLI; the manifest still shows what the runner spawns.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
-    assert!(runbook.contains("cool-cli run"), "{runbook}");
+    assert!(runbook.contains("eval-magic dispatch"), "{runbook}");
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
-    assert!(manifest.contains("## Dispatch recipe"), "{manifest}");
+    assert!(manifest.contains("## Dispatch"), "{manifest}");
     assert!(manifest.contains("cool-cli run"), "{manifest}");
 
     // Forced --no-stage: nothing was staged, so no task carries a staged slug.
@@ -137,12 +138,13 @@ fn descriptor_alone_carries_a_complete_run() {
     }
 }
 
-/// A descriptor without an exec_template warns naming the generic handoff:
-/// RUNBOOK.md and dispatch-manifest.md carry guidance, not a copy-pasteable
-/// per-task command. (The built-in-harness half of this pin — wired harnesses
-/// stay quiet — lives in src/cli/run/util.rs.)
+/// A descriptor without an exec_template warns at prep time, because the runner
+/// will have nothing to spawn: `eval-magic dispatch` fails outright for such a
+/// harness, so the gap is worth naming before the workspace is built. (The
+/// built-in-harness half of this pin — wired harnesses stay quiet — lives in
+/// src/cli/run/util.rs.)
 #[test]
-fn dispatchless_descriptor_warns_naming_the_generic_handoff() {
+fn dispatchless_descriptor_warns_that_dispatch_has_nothing_to_run() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     write_project_descriptor(&cwd, "label = \"cool-custom-harness\"\n");
@@ -161,7 +163,11 @@ fn dispatchless_descriptor_warns_naming_the_generic_handoff() {
         ])
         .assert()
         .success()
-        .stderr(contains("declares no dispatch exec recipe").and(contains("RUNBOOK.md")));
+        .stderr(
+            contains("declares no dispatch exec template")
+                .and(contains("eval-magic dispatch"))
+                .and(contains("eval-magic docs byoh")),
+        );
 }
 
 /// `--guard` with a harness that exists only in user-supplied descriptors is

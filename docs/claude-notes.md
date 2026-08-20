@@ -37,9 +37,9 @@ hook-entry and `hookSpecificOutput` verdict templates) is rendered by the generi
 
 ## Permission mode
 
-Every dispatch and judge recipe carries `--permission-mode bypassPermissions`. The obvious
-alternative, `acceptEdits`, is wrong here: it auto-approves *file edits* but **not Bash**, and
-because the recipe detaches stdin (`</dev/null`) there is nobody to approve, so anything not
+Every dispatch — eval agent and judge alike — carries `--permission-mode bypassPermissions`. The
+obvious alternative, `acceptEdits`, is wrong here: it auto-approves *file edits* but **not Bash**,
+and because the command detaches stdin (`</dev/null`) there is nobody to approve, so anything not
 trivially safe is auto-denied. Measured on a real dispatch, `ls`/`grep`/`find` ran while
 `bun run repro.ts`, `node -e '…'` and even `bun --version` came back "This command requires
 approval".
@@ -145,7 +145,7 @@ topic ([isolation guide](guides/isolation.md)). The per-source strings the banne
 
 `--setting-sources project,local` drops **all** user-scope discovery, not just `enabledPlugins`:
 skills under `<config_dir>/skills` are unloaded too. Verified 2026-08-06 by A/B within one campaign —
-the judge recipe carries no `--setting-sources` and its capture lists both `~/.claude/skills`
+the judge dispatch carries no `--setting-sources` and its capture lists both `~/.claude/skills`
 entries and every `<plugin>:<skill>` id, while all 48 isolated eval dispatches list neither.
 
 Project-local staged skills are independent of installed plugins, so they still load and the

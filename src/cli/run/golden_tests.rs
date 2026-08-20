@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
-use crate::adapters::{CliDispatchContext, CliJudgeContext, adapter_for};
+use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::core::{AvailableSkill, Harness, Mode};
 
 use super::dispatch::{DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest};
@@ -98,7 +98,7 @@ fn bare_task(harness: Harness) -> DispatchTaskOpts<'static> {
     }
 }
 
-fn render_manifest(harness: Harness, guard: bool, agent_model: Option<&str>) -> String {
+fn render_manifest(harness: Harness) -> String {
     let slug =
         adapter_for(harness).staged_slug("slow-powers-eval-", 2, "with_skill", "widget-skill");
     let mut staged = staged_task(harness);
@@ -116,8 +116,8 @@ fn render_manifest(harness: Harness, guard: bool, agent_model: Option<&str>) -> 
         &tasks,
         ManifestContext {
             harness,
-            guard,
-            agent_model,
+            guard: true,
+            agent_model: Some("model-x"),
             agent_env: empty_env(),
         },
     )
@@ -137,37 +137,25 @@ fn golden_runbook_per_harness() {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
-            multi_turn_tasks: 0,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
-            guard: true,
-            agent_model: Some("model-x"),
-            agent_env: empty_env(),
         });
         assert_golden(&format!("{label}/runbook.golden.md"), &book);
     }
 }
 
+/// One golden per harness: the manifest quotes the exec command but renders no
+/// conditional recipe, so guard state and model selection cannot change it.
+/// What stays harness-specific is the dispatch prompt each task carries, pinned
+/// by `golden_dispatch_prompt_per_harness`.
 #[test]
 fn golden_manifest_per_harness() {
     for harness in Harness::known() {
         let label = adapter_for(harness).label();
-        let manifest = render_manifest(harness, true, Some("model-x"));
-        assert_golden(&format!("{label}/manifest.golden.md"), &manifest);
+        assert_golden(
+            &format!("{label}/manifest.golden.md"),
+            &render_manifest(harness),
+        );
     }
-}
-
-#[test]
-fn golden_manifest_codex_without_guard() {
-    // Pins the hook-trust conditional: no --dangerously-bypass-hook-trust.
-    let manifest = render_manifest(Harness::resolve("codex").unwrap(), false, Some("model-x"));
-    assert_golden("codex/manifest-noguard.golden.md", &manifest);
-}
-
-#[test]
-fn golden_manifest_claude_without_model() {
-    // Pins the empty model-arg rendering.
-    let manifest = render_manifest(Harness::resolve("claude-code").unwrap(), true, None);
-    assert_golden("claude-code/manifest-nomodel.golden.md", &manifest);
 }
 
 #[test]
@@ -210,80 +198,28 @@ fn golden_guard_armed_message_per_harness() {
     }
 }
 
+/// The post-run hand-off names one runner command, so the agent model cannot
+/// change it. Pinned per harness, and asserted invariant across model
+/// selection.
 #[test]
-fn golden_judge_recipe_per_harness() {
-    for (harness, guard, rel) in [
-        (
-            Harness::resolve("claude-code").unwrap(),
-            true,
-            "claude-code/judge-recipe.golden.md",
-        ),
-        (
-            Harness::resolve("codex").unwrap(),
-            true,
-            "codex/judge-recipe.golden.md",
-        ),
-        // Cline has no guard, so one variant covers both guard states.
-        (
-            Harness::resolve("cline").unwrap(),
-            false,
-            "cline/judge-recipe.golden.md",
-        ),
-        // Pins the hook-trust conditional in the judge command line.
-        (
-            Harness::resolve("codex").unwrap(),
-            false,
-            "codex/judge-recipe-noguard.golden.md",
-        ),
-        // OpenCode has no guard args, so one variant covers both guard states.
-        (
-            Harness::resolve("opencode").unwrap(),
-            false,
-            "opencode/judge-recipe.golden.md",
-        ),
-    ] {
-        let recipe = adapter_for(harness)
-            .cli_judge_next_steps(CliJudgeContext {
-                guard,
-                iteration_dir: Path::new("/work/iter-1"),
+fn golden_next_steps_per_harness_do_not_vary_with_the_model() {
+    for harness in ["cline", "opencode"] {
+        let adapter = adapter_for(Harness::resolve(harness).unwrap());
+        let steps = |agent_model| {
+            adapter.cli_next_steps(CliDispatchContext {
+                guard: false,
+                target_args: " --skill-dir /tmp/skills --skill widget-skill",
+                iteration: 2,
+                agent_model,
+                agent_env: empty_env(),
             })
-            .expect("judge recipe is wired for this harness");
-        assert_golden(rel, &recipe);
-    }
-}
-
-#[test]
-fn golden_cline_next_steps_with_and_without_model() {
-    for (agent_model, rel) in [
-        (Some("model-x"), "cline/next-steps-model.golden.txt"),
-        (None, "cline/next-steps-nomodel.golden.txt"),
-    ] {
-        let steps =
-            adapter_for(Harness::resolve("cline").unwrap()).cli_next_steps(CliDispatchContext {
-                guard: false,
-                target_args: " --skill-dir /tmp/skills --skill widget-skill",
-                iteration: 2,
-                agent_model,
-                agent_env: empty_env(),
-            });
-        assert_golden(rel, &steps);
-    }
-}
-
-#[test]
-fn golden_opencode_next_steps_with_and_without_model() {
-    for (agent_model, rel) in [
-        (Some("model-x"), "opencode/next-steps-model.golden.txt"),
-        (None, "opencode/next-steps-nomodel.golden.txt"),
-    ] {
-        let steps =
-            adapter_for(Harness::resolve("opencode").unwrap()).cli_next_steps(CliDispatchContext {
-                guard: false,
-                target_args: " --skill-dir /tmp/skills --skill widget-skill",
-                iteration: 2,
-                agent_model,
-                agent_env: empty_env(),
-            });
-        assert_golden(rel, &steps);
+        };
+        let with_model = steps(Some("model-x"));
+        assert_eq!(
+            with_model,
+            steps(None),
+            "{harness}: dispatch guidance must not depend on the model"
+        );
+        assert_golden(&format!("{harness}/next-steps.golden.txt"), &with_model);
     }
 }

@@ -28,20 +28,19 @@
 
 eval-magic runs the same task in two controlled conditions—such as a new skill versus no skill, or
 an edited skill versus its previous version—and grades both results against shared assertions. It
-builds isolated task workspaces, stages skills, generates harness-specific dispatch instructions,
-ingests transcripts and final state, and produces comparison artifacts. You dispatch the agent
-sessions with Claude Code, Cline, Codex, OpenCode, or a descriptor-backed harness of your own.
+builds isolated task workspaces, stages skills, dispatches the agent sessions itself, ingests
+transcripts and final state, and produces comparison artifacts. It drives Claude Code, Cline,
+Codex, OpenCode, or a descriptor-backed harness of your own.
 
 The installed CLI is the primary manual. Start with `eval-magic --help`, and use
 `eval-magic <command> --help` whenever you reach a new phase.
 
 ## Install
 
-Git is required at runtime, plus a POSIX shell with `jq`: the dispatch and judge recipes eval-magic
-generates are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. The shell that runs them
-has to resolve the same paths the workspace was prepared with. On Windows that is Git Bash (Git for
-Windows), with `jq` installed separately — Git for Windows does not bundle it. WSL resolves a
-different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it.
+Git is required at runtime, plus a POSIX shell: harness dispatch commands are POSIX command lines,
+and `eval-magic dispatch` runs them itself, so the host it runs on needs a shell that resolves the
+workspace's own paths. On Windows that is Git Bash (Git for Windows). WSL resolves a different
+filesystem namespace, so run eval-magic inside WSL rather than dispatching into it.
 Set `EVAL_MAGIC_SH` to select a specific `sh`.
 
 Windows support runs through Git Bash and is deprecated: a future release will require WSL.
@@ -101,10 +100,10 @@ eval-magic run --harness codex
 eval-magic run --harness opencode
 ```
 
-`run` prepares the campaign; it does not dispatch agents. Review the printed task and model-usage
-summary before continuing. Then read the generated `RUNBOOK.md` from beginning to end. It contains
-the exact dispatch, ingest, judge, finalize, and `eval-magic teardown` commands for that campaign
-and harness.
+`run` prepares the campaign; `eval-magic dispatch` runs it. Review the printed task and model-usage
+summary before continuing — dispatch is where model usage is spent. Then read the generated
+`RUNBOOK.md` from beginning to end. It contains the exact dispatch, ingest, judge, finalize, and
+`eval-magic teardown` commands for that campaign and harness.
 
 After finalization, open the generated `benchmark.json` to compare pass rates, token and duration
 measurements, and validity warnings. Use `eval-magic aggregate --help` when you need to combine
@@ -152,9 +151,9 @@ Issues and planned work are tracked in the
 
 ## Development
 
-Development carries the same host requirement as use: a POSIX shell with `jq`. The scripted-turn
-tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite
-cannot pass without one. Tests that need `jq` or symlink creation report a skip instead.
+Development carries the same host requirement as use: a POSIX shell. The dispatch tests spawn
+`#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite cannot pass
+without one. Tests that need symlink creation report a skip instead.
 
 ```bash
 cargo fmt --check

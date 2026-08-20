@@ -4,7 +4,6 @@
 
 use anyhow::bail;
 
-use crate::adapters::{CliJudgeContext, adapter_for};
 use crate::cli::args::{CommonArgs, GradeArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
@@ -15,23 +14,15 @@ use crate::sandbox;
 use crate::validation;
 use std::path::{Path, PathBuf};
 
-const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
-
+/// The command that dispatches the judge tasks `ingest` emitted. Harness-
+/// independent: the runner drives judges the same way it drives eval tasks, so
+/// the only thing that varies is the `--harness` selector.
 fn judge_dispatch_guidance(ctx: &RunContext, iteration: u32) -> String {
-    let iteration_dir = ctx
-        .workspace_root
-        .join(&ctx.skill_name)
-        .join(format!("iteration-{iteration}"));
-    adapter_for(ctx.harness)
-        .cli_judge_next_steps(CliJudgeContext {
-            guard: sandbox::guard_is_armed(&ctx.stage_root),
-            iteration_dir: &iteration_dir,
-        })
-        .unwrap_or_else(|| {
-            format!(
-                "Dispatch each task from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nModel selection is recorded in judge-tasks.json, but this harness adapter has no judge CLI recipe wired yet."
-            )
-        })
+    format!(
+        "eval-magic dispatch --judges{} --iteration {iteration} --harness {}",
+        command_target_args(ctx),
+        ctx.harness.name()
+    )
 }
 
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage

@@ -370,17 +370,9 @@
           "type": "string",
           "description": "Copy/pasteable single-dispatch command; <eval-root>-style angle placeholders are prose for the human."
         },
-        "parallel_command_template": {
-          "type": "string",
-          "description": "Per-task command block spliced into the shared jq/xargs parallel scaffold."
-        },
-        "judge_command_template": {
-          "type": "string",
-          "description": "Judge command line spliced into the shared judge recipe; must reference $model_arg and {cwd} and end with a shell line continuation."
-        },
         "manifest_template": {
           "type": "string",
-          "description": "The dispatch-manifest harness section; {exec_command}/{parallel_recipe} placeholders; ends with exactly one newline."
+          "description": "The dispatch-manifest harness section; {exec_command} placeholder; ends with exactly one newline."
         }
       }
     },

@@ -10,20 +10,14 @@ use std::time::Duration;
 
 use regex::Regex;
 
-use crate::core::fs::artifact_path;
 use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
-use super::cli_command::{
-    render_agent_dispatch_command, render_cli_model_arg, render_judge_dispatch_recipe,
-    render_parallel_dispatch_recipe,
-};
+use super::cli_command::{render_agent_dispatch_command, render_cli_model_arg};
 use super::descriptor::{
     HarnessDescriptor, TranscriptSection, render_staged_slug, stage_name_error, subst,
 };
-use super::harness::{
-    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, ToolVocabulary,
-};
+use super::harness::{CliDispatchContext, CliManifestContext, HarnessAdapter, ToolVocabulary};
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::skills_block::{DEFAULT_HEADER, DEFAULT_ITEM, render_skills_block};
 use super::{PermissionDenial, SessionSurface, TranscriptSummary};
@@ -460,71 +454,21 @@ impl HarnessAdapter for DescriptorAdapter {
             );
         };
         let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
-        let parallel_recipe = match &self.descriptor.dispatch.parallel_command_template {
-            Some(block_template) => {
-                let model_arg = render_cli_model_arg(self.model_flag(), ctx.agent_model);
-                render_parallel_dispatch_recipe(
-                    &subst(
-                        block_template,
-                        &[
-                            ("model_arg", &model_arg),
-                            ("guard_args", self.guard_args(ctx.guard)),
-                        ],
-                    ),
-                    ctx.one_shot_only,
-                    ctx.agent_env,
-                )
-            }
-            None => String::new(),
-        };
         Some(
-            subst(
-                template,
-                &[
-                    ("exec_command", &exec_command),
-                    ("parallel_recipe", &parallel_recipe),
-                ],
-            )
-            .split('\n')
-            .map(String::from)
-            .collect(),
+            subst(template, &[("exec_command", &exec_command)])
+                .split('\n')
+                .map(String::from)
+                .collect(),
         )
-    }
-
-    fn cli_judge_next_steps(&self, ctx: CliJudgeContext<'_>) -> Option<String> {
-        let template = self.descriptor.dispatch.judge_command_template.as_ref()?;
-        // Embedded in a shell command line, so it carries the wire-format
-        // spelling every other generated path uses.
-        let cwd = artifact_path(ctx.iteration_dir);
-        let command_line = subst(
-            template,
-            // Judges run from the iteration metadata directory, outside every
-            // guarded task env. Hook-trust bypass is only for eval-agent
-            // dispatches whose cwd actually contains the vetted guard hook.
-            &[("cwd", &cwd), ("guard_args", self.guard_args(false))],
-        );
-        Some(render_judge_dispatch_recipe(
-            &command_line,
-            // Both guaranteed by descriptor validation when the template is set.
-            self.model_flag().unwrap_or_default(),
-            self.descriptor
-                .dispatch
-                .capture_prefix
-                .as_deref()
-                .unwrap_or_default(),
-        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
-    use std::path::Path;
     use std::sync::LazyLock;
 
-    use crate::adapters::harness::{
-        CliDispatchContext, CliJudgeContext, CliManifestContext, TokenUsageAggregation,
-    };
+    use crate::adapters::harness::{CliDispatchContext, CliManifestContext, TokenUsageAggregation};
     use crate::adapters::registry::adapter_for;
     use crate::core::{AvailableSkill, Harness};
 
@@ -539,16 +483,6 @@ mod tests {
             path: format!("/x/{name}/SKILL.md"),
             description: description.into(),
         }
-    }
-
-    fn next_steps(harness: Harness, agent_model: Option<&str>) -> String {
-        adapter_for(harness).cli_next_steps(CliDispatchContext {
-            guard: harness == Harness::resolve("codex").unwrap(),
-            target_args: " --skill-dir /tmp/skills --skill widget-skill",
-            iteration: 2,
-            agent_model,
-            agent_env: empty_env(),
-        })
     }
 
     fn adapter_from(toml_src: &str) -> super::DescriptorAdapter {
@@ -582,7 +516,6 @@ mod tests {
                 guard: false,
                 agent_model: None,
                 agent_env: empty_env(),
-                one_shot_only: false,
             })
             .expect("an exec template earns a generic manifest recipe")
             .join("\n");
@@ -661,16 +594,17 @@ mod tests {
                 .cli_resume_command(false, None, empty_env())
                 .unwrap();
             assert!(resume.starts_with(prelude), "{resume}");
+            // The manifest quotes the same exec command, so it inherits the
+            // prelude rather than carrying an indented copy of its own.
             let manifest = adapter
                 .cli_manifest_section(CliManifestContext {
                     guard: false,
                     agent_model: None,
                     agent_env: empty_env(),
-                    one_shot_only: false,
                 })
                 .unwrap()
                 .join("\n");
-            assert!(manifest.contains(&format!("    {prelude}\n")), "{manifest}");
+            assert!(manifest.contains(prelude), "{manifest}");
         }
     }
 
@@ -697,38 +631,41 @@ mod tests {
                     guard: false,
                     agent_model: None,
                     agent_env: empty_env(),
-                    one_shot_only: false,
                 })
                 .is_none(),
             "the manifest's generic header already covers the no-recipe baseline"
         );
     }
 
+    /// The command the runner spawns, not the hand-off text: `cli_next_steps`
+    /// names `eval-magic dispatch` now, so model and guard rendering is only
+    /// observable on the exec command itself.
+    fn exec_command(harness: Harness, guard: bool, agent_model: Option<&str>) -> String {
+        adapter_for(harness)
+            .cli_exec_command(guard, agent_model, empty_env())
+            .expect("a built-in harness declares an exec template")
+    }
+
     #[test]
     fn exec_recipe_includes_model_only_when_declared() {
-        let with = next_steps(Harness::resolve("claude-code").unwrap(), Some("opus"));
+        let harness = Harness::resolve("claude-code").unwrap();
+        let with = exec_command(harness, false, Some("opus"));
         assert!(with.contains("--model opus"), "{with}");
-        let without = next_steps(Harness::resolve("claude-code").unwrap(), None);
+        let without = exec_command(harness, false, None);
         assert!(!without.contains("--model "), "{without}");
     }
 
     #[test]
     fn codex_recipes_gate_hook_trust_on_guard() {
-        let guarded = next_steps(Harness::resolve("codex").unwrap(), Some("gpt-5-mini"));
+        let harness = Harness::resolve("codex").unwrap();
+        let guarded = exec_command(harness, true, Some("gpt-5-mini"));
         assert!(
             guarded.contains(
                 "codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write --dangerously-bypass-hook-trust -m gpt-5-mini --json \\"
             ),
             "{guarded}"
         );
-        let unguarded =
-            adapter_for(Harness::resolve("codex").unwrap()).cli_next_steps(CliDispatchContext {
-                guard: false,
-                target_args: "",
-                iteration: 2,
-                agent_model: None,
-                agent_env: empty_env(),
-            });
+        let unguarded = exec_command(harness, false, None);
         assert!(
             !unguarded.contains("--dangerously-bypass-hook-trust"),
             "{unguarded}"
@@ -737,99 +674,20 @@ mod tests {
 
     #[test]
     fn opencode_exec_recipe_carries_dir_auto_and_the_model_flag() {
-        let with = next_steps(
-            Harness::resolve("opencode").unwrap(),
-            Some("opencode/gpt-5-nano"),
-        );
+        let harness = Harness::resolve("opencode").unwrap();
+        let with = exec_command(harness, false, Some("opencode/gpt-5-nano"));
         assert!(
             with.contains(
                 "opencode run --dir <eval-root> --format json --auto -m opencode/gpt-5-nano \\"
             ),
             "{with}"
         );
-        let without = next_steps(Harness::resolve("opencode").unwrap(), None);
+        let without = exec_command(harness, false, None);
         assert!(
             without.contains("opencode run --dir <eval-root> --format json --auto \\"),
             "{without}"
         );
         assert!(!without.contains(" -m "), "{without}");
-    }
-
-    #[test]
-    fn codex_judge_recipe_splices_model_arg_in_one_command_shape() {
-        let recipe = adapter_for(Harness::resolve("codex").unwrap())
-            .cli_judge_next_steps(CliJudgeContext {
-                guard: true,
-                iteration_dir: Path::new("/work/iter-1"),
-            })
-            .expect("codex judge recipe is wired");
-        // One command shape: the optional model flag is spliced via $model_arg
-        // (same structure as the Claude judge recipe), not an if/else pair.
-        assert!(
-            recipe.contains(
-                "    codex --ask-for-approval never exec --cd \"/work/iter-1\" --sandbox workspace-write $model_arg --json \\"
-            ),
-            "{recipe}"
-        );
-        assert!(
-            !recipe.contains("--dangerously-bypass-hook-trust"),
-            "judges run outside guarded task envs: {recipe}"
-        );
-        assert!(
-            recipe.contains("    model_arg=\"\"; [ -n \"$model\" ] && model_arg=\"-m $model\""),
-            "{recipe}"
-        );
-        assert!(!recipe.contains("if [ -n"), "{recipe}");
-    }
-
-    #[test]
-    fn claude_judge_recipe_snapshot_is_stable() {
-        // Full-string pin carried over from the pre-descriptor adapter: locks
-        // the Claude judge recipe byte-for-byte through the descriptor path.
-        let recipe = adapter_for(Harness::resolve("claude-code").unwrap())
-            .cli_judge_next_steps(CliJudgeContext {
-                guard: false,
-                iteration_dir: Path::new("/work/iter-1"),
-            })
-            .expect("claude judge recipe is wired");
-        let expected = r#"Dispatch each judge task from judge-tasks.json with:
-Existing nonempty response files are skipped; delete one to dispatch that judge again.
-The final `N/M verdicts present` summary exits nonzero until every task has one.
-
-```bash
-JOBS=${JOBS:-4}
-jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // ""))' judge-tasks.json \
-  | tr -d '\r' \
-  | tr '\n' '\0' \
-  | xargs -0 -P "$JOBS" -n 3 sh -c '
-    prompt_path="$1"
-    response_path="$2"
-    model="${3#model=}"
-    if [ -s "$response_path" ]; then exit 0; fi
-    response_base="${response_path%.json}"
-    mkdir -p "$(dirname "$response_path")"
-    model_arg=""; [ -n "$model" ] && model_arg="--model $model"
-    cd "/work/iter-1" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions $model_arg \
-      "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
-      </dev/null \
-      > "$response_base.claude-events.jsonl" \
-      2> "$response_base.claude-stderr.log"
-  ' sh
-judge_dispatch_status=$?
-judge_total=$(jq '.tasks | length' judge-tasks.json | tr -d '\r')
-judge_present=$(
-  jq -r '.tasks[].response_path' judge-tasks.json \
-    | tr -d '\r' \
-    | while IFS= read -r response_path; do
-        if [ -s "$response_path" ]; then printf '%s\n' "$response_path"; fi
-      done \
-    | wc -l \
-    | tr -d '[:space:]'
-)
-printf '%s/%s verdicts present\n' "$judge_present" "$judge_total"
-[ "$judge_dispatch_status" -eq 0 ] && [ "$judge_present" -eq "$judge_total" ]
-```"#;
-        assert_eq!(recipe, expected);
     }
 
     #[test]

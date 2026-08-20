@@ -1,14 +1,13 @@
-//! `run` and `dispatch-task` handlers.
+//! `run` and `dispatch` handlers.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 
 use crate::adapters::adapter_for;
-use crate::cli::args::{DispatchTaskArgs, RunArgs};
+use crate::cli::args::{DispatchArgs, RunArgs};
 use crate::cli::run;
-use crate::cli::{parse_id_list, run_context_with_bootstrap};
+use crate::cli::{iteration_dir, parse_id_list, run_context_from, run_context_with_bootstrap};
 use crate::core::validate_agent_environment_entry;
 
 fn parse_agent_environment(values: &[String]) -> anyhow::Result<BTreeMap<String, String>> {
@@ -59,12 +58,78 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub(crate) fn run_dispatch_task(args: DispatchTaskArgs) -> anyhow::Result<()> {
-    run::conversation::command_dispatch_task(
-        Path::new(&args.dispatch),
-        args.task_index,
-        args.overwrite,
-    )
+/// Execute a prepared iteration's tasks through the harness.
+pub(crate) fn run_dispatch(args: DispatchArgs) -> anyhow::Result<()> {
+    let ctx = run_context_from(&args.common)?;
+    let iteration_dir = iteration_dir(&ctx, args.common.iteration)?;
+    // `--timeout 0` means "no deadline", which is the only way to say it with a
+    // plain seconds flag.
+    let timeout = (args.timeout > 0).then(|| std::time::Duration::from_secs(args.timeout));
+    if args.judges {
+        return dispatch_judges(&iteration_dir, &args, timeout);
+    }
+    let dispatch_path = iteration_dir.join("dispatch.json");
+    if !dispatch_path.is_file() {
+        bail!(
+            "{} not found — run `eval-magic run` to prepare the iteration first",
+            dispatch_path.display()
+        );
+    }
+
+    let summary = run::drive::command_dispatch(
+        &dispatch_path,
+        &args.task_index,
+        args.common.overwrite,
+        timeout,
+        args.jobs as usize,
+    )?;
+
+    println!(
+        "\nDispatched {} task(s): {}",
+        summary.reports.len(),
+        summary.tally()
+    );
+    for warning in summary.warnings() {
+        eprintln!("⚠ {warning}");
+    }
+    if summary.unusable() > 0 {
+        bail!(
+            "{} task(s) produced no usable result; rerun `eval-magic dispatch` to retry the \
+             failures (a timed-out task keeps its record — pass --overwrite to redo it)",
+            summary.unusable()
+        );
+    }
+    Ok(())
+}
+
+/// Dispatch the judge tasks `ingest` emitted, reporting verdict completeness.
+fn dispatch_judges(
+    iteration_dir: &std::path::Path,
+    args: &DispatchArgs,
+    timeout: Option<std::time::Duration>,
+) -> anyhow::Result<()> {
+    let summary = run::drive::judges::command_dispatch_judges(
+        iteration_dir,
+        args.common.overwrite,
+        timeout,
+        args.jobs as usize,
+    )?;
+    println!(
+        "\nDispatched {} judge task(s), skipped {}: {}",
+        summary.dispatched,
+        summary.skipped,
+        summary.verdict_line()
+    );
+    for failure in &summary.failures {
+        eprintln!("⚠ {failure}");
+    }
+    if !summary.complete() {
+        bail!(
+            "{} — rerun `eval-magic dispatch --judges` to fill the gaps",
+            summary.verdict_line()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

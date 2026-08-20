@@ -13,10 +13,9 @@ use clap::{Args, Parser, Subcommand};
 /// An eval dispatches a fresh subagent twice per test case — once with the skill
 /// loaded, once without (or old version vs. new) — and grades both outputs against
 /// assertions. The pass-rate delta tells you whether the skill is worth shipping.
-/// This CLI builds the workspace, stages skills for discovery, generates dispatch
-/// prompts, assembles run records from transcripts, grades, and aggregates; your
-/// agent harness supplies the one thing it never does itself: dispatching the
-/// subagents.
+/// This CLI builds the workspace, stages skills for discovery, dispatches every
+/// subagent through your chosen harness CLI, assembles run records from the
+/// transcripts, grades, and aggregates.
 ///
 /// The run loop is one canonical workflow in both modes:
 ///
@@ -86,8 +85,8 @@ pub struct CommonArgs {
     pub mode: Option<String>,
     /// Target harness: `claude-code` (default), `cline`, `codex`, or `opencode`.
     ///
-    /// All four built-ins support staged skills, transcript ingest, and dispatch
-    /// recipes; `claude-code`, `codex`, and `opencode` additionally support
+    /// All four built-ins support staged skills, transcript ingest, and runner
+    /// dispatch; `claude-code`, `codex`, and `opencode` additionally support
     /// scripted same-session follow-ups and the automatically armed write guard.
     /// Each reads its own per-task events file; Claude Code stages skills under
     /// `.claude/skills`, Cline under `.cline/skills`, Codex under
@@ -215,10 +214,7 @@ pub(crate) enum HarnessCommands {
     /// the descriptor end-to-end: renders `dispatch.exec_template` with a
     /// trivial prompt in a throwaway temp dir, runs it via `sh -c` from
     /// the temp `eval_root`, and verifies `outputs/final-message.md` is
-    /// recovered (non-empty). It additionally render-only-validates
-    /// `parallel_command_template` and `judge_command_template` for
-    /// placeholder-shape errors — rendering each with stand-in values and
-    /// reporting any unresolved `{token}` the run would later surface.
+    /// recovered (non-empty).
     ///
     /// `--probe` invokes the real harness CLI (network, tokens, usage
     /// limits), so it is opt-in and never runs as part of standard CI checks
@@ -449,7 +445,7 @@ pub struct RunArgs {
     /// staging — with `--no-stage` the guard stays off and the run is unguarded.
     /// Codex eval-agent dispatches must include
     /// `--dangerously-bypass-hook-trust` so the vetted project-local eval hook
-    /// runs; judge recipes omit it because judges run outside guarded task envs.
+    /// runs; judge dispatches omit it because judges run outside guarded task envs.
     /// Unguarded, stray writes are only *detected* after the fact by
     /// `detect-stray-writes`, never blocked.
     /// Under Claude Code the `PreToolUse` hook is staged in each env's
@@ -512,9 +508,10 @@ pub struct RunArgs {
     /// Agent-under-test model for CLI dispatches; otherwise recorded as
     /// provenance.
     ///
-    /// The run's dispatch recipes include the harness-native model flag when the
-    /// adapter supports one (e.g. Codex's `-m`, Claude Code's `--model`); otherwise
-    /// the value is persisted to `conditions.json` for `promote-baseline`.
+    /// The commands `dispatch` spawns include the harness-native model flag when
+    /// the adapter supports one (e.g. Codex's `-m`, Claude Code's `--model`);
+    /// otherwise the value is persisted to `conditions.json` for
+    /// `promote-baseline`.
     #[arg(long)]
     pub agent_model: Option<String>,
     /// Environment override for eval-agent dispatches (`KEY=VALUE`, repeatable).
@@ -531,8 +528,8 @@ pub struct RunArgs {
     /// Default judge model for emitted judge tasks.
     ///
     /// `grade` writes this into `judge-tasks.json` for judge tasks that do not
-    /// have an assertion-level `model` override, and Cli harness judge recipes
-    /// pass it through using the harness-native model flag. Also persists to
+    /// have an assertion-level `model` override, and `dispatch --judges` passes
+    /// it through using the harness-native model flag. Also persists to
     /// `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub judge_model: Option<String>,
@@ -544,18 +541,28 @@ pub struct RunArgs {
     pub label: Option<String>,
 }
 
-/// Execute one runner-owned multi-turn task from a generated dispatch plan.
 #[derive(Debug, Args)]
-pub struct DispatchTaskArgs {
-    /// Path to the runner-generated dispatch.json.
-    #[arg(long, value_name = "PATH")]
-    pub dispatch: String,
-    /// Zero-based index into dispatch.json's tasks array.
+pub struct DispatchArgs {
+    #[command(flatten)]
+    pub common: CommonArgs,
+    /// Dispatch only these zero-based `tasks[]` indices; repeatable. Every task
+    /// in the plan by default.
+    #[arg(long = "task-index")]
+    pub task_index: Vec<usize>,
+    /// Kill a task that runs longer than this many seconds and record it as
+    /// timed out, so one hung dispatch cannot stall the campaign. `0` disables
+    /// the deadline entirely.
+    #[arg(long, default_value_t = 1800, value_name = "SECONDS")]
+    pub timeout: u64,
+    /// How many tasks to dispatch at once. Each task owns a private environment,
+    /// so they are independent.
+    #[arg(long, default_value_t = 4, value_parser = clap::value_parser!(u32).range(1..))]
+    pub jobs: u32,
+    /// Dispatch the judge tasks `ingest` emitted instead of the eval tasks.
+    /// Skips existing nonempty responses, prints `N/M verdicts present`, and
+    /// exits nonzero while any are missing; rerun to fill the gaps.
     #[arg(long)]
-    pub task_index: usize,
-    /// Replace an existing conversation.json and rerun the task.
-    #[arg(long)]
-    pub overwrite: bool,
+    pub judges: bool,
 }
 
 /// Every subcommand on the CLI.
@@ -565,10 +572,10 @@ pub(crate) enum Commands {
     ///
     /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
-    /// (human-readable). It prepares the run but does not dispatch agents. After
-    /// setup, read `RUNBOOK.md` end to end; that generated file is the authority
-    /// for dispatch, ingest, judge, finalize, and teardown commands for the selected
-    /// harness.
+    /// (human-readable). It prepares the run but does not dispatch agents —
+    /// `eval-magic dispatch` does. After setup, read `RUNBOOK.md` end to end; that
+    /// generated file is the authority for the dispatch, ingest, judge, finalize,
+    /// and teardown commands for the selected harness.
     ///
     /// A case with effective run count `R` creates `2R` native agent sessions: one
     /// per condition and repetition. Scripted follow-ups add up to `2R × F` model
@@ -590,17 +597,25 @@ pub(crate) enum Commands {
     /// Isolating each dispatch from those sources, and confirming it worked, is
     /// `eval-magic docs isolation`.
     Run(RunArgs),
-    /// Execute one scripted multi-turn task through its harness CLI.
+    /// Run every task in a prepared iteration through its harness CLI.
     ///
-    /// Starts the task, resumes the same native session for every delivered
-    /// follow-up, and writes the task's `conversation.json` completion artifact.
-    /// A completed or normally stopped conversation records
-    /// `delivered_followups`; an interrupted task commits no artifact. Each round
-    /// must report the same native session ID or the command fails. Inspect the
-    /// per-round assistant messages and delivered count to verify the script ran as
-    /// intended. One-shot tasks continue to use the commands in
-    /// `dispatch-manifest.md`.
-    DispatchTask(DispatchTaskArgs),
+    /// Reads `dispatch.json`, executes each task in its own private environment,
+    /// and writes the task's `conversation.json` completion artifact. A task that
+    /// already has one is skipped, so rerunning after a failure retries only what
+    /// did not finish; `--overwrite` redispatches regardless.
+    ///
+    /// A task that fails is recorded and the batch continues — one bad dispatch
+    /// does not abandon the campaign. The command exits nonzero if any task
+    /// failed. A conversation that stops at a scripted gate is valid eval data,
+    /// not a failure.
+    ///
+    /// A task declaring scripted follow-up turns resumes the same native session
+    /// for every turn it delivers, and each round must report the same native
+    /// session ID or that task fails. A completed or normally stopped
+    /// conversation records `delivered_followups`; an interrupted task commits no
+    /// artifact, so a rerun picks it up. Inspect the per-round assistant messages
+    /// and the delivered count to verify a script ran as intended.
+    Dispatch(DispatchArgs),
     /// Snapshot a workspace baseline.
     ///
     /// Snapshots the skill as a Mode B baseline under
@@ -636,9 +651,8 @@ pub(crate) enum Commands {
     /// scope is captured before held-out files are injected. Then stops at the
     /// judge hand-off, listing a judge task per `llm_judge` assertion. Requires
     /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
-    /// harness exposes transcripts. When the harness provides a judge recipe, it
-    /// skips existing nonempty responses, prints `N/M verdicts present`, and exits
-    /// nonzero while any are missing; rerun the same recipe to fill the gaps.
+    /// harness exposes transcripts, under `outputs/turn-<n>/`. Dispatch the judge
+    /// tasks it lists with `eval-magic dispatch --judges`.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
@@ -867,6 +881,11 @@ pub struct FixtureArgs {
     /// output larger than the diagnostic truncation limit.
     #[arg(long)]
     pub pad: Option<usize>,
+    /// Sleep this many milliseconds before doing anything else, so a caller can
+    /// overrun a deadline. The delay lives here rather than in a `sleep` call
+    /// because Windows has no such binary.
+    #[arg(long = "sleep-ms")]
+    pub sleep_ms: Option<u64>,
     /// Joins the fragments. Empty by default.
     #[arg(long, default_value = "")]
     pub separator: String,
