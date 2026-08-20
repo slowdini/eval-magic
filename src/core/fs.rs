@@ -6,16 +6,12 @@
 //! generated artifact carries; [`normalize_separators`] is its comparison-side
 //! counterpart, for matching a path spelled by a different host.
 //!
-//! Copying comes in two flavors. Pick by what the destination is *for*:
-//!
-//! - [`copy_entry`] mirrors structure, recreating symlinks as symlinks. Right
-//!   when the copy must round-trip faithfully — the diff-scope baseline, which
-//!   is later compared byte-for-byte against the live tree.
-//! - [`copy_entry_materialized`] resolves symlinks into their target's content.
-//!   Right for everything else here: staging and fixtures copy *into* an
-//!   isolated task env, where a preserved link would point back out of the
-//!   sandbox, and snapshots must freeze content so a later run compares against
-//!   what was captured.
+//! [`copy_entry_materialized`] is the one way to copy here, and it resolves
+//! symlinks into their target's content rather than mirroring them. Every
+//! destination in this tree wants that: staging and fixtures copy *into* an
+//! isolated task env, where a preserved link would point back out of the
+//! sandbox, and a snapshot must freeze content so a later run compares against
+//! what was captured rather than whatever the link now points at.
 //!
 //! Every function returns [`std::io::Result`], which each consumer error enum
 //! (`PipelineError`, `WorkspaceError`, `RunError`) already absorbs via
@@ -133,40 +129,12 @@ pub fn write_json<T: Serialize + ?Sized>(path: &Path, value: &T) -> io::Result<(
     fs::write(path, text)
 }
 
-/// Copy `source` to `destination`, recursing into directories and **preserving**
-/// symlinks as symlinks. Missing parent directories of `destination` are created.
-///
-/// Use this only when the copy must round-trip faithfully; see
-/// [`copy_entry_materialized`] for the content-freezing counterpart, which is
-/// what callers copying into a task env or a snapshot want.
-pub fn copy_entry(source: &Path, destination: &Path) -> io::Result<()> {
-    let metadata = fs::symlink_metadata(source)?;
-    if metadata.file_type().is_symlink() {
-        create_parent(destination)?;
-        let target = fs::read_link(source)?;
-        let to_directory = source.metadata().is_ok_and(|metadata| metadata.is_dir());
-        create_symlink(&target, destination, to_directory)?;
-    } else if metadata.is_dir() {
-        fs::create_dir_all(destination)?;
-        for entry in fs::read_dir(source)? {
-            let entry = entry?;
-            copy_entry(&entry.path(), &destination.join(entry.file_name()))?;
-        }
-    } else {
-        create_parent(destination)?;
-        fs::copy(source, destination)?;
-    }
-    Ok(())
-}
-
 /// Copy `source` to `destination`, recursing into directories and **resolving**
 /// symlinks into their target's content.
 ///
-/// The counterpart to [`copy_entry`], for callers that must freeze content
-/// rather than mirror structure: a snapshot exists to be compared against
-/// later, so a preserved link would silently track whatever it points at
-/// instead of what was captured. Prefer [`copy_entry`] unless you specifically
-/// need that guarantee.
+/// Callers here must freeze content rather than mirror structure: a snapshot
+/// exists to be compared against later, so a preserved link would silently
+/// track whatever it points at instead of what was captured.
 pub fn copy_entry_materialized(source: &Path, destination: &Path) -> io::Result<()> {
     // `metadata` (unlike `symlink_metadata`) follows links, so a symlinked
     // directory recurses and a symlinked file lands in the `fs::copy` arm.
@@ -210,10 +178,15 @@ pub fn hardlinks_available(from: &Path, to: &Path) -> bool {
 
 /// Create a symlink at `link` pointing at `target`.
 ///
+/// Test support. Copying here resolves links into content rather than
+/// recreating them, so the only callers left are fixtures that need a link to
+/// exist and the probe that asks whether this host permits one.
+///
 /// `to_directory` is consulted only on Windows, which has separate file and
 /// directory link kinds; POSIX has one. Creating a symlink there also needs
 /// either Developer Mode or elevation, so this can fail for reasons that have
 /// nothing to do with the paths involved.
+#[cfg(test)]
 pub(crate) fn create_symlink(target: &Path, link: &Path, to_directory: bool) -> io::Result<()> {
     #[cfg(unix)]
     {
@@ -457,120 +430,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn copy_entry_copies_a_single_file() {
-        let tmp = TempDir::new().unwrap();
-        let source = tmp.path().join("src.txt");
-        fs::write(&source, "payload").unwrap();
-
-        copy_entry(&source, &tmp.path().join("dst.txt")).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(tmp.path().join("dst.txt")).unwrap(),
-            "payload"
-        );
-    }
-
-    #[test]
-    fn copy_entry_recurses_into_directories() {
-        let tmp = TempDir::new().unwrap();
-        let source = tmp.path().join("tree");
-        fs::create_dir_all(source.join("nested/deeper")).unwrap();
-        fs::write(source.join("top.txt"), "top").unwrap();
-        fs::write(source.join("nested/deeper/leaf.txt"), "leaf").unwrap();
-
-        let destination = tmp.path().join("copied");
-        copy_entry(&source, &destination).unwrap();
-
-        assert_eq!(
-            fs::read_to_string(destination.join("top.txt")).unwrap(),
-            "top"
-        );
-        assert_eq!(
-            fs::read_to_string(destination.join("nested/deeper/leaf.txt")).unwrap(),
-            "leaf"
-        );
-    }
-
-    /// The destination's parent may not exist yet (staging writes into a tree it
-    /// is still building). Failing here would make the helper's usability depend
-    /// on caller ordering.
-    #[test]
-    fn copy_entry_creates_missing_destination_parents() {
-        let tmp = TempDir::new().unwrap();
-        let source = tmp.path().join("src.txt");
-        fs::write(&source, "payload").unwrap();
-
-        let destination = tmp.path().join("a/b/c/dst.txt");
-        copy_entry(&source, &destination).unwrap();
-
-        assert_eq!(fs::read_to_string(&destination).unwrap(), "payload");
-    }
-
-    /// The behavior that used to differ between the five copies: a symlink must
-    /// be recreated as a link, not resolved into its target's content. Following
-    /// it would inline whatever the link pointed at — possibly from outside the
-    /// tree being copied.
-    #[test]
-    fn copy_entry_recreates_symlinks_instead_of_following_them() {
-        let tmp = TempDir::new().unwrap();
-        if skip_without_symlinks(
-            tmp.path(),
-            "copy_entry_recreates_symlinks_instead_of_following_them",
-        ) {
-            return;
-        }
-        let target = tmp.path().join("target.txt");
-        fs::write(&target, "target contents").unwrap();
-        let link = tmp.path().join("link.txt");
-        create_symlink(&target, &link, false).unwrap();
-
-        let destination = tmp.path().join("copied-link.txt");
-        copy_entry(&link, &destination).unwrap();
-
-        assert!(
-            fs::symlink_metadata(&destination)
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "the copy is still a symlink, not a materialized file"
-        );
-        assert_eq!(fs::read_link(&destination).unwrap(), target);
-    }
-
-    /// A symlink nested inside a copied directory survives too — the recursion
-    /// arm must route back through the symlink arm, not through `fs::copy`.
-    #[test]
-    fn copy_entry_preserves_symlinks_nested_inside_a_directory() {
-        let tmp = TempDir::new().unwrap();
-        if skip_without_symlinks(
-            tmp.path(),
-            "copy_entry_preserves_symlinks_nested_inside_a_directory",
-        ) {
-            return;
-        }
-        let source = tmp.path().join("tree");
-        fs::create_dir_all(&source).unwrap();
-        fs::write(source.join("real.txt"), "real").unwrap();
-        create_symlink(Path::new("real.txt"), &source.join("alias.txt"), false).unwrap();
-
-        let destination = tmp.path().join("copied");
-        copy_entry(&source, &destination).unwrap();
-
-        assert!(
-            fs::symlink_metadata(destination.join("alias.txt"))
-                .unwrap()
-                .file_type()
-                .is_symlink(),
-            "the nested symlink is still a symlink"
-        );
-        assert_eq!(
-            fs::read_link(destination.join("alias.txt")).unwrap(),
-            Path::new("real.txt"),
-            "the link target is preserved verbatim, including its relativeness"
-        );
-    }
-
     /// The counterpart semantic: a snapshot must freeze content, so a symlink is
     /// resolved and its target's bytes are written. Preserving the link would
     /// make the "frozen" copy track whatever the link points at later.
@@ -620,15 +479,6 @@ mod tests {
             fs::read_to_string(destination.join("nested/leaf.txt")).unwrap(),
             "leaf"
         );
-    }
-
-    #[test]
-    fn copy_entry_reports_a_missing_source() {
-        let tmp = TempDir::new().unwrap();
-
-        let err = copy_entry(&tmp.path().join("absent"), &tmp.path().join("dst")).unwrap_err();
-
-        assert_eq!(err.kind(), io::ErrorKind::NotFound);
     }
 
     /// The probe both succeeds and cleans up after itself: it runs inside the

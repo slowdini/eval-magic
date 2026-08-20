@@ -2,14 +2,40 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/diff-scope.schema.json",
   "title": "Diff Scope Metrics",
-  "description": "Runner-owned final-environment diff metrics for one eval run. Compares the complete task environment with its post-staging, post-guard baseline while excluding .eval-magic-outputs framework artifacts. Lives beside run.json as diff-scope.json.",
+  "description": "Runner-owned final-environment diff evidence for one eval run. Git measures the complete task environment against the refs/eval-magic/baseline ref its environment was marked with, honoring the codebase's own .gitignore and the .eval-magic-outputs framework exclusion. Lives beside run.json as diff-scope.json, with the diff itself in diff.patch.",
   "type": "object",
   "required": ["files_touched", "lines_added", "lines_removed", "hunks"],
   "additionalProperties": false,
   "properties": {
     "files_touched": { "type": "integer", "minimum": 0 },
-    "lines_added": { "type": "integer", "minimum": 0, "description": "Byte-lines inserted by a Myers diff." },
-    "lines_removed": { "type": "integer", "minimum": 0, "description": "Byte-lines deleted by a Myers diff." },
-    "hunks": { "type": "integer", "minimum": 0, "description": "Contiguous non-equal operation groups, with zero context." }
+    "lines_added": { "type": "integer", "minimum": 0, "description": "Lines inserted, as git diff --numstat counts them. A binary file contributes none." },
+    "lines_removed": { "type": "integer", "minimum": 0, "description": "Lines deleted, as git diff --numstat counts them. A binary file contributes none." },
+    "hunks": { "type": "integer", "minimum": 0, "description": "Contiguous non-equal operation groups, counted at zero context." },
+    "files": {
+      "type": "array",
+      "description": "Every changed file, ordered by path as Git reports them. Omitted for iterations created before the changed-file list.",
+      "items": {
+        "type": "object",
+        "required": ["path", "status", "lines_added", "lines_removed"],
+        "additionalProperties": false,
+        "properties": {
+          "path": { "type": "string", "description": "Environment-relative path, spelled with forward slashes as Git spells it." },
+          "status": { "type": "string", "enum": ["added", "modified", "deleted"] },
+          "lines_added": { "type": "integer", "minimum": 0 },
+          "lines_removed": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "patch": {
+      "type": "object",
+      "description": "The captured diff beside this record. Omitted for iterations created before patch capture.",
+      "required": ["path", "bytes", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "description": "Run-relative name of the patch file." },
+        "bytes": { "type": "integer", "minimum": 0, "description": "Size of the written patch, including any truncation marker." },
+        "truncated": { "type": "boolean", "description": "True when the diff exceeded the capture cap and the file carries a marker in place of the rest." }
+      }
+    }
   }
 }

@@ -624,8 +624,10 @@ pub(crate) enum Commands {
     /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
     /// writes, and maps raw per-env guard logs through `dispatch.json` into
     /// `guard-denials.json` (including tasks without `run.json`). Malformed raw
-    /// records fail with their source path and line number. It captures always-on
-    /// final-environment files/lines/hunks in `diff-scope.json`, grades
+    /// records fail with their source path and line number. It measures the
+    /// finished environment against the `eval-magic/baseline` ref it was marked
+    /// with, writing always-on files/lines/hunks and the changed-file list to
+    /// `diff-scope.json` and the diff itself to `diff.patch`, grades
     /// `transcript_check` assertions, prepares
     /// `diff_scope` grading for finalize, injects held-out
     /// `command_check.setup_files`, and executes each
@@ -645,7 +647,9 @@ pub(crate) enum Commands {
     /// runner-owned `command_check` results, and deterministic `diff_scope`
     /// files/lines thresholds into normal `grading.json` files, then writes
     /// `benchmark.json` with a per-assertion `passed`/`n` rollup from observed
-    /// assertion results and raw per-run metrics from `diff-scope.json`. If a live
+    /// assertion results and raw per-run metrics from `diff-scope.json`. The
+    /// per-run changed-file list and `diff.patch` stay beside each run rather
+    /// than being rolled up. If a live
     /// guard remains armed — the cwd guard, or any per-task Cli env guard — prints
     /// a `teardown` reminder before source edits. Requires `--iteration`.
     Finalize(CommonArgs),
@@ -698,12 +702,16 @@ pub(crate) enum Commands {
     DetectStrayWrites(CommonArgs),
     /// Grade run records (runner checks + LLM-judge task emission).
     ///
-    /// Captures always-on final-environment files/lines/hunks in `diff-scope.json`
+    /// Captures always-on final-environment files/lines/hunks plus the
+    /// changed-file list in `diff-scope.json`, writes the diff itself to
+    /// `diff.patch` beside it (truncated with a marker past its size cap),
     /// and evaluates `transcript_check` assertions directly: regex against
     /// tool invocations or, for scripted evals, assistant messages across rounds.
     /// Checks can require a match before the final completion claim or before the
     /// first write/patch tool call. A `diff_scope` assertion gates the captured file count
-    /// and/or added-plus-removed line count. Grade captures scope before it injects
+    /// and/or added-plus-removed line count. Git supplies both, so the codebase's
+    /// own `.gitignore` decides what counts and ignored build output stays out.
+    /// Grade captures scope before it injects
     /// held-out `command_check.setup_files` and executes each runner-owned command
     /// in its task environment, applying fixed environment overrides and running
     /// every environment matrix cell; completed command and diff-scope results
@@ -729,7 +737,8 @@ pub(crate) enum Commands {
     /// grouped findings in schema-v2 `plugin-shadow.json` (legacy unversioned
     /// reports remain readable) unless it records the resolved descriptor's
     /// `isolates_live_sources = true` assertion), and raw per-run files/lines/hunks
-    /// from `diff-scope.json`. Shadow findings retain their intrinsic warning or
+    /// from `diff-scope.json`. Each run's changed-file list and its `diff.patch`
+    /// stay in the run directory. Shadow findings retain their intrinsic warning or
     /// comparison-invalid severity, per-cell appearances, resolution, and
     /// remediation. A timing metric with `n: 0` is unavailable, not a measured
     /// zero. The top-level `diff_scope` field is omitted for compatible older

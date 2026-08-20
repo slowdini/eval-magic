@@ -1,12 +1,10 @@
 //! Runner-owned Git lifecycle for private task environments.
 
-use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
 
 use crate::adapters::registry::all_config_dir_names;
-use crate::core::{clear_git_environment, run_git};
+use crate::core::{BASELINE_REF, GitOutput, IsolatedGit, run_git};
 use crate::source::INITIALIZED_BRANCH;
 
 use super::super::RunError;
@@ -15,8 +13,6 @@ use super::Resolved;
 use super::envs::{EnvLayoutInput, env_targets};
 use crate::core::RunContext;
 
-/// Marks the state every environment starts from, for later diffing.
-const BASELINE_REF: &str = "refs/eval-magic/baseline";
 const BASELINE_MESSAGE: &str = "eval-magic task baseline";
 const BASELINE_NAME: &str = "eval-magic";
 const BASELINE_EMAIL: &str = "eval-magic@localhost";
@@ -145,34 +141,27 @@ fn path_budget_hint(root: &Path, windows: bool) -> Option<String> {
 
 fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     let root = plan.root.as_path();
-
-    let isolated = tempfile::TempDir::new()
-        .map_err(|error| format!("could not create isolated Git configuration: {error}"))?;
-    let template_dir = isolated.path().join("template");
-    let global_config = isolated.path().join("global-config");
-    fs::create_dir(&template_dir)
-        .map_err(|error| format!("could not create empty Git template directory: {error}"))?;
-    fs::write(&global_config, "")
-        .map_err(|error| format!("could not create empty Git configuration: {error}"))?;
+    let git = IsolatedGit::new()?;
 
     if plan.sourced {
         // The clone's history is the point of sourcing a codebase, so this is
         // the one case that must not reset `.git`.
-        strip_remotes(root, &global_config)?;
+        strip_remotes(root, &git)?;
     } else {
         remove_existing_git_dir(root)?;
+        let template = git.template_dir().to_string_lossy().into_owned();
         run_checked(
+            &git,
             root,
             &[
-                OsString::from("init"),
-                OsString::from("--quiet"),
-                OsString::from("--initial-branch"),
-                OsString::from(&plan.branch),
-                OsString::from("--template"),
-                template_dir.into_os_string(),
-                OsString::from("."),
+                "init",
+                "--quiet",
+                "--initial-branch",
+                &plan.branch,
+                "--template",
+                &template,
+                ".",
             ],
-            &global_config,
             &[],
         )?;
     }
@@ -185,30 +174,21 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     fs::write(root.join(".git/info/exclude"), "/.eval-magic-outputs/\n")
         .map_err(|error| format!("could not configure framework output exclusion: {error}"))?;
 
+    let hooks_path = hooks_dir.to_string_lossy().into_owned();
     for (name, value) in [
-        ("user.name", OsString::from(BASELINE_NAME)),
-        ("user.email", OsString::from(BASELINE_EMAIL)),
-        ("commit.gpgSign", OsString::from("false")),
-        ("tag.gpgSign", OsString::from("false")),
-        ("core.hooksPath", hooks_dir.into_os_string()),
+        ("user.name", BASELINE_NAME),
+        ("user.email", BASELINE_EMAIL),
+        ("commit.gpgSign", "false"),
+        ("tag.gpgSign", "false"),
+        ("core.hooksPath", hooks_path.as_str()),
         // Lifts Windows' `MAX_PATH`, which a staged skill under a deep workspace
         // crosses. Task repositories run under isolated Git configuration, so an
         // operator's own setting never reaches one. Written to the repository,
         // not per invocation, so the agent under test and the pipeline inherit
         // it; git ignores the key off Windows.
-        ("core.longpaths", OsString::from("true")),
+        ("core.longpaths", "true"),
     ] {
-        run_checked(
-            root,
-            &[
-                OsString::from("config"),
-                OsString::from("--local"),
-                OsString::from(name),
-                value,
-            ],
-            &global_config,
-            &[],
-        )?;
+        run_checked(&git, root, &["config", "--local", name, value], &[])?;
     }
 
     // Respects the sourced codebase's `.gitignore`: a real repository ignores
@@ -218,41 +198,27 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     // No exclude pathspec for `.eval-magic-outputs`: `.git/info/exclude` above
     // already ignores it, and an unforced add honors that. The pathspecs this
     // replaces existed only to carve it back out of a forced add.
-    run_checked(
-        root,
-        &[
-            OsString::from("add"),
-            OsString::from("--all"),
-            OsString::from("--"),
-            OsString::from("."),
-        ],
-        &global_config,
-        &[],
-    )?;
+    run_checked(&git, root, &["add", "--all", "--", "."], &[])?;
     // What the runner itself placed is forced in on top, so a codebase that
     // ignores `.claude/` cannot hide the staged skill from the baseline — which
     // would leave the condition under test outside every later diff.
     if !plan.forced_paths.is_empty() {
-        let mut args = vec![
-            OsString::from("add"),
-            OsString::from("--force"),
-            OsString::from("--"),
-        ];
-        args.extend(plan.forced_paths.iter().map(OsString::from));
-        run_checked(root, &args, &global_config, &[])?;
+        let mut args = vec!["add", "--force", "--"];
+        args.extend(plan.forced_paths.iter().map(String::as_str));
+        run_checked(&git, root, &args, &[])?;
     }
     run_checked(
+        &git,
         root,
         &[
-            OsString::from("commit"),
-            OsString::from("--quiet"),
-            OsString::from("--allow-empty"),
-            OsString::from("--no-gpg-sign"),
-            OsString::from("--no-verify"),
-            OsString::from("-m"),
-            OsString::from(BASELINE_MESSAGE),
+            "commit",
+            "--quiet",
+            "--allow-empty",
+            "--no-gpg-sign",
+            "--no-verify",
+            "-m",
+            BASELINE_MESSAGE,
         ],
-        &global_config,
         &[
             ("GIT_AUTHOR_NAME", BASELINE_NAME),
             ("GIT_AUTHOR_EMAIL", BASELINE_EMAIL),
@@ -269,39 +235,23 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     //
     // Deliberately outside `refs/heads/`: it never appears in `git branch`, so
     // it adds nothing to what the agent under test sees.
-    run_checked(
-        root,
-        &[
-            OsString::from("update-ref"),
-            OsString::from(BASELINE_REF),
-            OsString::from("HEAD"),
-        ],
-        &global_config,
-        &[],
-    )?;
+    run_checked(&git, root, &["update-ref", BASELINE_REF, "HEAD"], &[])?;
 
-    verify_task_repository(root, &global_config)
+    verify_task_repository(root, &git)
 }
 
 /// Drop every remote, so nothing in the environment can reach the source it was
 /// cloned from — or push to it.
-fn strip_remotes(root: &Path, global_config: &Path) -> Result<(), String> {
-    let listed = run_checked(root, &[OsString::from("remote")], global_config, &[])?;
-    for remote in String::from_utf8_lossy(&listed.stdout)
+fn strip_remotes(root: &Path, git: &IsolatedGit) -> Result<(), String> {
+    let listed = run_checked(git, root, &["remote"], &[])?;
+    let remotes: Vec<String> = String::from_utf8_lossy(&listed.stdout)
         .lines()
         .map(str::trim)
         .filter(|name| !name.is_empty())
-    {
-        run_checked(
-            root,
-            &[
-                OsString::from("remote"),
-                OsString::from("remove"),
-                OsString::from(remote),
-            ],
-            global_config,
-            &[],
-        )?;
+        .map(str::to_string)
+        .collect();
+    for remote in &remotes {
+        run_checked(git, root, &["remote", "remove", remote], &[])?;
     }
     Ok(())
 }
@@ -326,16 +276,8 @@ fn remove_existing_git_dir(root: &Path) -> Result<(), String> {
     })
 }
 
-fn verify_task_repository(root: &Path, global_config: &Path) -> Result<(), String> {
-    let top_level = run_checked(
-        root,
-        &[
-            OsString::from("rev-parse"),
-            OsString::from("--show-toplevel"),
-        ],
-        global_config,
-        &[],
-    )?;
+fn verify_task_repository(root: &Path, git: &IsolatedGit) -> Result<(), String> {
+    let top_level = run_checked(git, root, &["rev-parse", "--show-toplevel"], &[])?;
     let reported = PathBuf::from(String::from_utf8_lossy(&top_level.stdout).trim());
     let expected = fs::canonicalize(root)
         .map_err(|error| format!("could not canonicalize task root: {error}"))?;
@@ -354,13 +296,9 @@ fn verify_task_repository(root: &Path, global_config: &Path) -> Result<(), Strin
     }
 
     let status = run_checked(
+        git,
         root,
-        &[
-            OsString::from("status"),
-            OsString::from("--porcelain=v1"),
-            OsString::from("--untracked-files=all"),
-        ],
-        global_config,
+        &["status", "--porcelain=v1", "--untracked-files=all"],
         &[],
     )?;
     if !status.stdout.is_empty() {
@@ -370,7 +308,7 @@ fn verify_task_repository(root: &Path, global_config: &Path) -> Result<(), Strin
         ));
     }
 
-    let remotes = run_checked(root, &[OsString::from("remote")], global_config, &[])?;
+    let remotes = run_checked(git, root, &["remote"], &[])?;
     if !remotes.stdout.is_empty() {
         return Err(format!(
             "task repository unexpectedly has remotes: {}",
@@ -381,46 +319,20 @@ fn verify_task_repository(root: &Path, global_config: &Path) -> Result<(), Strin
 }
 
 fn run_checked(
+    git: &IsolatedGit,
     cwd: &Path,
-    args: &[OsString],
-    global_config: &Path,
+    args: &[&str],
     env: &[(&str, &str)],
-) -> Result<Output, String> {
-    let mut command = Command::new("git");
-    command
-        // `git init` creates `.git/objects/pack` before any repository-local
-        // configuration exists, so the long-path lift rides on the invocation.
-        .args(["-c", "core.longpaths=true"])
-        .args(args.iter().map(OsString::as_os_str))
-        .current_dir(cwd)
-        .env("GIT_CONFIG_NOSYSTEM", "1")
-        .env("GIT_CONFIG_GLOBAL", global_config)
-        .env_remove("GIT_CONFIG_COUNT")
-        .env_remove("GIT_CONFIG_PARAMETERS");
-    clear_git_environment(&mut command);
-    for (name, value) in env {
-        command.env(name, value);
+) -> Result<GitOutput, String> {
+    let output = git.run(cwd, args, env);
+    match output.status {
+        Some(0) => Ok(output),
+        status => Err(format!(
+            "git {} failed: {}",
+            args.join(" "),
+            git_diagnostic(status, &output.stderr)
+        )),
     }
-    let output = command.output().map_err(|error| {
-        format!(
-            "git {} could not start: {error}",
-            display_args(args.iter().map(OsString::as_os_str))
-        )
-    })?;
-    if output.status.success() {
-        return Ok(output);
-    }
-    Err(format!(
-        "git {} failed: {}",
-        display_args(args.iter().map(OsString::as_os_str)),
-        git_diagnostic(output.status.code(), &output.stderr)
-    ))
-}
-
-fn display_args<'a>(args: impl Iterator<Item = &'a OsStr>) -> String {
-    args.map(|arg| arg.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn git_diagnostic(status: Option<i32>, stderr: &[u8]) -> String {

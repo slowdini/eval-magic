@@ -68,6 +68,34 @@ Each dispatch gets its own private environment holding:
 An eval that declares no `codebase` still gets a Git repository, initialized on `work`, exactly as
 it always has.
 
+## The baseline ref is what the run is measured against
+
+Nothing writes into an environment after that ref is written, so it names exactly what the agent
+started from — and everything the agent did is the difference from it.
+
+During `ingest`, Git measures that difference. Each run gets:
+
+- `diff-scope.json` — `files_touched`, `lines_added`, `lines_removed`, and `hunks`, plus the list of
+  changed files with a status of `added`, `modified`, or `deleted`
+- `diff.patch` — the diff itself, which is the evidence a judge reads to answer whether the work was
+  any good. It always exists; for a run that changed nothing it is empty. A diff past the capture
+  cap is cut at a line boundary and carries a marker saying so, and `patch.truncated` in
+  `diff-scope.json` records it.
+
+What counts is what Git counts, under the same rules the baseline commit was built under:
+
+- The codebase's own `.gitignore` holds, so a run that compiles does not report its build output as
+  thousands of touched files.
+- Fixtures and staged skills count even when the codebase ignores their paths — they are committed
+  into the baseline regardless, so a change to one is always visible.
+- Framework artifacts under `.eval-magic-outputs/` never count.
+- A nested repository's internals never count: Git tracks no path with a `.git` component.
+- A rename counts as two touched files, one created and one deleted.
+- A binary file counts as one touched file, contributing no lines.
+
+A `diff_scope` assertion gates `max_files_touched`, `max_lines_changed` (added plus removed), or
+both, against exactly these numbers.
+
 ## One checkout per iteration
 
 Every environment a run provisions — each `(eval, condition, run)` cell — is built from one cached
@@ -103,7 +131,8 @@ paths. Seeding a task-specific file into a real project is the common case:
 A fixture overwrites a codebase file of the same path.
 
 The baseline the runner commits respects the codebase's `.gitignore`, so ignored build output stays
-out of it. Fixtures and staged skills are committed regardless of what the codebase ignores.
+out of it. Fixtures and staged skills are committed regardless of what the codebase ignores — which
+is also what keeps them inside every later measurement.
 
 ## A `path` source is not reproducible elsewhere
 
@@ -132,6 +161,16 @@ git status --porcelain
 
 `git remote -v` and `git status --porcelain` are both empty, and the two revisions match: the
 baseline ref names exactly what the agent started from.
+
+After a dispatch and `ingest`, read what the run produced:
+
+```sh
+jq '{files_touched, lines_added, lines_removed, hunks, files, patch}' diff-scope.json
+head -50 diff.patch
+```
+
+The same difference, spelled by Git itself, is `git diff refs/eval-magic/baseline` inside the
+environment.
 
 The resolved commit appears in `conditions.json`, each `run.json`, `benchmark.json`, and the
 `BASELINE.md` written by `promote-baseline` — alongside the skill the run measured, which

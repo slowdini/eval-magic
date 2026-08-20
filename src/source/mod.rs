@@ -14,9 +14,7 @@
 
 use std::path::Path;
 
-mod git;
-
-use git::IsolatedGit;
+use crate::core::IsolatedGit;
 
 /// Branch a source that carries no Git history of its own is initialized on.
 /// Matches the branch a fixture-only task repository has always used, so a run
@@ -121,7 +119,7 @@ fn resolve_path(
 
     let git = IsolatedGit::new().map_err(SourceError::msg)?;
     let text = |args: &[&str]| {
-        let output = git.run(&directory, args);
+        let output = git.run(&directory, args, &[]);
         (output.status == Some(0))
             .then(|| String::from_utf8_lossy(&output.stdout).trim().to_string())
             .filter(|value| !value.is_empty())
@@ -398,7 +396,7 @@ fn copy_from_cache(cache: &Path, dest: &Path) -> Result<(), SourceError> {
 
 /// Run git in `cwd`, turning a non-zero exit into an error naming the intent.
 fn checked(git: &IsolatedGit, cwd: &Path, args: &[&str], intent: &str) -> Result<(), SourceError> {
-    let output = git.run(cwd, args);
+    let output = git.run(cwd, args, &[]);
     if output.status == Some(0) {
         return Ok(());
     }
@@ -437,7 +435,7 @@ fn default_branch(refs: &[(String, String)], url: &str) -> Result<String, Source
 /// call answers both questions in one round trip.
 fn list_remote(url: &str, subject: &'static str) -> Result<Vec<(String, String)>, SourceError> {
     let git = IsolatedGit::new().map_err(SourceError::msg)?;
-    let output = git.run(Path::new("."), &["ls-remote", "--symref", url]);
+    let output = git.run(Path::new("."), &["ls-remote", "--symref", url], &[]);
     if output.status != Some(0) {
         return Err(SourceError::msg(format!(
             "could not read {subject} repository {url}: {}",

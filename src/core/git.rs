@@ -1,20 +1,29 @@
 //! Running git with the operator's configuration held off.
 //!
-//! Sourcing a codebase runs git against a URL from an eval config, on a host
-//! whose git configuration belongs to someone else. Left inherited, that
-//! configuration decides things the runner has to decide itself: `insteadOf`
-//! rewrites the URL, so the tree sourced is not the tree the report cites;
-//! `init.templateDir` installs hooks into a repository the guard assumes has
-//! none; `commit.gpgSign` blocks the baseline commit on a passphrase prompt.
+//! The runner spawns git on a host whose git configuration belongs to someone
+//! else. Left inherited, that configuration decides things the runner has to
+//! decide itself: `insteadOf` rewrites a URL, so the tree sourced is not the
+//! tree the report cites; `init.templateDir` installs hooks into a repository
+//! the guard assumes has none; `commit.gpgSign` blocks the baseline commit on a
+//! passphrase prompt; `core.excludesFile` and `core.autocrlf` change which files
+//! a diff reports and how many lines it counts.
 //!
-//! So every git invocation in this module runs with system and global
-//! configuration switched off and the environment-variable configuration
-//! mechanism cleared.
+//! So every caller that needs an answer git alone should decide runs through
+//! [`IsolatedGit`]: system and global configuration switched off, and the
+//! environment-variable configuration mechanism cleared.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::core::{GitOutput, clear_git_environment};
+
+/// Marks the state every task environment starts from.
+///
+/// The runner writes it once, when it establishes the environment's
+/// repository; every later measurement is the difference from it. Deliberately
+/// outside `refs/heads/`: it never appears in `git branch`, so it adds nothing
+/// to what the agent under test sees.
+pub const BASELINE_REF: &str = "refs/eval-magic/baseline";
 
 /// A scratch git configuration that resolves to nothing.
 ///
@@ -49,7 +58,16 @@ impl IsolatedGit {
         &self.template_dir
     }
 
-    pub(crate) fn run(&self, cwd: &Path, args: &[&str]) -> GitOutput {
+    /// Invoke git in `cwd`. `env` sets variables for this invocation only —
+    /// the committer identity a deterministic baseline commit needs, or the
+    /// scratch index a measurement builds; configuration still comes from the
+    /// isolated files above.
+    ///
+    /// `env` is applied *after* the routing variables are cleared, deliberately:
+    /// `GIT_INDEX_FILE` is one of the variables cleared, so a caller pointing
+    /// git at an index of its own has to win over the inherited state rather
+    /// than be swept up with it.
+    pub(crate) fn run(&self, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> GitOutput {
         let mut command = Command::new("git");
         command
             // `git clone` and `git init` create paths inside `.git` before any
@@ -66,6 +84,9 @@ impl IsolatedGit {
             .env_remove("GIT_CONFIG_COUNT")
             .env_remove("GIT_CONFIG_PARAMETERS");
         clear_git_environment(&mut command);
+        for (name, value) in env {
+            command.env(name, value);
+        }
         match command.output() {
             Ok(output) => GitOutput {
                 status: output.status.code(),
