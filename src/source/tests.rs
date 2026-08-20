@@ -480,3 +480,131 @@ fn materializing_a_dirty_local_repository_carries_only_committed_state() {
     assert!(!dest.join("untracked.txt").exists());
     assert_eq!(git_text(&dest, &["remote"]), "");
 }
+
+/// The environment a run provisions from its cached materialization:
+/// a local clone while the cache carries check-outable history and the
+/// host allows hard links, a plain copy otherwise.
+#[test]
+fn provisioning_an_env_from_a_cached_checkout_clones_with_history_and_no_remote() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = source_repo(tmp.path(), "origin", "main");
+    commit(&origin, "second.txt", "second");
+    let resolved = resolve(
+        &SourceSpec::Git {
+            url: origin.to_string_lossy().into_owned(),
+            reference: "main".to_string(),
+        },
+        tmp.path(),
+        "codebase",
+    )
+    .unwrap();
+    let cache = tmp.path().join("cache");
+    materialize(&resolved, &cache).unwrap();
+    let env = tmp.path().join("env");
+
+    let outcome = provision_env(&resolved, &cache, &env).expect("provisioning succeeds");
+
+    assert!(
+        matches!(outcome, EnvProvisioning::LocalClone),
+        "a cached checkout with commits and a hard-linking host clones"
+    );
+    assert_eq!(sha(&env, "HEAD"), resolved.revision.unwrap());
+    assert_eq!(git_text(&env, &["symbolic-ref", "--short", "HEAD"]), "main");
+    assert_eq!(
+        git_text(&env, &["rev-list", "--count", "HEAD"]),
+        "2",
+        "a local clone carries the cached checkout's history"
+    );
+    assert_eq!(
+        git_text(&env, &["remote"]),
+        "",
+        "a local clone names its source as a remote, so provisioning removes it"
+    );
+    assert_eq!(git_text(&env, &["status", "--porcelain"]), "");
+    assert_eq!(
+        std::fs::read_to_string(env.join("second.txt")).unwrap(),
+        "second
+"
+    );
+}
+
+/// A cache materialized from a directory with no Git history has no commits,
+/// and `git clone` of an empty repository checks out nothing — the only
+/// correct provisioning there is the plain copy.
+#[test]
+fn provisioning_a_commitless_cache_falls_back_to_a_plain_copy() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let plain = tmp.path().join("plain-project");
+    std::fs::create_dir_all(plain.join("src")).unwrap();
+    std::fs::write(
+        plain.join("src/main.rs"),
+        "fn main() {}
+",
+    )
+    .unwrap();
+    let resolved = resolve(
+        &SourceSpec::Path {
+            path: plain.to_string_lossy().into_owned(),
+        },
+        tmp.path(),
+        "codebase",
+    )
+    .unwrap();
+    let cache = tmp.path().join("cache");
+    materialize(&resolved, &cache).unwrap();
+    let env = tmp.path().join("env");
+
+    let outcome = provision_env(&resolved, &cache, &env).expect("provisioning succeeds");
+
+    assert!(matches!(outcome, EnvProvisioning::PlainCopy));
+    assert_eq!(
+        std::fs::read_to_string(env.join("src/main.rs")).unwrap(),
+        "fn main() {}
+",
+        "a commitless cache must still populate the environment's working tree"
+    );
+}
+
+/// Environments share the cache's objects by hard link, but
+/// each keeps a private working tree and private refs — a
+/// write in one is invisible to the others and to the cache.
+#[test]
+fn envs_provisioned_from_one_cache_are_independent_working_trees() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = source_repo(tmp.path(), "origin", "main");
+    let resolved = resolve(
+        &SourceSpec::Git {
+            url: origin.to_string_lossy().into_owned(),
+            reference: "main".to_string(),
+        },
+        tmp.path(),
+        "codebase",
+    )
+    .unwrap();
+    let cache = tmp.path().join("cache");
+    materialize(&resolved, &cache).unwrap();
+    let env_one = tmp.path().join("env-one");
+    let env_two = tmp.path().join("env-two");
+    provision_env(&resolved, &cache, &env_one).unwrap();
+    provision_env(&resolved, &cache, &env_two).unwrap();
+
+    commit(&env_one, "agent-work.txt", "work committed in env one");
+
+    assert_eq!(
+        git_text(&env_one, &["rev-list", "--count", "HEAD"]),
+        "2",
+        "the writing environment moved ahead on its own history"
+    );
+    assert_eq!(
+        git_text(&env_two, &["rev-list", "--count", "HEAD"]),
+        "1",
+        "the other environment's history is untouched"
+    );
+    assert_eq!(
+        git_text(&cache, &["rev-list", "--count", "HEAD"]),
+        "1",
+        "the cache every environment shares is never mutated"
+    );
+    assert!(!env_two.join("agent-work.txt").exists());
+    assert!(!cache.join("agent-work.txt").exists());
+}

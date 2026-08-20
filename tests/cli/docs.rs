@@ -163,10 +163,11 @@ fn docs_isolation_keeps_remedies_and_verification() {
 
 /// The codebase guide is the reference surface for a feature with no CLI flag,
 /// so the parts a config author cannot infer have to survive an edit: that a
-/// git ref is mandatory, that `files` layers over the checkout, and that a local
-/// path is not reproducible by anyone reading the results.
+/// git ref is mandatory, that `files` layers over the checkout, that a local
+/// path is not reproducible by anyone reading the results, and how the
+/// per-iteration cache provisions environments.
 #[test]
-fn docs_codebase_keeps_the_declaration_rules_and_reproducibility_caveat() {
+fn docs_codebase_keeps_the_declaration_rules_caveat_and_provisioning_contract() {
     skill_eval()
         .args(["docs", "codebase"])
         .assert()
@@ -177,7 +178,10 @@ fn docs_codebase_keeps_the_declaration_rules_and_reproducibility_caveat() {
         .stdout(contains("overlay"))
         .stdout(contains("refs/eval-magic/baseline"))
         .stdout(contains("host_local"))
-        .stdout(contains("not reproducible"));
+        .stdout(contains("not reproducible"))
+        .stdout(contains("materialized once"))
+        .stdout(contains("hard-link"))
+        .stdout(contains("independent working tree"));
 }
 
 #[test]

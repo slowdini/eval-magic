@@ -347,3 +347,319 @@ fn a_fixture_only_eval_still_gets_the_repository_it_always_had() {
         git(&env, &["rev-parse", "HEAD"])
     );
 }
+
+/// The number of hard links to `file` — the mechanism `git clone --local` uses
+/// to share the cache's object store with an environment instead of copying
+/// it. Straight from stat metadata on Unix.
+#[cfg(unix)]
+fn link_count(file: &Path) -> u32 {
+    use std::os::unix::fs::MetadataExt;
+    fs::metadata(file).unwrap().nlink() as u32
+}
+
+/// The number of hard links to `file`, read from fsutil because Windows has no
+/// stable std route to it: `number_of_links` rides the unstable
+/// `windows_by_handle` trait. fsutil prints one path per hard link, sometimes
+/// behind a `Hardlink list on ...` header — the header is the only printed
+/// line that is not a path.
+#[cfg(windows)]
+fn link_count(file: &Path) -> u32 {
+    let output = Command::new("fsutil")
+        .args(["hardlink", "list"])
+        .arg(file)
+        .output()
+        .expect("fsutil hardlink list must run");
+    assert!(
+        output.status.success(),
+        "fsutil hardlink list failed for {}: {}",
+        file.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    hardlink_list_count(&String::from_utf8_lossy(&output.stdout))
+}
+
+/// Count the hard links in `fsutil hardlink list` output: one path per line,
+/// sometimes behind a `Hardlink list on ...` header — the header is the only
+/// printed line that is not a path.
+fn hardlink_list_count(output: &str) -> u32 {
+    output
+        .lines()
+        .map(str::trim)
+        .filter(|line| line.contains('\\') && !line.starts_with("Hardlink"))
+        .count() as u32
+}
+
+/// Both layouts `fsutil hardlink list` prints. Pinned here because the
+/// Windows arm of `link_count` runs only on Windows, while the counting is
+/// plain string logic every runner can execute.
+#[test]
+fn fsutil_link_list_output_is_counted_in_both_of_its_formats() {
+    // Modern Windows: one \?\-prefixed path per hard link, no header.
+    let modern = r"\\?\C:\cache\.git\objects\ab\cdef
+\\?\C:\env\.git\objects\ab\cdef
+";
+    assert_eq!(hardlink_list_count(modern), 2);
+    // Older Windows: the same paths behind a `Hardlink list on ...` header,
+    // CRLF-terminated.
+    let older_lf = r"Hardlink list on C:\cache\.git\objects\ab\cdef
+C:\cache\.git\objects\ab\cdef
+C:\env\.git\objects\ab\cdef
+";
+    let older = older_lf.replace('\n', "\r\n");
+    assert_eq!(hardlink_list_count(&older), 2);
+    // A file no other path shares lists exactly once — the count that fails
+    // the hard-link assertions when an environment was copied, not cloned.
+    let lone = r"\\?\C:\env\.git\objects\ab\cdef
+";
+    assert_eq!(hardlink_list_count(lone), 1);
+}
+
+/// A file from `repo`'s object store — a loose object or a pack — that a local
+/// clone shares with its source by hard link. `objects/info` is skipped: it
+/// holds per-repository metadata (an exclude file), not objects, and is never
+/// shared.
+fn an_object_file(repo: &Path) -> PathBuf {
+    fn walk(dir: &Path) -> Option<PathBuf> {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                if path.file_name().is_some_and(|name| name == "info") {
+                    continue;
+                }
+                if let Some(found) = walk(&path) {
+                    return Some(found);
+                }
+            } else {
+                return Some(path);
+            }
+        }
+        None
+    }
+    walk(&repo.join(".git/objects")).expect("a materialized repository has objects")
+}
+
+/// One cached materialization provisions every environment of a
+/// multi-run campaign, and the provisioning is a local clone — each
+/// environment's object store is hard-linked to the cache's, not copied.
+#[test]
+fn multi_run_envs_are_provisioned_from_one_cached_materialization() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = codebase_repo(tmp.path(), "origin", "main");
+    let source = format!(r#"{{ "url": "{}", "ref": "main" }}"#, wire_path(&origin));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(
+        skill_dir.join("mr-review/evals/TASK.md"),
+        "task
+",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--runs",
+            "2",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    // One codebase declaration resolves to one cached materialization, shared
+    // by every environment the run provisions.
+    let iteration = iteration_dir(&cwd);
+    let cached: Vec<_> = fs::read_dir(iteration.join(".codebase")).unwrap().collect();
+    assert_eq!(cached.len(), 1, "one codebase, one cached materialization");
+    // One object file the cache holds, spelled relative to the cache root — the
+    // same content-addressed path every environment provisioned from it holds.
+    let cache = cached[0].as_ref().unwrap().path();
+    let object = an_object_file(&cache);
+    let object_relative = object.strip_prefix(&cache).unwrap();
+
+    for condition in ["with_skill", "without_skill"] {
+        for run in [1, 2] {
+            let env = iteration.join(format!("env-g1-{condition}-run-{run}"));
+            assert_eq!(
+                fs::read_to_string(env.join("src/main.rs")).unwrap(),
+                "fn main() {}
+",
+                "{condition} run {run}: the codebase's files must be present"
+            );
+            assert!(
+                git(&env, &["rev-list", "--count", "HEAD"])
+                    .parse::<u32>()
+                    .unwrap()
+                    >= 2,
+                "{condition} run {run}: the clone must carry the history"
+            );
+            assert_eq!(
+                git(&env, &["remote"]),
+                "",
+                "{condition} run {run}: no env may retain a remote, the cache included"
+            );
+            assert_eq!(
+                git(&env, &["rev-parse", "refs/eval-magic/baseline"]),
+                git(&env, &["rev-parse", "HEAD"]),
+                "{condition} run {run}: the baseline still names the start state"
+            );
+            assert!(
+                link_count(&env.join(object_relative)) >= 2,
+                "{condition} run {run}: the object store must be hard-linked to the cache's, not copied byte by byte"
+            );
+        }
+    }
+}
+
+/// A codebase that carries no Git history — a plain directory — still yields
+/// a working environment end to end. Its cache is a commitless repository,
+/// which a local clone could not populate (cloning an empty repository checks
+/// out nothing), so provisioning takes the plain-copy fallback.
+#[test]
+fn a_historyless_codebase_provisions_every_env_through_the_copy_fallback() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let plain = tmp.path().join("legacy-service");
+    fs::create_dir_all(plain.join("src")).unwrap();
+    fs::write(
+        plain.join("src/main.rs"),
+        "fn main() {}
+",
+    )
+    .unwrap();
+    let source = format!(r#"{{ "path": "{}" }}"#, wire_path(&plain));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(
+        skill_dir.join("mr-review/evals/TASK.md"),
+        "task
+",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    for condition in ["with_skill", "without_skill"] {
+        let env = cli_env_dir(&cwd, "g1", condition);
+        assert_eq!(
+            fs::read_to_string(env.join("src/main.rs")).unwrap(),
+            "fn main() {}
+",
+            "{condition}: a historyless codebase must still populate the working tree"
+        );
+        assert_eq!(
+            git(&env, &["remote"]),
+            "",
+            "{condition}: no env may retain a remote"
+        );
+        assert_eq!(
+            git(&env, &["rev-parse", "refs/eval-magic/baseline"]),
+            git(&env, &["rev-parse", "HEAD"]),
+            "{condition}: the baseline still names the start state"
+        );
+    }
+}
+
+/// The run plan names each codebase and the commit it resolved to, and says the
+/// iteration materializes it once — the fact #254 turned into a guarantee.
+#[test]
+fn the_run_plan_names_the_codebase_and_its_resolved_commit() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = codebase_repo(tmp.path(), "origin", "main");
+    let revision = git(&origin, &["rev-parse", "HEAD"]);
+    let source = format!(r#"{{ "url": "{}", "ref": "main" }}"#, wire_path(&origin));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(
+        skill_dir.join("mr-review/evals/TASK.md"),
+        "task
+",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("codebase: "))
+        .stdout(predicates::str::contains(&revision[..7]))
+        .stdout(predicates::str::contains("materialized once"));
+}
+
+/// Mode B parity: a revision-mode run provisions both arms of the comparison
+/// from the same cached codebase, so a skill edit is measured against the same
+/// tree the previous skill ran on.
+#[test]
+fn revision_mode_provisions_both_arms_from_the_cached_codebase() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let origin = codebase_repo(tmp.path(), "origin", "main");
+    let source = format!(r#"{{ "url": "{}", "ref": "main" }}"#, wire_path(&origin));
+    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
+    fs::write(
+        skill_dir.join("mr-review/evals/TASK.md"),
+        "task
+",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["snapshot", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--label", "baseline"])
+        .assert()
+        .success();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "revision", "--dry-run"])
+        .assert()
+        .success();
+
+    let iteration = iteration_dir(&cwd);
+    let cached: Vec<_> = fs::read_dir(iteration.join(".codebase")).unwrap().collect();
+    assert_eq!(
+        cached.len(),
+        1,
+        "both arms of the comparison share one cached materialization"
+    );
+
+    for condition in ["old_skill", "new_skill"] {
+        let env = iteration.join(format!("env-g1-{condition}"));
+        assert_eq!(
+            fs::read_to_string(env.join("src/main.rs")).unwrap(),
+            "fn main() {}
+",
+            "{condition}: the codebase's files must be present"
+        );
+        assert!(
+            git(&env, &["rev-list", "--count", "HEAD"])
+                .parse::<u32>()
+                .unwrap()
+                >= 2,
+            "{condition}: the history must survive provisioning"
+        );
+        assert_eq!(
+            git(&env, &["remote"]),
+            "",
+            "{condition}: no env may retain a remote"
+        );
+        assert_eq!(
+            git(&env, &["rev-parse", "refs/eval-magic/baseline"]),
+            git(&env, &["rev-parse", "HEAD"]),
+            "{condition}: the baseline still names the start state"
+        );
+    }
+}

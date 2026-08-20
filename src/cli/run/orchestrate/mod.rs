@@ -308,6 +308,21 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
         "  skill source: {}{revision}",
         source.resolved_path.as_deref().unwrap_or(&source.source)
     );
+    // The codebases the environments are built from, in the same shape as the
+    // skill source line — and the one-checkout-per-iteration fact the caching
+    // makes true.
+    for codebase in &r.codebases {
+        let source = &codebase.source;
+        let revision = source
+            .revision
+            .as_deref()
+            .map(|sha| format!(" ({})", &sha[..7.min(sha.len())]))
+            .unwrap_or_default();
+        println!(
+            "  codebase: {}{revision} — materialized once per iteration",
+            source.resolved_path.as_deref().unwrap_or(&source.source)
+        );
+    }
     if r.selected_evals.len() != r.total_evals {
         let (flag, ids) = match (opts.only, opts.skip) {
             (Some(ids), _) => ("--only", ids),
