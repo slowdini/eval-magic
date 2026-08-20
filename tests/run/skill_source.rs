@@ -26,7 +26,9 @@ fn prepare(cwd: &Path, skill_dir: &Path, extra: &[&str]) -> std::path::PathBuf {
 #[test]
 fn a_condition_stages_the_copy_in_the_eval_home_not_the_live_tree() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // realpath: this test compares paths the CLI emits, and the CLI resolves
+    // its roots once, so the expectation has to be built from a resolved root.
+    let (skill_dir, cwd) = setup(&resolved(tmp.path()), DEFAULT_EVALS);
 
     let iteration = prepare(&cwd, &skill_dir, &["--mode", "new-skill"]);
 
@@ -292,7 +294,7 @@ fn grading_reads_the_eval_definitions_the_run_copied() {
 #[test]
 fn revision_mode_stages_the_snapshot_and_the_copy() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let (skill_dir, cwd) = setup(&resolved(tmp.path()), DEFAULT_EVALS);
 
     skill_eval()
         .current_dir(&cwd)

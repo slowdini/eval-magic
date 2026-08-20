@@ -85,10 +85,15 @@ pub fn fixture(args: &[&str]) -> String {
 
 /// `fs::canonicalize` with Windows' verbatim (`\\?\`) prefix removed.
 ///
-/// The symlink resolution matters — a macOS temp dir lives under a symlinked
-/// `/var`, so the CLI's own paths resolve to `/private/var/...`. The prefix does
-/// not: a child process reports the plain form as its cwd, so plain is the
-/// spelling every path the CLI emits actually carries.
+/// Mirrors `eval_magic::core::fs::real_path`, which the CLI applies to its own
+/// roots. A test that compares a path the CLI emitted against one it built from
+/// `TempDir` has to resolve its side the same way, because a temp dir reaches
+/// the test under an alias on both CI hosts: macOS puts it under a symlinked
+/// `/var`, so the CLI's paths resolve to `/private/var/...`, and Windows hands
+/// out the 8.3 short name, so `C:\Users\RUNNER~1\...` resolves to
+/// `C:\Users\runneradmin\...`. The verbatim prefix is the one part that does
+/// *not* survive: a child process reports the plain form as its cwd, so plain is
+/// the spelling every path the CLI emits actually carries.
 pub fn resolved(path: &Path) -> PathBuf {
     let canonical = fs::canonicalize(path).unwrap();
     match canonical.to_string_lossy().strip_prefix(r"\\?\") {
