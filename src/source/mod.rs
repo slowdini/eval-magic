@@ -1,9 +1,12 @@
-//! Resolving a declared source to a revision, and materializing it as a tree.
+//! Resolving a declared source to a revision, materializing it as a tree, and
+//! provisioning task environments from that tree.
 //!
-//! Two phases, deliberately split. [`resolve`] is read-only: it answers "what
-//! exactly does this declaration point at?" without creating a directory, so a
-//! run can fail on an unreachable repository or a ref that does not exist before
-//! it has built any part of a workspace.
+//! Three operations, deliberately split. [`resolve`] is read-only: it answers
+//! "what exactly does this declaration point at?" without creating a directory,
+//! so a run can fail on an unreachable repository or a ref that does not exist
+//! before it has built any part of a workspace. [`materialize`] creates the one
+//! cached checkout an iteration shares; [`provision_env`] turns that cache into
+//! each individual task environment.
 //!
 //! Nothing here knows what a codebase is. A caller hands it a [`SourceSpec`] and
 //! gets back a [`ResolvedSource`]; the eval config's `codebase` block is one
@@ -301,6 +304,96 @@ fn clone_repository(
         "remove the cloned remote",
     )?;
     Ok(())
+}
+
+/// How [`provision_env`] produced an environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EnvProvisioning {
+    /// `git clone --local` from the cache: Git hard-links the object store and
+    /// checks out a fresh working tree, so the history arrives intact while the
+    /// cache's bytes are paid for once per iteration, not once per environment.
+    LocalClone,
+    /// A plain materialized copy of the cache: taken when the host cannot
+    /// hard-link between the two directories, or the cache carries no commits
+    /// to check out.
+    PlainCopy,
+}
+
+/// Produce one task environment at `dest` from the cached materialization of
+/// `resolved` that [`materialize`] left at `cache`.
+///
+/// A run materializes each distinct codebase once per iteration and provisions
+/// every `(group, condition, run)` environment from that single checkout. A
+/// local clone is the fast path: Git hard-links the object store instead of
+/// copying it, and the clone's history is the checkout's history. A local
+/// clone also names its source as an `origin` remote — removed here, so no
+/// environment retains a path back to the cache. The plain copy stands in
+/// wherever cloning could not deliver: a cache without commits (an empty
+/// repository clones to an empty working tree) or a host that refuses the
+/// hard link (a cache and an environment on different filesystems).
+///
+/// `dest` must not already exist. Returns how the environment was provisioned.
+pub fn provision_env(
+    resolved: &ResolvedSource,
+    cache: &Path,
+    dest: &Path,
+) -> Result<EnvProvisioning, SourceError> {
+    if resolved.revision.is_none() {
+        copy_from_cache(cache, dest)?;
+        return Ok(EnvProvisioning::PlainCopy);
+    }
+    let git = IsolatedGit::new().map_err(SourceError::msg)?;
+    let parent = dest.parent().unwrap_or(dest);
+    std::fs::create_dir_all(parent).map_err(|error| {
+        SourceError::msg(format!("could not create {}: {error}", parent.display()))
+    })?;
+    // Probing `cache/.git`, not the working tree: a probe file in the tree
+    // would be a leftover in the cache even after deletion racing a clone,
+    // while `.git` is metadata no checkout ever reads.
+    if !crate::core::fs::hardlinks_available(&cache.join(".git"), parent) {
+        copy_from_cache(cache, dest)?;
+        return Ok(EnvProvisioning::PlainCopy);
+    }
+    checked(
+        &git,
+        Path::new("."),
+        &[
+            "clone",
+            "--quiet",
+            "--local",
+            "--template",
+            &git.template_dir().to_string_lossy(),
+            &cache.to_string_lossy(),
+            &dest.to_string_lossy(),
+        ],
+        "clone the cached codebase checkout",
+    )?;
+    checked(
+        &git,
+        dest,
+        &["remote", "remove", "origin"],
+        "remove the cache as a remote",
+    )?;
+    Ok(EnvProvisioning::LocalClone)
+}
+
+/// The fallback provisioning: a materialized copy of the whole cache, for a
+/// host that cannot hard-link between the two directories or a cache with no
+/// commits to check out.
+fn copy_from_cache(cache: &Path, dest: &Path) -> Result<(), SourceError> {
+    std::fs::create_dir_all(dest).map_err(|error| {
+        SourceError::msg(format!(
+            "could not create environment {}: {error}",
+            dest.display()
+        ))
+    })?;
+    crate::core::fs::copy_entry_materialized(cache, dest).map_err(|error| {
+        SourceError::msg(format!(
+            "could not copy cached codebase {} into {}: {error}",
+            cache.display(),
+            dest.display()
+        ))
+    })
 }
 
 /// Run git in `cwd`, turning a non-zero exit into an error naming the intent.
