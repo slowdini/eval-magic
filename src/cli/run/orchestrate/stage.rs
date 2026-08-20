@@ -110,13 +110,17 @@ pub(super) fn stage_conditions(
             // agent left behind. Start from nothing instead.
             fs::remove_dir_all(&target.root)?;
         }
-        fs::create_dir_all(&target.root)?;
-
         // The codebase goes down first: staged skills and the `files` overlay are
-        // both applied *on top* of it.
+        // both applied *on top* of it. Every environment is provisioned from the
+        // iteration's single cached materialization of it — a local clone while
+        // the host allows the hard link, a plain copy otherwise — so `--runs 10`
+        // against a real repository costs one checkout, not ten copies.
         if let Some(codebase) = codebase {
             let source_tree = materialize_codebase(&r.iteration_dir, codebase, &mut materialized)?;
-            copy_entry_materialized(&source_tree, &target.root)?;
+            crate::source::provision_env(&codebase.source, &source_tree, &target.root)
+                .map_err(|error| RunError::msg(error.to_string()))?;
+        } else {
+            fs::create_dir_all(&target.root)?;
         }
 
         if !opts.no_stage {
@@ -234,9 +238,11 @@ fn copy_skill_dir(source: &Path, dest: &Path, root: &Path) -> Result<(), RunErro
 
 /// The materialized tree for `codebase`, creating it on first use.
 ///
-/// One materialization per distinct codebase per iteration; each environment is
-/// then provisioned from it by copy. Cloning per environment instead would mean
-/// one network round trip per `(group, condition, run)` cell.
+/// One materialization per distinct codebase per iteration; every environment
+/// is then provisioned from it ([`crate::source::provision_env`] — a local
+/// clone while the host allows the hard link, a copy otherwise). Materializing
+/// per environment instead would mean one network round trip per
+/// `(group, condition, run)` cell.
 fn materialize_codebase(
     iteration_dir: &Path,
     codebase: &super::RunCodebase,
