@@ -68,6 +68,24 @@ Each dispatch gets its own private environment holding:
 An eval that declares no `codebase` still gets a Git repository, initialized on `work`, exactly as
 it always has.
 
+## One checkout per iteration
+
+Every environment a run provisions — each `(eval, condition, run)` cell — is built from one cached
+checkout per distinct codebase, materialized once per iteration under `iteration-N/.codebase/`
+when the run prepares.
+Environments are provisioned from that cache with `git clone --local`: Git hard-links the object
+store instead of copying it and checks out a fresh working tree, so `--runs 10` against a large
+repository costs one clone plus a working tree per environment, not a full copy of the tree and
+its history per environment.
+
+Shared objects are content-addressed and immutable — Git never rewrites an object once written —
+so each environment is still an independent working tree with an independent history. Commits,
+branches, and edits in one environment are invisible to the others and to the cache.
+
+Where hard-linking is unavailable (the cache and the environments on different filesystems) or the
+source carries no Git history to clone, environments fall back to a plain copy of the cache. The
+result is the same tree, provisioned more slowly.
+
 ## `files` is an overlay
 
 `files` and `files_root` still work, and are applied *on top* of the codebase at their declared
