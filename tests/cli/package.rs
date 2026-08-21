@@ -123,6 +123,10 @@ fn native_windows_runtime_and_release_surfaces_are_absent() {
 
     let dist = read_repo_file("dist-workspace.toml");
     assert!(dist.contains(r#"installers = ["shell"]"#));
+    assert!(
+        dist.contains(r#"allow-dirty = ["ci"]"#),
+        "cargo-dist must allow the release workflow to omit its unconditional Windows setup"
+    );
     assert!(!dist.contains(&format!("{platform}-msvc")));
     assert!(!dist.contains(&format!("{}shell", "power")));
 
