@@ -37,29 +37,20 @@ The installed CLI is the primary manual. Start with `eval-magic --help`, and use
 
 ## Install
 
-Git is required at runtime, plus a POSIX shell: harness dispatch commands are POSIX command lines,
-and `eval-magic dispatch` runs them itself, so the host it runs on needs a shell that resolves the
-workspace's own paths. On Windows that is Git Bash (Git for Windows). WSL resolves a different
-filesystem namespace, so run eval-magic inside WSL rather than dispatching into it.
-Set `EVAL_MAGIC_SH` to select a specific `sh`.
+eval-magic supports Linux and macOS. On Windows, install and run eval-magic inside Windows
+Subsystem for Linux (WSL); native Windows is unsupported. Keep the repository, workspace, and
+harness commands inside the same WSL environment.
 
-Windows support runs through Git Bash and is deprecated: a future release will require WSL.
+Git and a POSIX shell are required. Set `EVAL_MAGIC_SH` to select a specific `sh`.
 
-Prebuilt binaries for macOS, Linux, and Windows are attached to each
+Prebuilt binaries for macOS and Linux are attached to each
 [GitHub release](https://github.com/slowdini/eval-magic/releases).
 
-macOS or Linux:
+Install on macOS, Linux, or inside WSL:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.sh | sh
-```
-
-Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -c \
-  "irm https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.ps1 | iex"
 ```
 
 Or build and install from crates.io:
@@ -151,9 +142,11 @@ Issues and planned work are tracked in the
 
 ## Development
 
-Development carries the same host requirement as use: a POSIX shell. The dispatch tests spawn
-`#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite cannot pass
-without one. Tests that need symlink creation report a skip instead.
+Development carries the same host requirement as use: Linux or macOS with a POSIX shell. On
+Windows, clone the repository and run the complete toolchain inside WSL; native Windows development
+is unsupported. The dispatch tests spawn `#!/bin/sh` harness stubs through the resolved shell and
+do not skip, so the suite cannot pass without one. Tests that need symlink creation report a skip
+instead.
 
 ```bash
 cargo fmt --check

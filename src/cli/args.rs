@@ -832,8 +832,8 @@ pub(crate) enum Commands {
     },
     /// Internal test fixture. A predictable child process for the suite to
     /// spawn — one that exits with a chosen code, emits chosen bytes, or writes
-    /// a chosen file — so tests never reach for `sh`, `true`, or `printf`, none
-    /// of which exist under `cmd.exe`. Not for users; hidden from help.
+    /// a chosen file — so tests do not depend on the output conventions of
+    /// utilities such as `true` or `printf`. Not for users; hidden from help.
     #[command(hide = true, name = "__fixture")]
     Fixture(FixtureArgs),
     /// Internal generic PreToolUse hook entry point. Invoked by the installed
@@ -882,8 +882,7 @@ pub struct FixtureArgs {
     #[arg(long)]
     pub pad: Option<usize>,
     /// Sleep this many milliseconds before doing anything else, so a caller can
-    /// overrun a deadline. The delay lives here rather than in a `sleep` call
-    /// because Windows has no such binary.
+    /// overrun a deadline without depending on an external `sleep` binary.
     #[arg(long = "sleep-ms")]
     pub sleep_ms: Option<u64>,
     /// Joins the fragments. Empty by default.

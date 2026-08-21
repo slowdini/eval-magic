@@ -288,9 +288,8 @@ impl ShadowSource {
     }
 }
 
-/// The resolved real path, rendered as wire format. `canonicalize` returns a
-/// verbatim (`\\?\`) path on Windows, which `artifact_path` strips — an OS
-/// escape hatch has no business in a report an agent and a reviewer both read.
+/// The resolved real path, rendered in the artifact wire format shared by
+/// agents and reviewers.
 fn canonical_path(path: &Path) -> Option<String> {
     path.canonicalize().ok().map(|path| artifact_path(&path))
 }

@@ -54,40 +54,35 @@ Extraction is a size decision, not a style preference; don't split a small inlin
 **Spawning a child process from a test.** Use the hidden `__fixture` subcommand, never `sh`, `true`,
 `printf`, or a `#!/bin/sh` stub. It exits with a chosen code, emits chosen bytes, writes a chosen
 file, or checks a file or variable — see `FixtureArgs` in `src/cli/args.rs`. One invocation parses
-the same under `sh -c` and `cmd /C`, which is what keeps `command_check` tests off per-OS command
-strings. Build the command with the `fixture` helper (`tests/run/helpers.rs` for integration tests,
-the one in `src/pipeline/grade/command_check/tests.rs` for unit tests). Because the fixture is the
-binary, `cargo test --lib` alone does not build it — run `cargo test`, or `cargo build` first.
+predictably under `sh -c`, which keeps `command_check` tests focused on runner behavior instead of
+the host's utility implementations. Build the command with the `fixture` helper
+(`tests/run/helpers.rs` for integration tests, the one in
+`src/pipeline/grade/command_check/tests.rs` for unit tests). Because the fixture is the binary,
+`cargo test --lib` alone does not build it — run `cargo test`, or `cargo build` first.
 
-**Tests are gated on capabilities, not on the OS.** `#[cfg(unix)]` on a test hides it from
-compilation and clippy on the other host and hides the coverage gap. Instead, probe for what the
-test actually needs and call `report_skip` (`src/core/runtime.rs`), which prints the reason and
-returns `true`. Setting `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns every skip into a failure; CI sets
-it on both runners, so neither can quietly stop covering something. Two capabilities are gated
-today: symlink creation, which Windows allows only under Developer Mode, and creating a path past
-Windows' 259-character limit (`deep_task_root`, `src/cli/run/orchestrate/git.rs`). The Windows
-runner is provisioned for both rather than exempted from them, so a skip there is a red build. The
-shell is not one of them; it is a hard requirement, per the section below. Where a genuine per-OS
-difference is the behavior under test — signals, path separators — branch on `cfg!(windows)` at
-runtime so both arms still compile everywhere.
+**Tests are gated on capabilities, not on broad platform labels.** Probe for what the test actually
+needs and call `report_skip` (`src/core/runtime.rs`), which prints the reason and returns `true`.
+Setting `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns every skip into a failure; CI sets it so coverage
+cannot quietly shrink. Symlink creation is capability-gated because the backing filesystem may
+forbid it. The shell is not capability-gated; it is a hard requirement, per the section below.
 
 **A POSIX shell is required, for use and for development.** Harness `exec_template`s are POSIX
 command lines, so the dispatch and probe paths spawn `sh` through `run_in_posix_shell` /
 `posix_shell()` (`src/core/runtime.rs`) rather than a hardcoded `/bin/sh`: it searches `PATH`, then
-a Git for Windows install. Set `EVAL_MAGIC_SH` to override it. `cargo test` inherits the
-requirement — the dispatch tests spawn a `#!/bin/sh` harness stub through the resolved shell and do
-not skip — so a host without `sh` fails the suite instead of quietly covering less. The shell is
-the whole requirement: `jq` was needed only while operators pasted the generated dispatch and judge
-recipes, and `eval-magic dispatch` drives both itself.
+checks `/bin/sh`. Set `EVAL_MAGIC_SH` to override it. `cargo test` inherits the requirement — the
+dispatch tests spawn a `#!/bin/sh` harness stub through the resolved shell and do not skip — so a
+host without `sh` fails the suite instead of quietly covering less. The shell is the whole
+requirement: `jq` was needed only while operators pasted the generated dispatch and judge recipes,
+and `eval-magic dispatch` drives both itself.
 `POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is the one wording the
 Markdown-carrying surfaces reuse: the shell-discovery errors, the `run` preflight warnings,
 `RUNBOOK.md`, and `dispatch-manifest.md`. State the requirement from there rather than rephrasing
 it. `--help` is the one deliberate restatement (`AFTER_HELP` in `src/cli/help.rs`), hard-wrapped and
 backtick-free because clap renders into a terminal; keep the two in step by hand.
 
-Which platforms that requirement is honored on — and why preparing on Windows but dispatching from
-WSL is a correctness boundary rather than a preference — is stated once under "Platform support" in
-`docs/developer_overview.md`.
+eval-magic supports Linux and macOS. On Windows, use and develop eval-magic entirely inside WSL;
+native Windows is unsupported. The complete boundary and the portable-data exception are stated
+under "Platform support" in `docs/developer_overview.md`.
 
 **Where user-facing warnings come from.** Library modules (`pipeline`, `workspace`, `sandbox`,
 `adapters`) never print. They return warning strings on their result struct — `#[serde(skip)]` when

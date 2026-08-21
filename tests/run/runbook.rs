@@ -119,13 +119,12 @@ fn run_writes_headless_runbook_for_claude() {
     );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
 
-    // Issue #248: the runbook is the manual for a campaign, so it names the
-    // shell it expects — and names it *above* the first command a reader would
-    // paste, which is the whole point of stating the requirement at all.
+    // The runbook is the manual for a campaign, so it names the shell it
+    // expects above the first command a reader would paste.
     let requirement = book
-        .find("Git Bash")
-        .expect("the runbook states the POSIX shell requirement");
-    assert!(book.contains("WSL"), "{book}");
+        .find("WSL")
+        .expect("the runbook states the Windows-through-WSL requirement");
+    assert!(!book.contains("Git Bash"), "{book}");
     // Anchored at a line start: the requirement prose names the command too,
     // and what this pins is the order of the *pasteable* line against it.
     assert!(
@@ -134,10 +133,8 @@ fn run_writes_headless_runbook_for_claude() {
     );
 }
 
-/// Issue #248: `run` used to succeed on a host with no POSIX shell and print
-/// recipes only a POSIX shell can execute, with nothing to say a different shell
-/// was expected. The prepared workspace is still correct, so this warns rather
-/// than failing — but it must warn, and it must name the way out.
+/// A prepared workspace remains correct when the host has no POSIX shell, so
+/// `run` warns and names the required environment rather than failing.
 ///
 /// `EVAL_MAGIC_SH` pointing at nothing reproduces the shell-less host on every
 /// platform, so the test does not depend on what the developer has installed.
@@ -159,7 +156,8 @@ fn run_warns_when_the_host_has_no_posix_shell() {
         ])
         .assert()
         .success()
-        .stderr(contains("⚠").and(contains("Git Bash")).and(contains("WSL")));
+        .stderr(contains("⚠").and(contains("WSL")))
+        .stderr(contains("Git Bash").not());
 }
 
 #[test]
@@ -196,9 +194,9 @@ fn run_writes_headless_runbook_for_opencode() {
         "no unsubstituted tokens: {manifest}"
     );
     // Dispatch shells out to POSIX command lines, so the manifest states the
-    // same requirement the runbook does (issue #248 names both artifacts).
+    // same requirement as the runbook.
     assert!(
-        manifest.contains("Git Bash"),
+        manifest.contains("WSL") && !manifest.contains("Git Bash"),
         "the manifest states the POSIX shell requirement: {manifest}"
     );
 }

@@ -102,75 +102,24 @@ pub fn run_git(args: &[&str], cwd: &Path) -> GitOutput {
 /// `--help` restates it in `cli::help::AFTER_HELP` instead, hard-wrapped and
 /// without backticks, because clap renders into a terminal rather than Markdown.
 ///
-/// A POSIX shell is the whole requirement. Harness `exec_template`s ship as
-/// POSIX command lines (`</dev/null`, `&&`, `\` continuations), and `dispatch`
-/// spawns them itself; nothing on that path shells out to a separate toolchain.
-///
-/// It also separates the two Windows options rather than listing them side by
-/// side. `dispatch` spawns each harness command line with the workspace's own
-/// absolute paths, so the shell it resolves has to resolve those same paths.
-/// Git Bash does — it shares the Windows filesystem. WSL does not: `C:\…` names
-/// nothing in its namespace, so WSL is correct only when eval-magic itself runs
-/// inside it. Nothing here translates between the two, and a split across that
-/// boundary fails quietly rather than loudly.
-pub(crate) const POSIX_TOOLING_REQUIREMENT: &str = "harness dispatch commands are POSIX command lines, and `eval-magic dispatch` runs them \
-     itself, so the host it runs on needs a POSIX shell — on Windows, Git Bash (Git for \
-     Windows). WSL resolves a different filesystem namespace, so run eval-magic inside WSL \
-     rather than dispatching into it. Set EVAL_MAGIC_SH to select a specific `sh`.";
-
-/// `sh` locations inside a Git for Windows install, given the `git --exec-path`
-/// directory (`<root>/mingw64/libexec/git-core` — hence three levels up).
-/// Always spelled `sh.exe`: this layout only exists on Windows, and pinning the
-/// name keeps the function testable on every host.
-fn git_shell_candidates(exec_path: &Path) -> Vec<PathBuf> {
-    let Some(root) = exec_path.ancestors().nth(3) else {
-        return Vec::new();
-    };
-    if root.as_os_str().is_empty() {
-        return Vec::new();
-    }
-    vec![
-        root.join("bin").join("sh.exe"),
-        root.join("usr").join("bin").join("sh.exe"),
-    ]
-}
+/// A POSIX shell is the whole tooling requirement. Harness `exec_template`s ship
+/// as POSIX command lines (`</dev/null`, `&&`, `\` continuations), and
+/// `dispatch` spawns them itself; nothing on that path shells out to a separate
+/// toolchain. Windows users run the Linux build and its workspace inside WSL.
+pub(crate) const POSIX_TOOLING_REQUIREMENT: &str = "`eval-magic` supports Linux and macOS. On Windows, run `eval-magic` inside WSL; native Windows is unsupported. Git and a POSIX shell are required. Set EVAL_MAGIC_SH to select a specific `sh`.";
 
 /// First executable named `name` on `PATH`, or `None`.
 fn find_on_path(name: &str) -> Option<PathBuf> {
-    let file_name = if cfg!(windows) {
-        format!("{name}.exe")
-    } else {
-        name.to_string()
-    };
     std::env::split_paths(&std::env::var_os("PATH")?)
-        .map(|directory| directory.join(&file_name))
+        .map(|directory| directory.join(name))
         .find(|candidate| candidate.is_file())
-}
-
-/// Where to look for `sh` on Windows once `PATH` has come up empty. Git for
-/// Windows bundles one, but its default installer only puts `Git\cmd` on
-/// `PATH`, so the shell has to be located through the install root instead.
-fn windows_shell_candidates() -> Vec<PathBuf> {
-    let mut candidates = Vec::new();
-    let git = run_git(&["--exec-path"], Path::new("."));
-    if git.status == Some(0) {
-        let exec_path = String::from_utf8_lossy(&git.stdout).trim().to_string();
-        if !exec_path.is_empty() {
-            candidates.extend(git_shell_candidates(Path::new(&exec_path)));
-        }
-    }
-    candidates.push(PathBuf::from(r"C:\Program Files\Git\bin\sh.exe"));
-    candidates.push(PathBuf::from(r"C:\Program Files\Git\usr\bin\sh.exe"));
-    candidates
 }
 
 /// Locate a POSIX shell. `override_path` carries the operator's `EVAL_MAGIC_SH`
 /// value and is passed in rather than read here so tests can exercise it
 /// without mutating process environment.
 ///
-/// Only ever searches for `sh`. On Windows `C:\Windows\System32\bash.exe` is
-/// the WSL launcher, which resolves a different filesystem namespace — every
-/// Windows path handed to it would name the wrong file.
+/// Only ever searches for `sh`: first on `PATH`, then at `/bin/sh`.
 fn discover_posix_shell(override_path: Option<&OsStr>) -> Result<PathBuf, String> {
     if let Some(value) = override_path {
         let path = PathBuf::from(value);
@@ -187,13 +136,6 @@ fn discover_posix_shell(override_path: Option<&OsStr>) -> Result<PathBuf, String
     if let Some(found) = find_on_path("sh") {
         return Ok(found);
     }
-    if cfg!(windows)
-        && let Some(found) = windows_shell_candidates()
-            .into_iter()
-            .find(|candidate| candidate.is_file())
-    {
-        return Ok(found);
-    }
     let posix_default = PathBuf::from("/bin/sh");
     if posix_default.is_file() {
         return Ok(posix_default);
@@ -201,8 +143,8 @@ fn discover_posix_shell(override_path: Option<&OsStr>) -> Result<PathBuf, String
     Err(format!("no POSIX shell found. {POSIX_TOOLING_REQUIREMENT}"))
 }
 
-/// The resolved POSIX shell, discovered once per process. Callers spawn this
-/// instead of a hardcoded `/bin/sh`, which does not exist on Windows.
+/// The resolved POSIX shell, discovered once per process. Callers use this
+/// instead of hardcoding `/bin/sh` so an operator can select a different `sh`.
 pub(crate) fn posix_shell() -> Result<&'static Path, &'static str> {
     static SHELL: OnceLock<Result<PathBuf, String>> = OnceLock::new();
     match SHELL.get_or_init(|| discover_posix_shell(std::env::var_os("EVAL_MAGIC_SH").as_deref())) {
@@ -342,36 +284,13 @@ mod tests {
         );
         assert_eq!(res.status, None);
         assert!(res.stdout.is_empty());
-        // Deliberately not matched against an errno spelling: the OS wording
-        // differs per platform ("No such file or directory" vs "The system
-        // cannot find the path specified"), and the contract is a readable
-        // reason, not any particular one.
+        // Deliberately not matched against an errno spelling: the contract is a
+        // readable reason, not any particular libc wording.
         let reason = String::from_utf8_lossy(&res.stderr);
         assert!(
             !reason.trim().is_empty(),
             "spawn failure reported no reason"
         );
-    }
-
-    /// The Git for Windows layout: `git --exec-path` points at
-    /// `<root>/mingw64/libexec/git-core`, so the shell sits three levels up.
-    #[test]
-    fn git_shell_candidates_walk_up_from_the_git_core_exec_path() {
-        let root = Path::new("/opt/Git");
-        assert_eq!(
-            git_shell_candidates(&root.join("mingw64").join("libexec").join("git-core")),
-            vec![
-                root.join("bin").join("sh.exe"),
-                root.join("usr").join("bin").join("sh.exe"),
-            ]
-        );
-    }
-
-    /// An exec path too shallow to contain a Git root yields no candidates
-    /// rather than walking off the top into `/`.
-    #[test]
-    fn git_shell_candidates_are_empty_for_a_rootless_exec_path() {
-        assert!(git_shell_candidates(Path::new("git-core")).is_empty());
     }
 
     #[test]
@@ -392,8 +311,8 @@ mod tests {
             .expect_err("a missing override should not fall through to discovery");
         assert!(error.contains("EVAL_MAGIC_SH"), "{error}");
         assert!(error.contains("/nonexistent-shell-for-tests"), "{error}");
-        assert!(error.contains("Git Bash"), "{error}");
         assert!(error.contains("WSL"), "{error}");
+        assert!(error.contains("native Windows is unsupported"), "{error}");
         // A POSIX shell is the whole requirement now. `jq` was only ever needed
         // by the generated recipes an operator pasted, and the runner dispatches
         // directly instead.
@@ -413,22 +332,17 @@ mod tests {
         assert!(shell.is_file(), "{} is not a file", shell.display());
     }
 
-    /// The declared requirement has to separate the two Windows options rather
-    /// than list them as equivalent. Git Bash shares the Windows filesystem, so a
-    /// workspace prepared by a native run dispatches from it correctly. WSL
-    /// resolves a different namespace, where the `C:\…` paths a native run wrote
-    /// name nothing — so WSL is only correct when eval-magic itself runs inside
-    /// it. Listing the two side by side invites a split that silently cannot work.
+    /// The declared requirement names the complete Windows support boundary:
+    /// eval-magic itself runs inside WSL, using the supported Linux build.
     #[test]
-    fn the_declared_requirement_places_wsl_around_eval_magic_not_downstream_of_it() {
+    fn the_declared_requirement_directs_windows_users_to_wsl() {
         assert!(
-            POSIX_TOOLING_REQUIREMENT.contains("Git Bash"),
+            POSIX_TOOLING_REQUIREMENT.contains("inside WSL"),
             "{POSIX_TOOLING_REQUIREMENT}"
         );
         assert!(
-            POSIX_TOOLING_REQUIREMENT.contains("inside WSL"),
-            "WSL must be named as where eval-magic runs, not somewhere to dispatch \
-             into: {POSIX_TOOLING_REQUIREMENT}"
+            POSIX_TOOLING_REQUIREMENT.contains("native Windows is unsupported"),
+            "{POSIX_TOOLING_REQUIREMENT}"
         );
     }
 
@@ -442,10 +356,8 @@ mod tests {
         );
     }
 
-    /// Build a `__fixture` command line. The string is handed to a shell, so it
-    /// has to parse identically under `sh -c` and `cmd /C`: a double-quoted
-    /// program path followed by double-quoted arguments does, because both
-    /// shells strip the quotes and hand the tokens over unchanged.
+    /// Build a `__fixture` command line for `sh -c`. Quoting every argument keeps
+    /// paths with spaces and literal fixture values intact.
     fn fixture(args: &[&str]) -> String {
         let exe = assert_cmd::cargo::cargo_bin("eval-magic");
         assert!(

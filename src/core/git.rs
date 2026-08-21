@@ -70,10 +70,6 @@ impl IsolatedGit {
     pub(crate) fn run(&self, cwd: &Path, args: &[&str], env: &[(&str, &str)]) -> GitOutput {
         let mut command = Command::new("git");
         command
-            // `git clone` and `git init` create paths inside `.git` before any
-            // repository-local configuration exists, so the Windows long-path
-            // lift has to ride on the invocation itself.
-            .args(["-c", "core.longpaths=true"])
             .args(args)
             .current_dir(cwd)
             .env("GIT_CONFIG_NOSYSTEM", "1")
