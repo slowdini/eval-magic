@@ -20,7 +20,7 @@ use crate::adapters::descriptor::finalize_descriptor;
 use crate::adapters::descriptor_adapter::DescriptorAdapter;
 use crate::cli::run::conversation::{TaskOutcome, run_task};
 use crate::cli::run::dispatch::DispatchTask;
-use crate::core::{posix_shell, validate_agent_environment_entry};
+use crate::core::{ConversationStopReason, posix_shell, validate_agent_environment_entry};
 
 /// The run-time half of `dispatch.json`: everything the driver needs to execute
 /// a task, frozen at plan time so a dispatch is reproducible from the workspace
@@ -114,8 +114,12 @@ impl DispatchSummary {
             .count()
     }
 
-    /// Warnings naming every task that did not produce usable eval data. A
-    /// gate stop is not one: it is a valid, recorded result.
+    /// Warnings naming every task whose result needs a second look. A scripted
+    /// gate stop is not one: the script said what to do and the run did it.
+    ///
+    /// A responder stop is. Nothing failed and nothing needs rerunning, but the
+    /// conversation ended with the task unfinished, so the record it leaves is
+    /// weaker evidence than a completed run and must not be read as one.
     pub fn warnings(&self) -> Vec<String> {
         self.reports
             .iter()
@@ -124,6 +128,24 @@ impl DispatchSummary {
                 Ok(TaskOutcome::TimedOut { round }) => Some(format!(
                     "{} timed out in round {round}; its environment holds whatever the \
                      agent finished before the deadline",
+                    report.description
+                )),
+                Ok(TaskOutcome::Stopped {
+                    reason: Some(ConversationStopReason::ResponderCannotAnswer),
+                    ..
+                }) => Some(format!(
+                    "{} stopped: the responder could not answer the agent's question, so the run \
+                     ended mid-task. Read the last assistant message under its outputs before \
+                     trusting this data point.",
+                    report.description
+                )),
+                Ok(TaskOutcome::Stopped {
+                    reason: Some(ConversationStopReason::MaxTurnsReached),
+                    ..
+                }) => Some(format!(
+                    "{} stopped at the responder's max_turns bound with the agent still asking, \
+                     so the run ended mid-task. Raise max_turns or read the transcript before \
+                     trusting this data point.",
                     report.description
                 )),
                 Ok(_) => None,

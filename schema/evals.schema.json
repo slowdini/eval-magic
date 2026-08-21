@@ -78,6 +78,10 @@
           "items": { "$ref": "#/definitions/scriptedTurn" },
           "description": "Ordered scripted user follow-ups. Each delivered turn resumes the same agent session; absence preserves one-shot dispatch."
         },
+        "responder": {
+          "$ref": "#/definitions/responder",
+          "description": "Derives each follow-up turn from what the agent just said, instead of scripting them. Mutually exclusive with turns; declaring neither preserves one-shot dispatch. Requires a harness with native conversation resume, exactly as turns does."
+        },
         "expected_output": {
           "type": "string",
           "minLength": 1,
@@ -117,6 +121,28 @@
           "type": "array",
           "items": { "$ref": "#/definitions/assertion" },
           "description": "Pass/fail criteria, added after iteration 1 when you know what outputs look like."
+        }
+      },
+      "allOf": [
+        {
+          "not": { "required": ["turns", "responder"] }
+        }
+      ]
+    },
+    "responder": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["heuristic"],
+          "description": "Which responder answers the agent. 'heuristic' is deterministic and free: it answers a question that offers a list of options, and stops the run on anything else. Required rather than defaulted, because the responder decides what the agent hears."
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum follow-up turns the responder may synthesize; the opening prompt is not one of them. Defaults to 8. Reaching it is recorded as a stopped conversation, not a failure."
         }
       }
     },

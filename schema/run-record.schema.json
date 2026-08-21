@@ -102,7 +102,7 @@
       "properties": {
         "status": {
           "type": "string",
-          "enum": ["completed", "stopped"]
+          "enum": ["completed", "stopped", "timed_out"]
         },
         "delivered_followups": {
           "type": "integer",
@@ -110,15 +110,20 @@
         },
         "stop_reason": {
           "type": "string",
-          "enum": ["agent_did_not_ask", "agent_response_mismatch"]
+          "enum": ["agent_did_not_ask", "agent_response_mismatch", "responder_cannot_answer", "max_turns_reached"]
         },
         "stopped_before_followup": {
           "type": "integer",
           "minimum": 1
         },
+        "timed_out_in_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The round the dispatch was killed in, when it outran its per-task deadline."
+        },
         "events": {
           "type": "array",
-          "minItems": 2,
+          "minItems": 1,
           "items": {
             "oneOf": [
               { "$ref": "#/definitions/userMessage" },
@@ -135,7 +140,8 @@
             "required": ["status"]
           },
           "then": {
-            "required": ["stop_reason", "stopped_before_followup"]
+            "required": ["stop_reason", "stopped_before_followup"],
+            "not": { "required": ["timed_out_in_round"] }
           }
         },
         {
@@ -147,10 +153,33 @@
             "not": {
               "anyOf": [
                 { "required": ["stop_reason"] },
+                { "required": ["stopped_before_followup"] },
+                { "required": ["timed_out_in_round"] }
+              ]
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "status": { "const": "timed_out" } },
+            "required": ["status"]
+          },
+          "then": {
+            "required": ["timed_out_in_round"],
+            "not": {
+              "anyOf": [
+                { "required": ["stop_reason"] },
                 { "required": ["stopped_before_followup"] }
               ]
             }
           }
+        },
+        {
+          "if": {
+            "properties": { "status": { "enum": ["completed", "stopped"] } },
+            "required": ["status"]
+          },
+          "then": { "properties": { "events": { "minItems": 2 } } }
         }
       ]
     },
@@ -162,7 +191,51 @@
         "type": { "const": "user_message" },
         "ordinal": { "type": "integer", "minimum": 0 },
         "round": { "type": "integer", "minimum": 1 },
-        "text": { "type": "string" }
+        "text": { "type": "string" },
+        "origin": {
+          "type": "object",
+          "required": ["responder", "answers"],
+          "additionalProperties": false,
+          "description": "How a responder derived this turn. Absent on the eval's opening prompt and on scripted turns, which are authored rather than derived.",
+          "properties": {
+            "responder": {
+              "type": "string",
+              "enum": ["heuristic"],
+              "description": "Which responder produced the turn."
+            },
+            "answers": {
+              "type": "array",
+              "minItems": 1,
+              "description": "One entry per question the turn answered, in the order they were asked.",
+              "items": {
+                "type": "object",
+                "required": ["options", "rule", "chosen"],
+                "additionalProperties": false,
+                "properties": {
+                  "question": {
+                    "type": "string",
+                    "description": "The question line the options hung from."
+                  },
+                  "options": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "The options as the agent wrote them, before markers were stripped."
+                  },
+                  "rule": {
+                    "type": "string",
+                    "enum": ["recommended_option", "first_option", "no_selection"],
+                    "description": "The mechanical rule that picked this answer, so a reader can audit the selection without rerunning it."
+                  },
+                  "chosen": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "The options selected, cleaned of their markers. Empty when the rule selected nothing."
+                  }
+                }
+              }
+            }
+          }
+        }
       }
     },
     "assistantMessage": {

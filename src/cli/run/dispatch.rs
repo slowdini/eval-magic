@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
 use crate::core::{
-    AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn, SkillSource,
-    SourceRecord,
+    AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ResponderPolicy, ScriptedTurn,
+    SkillSource, SourceRecord,
 };
 
 use super::RunError;
@@ -63,6 +63,11 @@ pub struct DispatchTask {
     /// The skill under test this task stages, as the run resolved it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_source: Option<SkillSource>,
+    /// The policy that derives this task's follow-up turns, when the eval
+    /// declares one instead of scripting them. Recorded here so the plan names
+    /// how the conversation was driven, not just what it produced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder: Option<ResponderPolicy>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -104,6 +109,8 @@ pub struct DispatchTaskOpts<'a> {
     pub codebase: Option<&'a SourceRecord>,
     /// The skill under test this task stages, if any.
     pub skill_source: Option<&'a SkillSource>,
+    /// The responder policy this eval declares, if any.
+    pub responder: Option<&'a ResponderPolicy>,
 }
 
 fn render_available_skills_block_for_harness(
@@ -291,6 +298,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         eval_root,
         codebase: opts.codebase.cloned(),
         skill_source: opts.skill_source.cloned(),
+        responder: opts.responder.cloned(),
         dispatch_prompt: sections.join(""),
     })
 }
@@ -533,6 +541,7 @@ mod tests {
                 isolation: None,
                 turns: None,
                 codebase: None,
+                responder: None,
             })
             .collect()
     }

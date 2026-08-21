@@ -200,6 +200,7 @@ mod tests {
             isolation: None,
             turns: None,
             codebase: None,
+            responder: None,
         }
     }
 

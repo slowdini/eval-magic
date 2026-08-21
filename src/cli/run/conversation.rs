@@ -13,7 +13,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, anyhow, bail};
-use regex::Regex;
 
 use crate::adapters::cli_command::shell_quote_arg;
 use crate::adapters::descriptor::subst;
@@ -21,21 +20,54 @@ use crate::adapters::descriptor_adapter::DescriptorAdapter;
 use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::transcript::{TranscriptEvent, TranscriptSummary};
 use crate::core::{
-    ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason, DeliverWhen,
-    ScriptedTurn, ShellOutcome, run_in_posix_shell,
+    ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason,
+    ShellOutcome, run_in_posix_shell,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::dispatch::DispatchTask;
+use turn_plan::{NextTurn, TurnPlan};
+
+mod responder;
+mod turn_plan;
 
 /// How one dispatched task ended. A failure is not represented here — it stays
 /// an `Err`, which the batch driver records per task rather than propagating.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TaskOutcome {
-    Completed { delivered_followups: u32 },
-    Stopped { before_followup: u32 },
-    TimedOut { round: u32 },
+    Completed {
+        delivered_followups: u32,
+        source: TurnSource,
+    },
+    Stopped {
+        before_followup: u32,
+        /// Always present in practice — the schema requires a stop reason on a
+        /// stopped conversation — but carried as written rather than filled in
+        /// with a guess, so an outcome can never name the wrong reason.
+        reason: Option<ConversationStopReason>,
+    },
+    TimedOut {
+        round: u32,
+    },
     SkippedExisting,
+}
+
+/// What produced a task's follow-up turns. Only used to word an outcome: a
+/// scripted run and a responder-driven one stop for different reasons and an
+/// operator reading the batch summary needs to know which they are looking at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnSource {
+    Scripted,
+    Responder,
+}
+
+impl TurnSource {
+    fn noun(self) -> &'static str {
+        match self {
+            Self::Scripted => "scripted follow-up turn(s)",
+            Self::Responder => "responder turn(s)",
+        }
+    }
 }
 
 impl TaskOutcome {
@@ -44,13 +76,29 @@ impl TaskOutcome {
         match self {
             Self::Completed {
                 delivered_followups: 0,
+                ..
             } => "completed".to_string(),
             Self::Completed {
                 delivered_followups,
-            } => format!("completed with {delivered_followups} scripted follow-up turn(s)"),
-            Self::Stopped { before_followup } => {
-                format!("stopped before scripted follow-up {before_followup}")
-            }
+                source,
+            } => format!("completed with {delivered_followups} {}", source.noun()),
+            Self::Stopped {
+                before_followup,
+                reason: Some(ConversationStopReason::ResponderCannotAnswer),
+            } => format!(
+                "stopped before turn {before_followup} — the responder could not answer the \
+                 agent's question"
+            ),
+            Self::Stopped {
+                before_followup,
+                reason: Some(ConversationStopReason::MaxTurnsReached),
+            } => format!(
+                "stopped at the responder's max_turns bound after {} turn(s)",
+                before_followup.saturating_sub(1)
+            ),
+            Self::Stopped {
+                before_followup, ..
+            } => format!("stopped before scripted follow-up {before_followup}"),
             Self::TimedOut { round } => format!("timed out in round {round}"),
             Self::SkippedExisting => "skipped (already complete)".to_string(),
         }
@@ -71,9 +119,9 @@ pub fn run_task(
     // One budget for the whole task, not per round: a scripted conversation is
     // a single dispatch from the operator's point of view.
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
-    // Empty for a one-shot task: the runner drives every dispatch, so the
-    // follow-up loop below simply has nothing to deliver.
-    let turns = task.turns.as_deref().unwrap_or_default();
+    // A one-shot task takes the same path with nothing to deliver, so the loop
+    // below is the single delivery path for every shape of task.
+    let plan = TurnPlan::for_task(task);
     let conversation_path = task
         .conversation_path
         .as_deref()
@@ -95,17 +143,17 @@ pub fn run_task(
     let initial_template = adapter
         .cli_exec_command(guard, agent_model, agent_env)
         .ok_or_else(|| anyhow!("harness declares no initial dispatch command"))?;
-    // Only a scripted task resumes a session, and a harness may support one-shot
-    // dispatch without declaring `[conversation]` at all (cline does). Requiring
-    // the template up front would make those harnesses undispatchable.
-    let resume_template = if turns.is_empty() {
-        None
-    } else {
+    // Only a multi-turn task resumes a session, and a harness may support
+    // one-shot dispatch without declaring `[conversation]` at all (cline does).
+    // Requiring the template up front would make those harnesses undispatchable.
+    let resume_template = if plan.delivers_followups() {
         Some(
             adapter
                 .cli_resume_command(guard, agent_model, agent_env)
                 .ok_or_else(|| anyhow!("harness declares no native conversation resume command"))?,
         )
+    } else {
+        None
     };
     if overwrite && conversation_path.exists() {
         fs::remove_file(&conversation_path).with_context(|| {
@@ -121,6 +169,7 @@ pub fn run_task(
         ordinal: 0,
         round: 1,
         text: task.user_prompt.clone(),
+        origin: None,
     }];
     let mut next_ordinal = 1_u32;
 
@@ -157,6 +206,7 @@ pub fn run_task(
                 events,
             },
             None,
+            plan.source(),
         );
     }
     let first_summary = parse_round(adapter, &first_outputs, &events_filename, 1)?;
@@ -177,19 +227,25 @@ pub fn run_task(
     let mut stopped_before_followup = None;
     let mut timed_out_in_round = None;
 
-    for (index, turn) in turns.iter().enumerate() {
-        let followup = u32::try_from(index + 1).unwrap_or(u32::MAX);
-        if let Some(reason) = unmet_gate(turn, &preceding_assistant)? {
-            stop_reason = Some(reason);
-            stopped_before_followup = Some(followup);
-            break;
-        }
+    loop {
+        let followup = delivered_followups.saturating_add(1);
+        let next = plan.next_turn(delivered_followups, &preceding_assistant, &final_message)?;
+        let (prompt, origin) = match next {
+            NextTurn::Done => break,
+            NextTurn::Stop(reason) => {
+                stop_reason = Some(reason);
+                stopped_before_followup = Some(followup);
+                break;
+            }
+            NextTurn::Deliver { text, origin } => (text, origin),
+        };
 
         let round = followup.saturating_add(1);
         events.push(ConversationEvent::UserMessage {
             ordinal: next_ordinal,
             round,
-            text: turn.prompt.clone(),
+            text: prompt.clone(),
+            origin,
         });
         next_ordinal = next_ordinal.saturating_add(1);
         delivered_followups = delivered_followups.saturating_add(1);
@@ -197,14 +253,14 @@ pub fn run_task(
         let round_outputs = base_outputs.join(format!("turn-{round}"));
         let resume_template = resume_template
             .as_deref()
-            .expect("a task with turns resolved a resume template above");
+            .expect("a task that delivers follow-ups resolved a resume template above");
         let command = render_command(
             resume_template,
             eval_root,
             &task.dispatch_prompt_path,
             &round_outputs,
             Some(&session_id),
-            Some(&turn.prompt),
+            Some(&prompt),
             round,
         );
         if execute_round(
@@ -252,6 +308,7 @@ pub fn run_task(
             events,
         },
         Some(final_message),
+        plan.source(),
     )
 }
 
@@ -263,6 +320,7 @@ fn write_conversation(
     base_outputs: &Path,
     conversation: ConversationRecord,
     final_message: Option<String>,
+    source: TurnSource,
 ) -> anyhow::Result<TaskOutcome> {
     let _: ConversationRecord = validate_against_schema(
         SchemaName::Conversation,
@@ -281,9 +339,11 @@ fn write_conversation(
     Ok(match conversation.status {
         ConversationStatus::Completed => TaskOutcome::Completed {
             delivered_followups: conversation.delivered_followups,
+            source,
         },
         ConversationStatus::Stopped => TaskOutcome::Stopped {
             before_followup: conversation.stopped_before_followup.unwrap_or_default(),
+            reason: conversation.stop_reason,
         },
         ConversationStatus::TimedOut => TaskOutcome::TimedOut {
             round: conversation.timed_out_in_round.unwrap_or(1),
@@ -353,26 +413,6 @@ fn append_summary_events(
         *next_ordinal = next_ordinal.saturating_add(1);
     }
     Ok(assistant_messages.join("\n"))
-}
-
-fn unmet_gate(
-    turn: &ScriptedTurn,
-    preceding_assistant: &str,
-) -> anyhow::Result<Option<ConversationStopReason>> {
-    if turn.deliver_when == DeliverWhen::Always {
-        return Ok(None);
-    }
-    if !preceding_assistant.contains('?') {
-        return Ok(Some(ConversationStopReason::AgentDidNotAsk));
-    }
-    if let Some(pattern) = &turn.agent_response_matches {
-        let regex = Regex::new(pattern)
-            .with_context(|| format!("invalid agent_response_matches regex {pattern:?}"))?;
-        if !regex.is_match(preceding_assistant) {
-            return Ok(Some(ConversationStopReason::AgentResponseMismatch));
-        }
-    }
-    Ok(None)
 }
 
 /// Render a one-shot dispatch command: the exec template with its task
@@ -480,47 +520,10 @@ fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> anyhow::Resu
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{append_summary_events, execute_round, unmet_gate};
+    use super::{append_summary_events, execute_round};
     use crate::adapters::TranscriptSummary;
     use crate::adapters::cli_command::shell_quote_arg;
     use crate::adapters::transcript::TranscriptEvent;
-    use crate::core::{ConversationStopReason, DeliverWhen, ScriptedTurn};
-
-    fn conditional(pattern: Option<&str>) -> ScriptedTurn {
-        ScriptedTurn {
-            prompt: "follow up".into(),
-            deliver_when: DeliverWhen::AgentAsks,
-            agent_response_matches: pattern.map(str::to_string),
-        }
-    }
-
-    #[test]
-    fn agent_asks_requires_a_question_mark() {
-        assert_eq!(
-            unmet_gate(&conditional(None), "Please provide the timezone.").unwrap(),
-            Some(ConversationStopReason::AgentDidNotAsk)
-        );
-        assert_eq!(
-            unmet_gate(&conditional(None), "Which timezone?").unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn response_pattern_is_an_additional_compatibility_gate() {
-        assert_eq!(
-            unmet_gate(&conditional(Some("(?i)time ?zone")), "Which locale?").unwrap(),
-            Some(ConversationStopReason::AgentResponseMismatch)
-        );
-        assert_eq!(
-            unmet_gate(
-                &conditional(Some("(?i)time ?zone")),
-                "Which timezone should I use?"
-            )
-            .unwrap(),
-            None
-        );
-    }
 
     #[test]
     fn execute_round_creates_the_round_output_directory_before_shell_redirection() {

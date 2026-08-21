@@ -8,6 +8,7 @@ use std::fs;
 use std::path::Path;
 
 mod dispatch;
+mod responder;
 
 #[test]
 fn multi_turn_eval_dispatch_records_followups_and_conversation_artifact_path() {

@@ -121,6 +121,12 @@ pub struct Eval {
     /// serializes exactly as it did before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codebase: Option<CodebaseSource>,
+    /// Derives each follow-up from what the agent just said, instead of
+    /// scripting them. Mutually exclusive with [`Self::turns`]; absence of both
+    /// preserves one-shot dispatch. Appended last so an eval that declares none
+    /// serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder: Option<ResponderPolicy>,
 }
 
 /// One scripted user follow-up delivered after an assistant response.
@@ -138,6 +144,31 @@ pub struct ScriptedTurn {
 pub enum DeliverWhen {
     Always,
     AgentAsks,
+}
+
+/// How the runner answers the agent when an eval has no scripted script to
+/// follow: the alternative to [`ScriptedTurn`], not a layer on top of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponderPolicy {
+    #[serde(rename = "type")]
+    pub kind: ResponderKind,
+    /// Maximum follow-up turns the responder may synthesize. The opening prompt
+    /// is not one of them, so this counts exactly what `delivered_followups`
+    /// counts. `None` takes [`DEFAULT_RESPONDER_MAX_TURNS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
+}
+
+/// The bound a responder eval gets when it declares none: high enough that a
+/// real clarifying exchange is not cut short, low enough that an agent stuck in
+/// a question loop cannot burn a campaign.
+pub const DEFAULT_RESPONDER_MAX_TURNS: u32 = 8;
+
+impl ResponderPolicy {
+    /// The bound this policy actually runs under.
+    pub fn max_turns(&self) -> u32 {
+        self.max_turns.unwrap_or(DEFAULT_RESPONDER_MAX_TURNS)
+    }
 }
 
 /// Legacy per-eval isolation hint. Every new run is task-scoped regardless.
@@ -414,6 +445,13 @@ pub enum ConversationStatus {
 pub enum ConversationStopReason {
     AgentDidNotAsk,
     AgentResponseMismatch,
+    /// The agent asked something the responder could not answer mechanically.
+    /// This is the branch an LLM responder takes over; until then the run stops
+    /// here rather than inventing a reply.
+    ResponderCannotAnswer,
+    /// The agent was still asking when the responder's `max_turns` bound was
+    /// reached. A bounded conversation, not a failed one.
+    MaxTurnsReached,
 }
 
 /// One globally ordered event across every delivered conversation round.
@@ -424,6 +462,12 @@ pub enum ConversationEvent {
         ordinal: u32,
         round: u32,
         text: String,
+        /// How a responder derived this turn. Absent on the seeded eval prompt
+        /// and on scripted turns, which are authored rather than derived — the
+        /// absence is what tells the two apart. Appended last so a scripted
+        /// conversation serializes exactly as it did before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<TurnOrigin>,
     },
     AssistantMessage {
         ordinal: u32,
@@ -439,6 +483,53 @@ pub enum ConversationEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<Value>,
     },
+}
+
+/// Where a synthesized user turn came from, recorded on the turn itself so a
+/// reader can audit whether the responder distorted the run. Absent on the
+/// seeded eval prompt and on scripted turns, which are authored, not derived.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnOrigin {
+    pub responder: ResponderKind,
+    /// One entry per question the turn answered, in the order they were asked.
+    pub answers: Vec<ResponderAnswer>,
+}
+
+/// Which responder produced a turn. `heuristic` is the only one that exists
+/// today; the LLM answering agent adds its own so the two stay distinguishable
+/// in a record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponderKind {
+    Heuristic,
+}
+
+/// How the responder answered one question, with the evidence it read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponderAnswer {
+    /// The question line the options hung from, when the message carried one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question: Option<String>,
+    /// The options as written, before markers were stripped.
+    pub options: Vec<String>,
+    pub rule: ResponderRule,
+    /// Empty when the rule selected nothing.
+    pub chosen: Vec<String>,
+}
+
+/// The mechanical rule that picked one answer. Naming it on the turn is what
+/// makes a synthesized conversation auditable rather than mysterious.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponderRule {
+    /// Exactly one option was marked as recommended, or every recommended
+    /// option of a checkbox list was taken.
+    RecommendedOption,
+    /// Exactly one choice was required and none was recommended, so the first
+    /// option won.
+    FirstOption,
+    /// A checkbox list required zero or more choices and recommended none.
+    NoSelection,
 }
 
 /// The result of grading one assertion.
@@ -570,6 +661,7 @@ mod tests {
             isolation: None,
             turns: None,
             codebase: None,
+            responder: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -594,6 +686,7 @@ mod tests {
             isolation: Some(Isolation::Isolated),
             turns: None,
             codebase: None,
+            responder: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert_eq!(

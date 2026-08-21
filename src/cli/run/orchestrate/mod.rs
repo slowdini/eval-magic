@@ -243,17 +243,32 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     // to the eval config actually selected for the run.
     let resolved = resolve::resolve_request(ctx, opts)?;
 
-    if resolved
-        .selected_evals
-        .iter()
-        .any(|eval| eval.turns.as_ref().is_some_and(|turns| !turns.is_empty()))
-        && !adapter_for(ctx.harness).has_conversation_resume()
-    {
-        return Err(RunError::msg(format!(
-            "--harness {} cannot run evals with scripted follow-up turns: its descriptor \
-             declares no [conversation] native resume capability",
-            adapter_for(ctx.harness).label()
-        )));
+    // Both ways of driving a conversation need the same capability: without one
+    // preserved session, a follow-up answers a fresh agent that never asked.
+    // Reported here rather than at dispatch time, so the gap surfaces before a
+    // workspace is built.
+    if !adapter_for(ctx.harness).has_conversation_resume() {
+        let label = adapter_for(ctx.harness).label();
+        if resolved
+            .selected_evals
+            .iter()
+            .any(|eval| eval.turns.as_ref().is_some_and(|turns| !turns.is_empty()))
+        {
+            return Err(RunError::msg(format!(
+                "--harness {label} cannot run evals with scripted follow-up turns: its descriptor \
+                 declares no [conversation] native resume capability"
+            )));
+        }
+        if resolved
+            .selected_evals
+            .iter()
+            .any(|eval| eval.responder.is_some())
+        {
+            return Err(RunError::msg(format!(
+                "--harness {label} cannot run evals with a responder: its descriptor declares no \
+                 [conversation] native resume capability"
+            )));
+        }
     }
 
     // The harness preflight provides supported enhancements automatically (the

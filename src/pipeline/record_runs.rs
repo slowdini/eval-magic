@@ -69,10 +69,14 @@ struct DispatchTask {
     #[serde(default)]
     conversation_path: Option<String>,
     /// Present only for a scripted task. Every task carries a
-    /// `conversation_path`, so this is what tells a task whose rounds are
-    /// unknown-without-the-artifact from a one-shot task.
+    /// `conversation_path`, so this and `responder` are what tell a task whose
+    /// rounds are unknown-without-the-artifact from a one-shot task.
     #[serde(default)]
     turns: Option<serde_json::Value>,
+    /// Present only for a responder-driven task — the other way a task's rounds
+    /// become unknown without its completion artifact.
+    #[serde(default)]
+    responder: Option<serde_json::Value>,
     /// Group this task belongs to; absent for a single-group run. Carried so the
     /// session-surface report can be joined back to the comparison cells a
     /// shadow finding names.
@@ -175,7 +179,7 @@ impl RecordRunsResult {
         ))
     }
 
-    /// Warn when a scripted task never produced its runner-owned completion
+    /// Warn when a multi-turn task never produced its runner-owned completion
     /// artifact. Raw per-turn transcripts are intentionally not ingested
     /// without it because the driver may have failed between turns.
     pub fn incomplete_conversation_warning(&self) -> Option<String> {
@@ -185,7 +189,7 @@ impl RecordRunsResult {
         }
         let plural = if n == 1 { "" } else { "s" };
         Some(format!(
-            "⚠ {n} scripted conversation{plural} skipped — conversation.json is missing, so \
+            "⚠ {n} multi-turn conversation{plural} skipped — conversation.json is missing, so \
              eval-magic cannot distinguish a completed/stopped scenario from an interrupted \
              dispatch. Re-run `eval-magic dispatch` — it retries exactly the tasks with no \
              completion artifact."
@@ -221,11 +225,11 @@ pub fn record_runs(
     let mut surface_tasks: Vec<TaskSessionSurface> = Vec::new();
     for task in &tasks {
         let conversation = conversation::for_task(task)?;
-        // Keyed on `turns`, not on `conversation_path`: every task declares a
-        // conversation artifact, so its presence does not distinguish a scripted
-        // one. A scripted task without the artifact is genuinely incomplete —
-        // which rounds ran is unknown.
-        if task.turns.is_some() && conversation.is_none() {
+        // Keyed on what drives the turns, not on `conversation_path`: every task
+        // declares a conversation artifact, so its presence does not distinguish
+        // a multi-turn one. A scripted or responder-driven task without the
+        // artifact is genuinely incomplete — which rounds ran is unknown.
+        if (task.turns.is_some() || task.responder.is_some()) && conversation.is_none() {
             result.skipped_incomplete_conversation += 1;
             continue;
         }
