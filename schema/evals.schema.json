@@ -220,7 +220,7 @@
         "command": {
           "type": "string",
           "minLength": 1,
-          "description": "Trusted eval-author command executed by the runner in the task environment after agent dispatch."
+          "description": "Trusted eval-author POSIX shell command executed by the runner with `sh -c` in the task environment after agent dispatch."
         },
         "env": {
           "type": "object",

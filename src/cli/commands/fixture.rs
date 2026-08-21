@@ -3,10 +3,9 @@
 //!
 //! Tests that exercise `command_check` grading need a program that exits with a
 //! chosen status, emits chosen bytes, or writes a chosen file. Reaching for
-//! `sh`, `true`, or `printf` ties those tests to POSIX, and the `cmd.exe`
-//! equivalents are not equivalent — `echo x>>f` appends CRLF, and
-//! `echo|set /p=` cannot round-trip a value. One fixture invoked the same way
-//! under both shells removes the dialect problem entirely.
+//! external utilities such as `true`, `printf`, or `sleep` would make their
+//! platform-specific output and availability part of the test. The fixture
+//! keeps those effects predictable.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -160,9 +159,8 @@ mod tests {
     }
 
     /// `--sleep-ms` delays the fixture before it does anything else, which is
-    /// what lets a dispatch-timeout test overrun a deadline on any host. `sleep`
-    /// is a POSIX binary Windows lacks, so the delay has to live in the fixture
-    /// itself.
+    /// what lets a dispatch-timeout test overrun a deadline without depending
+    /// on an external `sleep` binary.
     #[test]
     fn sleep_ms_delays_the_fixture_before_it_emits() {
         let started = std::time::Instant::now();

@@ -17,12 +17,8 @@ fn check(command: &str) -> AssertionCommandCheck {
 
 /// A `__fixture` invocation as a shell command line.
 ///
-/// `execute_command_check` hands the string to the platform shell, so it has to
-/// parse identically under `sh -c` and `cmd /C`. A double-quoted program path
-/// followed by double-quoted arguments does: both shells strip the quotes and
-/// hand the tokens to the program unchanged. Writing one command per shell
-/// dialect instead invites silent divergence — `printf x` and `echo x` do not
-/// agree on the trailing newline.
+/// `execute_command_check` hands the string to `sh -c`. Double-quoting the
+/// program path and arguments preserves spaces and literal fixture values.
 fn fixture(args: &[&str]) -> String {
     let exe = assert_cmd::cargo::cargo_bin("eval-magic");
     assert!(
@@ -134,17 +130,27 @@ fn expected_and_unexpected_exit_codes_are_assertion_results() {
     assert!(failed.evidence.contains("got 3"));
 }
 
-/// An eval author's `command_check` reaches the shell with its own quoting
-/// intact. Windows makes this easy to get wrong: Rust escapes a command's
-/// embedded quotes as `\"`, which `cmd.exe` does not understand, so a quoted
-/// argument silently arrives split at the space.
+/// An eval author's `command_check` reaches `sh -c` with its own quoting intact.
 #[test]
-fn command_reaches_the_platform_shell_with_its_quoting_intact() {
+fn command_reaches_the_posix_shell_with_its_quoting_intact() {
     let root = tempfile::TempDir::new().unwrap();
     let result =
         execute_command_check(&check(&fixture(&["--text", "spaced value"])), root.path()).unwrap();
     assert!(result.passed, "{}", result.evidence);
     assert_eq!(result.stdout, "spaced value");
+}
+
+#[test]
+fn command_accepts_posix_environment_assignment_syntax() {
+    let root = tempfile::TempDir::new().unwrap();
+    let command = format!(
+        "EVAL_MAGIC_TEST_VALUE=posix {}",
+        fixture(&["--require-env", "EVAL_MAGIC_TEST_VALUE=posix"])
+    );
+
+    let result = execute_command_check(&check(&command), root.path()).unwrap();
+
+    assert!(result.passed, "{}", result.evidence);
 }
 
 #[test]
@@ -410,13 +416,6 @@ fn termination_message_names_the_signal_when_there_is_one() {
 
 #[test]
 fn signal_termination_is_an_ordinary_failed_assertion() {
-    // Windows has no signals: a child always reports an exit code, so there is
-    // no way to reach the no-code path from the outside. The wording it would
-    // produce is pinned by `termination_message_names_the_signal_when_there_is_one`
-    // instead, which runs everywhere.
-    if cfg!(windows) {
-        return;
-    }
     let root = tempfile::TempDir::new().unwrap();
     let result = execute_command_check(&check("kill -TERM $$"), root.path()).unwrap();
     assert!(!result.passed);

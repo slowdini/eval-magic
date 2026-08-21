@@ -8,8 +8,9 @@
 //!
 //! The gap is host-local: `dispatch` spawns each harness command line with the
 //! workspace's own absolute paths, so the shell it resolves has to resolve
-//! those. Git Bash shares the Windows filesystem; WSL resolves its own. See
-//! [`POSIX_TOOLING_REQUIREMENT`] for the declared rule the warning defers to.
+//! those. Windows users keep preparation and dispatch inside the same WSL
+//! environment. See [`POSIX_TOOLING_REQUIREMENT`] for the declared rule the
+//! warning defers to.
 
 use std::path::Path;
 
@@ -51,18 +52,24 @@ mod tests {
     /// workspace is still correct.
     #[test]
     fn a_missing_shell_warns_with_the_declared_requirement() {
-        let warning = tooling_warning(Err("no POSIX shell found. Use Git Bash or WSL."))
+        let warning = tooling_warning(Err(
+            "no POSIX shell found. On Windows, run eval-magic inside WSL; native Windows is unsupported.",
+        ))
             .expect("a host with no POSIX shell must be told");
         assert!(warning.contains("no POSIX shell found"), "{warning}");
-        assert!(warning.contains("Git Bash"), "{warning}");
+        assert!(warning.contains("WSL"), "{warning}");
+        assert!(
+            warning.contains("native Windows is unsupported"),
+            "{warning}"
+        );
     }
 
-    /// An unqualified "dispatch it from a POSIX shell" reads as an invitation to
-    /// prepare here and dispatch from WSL — the one split
-    /// [`POSIX_TOOLING_REQUIREMENT`] rules out, and the one that fails quietly.
+    /// An unqualified "dispatch it from a POSIX shell" could invite a caller to
+    /// cross filesystem namespaces. Confining it to the preparing host keeps the
+    /// generated absolute paths valid.
     #[test]
     fn a_missing_shell_confines_dispatch_to_the_host_that_prepared_the_workspace() {
-        let warning = tooling_warning(Err("no POSIX shell found. Use Git Bash."))
+        let warning = tooling_warning(Err("no POSIX shell found."))
             .expect("a host with no POSIX shell must be told");
         assert!(
             warning.contains("this host"),

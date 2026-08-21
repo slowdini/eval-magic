@@ -2,9 +2,9 @@
 //! artifact path rendering, and tree copying, used by `pipeline`, `workspace`,
 //! `cli::run`, `adapters`, and `sandbox`.
 //!
-//! [`artifact_path`] renders a path into the forward-slash wire format every
-//! generated artifact carries; [`normalize_separators`] is its comparison-side
-//! counterpart, for matching a path spelled by a different host.
+//! [`artifact_path`] renders a supported-host path into the forward-slash wire
+//! format every generated artifact carries; [`normalize_separators`] is its
+//! comparison-side counterpart, for matching foreign path spellings in data.
 //!
 //! [`copy_entry_materialized`] is the one way to copy here, and it resolves
 //! symlinks into their target's content rather than mirroring them. Every
@@ -27,73 +27,32 @@ use serde::Serialize;
 /// carries.
 ///
 /// Artifact path fields are a wire format: agents read them, downstream tools
-/// join them, and the golden fixtures compare them byte for byte. `Path::join`
-/// plus `Display` emits the *host's* separator, so on Windows a POSIX-rooted
-/// base yields `/work/cond\run.json` — malformed for every reader. Forward
-/// slashes are accepted by the Windows file APIs, so the result stays openable
-/// by the stages that read these fields back.
-///
-/// The rewrite is Windows-only: a POSIX filename may legally contain a literal
-/// backslash, and rewriting it there would name a different file. A verbatim
-/// (`\\?\`) prefix — what `Path::canonicalize` returns on Windows — is stripped
-/// first, since it is an OS escape hatch rather than a path to hand an agent.
+/// join them, and the golden fixtures compare them byte for byte. Supported
+/// hosts use forward slashes natively. A POSIX filename may legally contain a
+/// literal backslash, so rewriting one would name a different file.
 ///
 /// Not for paths handed to a process: a spawned command's argv and the guard
 /// hook command line must keep the host's own spelling.
 pub fn artifact_path(path: &Path) -> String {
-    let rendered = path.to_string_lossy();
-    if !cfg!(windows) {
-        return rendered.into_owned();
-    }
-    normalize_separators(&strip_verbatim_prefix(&rendered))
-}
-
-/// Drop Windows' verbatim (`\\?\`) prefix, keeping the host's own separators.
-fn strip_verbatim_prefix(rendered: &str) -> String {
-    match rendered.strip_prefix(r"\\?\UNC\") {
-        // Verbatim UNC collapses back to the `\\server\share` form; dropping
-        // the whole prefix would leave a bare `UNC\` component.
-        Some(rest) => format!(r"\\{rest}"),
-        None => rendered
-            .strip_prefix(r"\\?\")
-            .unwrap_or(rendered)
-            .to_string(),
-    }
+    path.to_string_lossy().into_owned()
 }
 
 /// The one spelling of `path` that every participant in a run agrees on.
 ///
-/// POSIX hands this out for free: `getcwd` resolves symlinks, so a Unix process
-/// and everything it spawns already share one spelling of the working directory.
-/// Windows makes no such promise — it hands back whatever spelling the cwd was
-/// set with — and one directory there has several valid names: an 8.3 short
-/// name (`RUNNER~1`), a junction, a `subst` drive, a redirected profile
-/// directory. Tools then disagree about which to report: `git` prints the
-/// resolved name, while node's `process.cwd()` and `cmd`'s `cd` echo the alias
-/// back. Anything comparing those strings — the write guard's allowed roots
-/// against the paths an agent's own tools hand it — silently stops matching.
-///
-/// Resolving once, at the point a run's roots are derived, gives Windows the
-/// guarantee POSIX already provides. The verbatim (`\\?\`) prefix comes off
-/// because a spawned child reports the plain form, so plain is the spelling the
-/// comparisons actually see.
+/// `getcwd` and `canonicalize` resolve symlink aliases, so resolving once at the
+/// point a run's roots are derived gives the write guard, Git, and spawned tools
+/// one spelling to compare.
 ///
 /// A run names directories before it creates them, so resolution walks up to the
-/// deepest ancestor that exists and re-attaches the rest: the alias always lives
-/// in an ancestor — a temp dir, a junction, an 8.3 profile name — never in the
-/// leaf about to be created. With no ancestor on disk at all, the lexical form
-/// is all there is.
+/// deepest ancestor that exists and re-attaches the rest. With no ancestor on
+/// disk at all, the lexical form is all there is.
 pub fn real_path(path: &Path) -> io::Result<PathBuf> {
     let absolute = std::path::absolute(path)?;
     let mut unresolved = Vec::new();
     let mut anchor = absolute.as_path();
     loop {
         if let Ok(canonical) = fs::canonicalize(anchor) {
-            let mut resolved = if cfg!(windows) {
-                PathBuf::from(strip_verbatim_prefix(&canonical.to_string_lossy()))
-            } else {
-                canonical
-            };
+            let mut resolved = canonical;
             resolved.extend(unresolved.iter().rev());
             return Ok(resolved);
         }
@@ -180,25 +139,10 @@ pub fn hardlinks_available(from: &Path, to: &Path) -> bool {
 ///
 /// Test support. Copying here resolves links into content rather than
 /// recreating them, so the only callers left are fixtures that need a link to
-/// exist and the probe that asks whether this host permits one.
-///
-/// `to_directory` is consulted only on Windows, which has separate file and
-/// directory link kinds; POSIX has one. Creating a symlink there also needs
-/// either Developer Mode or elevation, so this can fail for reasons that have
-/// nothing to do with the paths involved.
+/// exist and the probe that asks whether this filesystem permits one.
 #[cfg(test)]
-pub(crate) fn create_symlink(target: &Path, link: &Path, to_directory: bool) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        let _ = to_directory;
-        std::os::unix::fs::symlink(target, link)
-    }
-    #[cfg(windows)]
-    if to_directory {
-        std::os::windows::fs::symlink_dir(target, link)
-    } else {
-        std::os::windows::fs::symlink_file(target, link)
-    }
+pub(crate) fn create_symlink(target: &Path, link: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
 }
 
 /// Create `path`'s parent directory chain, when it has one.
@@ -209,37 +153,6 @@ fn create_parent(path: &Path) -> io::Result<()> {
     }
 }
 
-/// Make `link` a second name for the directory `target`, for tests that need one
-/// directory reachable by two spellings.
-///
-/// Deliberately *not* gated on the symlink capability. The paths that resolve
-/// aliases differently are a Windows problem, so a fixture that skips on a
-/// stock Windows box would leave that platform uncovered exactly where it
-/// matters. A junction is the Windows alias that needs no Developer Mode and no
-/// elevation, and `canonicalize` collapses it the same way it collapses a
-/// symlink, an 8.3 short name, or a `subst` drive.
-#[cfg(test)]
-pub(crate) fn create_directory_alias(target: &Path, link: &Path) -> io::Result<()> {
-    if !cfg!(windows) {
-        return create_symlink(target, link, true);
-    }
-    let status = std::process::Command::new("cmd")
-        .args(["/C", "mklink", "/J"])
-        .arg(link)
-        .arg(target)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()?;
-    if status.success() {
-        return Ok(());
-    }
-    Err(io::Error::other(format!(
-        "mklink /J could not alias {} to {}",
-        link.display(),
-        target.display()
-    )))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -248,17 +161,15 @@ mod tests {
 
     /// Whether this host lets the test process create a symlink at all.
     ///
-    /// A capability, not a platform: Windows can create symlinks, but only under
-    /// Developer Mode or elevation. Probing beats gating on the OS — the tests
-    /// then run wherever the capability exists instead of wherever the OS name
-    /// matches.
+    /// A capability, not a platform label: tests exercise links wherever the
+    /// backing filesystem permits them.
     fn symlinks_available(scratch: &Path) -> bool {
         let target = scratch.join("probe-target.txt");
         let link = scratch.join("probe-link.txt");
         if fs::write(&target, "probe").is_err() {
             return false;
         }
-        create_symlink(&target, &link, false).is_ok()
+        create_symlink(&target, &link).is_ok()
     }
 
     /// Report a skipped symlink test, deferring to the shared skip policy so the
@@ -267,7 +178,7 @@ mod tests {
         !symlinks_available(scratch)
             && crate::core::runtime::report_skip(
                 test,
-                "this host does not permit symlink creation (Windows needs Developer Mode)",
+                "this filesystem does not permit symlink creation",
             )
     }
 
@@ -276,11 +187,17 @@ mod tests {
     #[test]
     fn real_path_collapses_an_alias_onto_the_resolved_spelling() {
         let tmp = TempDir::new().unwrap();
+        if skip_without_symlinks(
+            tmp.path(),
+            "real_path_collapses_an_alias_onto_the_resolved_spelling",
+        ) {
+            return;
+        }
         let real = tmp.path().join("real-dir");
         fs::create_dir_all(&real).unwrap();
         fs::create_dir_all(real.join("nested")).unwrap();
         let alias = tmp.path().join("alias-dir");
-        create_directory_alias(&real, &alias).unwrap();
+        create_symlink(&real, &alias).unwrap();
 
         assert_eq!(
             real_path(&alias.join("nested")).unwrap(),
@@ -288,31 +205,24 @@ mod tests {
         );
     }
 
-    /// The verbatim prefix is an OS escape hatch: a spawned child reports the
-    /// plain form, so a root carrying `\\?\` would fail to match every path the
-    /// comparisons actually see.
-    #[test]
-    fn real_path_never_returns_a_verbatim_prefix() {
-        let tmp = TempDir::new().unwrap();
-        let resolved = real_path(tmp.path()).unwrap();
-        assert!(
-            !resolved.to_string_lossy().starts_with(r"\\?\"),
-            "{resolved:?} still carries the verbatim prefix"
-        );
-    }
-
     /// A run names directories before it creates them — a workspace root, an
     /// iteration dir. Resolving only whole existing paths would leave exactly
-    /// those unresolved, and the alias lives in the *ancestor* anyway (a temp
-    /// dir, a junction, an 8.3 profile name), never in the leaf about to be
-    /// created. So resolve as far down as the disk goes and re-attach the rest.
+    /// those unresolved, and the alias lives in the *ancestor* anyway, never in
+    /// the leaf about to be created. Resolve as far down as the disk goes and
+    /// re-attach the rest.
     #[test]
     fn real_path_resolves_the_existing_ancestor_of_a_path_not_yet_created() {
         let tmp = TempDir::new().unwrap();
+        if skip_without_symlinks(
+            tmp.path(),
+            "real_path_resolves_the_existing_ancestor_of_a_path_not_yet_created",
+        ) {
+            return;
+        }
         let real = tmp.path().join("real-dir");
         fs::create_dir_all(&real).unwrap();
         let alias = tmp.path().join("alias-dir");
-        create_directory_alias(&real, &alias).unwrap();
+        create_symlink(&real, &alias).unwrap();
 
         let unborn = alias.join("workspace").join("iteration-1");
         assert_eq!(
@@ -328,11 +238,7 @@ mod tests {
     /// no worse than the spelling the caller passed in.
     #[test]
     fn real_path_falls_back_to_the_lexical_form_when_no_ancestor_exists() {
-        let absent = Path::new(if cfg!(windows) {
-            r"C:\no-such-root-here\child"
-        } else {
-            "/no-such-root-here/child"
-        });
+        let absent = Path::new("/no-such-root-here/child");
         assert_eq!(
             real_path(absent).unwrap(),
             std::path::absolute(absent).unwrap()
@@ -349,39 +255,14 @@ mod tests {
         );
     }
 
-    /// A backslash means different things per host, so `artifact_path` does too,
-    /// and both halves belong in one place.
-    ///
-    /// On Windows it is a separator: `Path::join` on a POSIX-rooted base emits
-    /// one, so a manifest entry would otherwise read `/work/cond\run.json`. A
-    /// verbatim `\\?\` prefix is stripped as well — an OS-level escape hatch, not
-    /// something an agent should ever be handed. On POSIX a backslash is a legal
-    /// filename character, so rewriting it would name a different file.
+    /// A backslash is a legal POSIX filename character, so artifact rendering
+    /// preserves it rather than naming a different file.
     #[test]
-    fn artifact_path_applies_host_separator_rules() {
-        if cfg!(windows) {
-            assert_eq!(
-                artifact_path(Path::new(r"/work/cond\run.json")),
-                "/work/cond/run.json"
-            );
-            assert_eq!(
-                artifact_path(Path::new(r"C:\work\cond\run.json")),
-                "C:/work/cond/run.json"
-            );
-            assert_eq!(
-                artifact_path(Path::new(r"\\?\C:\work\run.json")),
-                "C:/work/run.json"
-            );
-            assert_eq!(
-                artifact_path(Path::new(r"\\?\UNC\host\share\run.json")),
-                "//host/share/run.json"
-            );
-        } else {
-            assert_eq!(
-                artifact_path(Path::new(r"/work/od\dity.json")),
-                r"/work/od\dity.json"
-            );
-        }
+    fn artifact_path_preserves_literal_backslashes() {
+        assert_eq!(
+            artifact_path(Path::new(r"/work/od\dity.json")),
+            r"/work/od\dity.json"
+        );
     }
 
     /// Comparison normalization is unconditional, unlike [`artifact_path`]: its
@@ -445,7 +326,7 @@ mod tests {
         let source = tmp.path().join("tree");
         fs::create_dir_all(&source).unwrap();
         fs::write(source.join("real.txt"), "frozen").unwrap();
-        create_symlink(Path::new("real.txt"), &source.join("alias.txt"), false).unwrap();
+        create_symlink(Path::new("real.txt"), &source.join("alias.txt")).unwrap();
 
         let destination = tmp.path().join("copied");
         copy_entry_materialized(&source, &destination).unwrap();

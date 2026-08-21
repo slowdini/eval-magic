@@ -8,12 +8,10 @@
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
 REQUIREMENTS:
-  Git, plus a POSIX shell. Harness dispatch commands are POSIX command
-  lines, and eval-magic dispatch runs them itself, so the host it runs on
-  needs a shell that resolves the workspace's own paths. On Windows that is
-  Git Bash (Git for Windows). WSL resolves a different filesystem namespace,
-  so run eval-magic inside WSL rather than dispatching into it. Set
-  EVAL_MAGIC_SH to select a specific sh.
+  eval-magic supports Linux and macOS. On Windows, install and run eval-magic
+  inside WSL; native Windows is unsupported. Keep the repository, workspace,
+  and harness commands inside the same WSL environment. Git and a POSIX shell
+  are required. Set EVAL_MAGIC_SH to select a specific sh.
 
 EXAMPLES:
   # Scaffold a first eval and prepare its isolated comparison environments

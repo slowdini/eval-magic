@@ -204,11 +204,9 @@ mod tests {
         stage_root: PathBuf,
     }
 
-    /// The marker path as it appears *inside* a JSON string value: the hook
-    /// command embeds it, so every Windows separator is escaped to `\\`.
-    /// Interpolating `display()` raw builds an expectation that is not even
-    /// valid JSON, and the byte pin then fails on a difference the file does
-    /// not have.
+    /// The marker path as it appears *inside* a JSON string value. Serializing
+    /// it keeps the expectation valid JSON even when the path contains bytes
+    /// that need escaping.
     fn json_string_body(path: &Path) -> String {
         let quoted = serde_json::to_string(&path.to_string_lossy()).unwrap();
         quoted[1..quoted.len() - 1].to_string()

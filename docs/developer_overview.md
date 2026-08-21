@@ -75,23 +75,19 @@ following authorities:
 
 | Tier | Platform | Verified by |
 | --- | --- | --- |
-| Supported | Linux, macOS | the `ubuntu-latest` CI job |
-| Deprecated | Windows, through Git Bash (Git for Windows) | the `windows-latest` CI job |
-| Unsupported | preparing a workspace on Windows and dispatching it from WSL | — |
+| Supported | Linux, macOS, Linux inside WSL | the `ubuntu-latest` CI job |
+| Unsupported | native Windows | — |
 
-Windows support is deprecated in favor of WSL. #256 has landed, so the recipe surface that carried
-the largest Windows accommodation is gone; the remaining removal — the `cfg(windows)` sites, the CI
-leg, and the msvc target — is #275. Until that lands, the Windows runner stays green and
-Windows-native behavior is held to the same bar as any other platform: a Windows failure is a real
-failure, not an accepted gap. Do not add new Windows-native accommodation in the meantime.
+Windows users run the Linux build inside Windows Subsystem for Linux (WSL). Keep the binary,
+repository, eval workspaces, and harness processes inside the same WSL environment. `dispatch`
+passes workspace-owned absolute paths to harness command lines, so crossing from a native Windows
+process into WSL would change the filesystem namespace and invalidate those paths.
 
-The unsupported row is a correctness boundary rather than a preference. `dispatch` spawns each
-harness command line with the workspace's own absolute paths, so the shell it resolves has to
-resolve those. Git Bash shares the Windows filesystem, so those paths resolve; WSL resolves its own
-namespace, where a `C:\…` path names nothing. Nothing in the tree translates between the two, so
-the split fails quietly instead of loudly. `POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is
-the single wording every user-facing surface reuses to state this; `src/cli/help.rs` restates it
-for clap by hand.
+Do not add native Windows accommodations or release targets. Preserve support for Windows-shaped
+paths only where they are data read from artifacts or transcripts; those portable-data contracts
+do not imply native Windows runtime support. `POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is
+the single wording every user-facing Markdown surface reuses. `src/cli/help.rs` restates it for
+clap by hand.
 
 ## Make and verify a change
 
@@ -100,11 +96,11 @@ editing. Add a focused failing test at the narrowest useful boundary, implement 
 run the focused test again. Cross-harness changes belong at shared descriptor, runner, or adapter
 boundaries unless the evidence requires a named harness capability.
 
-Development carries the host requirement the tool itself declares: a POSIX shell. The dispatch
+Development requires Linux or macOS with a POSIX shell. Windows contributors clone the repository
+and run the complete toolchain inside WSL; native Windows development is unsupported. The dispatch
 tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite
-cannot pass without one. Tests needing symlink creation or a path past Windows' 259-character limit
-report a skip instead; `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into failures, as CI
-sets it to do on both its Ubuntu and its Windows runner.
+cannot pass without one. Tests needing symlink creation report a skip instead;
+`EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into failures in CI.
 
 Before handing work off, run:
 

@@ -71,10 +71,8 @@ pub fn wire_path(path: &Path) -> String {
 
 /// A `__fixture` invocation as a `command_check` command line.
 ///
-/// The grader hands the string to the platform shell, so it has to parse the
-/// same under `sh -c` and `cmd /C`: a double-quoted program path followed by
-/// double-quoted arguments does. One such command covers what `test`, `true`,
-/// and `fc` would each have to spell differently per shell.
+/// The grader hands the string to `sh -c`. Double-quoting the program path and
+/// arguments preserves spaces and literal fixture values.
 pub fn fixture(args: &[&str]) -> String {
     let mut command = format!("\"{}\" __fixture", env!("CARGO_BIN_EXE_eval-magic"));
     for arg in args {
@@ -83,23 +81,12 @@ pub fn fixture(args: &[&str]) -> String {
     command
 }
 
-/// `fs::canonicalize` with Windows' verbatim (`\\?\`) prefix removed.
-///
 /// Mirrors `eval_magic::core::fs::real_path`, which the CLI applies to its own
 /// roots. A test that compares a path the CLI emitted against one it built from
-/// `TempDir` has to resolve its side the same way, because a temp dir reaches
-/// the test under an alias on both CI hosts: macOS puts it under a symlinked
-/// `/var`, so the CLI's paths resolve to `/private/var/...`, and Windows hands
-/// out the 8.3 short name, so `C:\Users\RUNNER~1\...` resolves to
-/// `C:\Users\runneradmin\...`. The verbatim prefix is the one part that does
-/// *not* survive: a child process reports the plain form as its cwd, so plain is
-/// the spelling every path the CLI emits actually carries.
+/// `TempDir` has to resolve its side the same way. On macOS, for example, temp
+/// directories under `/var` resolve to `/private/var/...`.
 pub fn resolved(path: &Path) -> PathBuf {
-    let canonical = fs::canonicalize(path).unwrap();
-    match canonical.to_string_lossy().strip_prefix(r"\\?\") {
-        Some(plain) => PathBuf::from(plain),
-        None => canonical,
-    }
+    fs::canonicalize(path).unwrap()
 }
 
 /// The ref a task environment carries at the state the agent started from.

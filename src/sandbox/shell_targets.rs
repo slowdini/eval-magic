@@ -310,9 +310,8 @@ fn fd_duplication_end(chars: &[char], at: usize) -> Option<usize> {
 /// Applied to the *resolved* path, so `/dev/../etc/passwd` cannot launder an
 /// out-of-bounds target through the `/dev` prefix.
 ///
-/// Matched by path component rather than by string: a resolved path renders
-/// with the host's separator, so `/dev/fd/1` reads back as `fd\1` on Windows
-/// and a `"fd/"` string prefix would miss it.
+/// Matched by path component rather than by string so path rendering details do
+/// not affect the result.
 fn is_non_file_device(resolved: &Path) -> bool {
     let Ok(rest) = resolved.strip_prefix("/dev") else {
         return false;

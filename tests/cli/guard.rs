@@ -26,10 +26,9 @@ fn guard_subcommand_is_hidden_but_callable() {
 /// Write an armed guard marker scoping writes to `<allowed>` under
 /// `<root>/<namespace>/skills`, and return its path.
 ///
-/// Serialized rather than string-interpolated: a Windows path embeds `\U`,
-/// `\A`, `\T` — none of them valid JSON escapes — so a `format!`-built marker
-/// is malformed, the guard reads it as absent, and every assertion below
-/// silently passes through the fail-open path instead of testing anything.
+/// Serialized rather than string-interpolated so path bytes that require JSON
+/// escaping cannot make the marker malformed and send the assertions through
+/// the fail-open path.
 fn write_marker_in(
     root: &std::path::Path,
     namespace: &str,

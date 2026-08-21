@@ -309,12 +309,24 @@ fn repository_documentation_map_names_each_surface() {
 
     // A POSIX shell is a development requirement, not a probed capability: the
     // dispatch tests spawn a `#!/bin/sh` stub through it and cannot skip. Both
-    // contributor-facing docs have to say so, or the next contributor on
-    // Windows rediscovers it as a test failure (issue #248).
+    // contributor-facing docs have to say so, including where Windows
+    // contributors run the toolchain.
     for (name, text) in [("AGENTS.md", &agents), ("developer overview", &overview)] {
         assert!(
             text.contains("POSIX shell"),
             "{name} should record the POSIX shell development requirement"
+        );
+        assert!(
+            text.contains("WSL"),
+            "{name} should direct Windows work to WSL"
+        );
+        assert!(
+            text.contains("native Windows"),
+            "{name} should state the unsupported native-Windows boundary"
+        );
+        assert!(
+            !text.contains("Git Bash"),
+            "{name} should not retain a Git Bash fallback"
         );
     }
 }
@@ -329,8 +341,10 @@ fn help_states_the_posix_tooling_requirement() {
         .success()
         .stdout(contains("REQUIREMENTS:"))
         .stdout(contains("POSIX shell"))
-        .stdout(contains("Git Bash"))
         .stdout(contains("WSL"))
+        .stdout(contains("native Windows"))
+        .stdout(contains("Git Bash").not())
+        .stdout(contains("PowerShell").not())
         // `jq` was a requirement only while operators pasted the generated
         // recipes; the runner dispatches directly and needs no such toolchain.
         .stdout(contains("jq").not());
@@ -353,14 +367,17 @@ fn readme_is_a_concise_first_run_path() {
         "eval-magic docs isolation",
         "docs/developer_overview.md",
         // The declared host requirement, stated for both audiences the README
-        // serves: installing the tool, and developing it (issue #248). `jq` is
-        // deliberately absent — it was a requirement only while operators
-        // pasted the generated recipes.
+        // serves: installing the tool and developing it. `jq` is deliberately
+        // absent because the runner dispatches directly.
         "POSIX shell",
-        "Git Bash",
         "WSL",
+        "native Windows",
     ] {
         assert!(readme.contains(expected), "README is missing {expected}");
+    }
+
+    for retired in ["Git Bash", "Windows PowerShell", "eval-magic-installer.ps1"] {
+        assert!(!readme.contains(retired), "README still contains {retired}");
     }
 
     assert!(

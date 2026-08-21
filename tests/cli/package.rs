@@ -13,6 +13,21 @@ fn read_repo_file(path: &str) -> String {
     })
 }
 
+fn rust_sources_under(path: &Path) -> Vec<std::path::PathBuf> {
+    let mut sources = Vec::new();
+    for entry in std::fs::read_dir(path).unwrap_or_else(|err| {
+        panic!("expected to read {}: {err}", path.display());
+    }) {
+        let path = entry.expect("repository entry should be readable").path();
+        if path.is_dir() {
+            sources.extend(rust_sources_under(&path));
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            sources.push(path);
+        }
+    }
+    sources
+}
+
 #[test]
 fn source_files_advertise_crates_io_publish_channel() {
     let manifest = read_repo_file("Cargo.toml");
@@ -70,26 +85,54 @@ fn ci_publishes_default_branch_coverage_for_readme_badge() {
     }
 }
 
-/// Releases attach a Windows binary, so the suite has to run on Windows — but
-/// the matrix entry alone proves nothing. Six of those tests are gated on
-/// capabilities the runner has to be handed: `jq` for the judge recipes, and
-/// symlink creation for the `core::fs` round-trips. Without the enforcement
-/// variable they skip in silence, and the job reports green while covering
-/// strictly less than it looks like it is. Every string below is load-bearing,
-/// which is why they are pinned together rather than one standing for the rest.
 #[test]
-fn ci_runs_the_suite_on_windows_with_capability_skips_enforced() {
-    let workflow = read_repo_file(".github/workflows/ci.yml");
-
-    for expected in [
-        "os: [ubuntu-latest, windows-latest]",
-        "fail-fast: false",
-        "EVAL_MAGIC_REQUIRE_POSIX_TOOLS: 1",
-        "choco install jq",
-        "AllowDevelopmentWithoutDevLicense",
-    ] {
-        assert!(workflow.contains(expected), "CI is missing {expected}");
+fn native_windows_runtime_and_release_surfaces_are_absent() {
+    let platform = "windows";
+    let native_markers = [
+        format!("cfg!({platform})"),
+        format!("#[cfg({platform})]"),
+        format!("cfg_attr({platform}"),
+        format!("target_os = \"{platform}\""),
+        format!("std::os::{platform}"),
+        format!("Command::new(\"{}\")", "cmd"),
+        format!("core.{}", "longpaths"),
+    ];
+    let mut rust_sources = rust_sources_under(&repo_root().join("src"));
+    rust_sources.extend(rust_sources_under(&repo_root().join("tests")));
+    for path in rust_sources {
+        let source = std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("expected to read {}: {err}", path.display()));
+        for marker in &native_markers {
+            assert!(
+                !source.contains(marker),
+                "{} still contains native-Windows marker {marker}",
+                path.display()
+            );
+        }
     }
+
+    let ci = read_repo_file(".github/workflows/ci.yml");
+    assert!(ci.contains("runs-on: ubuntu-latest"));
+    for marker in [
+        format!("{platform}-latest"),
+        "choco install jq".to_string(),
+        "AllowDevelopmentWithoutDevLicense".to_string(),
+    ] {
+        assert!(!ci.contains(&marker), "CI still contains {marker}");
+    }
+
+    let dist = read_repo_file("dist-workspace.toml");
+    assert!(dist.contains(r#"installers = ["shell"]"#));
+    assert!(!dist.contains(&format!("{platform}-msvc")));
+    assert!(!dist.contains(&format!("{}shell", "power")));
+
+    let release = read_repo_file(".github/workflows/release.yml");
+    assert!(!release.contains(&format!("core.{}", "longpaths")));
+    assert!(!release.contains(&format!("{}shell", "power")));
+
+    let evals_schema = read_repo_file("schema/evals.schema.json");
+    assert!(evals_schema.contains("POSIX shell command"));
+    assert!(evals_schema.contains("sh -c"));
 }
 
 #[test]

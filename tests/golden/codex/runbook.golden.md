@@ -4,7 +4,7 @@ This runbook is for a human driving the run from a terminal. Work from this iter
 and copy-paste each step. The workspace is self-contained — you should not need the surrounding
 repo.
 
-> **Requires:** harness dispatch commands are POSIX command lines, and `eval-magic dispatch` runs them itself, so the host it runs on needs a POSIX shell — on Windows, Git Bash (Git for Windows). WSL resolves a different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH to select a specific `sh`.
+> **Requires:** `eval-magic` supports Linux and macOS. On Windows, run `eval-magic` inside WSL; native Windows is unsupported. Git and a POSIX shell are required. Set EVAL_MAGIC_SH to select a specific `sh`.
 
 - **Skill under test:** widget-skill
 - **Mode:** revision — comparing `old_skill` vs `new_skill`

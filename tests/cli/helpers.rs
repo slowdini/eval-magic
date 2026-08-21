@@ -19,19 +19,12 @@ pub fn skill_eval() -> Command {
     cmd
 }
 
-/// `fs::canonicalize` with Windows' verbatim (`\\?\`) prefix removed — the
-/// spelling the CLI itself resolves paths to, and the one a child process
-/// reports as its cwd. Fixtures built on any other spelling of the same
-/// directory will not match the paths the CLI emits.
+/// The canonical spelling the CLI resolves paths to.
 ///
-/// Both halves matter, and each is a different host's problem: the resolution
-/// covers macOS (/var → /private/var), the stripping covers Windows.
+/// Fixtures built on an alias of the same directory will not match paths the
+/// CLI emits. This matters on macOS, where `/var` resolves to `/private/var`.
 pub fn resolved(path: &Path) -> PathBuf {
-    let canonical = fs::canonicalize(path).unwrap();
-    match canonical.to_string_lossy().strip_prefix(r"\\?\") {
-        Some(plain) => PathBuf::from(plain),
-        None => canonical,
-    }
+    fs::canonicalize(path).unwrap()
 }
 
 /// A temp root already in the spelling [`resolved`] describes.

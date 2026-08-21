@@ -35,6 +35,16 @@ fn input_from(cwd: &Path) -> DetectInput {
     }
 }
 
+fn create_symlink_or_skip(target: &Path, link: &Path, test: &str) -> bool {
+    match crate::core::fs::create_symlink(target, link) {
+        Ok(()) => false,
+        Err(error) => crate::core::runtime::report_skip(
+            test,
+            &format!("this filesystem does not permit symlink creation: {error}"),
+        ),
+    }
+}
+
 #[test]
 fn cwd_skill_dir_is_the_default_single_skill() {
     let tmp = TempDir::new().unwrap();
@@ -399,20 +409,25 @@ fn stage_root_default() {
 /// against paths the agent's own tools report — so an alias of the cwd has to
 /// collapse here, once, or the two sides disagree forever after.
 ///
-/// Windows spells one directory several ways (8.3 short names, junctions,
-/// `subst` drives, redirected profiles); each is one `canonicalize` apart
-/// from the real path, so exercising one exercises the mechanism.
+/// A symlink gives one directory two spellings; canonicalizing the run roots
+/// once keeps every later comparison on the resolved spelling.
 #[test]
 fn a_cwd_alias_collapses_so_every_derived_root_shares_one_spelling() {
     let tmp = TempDir::new().unwrap();
     let real = tmp.path().join("real-workspace");
     fs::create_dir_all(&real).unwrap();
     let alias = tmp.path().join("alias-workspace");
-    crate::core::fs::create_directory_alias(&real, &alias).unwrap();
+    if create_symlink_or_skip(
+        &real,
+        &alias,
+        "a_cwd_alias_collapses_so_every_derived_root_shares_one_spelling",
+    ) {
+        return;
+    }
     make_skill_dir(&real, &["foo"]);
 
-    // Enter through the alias, exactly as a user whose workspace sits under a
-    // junction or a redirected profile directory does.
+    // Enter through the alias, exactly as a user whose workspace sits below a
+    // symlinked directory does.
     let ctx = detect_run_context(DetectInput {
         skill: Some("foo".to_string()),
         ..input_from(&alias.join("skill-dir"))
@@ -443,7 +458,13 @@ fn an_aliased_workspace_dir_flag_resolves_to_the_same_spelling() {
     let real = tmp.path().join("real-workspace");
     fs::create_dir_all(&real).unwrap();
     let alias = tmp.path().join("alias-workspace");
-    crate::core::fs::create_directory_alias(&real, &alias).unwrap();
+    if create_symlink_or_skip(
+        &real,
+        &alias,
+        "an_aliased_workspace_dir_flag_resolves_to_the_same_spelling",
+    ) {
+        return;
+    }
     let skill_dir = make_skill_dir(tmp.path(), &["foo"]);
 
     let ctx = detect_run_context(DetectInput {
