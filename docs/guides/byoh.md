@@ -135,9 +135,12 @@ Use this sequence:
 3. Run a small eval through `run`, dispatch, `ingest`, and `finalize`.
 4. Confirm that every declared enhancement was exercised by the smoke run.
 
-Scripted `turns` require `[conversation].resume_exec_template` plus transcript extraction of ordered
-assistant messages and the native session ID. There is no fresh-session fallback: `run` rejects the
-case when the harness cannot preserve the conversation.
+Multi-turn evals — scripted `turns` and `responder` alike — require
+`[conversation].resume_exec_template` plus transcript extraction of ordered assistant messages and
+the native session ID. There is no fresh-session fallback: `run` rejects the case when the harness
+cannot preserve the conversation. The responder itself needs nothing further from a descriptor; it
+reads the agent's message as Markdown, so it works on any harness that can resume. See
+`eval-magic docs conversations`.
 
 When a shadow preflight reports a live copy, isolate every initial and resumed eval-agent dispatch
 before setting `isolates_live_sources = true`. The per-harness remedies and verification procedure

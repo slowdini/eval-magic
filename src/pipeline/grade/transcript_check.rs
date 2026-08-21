@@ -319,6 +319,7 @@ mod tests {
                     ordinal: 0,
                     round: 1,
                     text: "Fix it".into(),
+                    origin: None,
                 },
                 ConversationEvent::AssistantMessage {
                     ordinal: 1,
@@ -329,6 +330,7 @@ mod tests {
                     ordinal: 2,
                     round: 2,
                     text: "US timezones".into(),
+                    origin: None,
                 },
                 ConversationEvent::ToolInvocation {
                     ordinal: 3,

@@ -609,12 +609,15 @@ pub(crate) enum Commands {
     /// failed. A conversation that stops at a scripted gate is valid eval data,
     /// not a failure.
     ///
-    /// A task declaring scripted follow-up turns resumes the same native session
-    /// for every turn it delivers, and each round must report the same native
-    /// session ID or that task fails. A completed or normally stopped
-    /// conversation records `delivered_followups`; an interrupted task commits no
-    /// artifact, so a rerun picks it up. Inspect the per-round assistant messages
-    /// and the delivered count to verify a script ran as intended.
+    /// A multi-turn task — one declaring scripted `turns`, or a `responder` that
+    /// derives them — resumes the same native session for every turn it
+    /// delivers, and each round must report the same native session ID or that
+    /// task fails. A completed or normally stopped conversation records
+    /// `delivered_followups`; an interrupted task commits no artifact, so a
+    /// rerun picks it up. A responder that could not answer, or that hit its
+    /// `max_turns` bound, is recorded and warned about: the run ended mid-task,
+    /// so read its last assistant message before trusting it. See
+    /// `eval-magic docs conversations`.
     Dispatch(DispatchArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -775,9 +778,11 @@ pub(crate) enum Commands {
     /// does not run agents, ingest transcripts, finalize, or promote results.
     ///
     /// Extend the seed in `evals/evals.json`: `turns` scripts same-session
-    /// follow-ups, `files_root` mounts fixture sources at the task root, and a
-    /// per-eval `runs` value overrides `run --runs`. Add assertions after the first
-    /// iteration, then check the file with `eval-magic validate`.
+    /// follow-ups and `responder` derives them instead (see
+    /// `eval-magic docs conversations`), `files_root` mounts fixture sources at
+    /// the task root, and a per-eval `runs` value overrides `run --runs`. Add
+    /// assertions after the first iteration, then check the file with
+    /// `eval-magic validate`.
     Init(InitArgs),
     /// Promote a benchmark and gradings into a committed baseline.
     ///

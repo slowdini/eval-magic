@@ -16,6 +16,7 @@ use crate::validation::schema::{SchemaName, validate_against_schema};
 /// returning the typed config on success.
 pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig, ValidationError> {
     validate_codebase_declarations(config, source)?;
+    validate_turn_source_declarations(config, source)?;
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
     let mut seen = HashSet::new();
@@ -63,12 +64,16 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
         let visible = ev.files.as_deref().unwrap_or(&[]);
         for assertion in ev.assertions.as_deref().unwrap_or(&[]) {
             if let Assertion::TranscriptCheck(check) = assertion {
-                if check.check == "assistant_message_matches" && ev.turns.is_none() {
+                if check.check == "assistant_message_matches"
+                    && ev.turns.is_none()
+                    && ev.responder.is_none()
+                {
                     return Err(ValidationError::InvalidConfig {
                         path: source.to_string(),
                         message: format!(
                             "eval '{}', transcript_check '{}': assistant_message_matches \
-                             requires a non-empty turns array",
+                             requires a multi-turn conversation — a non-empty turns array or a \
+                             responder",
                             ev.id, check.id
                         ),
                     });
@@ -153,6 +158,31 @@ fn validate_codebase_declarations(config: &Value, source: &str) -> Result<(), Va
             .and_then(Value::as_str)
             .map_or_else(|| format!("evals[{index}]"), str::to_string);
         validate_codebase(source, &format!("eval '{id}', codebase"), codebase)?;
+    }
+    Ok(())
+}
+
+/// Reject an eval that declares both ways of driving a conversation. Checked
+/// before the schema for the same reason the codebase rules are: the schema
+/// states it as a bare `not`, which reports the whole eval as disallowed and
+/// never names the two fields that clash.
+fn validate_turn_source_declarations(config: &Value, source: &str) -> Result<(), ValidationError> {
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        if eval.get("turns").is_none() || eval.get("responder").is_none() {
+            continue;
+        }
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{id}': declares both 'turns' and 'responder'; a conversation is either \
+                 scripted or derived, not both"
+            ),
+        });
     }
     Ok(())
 }
@@ -441,6 +471,63 @@ mod tests {
                 .to_string();
             assert!(error.contains(expected), "{expected}: {error}");
         }
+    }
+
+    #[test]
+    fn accepts_an_eval_declaring_only_a_responder() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "heuristic", "max_turns": 3 });
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let responder = parsed.evals[0].responder.as_ref().unwrap();
+        assert_eq!(responder.kind, crate::core::ResponderKind::Heuristic);
+        assert_eq!(responder.max_turns, Some(3));
+    }
+
+    /// The two ways to drive a conversation are alternatives, not layers: a
+    /// scripted array says exactly what the user says, a responder derives it.
+    #[test]
+    fn rejects_responder_and_turns_together() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "heuristic" });
+        config["evals"][0]["turns"] = json!([{ "prompt": "go on", "deliver_when": "always" }]);
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("responder"), "{error}");
+        assert!(error.contains("turns"), "{error}");
+    }
+
+    /// A bound of zero would dispatch turn 1 and refuse to answer anything,
+    /// which is a one-shot eval written the long way round.
+    #[test]
+    fn rejects_a_zero_max_turns() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "heuristic", "max_turns": 0 });
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("max_turns"), "{error}");
+    }
+
+    /// The check needs a multi-turn conversation to read, and a responder
+    /// produces one just as a scripted array does.
+    #[test]
+    fn assistant_message_matches_accepts_a_responder_eval() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "heuristic" });
+        config["evals"][0]["assertions"] = json!([{
+            "id": "asked",
+            "type": "transcript_check",
+            "check": "assistant_message_matches",
+            "pattern": "timezone"
+        }]);
+
+        validate_evals_config(&config, "evals.json").unwrap();
     }
 
     #[test]

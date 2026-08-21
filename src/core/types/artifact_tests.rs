@@ -189,3 +189,123 @@ fn run_record_roundtrips_a_stopped_multi_turn_conversation() {
         "assistant_message"
     );
 }
+
+/// A responder-driven record has to satisfy three contracts at once: the Rust
+/// types, `conversation.schema.json` (which the driver validates against before
+/// writing), and `run-record.schema.json` (which ingest validates against
+/// afterwards). Checking one alone lets the other two drift.
+#[test]
+fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
+    use crate::validation::{SchemaName, validate_against_schema};
+
+    let conversation = json!({
+        "status": "stopped",
+        "delivered_followups": 1,
+        "stop_reason": "responder_cannot_answer",
+        "stopped_before_followup": 2,
+        "events": [
+            { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+            { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which cache?\n\n- LRU (Recommended)\n- Redis\n" },
+            {
+                "type": "user_message",
+                "ordinal": 2,
+                "round": 2,
+                "text": "LRU",
+                "origin": {
+                    "responder": "heuristic",
+                    "answers": [{
+                        "question": "Which cache?",
+                        "options": ["LRU (Recommended)", "Redis"],
+                        "rule": "recommended_option",
+                        "chosen": ["LRU"]
+                    }]
+                }
+            },
+            { "type": "assistant_message", "ordinal": 3, "round": 2, "text": "What TTL suits you?" }
+        ]
+    });
+
+    let parsed: ConversationRecord =
+        validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json")
+            .unwrap();
+    assert_eq!(
+        parsed.stop_reason,
+        Some(ConversationStopReason::ResponderCannotAnswer)
+    );
+    let ConversationEvent::UserMessage { origin, .. } = &parsed.events[2] else {
+        panic!("event 2 is the synthesized turn");
+    };
+    let origin = origin
+        .as_ref()
+        .expect("a synthesized turn names its origin");
+    assert_eq!(origin.responder, ResponderKind::Heuristic);
+    assert_eq!(origin.answers[0].rule, ResponderRule::RecommendedOption);
+
+    // The seeded prompt is authored, not derived, so it carries no origin at
+    // all — the field's absence is what distinguishes the two.
+    let ConversationEvent::UserMessage { origin, .. } = &parsed.events[0] else {
+        panic!("event 0 is the eval prompt");
+    };
+    assert!(origin.is_none());
+
+    let record = json!({
+        "eval_id": "add-caching",
+        "condition": "with_skill",
+        "skill_path": null,
+        "prompt": "Add caching.",
+        "files": [],
+        "final_message": "What TTL suits you?",
+        "tool_invocations": [],
+        "total_tokens": null,
+        "duration_ms": null,
+        "conversation": conversation
+    });
+    let record: RunRecord =
+        validate_against_schema(SchemaName::RunRecord, &record, "run.json").unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&record).unwrap()["conversation"],
+        serde_json::to_value(record.conversation.clone().unwrap()).unwrap()
+    );
+}
+
+/// A conversation that outran its deadline is written by the driver and read
+/// back by ingest, so the run-record schema has to accept the same shape
+/// `conversation.schema.json` does — including a round-1 timeout, whose only
+/// event is the seeded prompt.
+#[test]
+fn a_timed_out_conversation_satisfies_the_run_record_schema() {
+    use crate::validation::{SchemaName, validate_against_schema};
+
+    let conversation = json!({
+        "status": "timed_out",
+        "delivered_followups": 0,
+        "timed_out_in_round": 1,
+        "events": [
+            { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." }
+        ]
+    });
+    let _: ConversationRecord =
+        validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json")
+            .unwrap();
+
+    let record = json!({
+        "eval_id": "add-caching",
+        "condition": "with_skill",
+        "skill_path": null,
+        "prompt": "Add caching.",
+        "files": [],
+        "final_message": "",
+        "tool_invocations": [],
+        "total_tokens": null,
+        "duration_ms": null,
+        "conversation": conversation
+    });
+
+    let record: RunRecord =
+        validate_against_schema(SchemaName::RunRecord, &record, "run.json").unwrap();
+    assert_eq!(
+        record.conversation.unwrap().status,
+        ConversationStatus::TimedOut
+    );
+}

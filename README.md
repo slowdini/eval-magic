@@ -115,7 +115,9 @@ The command help and generated runbook describe baseline selection and the rest 
 Each eval case runs once per condition and repetition in its own clean Git repository. The two arms
 receive the same task and fixtures; only the condition under test changes. Assertions can combine
 LLM judgment with runner-owned command checks, transcript checks, and final diff limits. Scripted
-`turns` resume one native harness session so follow-up answers remain part of the same conversation.
+Multi-turn evals resume one native harness session so follow-up answers remain part of the same
+conversation, whether the turns are scripted or derived by a responder (`eval-magic docs
+conversations`).
 
 Most harness features are declared in TOML descriptors. See the current registry and resolved data
 instead of relying on a static compatibility table:

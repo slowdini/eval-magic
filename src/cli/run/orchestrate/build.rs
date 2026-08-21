@@ -219,6 +219,7 @@ pub(super) fn write_dispatch(
                         user_prompt: &ev.prompt,
                         fixtures,
                         turns: ev.turns.as_deref(),
+                        responder: ev.responder.as_ref(),
                         outputs_dir: &outputs_dir_str,
                         cond_dir: &run_dir_str,
                         bootstrap_content: staged.bootstrap_content.as_deref(),
