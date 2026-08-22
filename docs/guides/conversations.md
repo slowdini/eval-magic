@@ -29,100 +29,110 @@ front when the selected harness cannot. `eval-magic harness list` names the
   "id": "add-request-caching",
   "prompt": "Requests to the pricing API are slow. Can you add caching?",
   "expected_output": "A working cache with the pricing endpoint under 100ms.",
-  "responder": { "type": "heuristic", "max_turns": 8 }
+  "responder": { "type": "llm", "max_turns": 8 }
 }
 ```
 
-- **`type`** is required. `heuristic` is the only responder today. It is
-  deterministic and costs nothing: it reads the agent's message and applies
-  fixed rules, with no second model involved.
+- **`type`** is required. `llm` is the only responder: a small model, consulted
+  once after every round through the same harness as the agent under test.
+  Choose it with `eval-magic run --responder-model`; omit that flag and the
+  consultation runs on the harness's default model.
 - **`max_turns`** bounds how many follow-ups the responder may synthesize. The
   opening prompt is not one of them. It defaults to 8.
 
 Every turn the responder produces is recorded in the run's `conversation.json`
-with an `origin` naming the rule that produced it, so you can audit whether the
-responder distorted the run instead of taking the transcript on trust. The
-eval's own opening prompt carries no `origin` — that absence is how you tell an
-authored turn from a derived one.
+with an `origin` naming the responder and, when it offered one, its one-line
+reason for answering that way. The eval's own opening prompt carries no
+`origin` — that absence is how you tell an authored turn from a derived one.
 
-## What the heuristic answers
+The full prompt and verdict of every consultation are kept on disk under the
+run's `responder/turn-<n>/`, so you can audit what the responder was shown and
+what it wrote without rerunning anything.
 
-The heuristic reads the last message of each round as Markdown and answers
-exactly one shape of question: **a list of options introduced by a question.**
+## What the responder is shown
 
-A list counts as a question when the line directly above it ends with a `?`:
+**Only what the agent already knows.** Each consultation carries the eval's
+opening `prompt`, every reply the responder has already given, and the agent's
+last message. It does not carry `expected_output` and it does not carry the
+assertions: those are the grading criteria, and a responder that had read them
+could hand the agent the rubric.
 
-```
-Which cache should I use?
+It is told to answer as the person who asked for the work — take whatever the
+agent marked as recommended, else the simplest option and the least work; add no
+requirements; invent no facts; write no code; keep it short.
 
-- An in-process LRU (Recommended)
-- Redis
-```
+It answers with one of three verdicts:
 
-The `?` has to be the last thing said before the options appear. That is what
-separates a real question from a closing summary, which is also mostly a
-bulleted list and would otherwise be "answered" as though the finished task were
-still open.
+| Verdict | What it means |
+| --- | --- |
+| `answer` | What the user says next. Delivered as the following turn. |
+| `done` | The agent is reporting the task finished and waiting on nothing. |
+| `cannot_answer` | It could not answer without inventing something. |
 
-Given a list, the choice is mechanical:
+Because the responder decides `done`, completion is a judgement rather than the
+absence of a question mark — and the judgement is recorded with its reason, so
+a run that stopped early is legible rather than mysterious.
 
-| The list | Recommendation marked | The answer |
-| --- | --- | --- |
-| plain (`-`, `*`, `1.`) | yes | the first recommended option |
-| plain | no | the first option |
-| checkboxes (`- [ ]`) | yes | every recommended option |
-| checkboxes | no | nothing — `None of these.` |
+## What is never delivered
 
-Plain lists ask for exactly one choice; checkboxes ask for zero or more. That
-syntax is the only signal the heuristic uses to tell them apart.
+A reply that fails any of these checks is not sent to the agent. The run stops
+instead, because an undelivered reply is a loud, greppable stop, while a bad one
+enters the transcript as an ordinary user turn and is graded as though the
+exchange really happened.
 
-An option counts as recommended when it carries a standalone `recommended` in
-parentheses, brackets, or bold — `(Recommended)`, `[recommended]`,
-`**Recommended**` — or when it is a pre-checked box, `- [x]`.
+| Rejected when the reply | Recorded cause |
+| --- | --- |
+| is blank | `empty_reply` |
+| runs past 2000 bytes | `reply_too_long` |
+| contains a fenced code block | `reply_contains_code` |
+| repeats the previous reply verbatim | `reply_repeated` |
 
-A message that asks more than one question is answered in one turn, numbered in
-the order the questions appeared.
+The length and code rules are the same rule twice: a simulated user answers in
+sentences, so anything longer means the responder started doing the agent's work,
+and crediting the agent under test with work it did not do would corrupt the
+result. A repeat means the exchange is circling, and spending the remaining
+turns on it would only reach the same place more expensively.
+
+A consultation that never produces a reply stops the run the same way, with its
+own cause: `declined` when the responder honestly refused, and
+`dispatch_failed`, `dispatch_timed_out`, `missing_verdict`, or
+`malformed_verdict` when something broke. One outcome, because the run ended
+mid-task either way; separate causes, because an honest refusal and a broken
+dispatch call for different fixes.
 
 ## How a conversation ends
 
 | Recorded as | When |
 | --- | --- |
-| `completed` | The agent's last message asked nothing. It considers the task done, so the run stops rather than burning its remaining turns. |
-| `stopped`, `responder_cannot_answer` | The agent asked something with no option list. |
+| `completed` | The responder judged the agent finished. The run stops rather than burning its remaining turns. |
+| `stopped`, `responder_cannot_answer` | The responder produced no usable reply. `responder_outcome.cause` says why. |
 | `stopped`, `max_turns_reached` | The agent was still asking at the bound. |
 | `timed_out` | The task outran `dispatch --timeout`. |
 
 A `stopped` conversation is recorded, not failed: `dispatch` exits zero and
 `ingest` still records the run. But both responder stops end the conversation
-with the task unfinished, so `dispatch` warns about each one by name. Read the
-last assistant message before treating such a run as a data point beside a
-completed one.
-
-Two properties are worth knowing before you read results:
-
-- The heuristic never guesses. A question it does not recognize stops the run
-  instead of inventing an answer, because a fabricated answer would silently
-  change what the agent was asked to do.
-- It errs toward stopping. A question mark anywhere in an otherwise-finished
-  message stops the run rather than calling it complete. That costs a dispatch;
-  the alternative — recording a run as complete while the agent was still
-  waiting — would cost the result's credibility.
-
-Answering free-form questions needs a model, not rules. That is a separate
-responder, and until it ships, `responder_cannot_answer` is where those runs
-stop.
+with the task unfinished, so `dispatch` warns about each one by name and
+`aggregate` counts them per condition in `benchmark.json`'s
+`validity_warnings`. That count is the one to read first: one arm truncated more
+often than the other is a threat to the comparison, not just to the run.
 
 ## Cross-harness behaviour
 
-The heuristic reads plain Markdown out of the agent's message, so it needs no
-per-harness support: any harness that can resume a session can run a responder
-eval. Nothing is read from a harness-native question tool, and nothing needs to
-be, because a dispatch runs headless with no channel to answer such a tool on.
+The responder needs no per-harness support and no descriptor field. It reads
+`TranscriptSummary::final_text`, which every harness's parser already
+normalizes, replies through the existing `{prompt_arg}` slot, and runs its own
+consultations through the same `[dispatch].exec_template` a judge uses. Any
+harness that can resume a session can run a responder eval.
 
-The shapes above are a contract, not a description of one agent. An agent that
-offers options this way is answered; one that phrases them some other way stops
-the run. If you are bringing your own harness and its agent asks in a shape the
-table does not cover, that is a gap in the table, not in your descriptor.
+Nothing is read from a harness-native question tool, and nothing needs to be: a
+dispatch runs headless with stdin detached, so a tool that asks the user has no
+channel to be answered on. Free text is the only mechanism that fits, and it
+happens to be the portable one.
+
+Consultations run in the run's own `responder/` directory, which sits above the
+task environment. That is deliberate — a consultation must not be able to write
+into the codebase under measurement, and must not pick up that codebase's
+`CLAUDE.md` or `AGENTS.md` as instructions to itself.
 
 ## Scripted turns
 

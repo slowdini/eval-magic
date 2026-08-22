@@ -21,11 +21,12 @@ use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::transcript::{TranscriptEvent, TranscriptSummary};
 use crate::core::{
     ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason,
-    ShellOutcome, run_in_posix_shell,
+    ResponderOutcome, ResponderStopCause, ShellOutcome, run_in_posix_shell,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::dispatch::DispatchTask;
+use responder::{Consultation, ResponderRuntime};
 use turn_plan::{NextTurn, TurnPlan};
 
 mod responder;
@@ -45,6 +46,10 @@ pub enum TaskOutcome {
         /// stopped conversation — but carried as written rather than filled in
         /// with a guess, so an outcome can never name the wrong reason.
         reason: Option<ConversationStopReason>,
+        /// Why the responder produced no usable reply, when it was the
+        /// responder that stopped the run. An honest refusal and a broken
+        /// dispatch end the run identically, so the warning has to say which.
+        cause: Option<ResponderStopCause>,
     },
     TimedOut {
         round: u32,
@@ -85,13 +90,16 @@ impl TaskOutcome {
             Self::Stopped {
                 before_followup,
                 reason: Some(ConversationStopReason::ResponderCannotAnswer),
+                cause,
             } => format!(
-                "stopped before turn {before_followup} — the responder could not answer the \
-                 agent's question"
+                "stopped before turn {before_followup} — the responder produced no usable reply \
+                 ({})",
+                cause_label(*cause)
             ),
             Self::Stopped {
                 before_followup,
                 reason: Some(ConversationStopReason::MaxTurnsReached),
+                ..
             } => format!(
                 "stopped at the responder's max_turns bound after {} turn(s)",
                 before_followup.saturating_sub(1)
@@ -105,17 +113,40 @@ impl TaskOutcome {
     }
 }
 
+/// How a stop cause reads in a warning. Absent only for a stop the responder
+/// did not produce, which no caller here words this way.
+pub fn cause_label(cause: Option<ResponderStopCause>) -> &'static str {
+    cause.map_or("cause unrecorded", ResponderStopCause::wire_name)
+}
+
+/// The dispatch-wide settings every task shares, frozen in `dispatch.json` and
+/// read back once by the batch driver. Grouped rather than passed one by one
+/// because they travel together and always come from the same envelope.
+#[derive(Debug, Clone, Copy)]
+pub struct DispatchSettings<'a> {
+    pub guard: bool,
+    pub agent_model: Option<&'a str>,
+    /// The model consulted after each round of a responder task. `None` runs the
+    /// consultation on the harness's default model.
+    pub responder_model: Option<&'a str>,
+    pub agent_env: &'a BTreeMap<String, String>,
+}
+
 /// Execute one task: start a native session, deliver every scripted follow-up
 /// whose gate is met, and write the `conversation.json` completion artifact.
 pub fn run_task(
     adapter: &DescriptorAdapter,
     task: &DispatchTask,
-    guard: bool,
-    agent_model: Option<&str>,
-    agent_env: &BTreeMap<String, String>,
+    settings: &DispatchSettings<'_>,
     overwrite: bool,
     timeout: Option<Duration>,
 ) -> anyhow::Result<TaskOutcome> {
+    let DispatchSettings {
+        guard,
+        agent_model,
+        responder_model,
+        agent_env,
+    } = *settings;
     // One budget for the whole task, not per round: a scripted conversation is
     // a single dispatch from the operator's point of view.
     let deadline = timeout.map(|timeout| Instant::now() + timeout);
@@ -164,6 +195,23 @@ pub fn run_task(
         })?;
     }
 
+    // Consultations run outside every task env, so nothing the responder does
+    // reaches the codebase under measurement or picks up its `CLAUDE.md`.
+    let responder_runtime = match &plan {
+        TurnPlan::Responder(_) => Some(ResponderRuntime {
+            adapter,
+            model: responder_model,
+            agent_env,
+            responder_dir: PathBuf::from(
+                task.responder_dir
+                    .as_deref()
+                    .ok_or_else(|| anyhow!("responder task is missing responder_dir"))?,
+            ),
+            deadline,
+        }),
+        TurnPlan::OneShot | TurnPlan::Scripted(_) => None,
+    };
+
     let base_outputs = Path::new(&task.outputs_dir);
     let mut events = vec![ConversationEvent::UserMessage {
         ordinal: 0,
@@ -204,6 +252,7 @@ pub fn run_task(
                 stopped_before_followup: None,
                 timed_out_in_round: Some(1),
                 events,
+                responder_outcome: None,
             },
             None,
             plan.source(),
@@ -226,19 +275,41 @@ pub fn run_task(
     let mut stop_reason = None;
     let mut stopped_before_followup = None;
     let mut timed_out_in_round = None;
+    let mut responder_outcome: Option<ResponderOutcome> = None;
+    // Every reply the responder has produced, in order: the prompt for the next
+    // consultation, and the repeat guard's memory.
+    let mut responder_replies: Vec<String> = Vec::new();
 
     loop {
         let followup = delivered_followups.saturating_add(1);
-        let next = plan.next_turn(delivered_followups, &preceding_assistant, &final_message)?;
+        let consultation = Consultation {
+            task_prompt: &task.user_prompt,
+            prior_replies: &responder_replies,
+            final_message: &final_message,
+        };
+        let next = plan.next_turn(
+            delivered_followups,
+            &preceding_assistant,
+            &consultation,
+            responder_runtime.as_ref(),
+            responder_replies.last().map(String::as_str),
+        )?;
         let (prompt, origin) = match next {
-            NextTurn::Done => break,
-            NextTurn::Stop(reason) => {
+            NextTurn::Done { responder } => {
+                responder_outcome = responder;
+                break;
+            }
+            NextTurn::Stop { reason, responder } => {
                 stop_reason = Some(reason);
                 stopped_before_followup = Some(followup);
+                responder_outcome = responder;
                 break;
             }
             NextTurn::Deliver { text, origin } => (text, origin),
         };
+        if origin.is_some() {
+            responder_replies.push(prompt.clone());
+        }
 
         let round = followup.saturating_add(1);
         events.push(ConversationEvent::UserMessage {
@@ -306,6 +377,9 @@ pub fn run_task(
             stopped_before_followup: timed_out_in_round.map_or(stopped_before_followup, |_| None),
             timed_out_in_round,
             events,
+            // A timeout outranks the responder's verdict for the same reason it
+            // outranks a gate stop: the round it judged never finished.
+            responder_outcome: timed_out_in_round.map_or(responder_outcome, |_| None),
         },
         Some(final_message),
         plan.source(),
@@ -344,6 +418,10 @@ fn write_conversation(
         ConversationStatus::Stopped => TaskOutcome::Stopped {
             before_followup: conversation.stopped_before_followup.unwrap_or_default(),
             reason: conversation.stop_reason,
+            cause: conversation
+                .responder_outcome
+                .as_ref()
+                .and_then(|outcome| outcome.cause),
         },
         ConversationStatus::TimedOut => TaskOutcome::TimedOut {
             round: conversation.timed_out_in_round.unwrap_or(1),

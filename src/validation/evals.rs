@@ -476,11 +476,11 @@ mod tests {
     #[test]
     fn accepts_an_eval_declaring_only_a_responder() {
         let mut config = base();
-        config["evals"][0]["responder"] = json!({ "type": "heuristic", "max_turns": 3 });
+        config["evals"][0]["responder"] = json!({ "type": "llm", "max_turns": 3 });
 
         let parsed = validate_evals_config(&config, "evals.json").unwrap();
         let responder = parsed.evals[0].responder.as_ref().unwrap();
-        assert_eq!(responder.kind, crate::core::ResponderKind::Heuristic);
+        assert_eq!(responder.kind, crate::core::ResponderKind::Llm);
         assert_eq!(responder.max_turns, Some(3));
     }
 
@@ -489,7 +489,7 @@ mod tests {
     #[test]
     fn rejects_responder_and_turns_together() {
         let mut config = base();
-        config["evals"][0]["responder"] = json!({ "type": "heuristic" });
+        config["evals"][0]["responder"] = json!({ "type": "llm" });
         config["evals"][0]["turns"] = json!([{ "prompt": "go on", "deliver_when": "always" }]);
 
         let error = validate_evals_config(&config, "evals.json")
@@ -505,7 +505,7 @@ mod tests {
     #[test]
     fn rejects_a_zero_max_turns() {
         let mut config = base();
-        config["evals"][0]["responder"] = json!({ "type": "heuristic", "max_turns": 0 });
+        config["evals"][0]["responder"] = json!({ "type": "llm", "max_turns": 0 });
 
         let error = validate_evals_config(&config, "evals.json")
             .unwrap_err()
@@ -519,7 +519,7 @@ mod tests {
     #[test]
     fn assistant_message_matches_accepts_a_responder_eval() {
         let mut config = base();
-        config["evals"][0]["responder"] = json!({ "type": "heuristic" });
+        config["evals"][0]["responder"] = json!({ "type": "llm" });
         config["evals"][0]["assertions"] = json!([{
             "id": "asked",
             "type": "transcript_check",

@@ -204,7 +204,7 @@ pub(crate) fn harness_run_preflight<'a>(
              trusting a run whose evals depend on the agent actually executing something."
         ));
     }
-    if (opts.agent_model.is_some() || opts.judge_model.is_some())
+    if (opts.agent_model.is_some() || opts.judge_model.is_some() || opts.responder_model.is_some())
         && adapter.cli_model_flag().is_none()
     {
         warnings.push(format!(

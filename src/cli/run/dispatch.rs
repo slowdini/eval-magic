@@ -68,6 +68,13 @@ pub struct DispatchTask {
     /// how the conversation was driven, not just what it produced.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responder: Option<ResponderPolicy>,
+    /// Where this task's responder consultations run and are captured. It sits
+    /// in the cell directory, above the env: a consultation must not be able to
+    /// reach the codebase under measurement, nor pick up its `CLAUDE.md` as
+    /// instructions. Absent unless the eval declares a responder, so a task
+    /// without one serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder_dir: Option<String>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -299,6 +306,9 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         codebase: opts.codebase.cloned(),
         skill_source: opts.skill_source.cloned(),
         responder: opts.responder.cloned(),
+        responder_dir: opts
+            .responder
+            .map(|_| artifact_path(&cond_dir.join("responder"))),
         dispatch_prompt: sections.join(""),
     })
 }

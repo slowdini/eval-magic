@@ -345,6 +345,7 @@ mod tests {
                     text: "Done.".into(),
                 },
             ],
+            responder_outcome: None,
         }
     }
 

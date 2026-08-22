@@ -203,25 +203,25 @@ fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
         "delivered_followups": 1,
         "stop_reason": "responder_cannot_answer",
         "stopped_before_followup": 2,
+        "responder_outcome": {
+            "ending": "cannot_answer",
+            "cause": "declined",
+            "rationale": "the agent asked for a credential I was never given"
+        },
         "events": [
             { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
-            { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which cache?\n\n- LRU (Recommended)\n- Redis\n" },
+            { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which cache should I use?" },
             {
                 "type": "user_message",
                 "ordinal": 2,
                 "round": 2,
-                "text": "LRU",
+                "text": "An in-process LRU is fine.",
                 "origin": {
-                    "responder": "heuristic",
-                    "answers": [{
-                        "question": "Which cache?",
-                        "options": ["LRU (Recommended)", "Redis"],
-                        "rule": "recommended_option",
-                        "chosen": ["LRU"]
-                    }]
+                    "responder": "llm",
+                    "rationale": "the simplest option that needs no new service"
                 }
             },
-            { "type": "assistant_message", "ordinal": 3, "round": 2, "text": "What TTL suits you?" }
+            { "type": "assistant_message", "ordinal": 3, "round": 2, "text": "Which API key should it use?" }
         ]
     });
 
@@ -232,14 +232,24 @@ fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
         parsed.stop_reason,
         Some(ConversationStopReason::ResponderCannotAnswer)
     );
+    let outcome = parsed
+        .responder_outcome
+        .as_ref()
+        .expect("a responder-ended conversation records how it ended");
+    assert_eq!(outcome.ending, ResponderEnding::CannotAnswer);
+    assert_eq!(outcome.cause, Some(ResponderStopCause::Declined));
+
     let ConversationEvent::UserMessage { origin, .. } = &parsed.events[2] else {
         panic!("event 2 is the synthesized turn");
     };
     let origin = origin
         .as_ref()
         .expect("a synthesized turn names its origin");
-    assert_eq!(origin.responder, ResponderKind::Heuristic);
-    assert_eq!(origin.answers[0].rule, ResponderRule::RecommendedOption);
+    assert_eq!(origin.responder, ResponderKind::Llm);
+    assert_eq!(
+        origin.rationale.as_deref(),
+        Some("the simplest option that needs no new service")
+    );
 
     // The seeded prompt is authored, not derived, so it carries no origin at
     // all — the field's absence is what distinguishes the two.
@@ -254,7 +264,7 @@ fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
         "skill_path": null,
         "prompt": "Add caching.",
         "files": [],
-        "final_message": "What TTL suits you?",
+        "final_message": "Which API key should it use?",
         "tool_invocations": [],
         "total_tokens": null,
         "duration_ms": null,
@@ -267,6 +277,75 @@ fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
         serde_json::to_value(&record).unwrap()["conversation"],
         serde_json::to_value(record.conversation.clone().unwrap()).unwrap()
     );
+}
+
+/// A conversation the responder judged finished records why, because
+/// completion is now a model judgement rather than the absence of a question
+/// mark. `cause` is absent: nothing went wrong.
+#[test]
+fn a_responder_completion_records_its_rationale_and_no_cause() {
+    use crate::validation::{SchemaName, validate_against_schema};
+
+    let conversation = json!({
+        "status": "completed",
+        "delivered_followups": 1,
+        "responder_outcome": {
+            "ending": "done",
+            "rationale": "the agent reported the cache in place and asked nothing"
+        },
+        "events": [
+            { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+            { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which cache?" },
+            {
+                "type": "user_message",
+                "ordinal": 2,
+                "round": 2,
+                "text": "An in-process LRU is fine.",
+                "origin": { "responder": "llm" }
+            },
+            { "type": "assistant_message", "ordinal": 3, "round": 2, "text": "Done — the LRU is wired in." }
+        ]
+    });
+
+    let parsed: ConversationRecord =
+        validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json")
+            .unwrap();
+    let outcome = parsed
+        .responder_outcome
+        .expect("a responder ended this one");
+    assert_eq!(outcome.ending, ResponderEnding::Done);
+    assert_eq!(outcome.cause, None);
+
+    // A turn whose responder offered no rationale still records its origin —
+    // the tag is what marks the turn derived, not the prose.
+    let ConversationEvent::UserMessage { origin, .. } = &parsed.events[2] else {
+        panic!("event 2 is the synthesized turn");
+    };
+    assert_eq!(origin.as_ref().unwrap().rationale, None);
+}
+
+/// An operator reads a stop cause in a `dispatch` warning and greps for it in
+/// `conversation.json`. Those are two spellings of one name, so they are pinned
+/// to each other rather than kept in step by hand.
+#[test]
+fn every_stop_cause_prints_the_name_it_serializes_as() {
+    for cause in [
+        ResponderStopCause::Declined,
+        ResponderStopCause::DispatchFailed,
+        ResponderStopCause::DispatchTimedOut,
+        ResponderStopCause::MissingVerdict,
+        ResponderStopCause::MalformedVerdict,
+        ResponderStopCause::EmptyReply,
+        ResponderStopCause::ReplyTooLong,
+        ResponderStopCause::ReplyContainsCode,
+        ResponderStopCause::ReplyRepeated,
+    ] {
+        assert_eq!(
+            serde_json::to_value(cause).unwrap(),
+            Value::String(cause.wire_name().to_string()),
+            "{cause:?}"
+        );
+    }
 }
 
 /// A conversation that outran its deadline is written by the driver and read

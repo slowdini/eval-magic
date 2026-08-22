@@ -136,8 +136,8 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["heuristic"],
-          "description": "Which responder answers the agent. 'heuristic' is deterministic and free: it answers a question that offers a list of options, and stops the run on anything else. Required rather than defaulted, because the responder decides what the agent hears."
+          "enum": ["llm"],
+          "description": "Which responder answers the agent. 'llm' consults a small model through the same harness as the agent under test, once after every round: it answers, judges the task finished, or stops the run rather than guessing. Required rather than defaulted, because the responder decides what the agent hears. Choose the model with 'run --responder-model'."
         },
         "max_turns": {
           "type": "integer",

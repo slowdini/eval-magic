@@ -21,7 +21,8 @@ use self::assertions::AssertionRollup;
 use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::core::fs::write_json;
 use crate::core::{
-    CodebaseUse, ConditionsRecord, GradingResult, Mode, SkillSource, TimingRecord, TimingSource,
+    CodebaseUse, ConditionsRecord, ConversationRecord, GradingResult, Mode, ResponderEnding,
+    ResponderStopCause, SkillSource, TimingRecord, TimingSource,
 };
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
@@ -220,6 +221,10 @@ pub fn aggregate(
         .map(|condition| (condition.clone(), Vec::new()))
         .collect();
     let mut missing_diff_scopes = Vec::new();
+    // Per condition, the causes that ended a run before its task was finished.
+    // Tallied per condition on purpose: one arm being truncated more than the
+    // other is the threat to the comparison, not the raw total.
+    let mut responder_stops: HashMap<String, Vec<&'static str>> = HashMap::new();
 
     for eval_dir in &eval_dirs {
         for cond in &condition_names {
@@ -251,6 +256,10 @@ pub fn aggregate(
                         .map(|index| format!("/run-{index}"))
                         .unwrap_or_default();
                     missing_diff_scopes.push(format!("{eval_dir}/{cond}{run}"));
+                }
+
+                if let Some(cause) = responder_stop_cause(&slot.dir) {
+                    responder_stops.entry(cond.clone()).or_default().push(cause);
                 }
 
                 if !grading_path.exists() {
@@ -384,6 +393,22 @@ pub fn aggregate(
         }
     }
 
+    for cond in &condition_names {
+        let Some(causes) = responder_stops.get(cond).filter(|c| !c.is_empty()) else {
+            continue;
+        };
+        let mut named: Vec<&str> = causes.to_vec();
+        named.sort_unstable();
+        named.dedup();
+        validity_warnings.push(format!(
+            "condition '{cond}' had {} run(s) end before the task was finished because the \
+             responder produced no usable reply ({}) — those runs measure an interrupted task, \
+             so their gradings are not comparable with a completed run's.",
+            causes.len(),
+            named.join(", ")
+        ));
+    }
+
     git_isolation::collect_warnings(iteration_dir, &mut validity_warnings);
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
     collect_guard_denial_warnings(iteration_dir, &mut validity_warnings);
@@ -479,6 +504,24 @@ fn timing_source_label(source: Option<TimingSource>) -> String {
         Some(TimingSource::CompletionEvent) | None => "completion-event",
     }
     .to_string()
+}
+
+/// Why one run's responder ended it early, if it did. A conversation the
+/// responder carried to completion, a scripted one, and a timeout all return
+/// `None`: only an unfinished task threatens the comparison. Read leniently —
+/// an unreadable artifact is the ingest stage's problem, not this one's.
+fn responder_stop_cause(run_dir: &Path) -> Option<&'static str> {
+    let raw = fs::read_to_string(run_dir.join("conversation.json")).ok()?;
+    let record: ConversationRecord = serde_json::from_str(&raw).ok()?;
+    let outcome = record.responder_outcome?;
+    match outcome.ending {
+        ResponderEnding::Done => None,
+        ResponderEnding::CannotAnswer => Some(
+            outcome
+                .cause
+                .map_or("unrecorded", ResponderStopCause::wire_name),
+        ),
+    }
 }
 
 /// Add a warning per stray-write violation / live-source read. A malformed

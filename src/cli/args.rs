@@ -368,6 +368,13 @@ pub struct PromoteBaselineArgs {
     /// `unspecified`.
     #[arg(long)]
     pub judge_model: Option<String>,
+    /// Operator-declared responder model, recorded in `BASELINE.md`.
+    ///
+    /// Overrides a `responder_model` recorded in the iteration's
+    /// `conditions.json` (set via `run --responder-model`); when both are
+    /// absent, `BASELINE.md` shows `unspecified`.
+    #[arg(long)]
+    pub responder_model: Option<String>,
 }
 
 /// `run` adds the build-time flags (mode/baseline selection, staging toggles,
@@ -520,9 +527,8 @@ pub struct RunArgs {
     /// entries override them by key, with the last occurrence winning. Values
     /// may be empty and may contain `=`. The resolved map is recorded in
     /// `conditions.json` and `dispatch.json`, so do not use this flag for
-    /// secrets. This does not affect judge agents or runner-owned
-    /// `command_check` assertions. Unset keys keep inheriting the operator's
-    /// environment.
+    /// secrets. Runner-owned `command_check` assertions are unaffected. Unset
+    /// keys keep inheriting the operator's environment.
     #[arg(long, value_name = "KEY=VALUE")]
     pub agent_env: Vec<String>,
     /// Default judge model for emitted judge tasks.
@@ -533,6 +539,17 @@ pub struct RunArgs {
     /// `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub judge_model: Option<String>,
+    /// Model that answers the agent for evals declaring a `responder`.
+    ///
+    /// `dispatch` consults it once after every round, through the same harness
+    /// as the agent under test, using the harness-native model flag. It is
+    /// run-level on purpose: answering one eval with a different model than its
+    /// neighbours puts a second uncontrolled variable inside the comparison.
+    /// Omit it to answer on the harness's default model. Also persists to
+    /// `conditions.json` for `promote-baseline`. See
+    /// `eval-magic docs conversations`.
+    #[arg(long)]
+    pub responder_model: Option<String>,
     /// Provenance label for this run, persisted into `conditions.json`.
     ///
     /// Surfaced in `BASELINE.md` by `promote-baseline` (its own `--label` flag
@@ -579,9 +596,11 @@ pub(crate) enum Commands {
     ///
     /// A case with effective run count `R` creates `2R` native agent sessions: one
     /// per condition and repetition. Scripted follow-ups add up to `2R × F` model
-    /// turns for `F` declared follow-ups, and each `llm_judge` assertion creates a
-    /// judge task per condition and repetition. Review the printed run summary and
-    /// obtain confirmation before spending model usage.
+    /// turns for `F` declared follow-ups. A `responder` case instead adds one
+    /// agent turn and one small responder dispatch per round, up to its
+    /// `max_turns` bound. Each `llm_judge` assertion creates a judge task per
+    /// condition and repetition. Review the printed run summary and obtain
+    /// confirmation before spending model usage.
     ///
     /// Git is required. Every task environment is initialized as an independent,
     /// clean repository on branch `work` with a deterministic baseline commit and
@@ -614,10 +633,14 @@ pub(crate) enum Commands {
     /// delivers, and each round must report the same native session ID or that
     /// task fails. A completed or normally stopped conversation records
     /// `delivered_followups`; an interrupted task commits no artifact, so a
-    /// rerun picks it up. A responder that could not answer, or that hit its
-    /// `max_turns` bound, is recorded and warned about: the run ended mid-task,
-    /// so read its last assistant message before trusting it. See
-    /// `eval-magic docs conversations`.
+    /// rerun picks it up.
+    ///
+    /// A responder task adds one small consultation after every round, run
+    /// through the same harness on `run --responder-model` and captured under
+    /// the run's `responder/` directory. A responder that produced no usable
+    /// reply, or that hit its `max_turns` bound, is recorded and warned about by
+    /// cause: the run ended mid-task, so read its last assistant message before
+    /// trusting it. See `eval-magic docs conversations`.
     Dispatch(DispatchArgs),
     /// Snapshot a workspace baseline.
     ///

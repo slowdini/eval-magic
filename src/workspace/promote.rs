@@ -31,6 +31,7 @@ pub struct PromoteOptions<'a> {
     /// agent/judge itself, so it cannot observe these — record what was used.
     pub agent_model: Option<&'a str>,
     pub judge_model: Option<&'a str>,
+    pub responder_model: Option<&'a str>,
 }
 
 /// What [`promote_baseline`] wrote.
@@ -362,6 +363,10 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         .judge_model
         .or_else(|| conditions.and_then(|c| c.judge_model.as_deref()))
         .unwrap_or("unspecified");
+    let responder_model = opts
+        .responder_model
+        .or_else(|| conditions.and_then(|c| c.responder_model.as_deref()))
+        .unwrap_or("unspecified");
     let run_label = opts
         .label
         .or_else(|| conditions.and_then(|c| c.label.as_deref()))
@@ -389,6 +394,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Harness | {harness} |"),
         format!("| Agent model | {agent_model} |"),
         format!("| Judge model | {judge_model} |"),
+        format!("| Responder model | {responder_model} |"),
         format!("| Conditions | {conditions_cell} |"),
         format!("| Run timestamp | {timestamp} |"),
         format!("| Label | {run_label} |"),

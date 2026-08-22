@@ -59,6 +59,7 @@ pub struct RunOptions<'a> {
     /// Resolved descriptor defaults plus run-level agent environment overrides.
     pub agent_env: BTreeMap<String, String>,
     pub judge_model: Option<&'a str>,
+    pub responder_model: Option<&'a str>,
     pub label: Option<&'a str>,
 }
 
