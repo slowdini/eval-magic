@@ -2,9 +2,10 @@
 //!
 //! [`decide`] is the single decision point the armed PreToolUse hook consults:
 //! given a tool call and the on-disk guard marker, it allows or denies. Writes
-//! outside every allowed root and un-scoped Bash mutations are denied; everything
-//! else — all read tools, and the orchestrator's own in-sandbox writes — is
-//! allowed. When the guard is not armed, every call is allowed.
+//! outside every allowed root and recognized Bash targets that escape those roots
+//! are denied; everything else — all read tools, and the orchestrator's own
+//! in-sandbox writes — is allowed. When the guard is not armed, every call is
+//! allowed.
 
 use chrono::DateTime;
 use serde::Deserialize;
@@ -341,12 +342,15 @@ mod tests {
     }
 
     #[test]
-    fn denies_an_install_command() {
-        let d = decide_now(
+    fn denies_an_install_command_from_outside_the_guarded_environment() {
+        let d = decide_with_cwd(
             "Bash",
-            json!({ "command": "npm install left-pad" }),
+            &json!({ "command": "npm install left-pad" }),
             Some(&marker()),
-        );
+            now_ms(),
+            Path::new("/outside/project"),
+        )
+        .decision;
         assert!(!d.allow);
         let reason = d.reason.unwrap();
         assert!(reason.to_lowercase().contains("install"));
@@ -354,7 +358,7 @@ mod tests {
     }
 
     #[test]
-    fn allows_a_bash_command_scoped_to_an_allowed_root() {
+    fn allows_bash_with_an_in_bounds_redirect() {
         let d = decide_now(
             "Bash",
             json!({ "command": "echo hi > /work/.eval-magic/x/outputs/log" }),
@@ -499,43 +503,32 @@ mod tests {
     }
 
     #[test]
-    fn denies_bash_that_creates_a_path_under_dot_claude_via_non_redirect_verb() {
-        assert!(
-            !decide_now(
+    fn allows_ordinary_filesystem_commands_inside_the_guarded_environment() {
+        let marker = marker();
+        let cwd = Path::new("/work/.eval-magic/task");
+        for command in [
+            "mkdir -p .claude/foo",
+            "cp out.txt .claude/bar",
+            "mkdir skills",
+            "cp -r src ./skills",
+            "mkdir -p .codex/foo",
+            "cp hooks.json .codex/hooks.json",
+            "mkdir -p .agents/foo",
+            "touch .opencode/opencode.json",
+        ] {
+            let result = decide_with_cwd(
                 "Bash",
-                json!({ "command": "mkdir -p .claude/foo" }),
-                Some(&marker())
-            )
-            .allow
-        );
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "cp out.txt .claude/bar" }),
-                Some(&marker())
-            )
-            .allow
-        );
-    }
-
-    #[test]
-    fn denies_bash_that_creates_a_bare_skills_dir() {
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "mkdir skills" }),
-                Some(&marker())
-            )
-            .allow
-        );
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "cp -r src ./skills" }),
-                Some(&marker())
-            )
-            .allow
-        );
+                &json!({ "command": command }),
+                Some(&marker),
+                now_ms(),
+                cwd,
+            );
+            assert!(
+                result.decision.allow,
+                "{command} should be allowed: {:?}",
+                result.decision.reason
+            );
+        }
     }
 
     #[test]
@@ -559,50 +552,6 @@ mod tests {
             Some(&marker()),
         );
         assert!(d.allow);
-    }
-
-    #[test]
-    fn denies_bash_that_creates_a_path_under_dot_codex_via_non_redirect_verb() {
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "mkdir -p .codex/foo" }),
-                Some(&marker())
-            )
-            .allow
-        );
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "cp evil.json .codex/hooks.json" }),
-                Some(&marker())
-            )
-            .allow
-        );
-    }
-
-    #[test]
-    fn denies_bash_that_creates_a_path_under_dot_agents_via_non_redirect_verb() {
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "mkdir -p .agents/foo" }),
-                Some(&marker())
-            )
-            .allow
-        );
-    }
-
-    #[test]
-    fn denies_bash_that_creates_a_path_under_dot_opencode_via_non_redirect_verb() {
-        assert!(
-            !decide_now(
-                "Bash",
-                json!({ "command": "touch .opencode/opencode.json" }),
-                Some(&marker())
-            )
-            .allow
-        );
     }
 
     #[test]
@@ -632,19 +581,6 @@ mod tests {
             "Bash",
             json!({ "command": "mkdir -p /work/.agents/skills/staged-x" }),
             Some(&codex_marker),
-        );
-        assert!(d.allow);
-    }
-
-    #[test]
-    fn does_not_flag_a_skills_prefixed_dir_as_a_bare_skills_write() {
-        // A `skills`-prefixed path that is NOT an allowed root: the bare-`skills/`
-        // heuristic only fires on a bare `skills` at a path boundary, so a
-        // `skills-`-prefixed dir must not be flagged and the write is allowed.
-        let d = decide_now(
-            "Bash",
-            json!({ "command": "mkdir -p /work/skills-data/x/outputs" }),
-            Some(&marker()),
         );
         assert!(d.allow);
     }

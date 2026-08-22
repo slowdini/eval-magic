@@ -257,8 +257,7 @@ fn cline_deny_verdict_bytes_match_the_on_disk_contract() {
 /// arbiter's shell patterns must classify it.
 #[test]
 fn cline_deny_verdict_classifies_a_joined_shell_command() {
-    let payload =
-        r#"{ "tool_name": "run_commands", "tool_input": { "command": "npm install left-pad" } }"#;
+    let payload = r#"{ "tool_name": "run_commands", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
     let verdict = verdict("cline", payload, Some(marker())).expect("should block");
     assert!(verdict.contains("package install/add"), "{verdict}");
 }

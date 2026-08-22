@@ -151,6 +151,9 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
   `.cline/plugins/slow-powers-eval-guard/index.js` whose `beforeTool` hook forwards every tool
   call to `eval-magic guard-hook --harness cline` (`run_commands`' `commands` array joined into
   one `command` string for the shared arbiter) and returns `{skip: true, reason}` on deny.
+  The shared cwd-aware policy allows ordinary installs, builds, tests, and in-place edits inside
+  the task env while denying recognized explicit destinations outside it, output escapes,
+  repository-routing escapes, and remote Git mutations.
   Spike-verified on 3.0.53 (all in a throwaway dir, hand-staged plugin): project plugin dirs
   auto-load in headless one-shot dispatches (a bare `index.js` needs no package.json; a loose
   `.js` file at the plugins root is IGNORED); the hook context is `{snapshot, tool, toolCall,

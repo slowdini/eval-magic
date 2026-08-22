@@ -47,7 +47,7 @@
           },
           "warnings": {
             "type": "array",
-            "description": "Heuristic: a Bash command matched a mutating pattern (install, git, sed -i), or a literal redirection/tee target resolved outside the task environment from the invocation cwd.",
+            "description": "Heuristic: a recognized development mutation had an invocation cwd or explicit destination outside the task environment, an output redirection/tee target could not be proven in bounds, or a Git operation escaped the local task repository.",
             "items": { "$ref": "#/definitions/finding" }
           },
           "live_source_reads": {

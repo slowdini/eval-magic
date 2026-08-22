@@ -380,9 +380,8 @@ pub fn default_harness_name() -> &'static str {
 }
 
 /// The union of every harness's project-local config dir names (sorted,
-/// deduplicated): the dirs harness-agnostic code must treat as protected —
-/// staging's sibling-asset filter, the guard's Bash tamper rule, and
-/// detect-stray-writes' staging-dir lookbehind.
+/// deduplicated): staging excludes them from sibling assets, and task-repository
+/// setup force-adds the runner-owned copies to the baseline.
 pub fn all_config_dir_names() -> Vec<String> {
     let mut names: Vec<String> = registry()
         .iter()

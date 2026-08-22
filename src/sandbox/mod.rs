@@ -21,6 +21,7 @@ pub mod decide;
 mod git_command;
 pub mod guard;
 pub mod install;
+mod mutation_targets;
 pub mod policy;
 mod shell_targets;
 

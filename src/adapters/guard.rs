@@ -639,8 +639,7 @@ mod tests {
              /work/.eval-magic/tmp.\"}}"
         );
 
-        let payload =
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#;
+        let payload = r#"{ "tool_name": "Bash", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
         assert_eq!(
             verdict("codex", payload, Some(marker())).expect("should block"),
             "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
@@ -737,7 +736,7 @@ mod tests {
 
     #[test]
     fn codex_deny_returns_decision_block_json() {
-        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#;
+        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
         let out = verdict("codex", payload, Some(marker())).expect("should block");
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["decision"], "block");

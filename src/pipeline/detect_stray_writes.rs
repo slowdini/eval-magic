@@ -5,9 +5,10 @@
 //!
 //! - **violations**: file-write tools (per the adapters' cross-harness
 //!   vocabulary union) whose target path resolves outside the task's eval root.
-//! - **warnings**: shell commands matching a mutating pattern that don't
-//!   reference the eval root, or literal redirect/`tee` targets resolving
-//!   outside it from the invocation cwd.
+//! - **warnings**: recognized development mutations whose invocation cwd or
+//!   explicit destination escapes the eval root, output redirect/`tee` targets
+//!   that cannot be proven in bounds, and Git operations that escape the local
+//!   task repository.
 //! - **live_source_reads**: read tools / shell commands that touched the live
 //!   skill-under-test directory instead of its staged copy.
 //! - **guard denials**: raw per-task JSONL is joined through `dispatch.json`
@@ -372,6 +373,9 @@ fn eval_roots_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, 
 }
 
 #[cfg(test)]
+mod realistic_development_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
@@ -549,32 +553,6 @@ mod tests {
         );
         assert_eq!(f.warnings.len(), 1);
         assert!(f.warnings[0].reason.to_lowercase().contains("worktree"));
-    }
-
-    #[test]
-    fn creating_a_path_under_dot_claude_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv("Bash", json!({"command": "mkdir -p .claude/foo"}), 0)],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
-    }
-
-    #[test]
-    fn creating_a_path_under_dot_codex_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": "cp evil.json .codex/hooks.json"}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
     }
 
     #[test]
