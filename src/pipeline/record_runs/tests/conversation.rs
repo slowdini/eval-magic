@@ -293,7 +293,7 @@ fn a_responder_task_without_its_completion_artifact_is_skipped_as_incomplete() {
     let dispatch_path = iter.join("dispatch.json");
     let mut dispatch: Value =
         serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
-    dispatch["tasks"][0]["responder"] = json!({ "type": "heuristic" });
+    dispatch["tasks"][0]["responder"] = json!({ "type": "llm" });
     dispatch["tasks"][0]["conversation_path"] = json!(
         iter.join("eval-clarify")
             .join("with_skill")
@@ -355,7 +355,7 @@ fn records_a_run_whose_conversation_timed_out_in_a_later_round() {
     let dispatch_path = iter.join("dispatch.json");
     let mut dispatch: Value =
         serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
-    dispatch["tasks"][0]["responder"] = json!({ "type": "heuristic" });
+    dispatch["tasks"][0]["responder"] = json!({ "type": "llm" });
     dispatch["tasks"][0]["conversation_path"] =
         json!(conversation_path.to_string_lossy().to_string());
     fs::write(

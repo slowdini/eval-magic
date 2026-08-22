@@ -21,9 +21,10 @@ each task's `conversation.json`. A task that already has one is skipped, so reru
 command retries only what did not finish. A task that exceeds `--timeout` is recorded as timed out
 rather than left to stall the campaign, and a task that fails is recorded and named while the rest
 of the batch continues. A conversation that stops at a scripted gate is valid eval data, not a
-failure. A conversation the responder stopped — because it could not answer the agent's question,
-or because it hit `max_turns` — is recorded too, but it ended with the task unfinished; `dispatch`
-warns about each one by name, and those runs are weaker evidence than a completed one.
+failure. A conversation the responder stopped — because it produced no usable reply, or because it
+hit `max_turns` — is recorded too, but it ended with the task unfinished; `dispatch` warns about
+each one by name and cause, and `aggregate` counts them per condition in `benchmark.json`'s
+`validity_warnings`. Those runs are weaker evidence than a completed one.
 
 ```
 eval-magic ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness cline

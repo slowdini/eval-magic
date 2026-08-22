@@ -18,7 +18,7 @@ use serde::Deserialize;
 
 use crate::adapters::descriptor::finalize_descriptor;
 use crate::adapters::descriptor_adapter::DescriptorAdapter;
-use crate::cli::run::conversation::{TaskOutcome, run_task};
+use crate::cli::run::conversation::{DispatchSettings, TaskOutcome, cause_label, run_task};
 use crate::cli::run::dispatch::DispatchTask;
 use crate::core::{ConversationStopReason, posix_shell, validate_agent_environment_entry};
 
@@ -31,6 +31,8 @@ pub struct DispatchEnvelope {
     pub guard: bool,
     #[serde(default)]
     pub agent_model: Option<String>,
+    #[serde(default)]
+    pub responder_model: Option<String>,
     #[serde(default)]
     pub agent_env: BTreeMap<String, String>,
     pub harness_descriptor: serde_json::Value,
@@ -132,12 +134,14 @@ impl DispatchSummary {
                 )),
                 Ok(TaskOutcome::Stopped {
                     reason: Some(ConversationStopReason::ResponderCannotAnswer),
+                    cause,
                     ..
                 }) => Some(format!(
-                    "{} stopped: the responder could not answer the agent's question, so the run \
-                     ended mid-task. Read the last assistant message under its outputs before \
+                    "{} stopped: the responder could not answer the agent's question ({}), so the \
+                     run ended mid-task. Read the last assistant message under its outputs before \
                      trusting this data point.",
-                    report.description
+                    report.description,
+                    cause_label(*cause)
                 )),
                 Ok(TaskOutcome::Stopped {
                     reason: Some(ConversationStopReason::MaxTurnsReached),
@@ -195,9 +199,12 @@ pub fn command_dispatch(
         let result = run_task(
             &adapter,
             task,
-            envelope.guard,
-            envelope.agent_model.as_deref(),
-            &envelope.agent_env,
+            &DispatchSettings {
+                guard: envelope.guard,
+                agent_model: envelope.agent_model.as_deref(),
+                responder_model: envelope.responder_model.as_deref(),
+                agent_env: &envelope.agent_env,
+            },
             overwrite,
             timeout,
         )

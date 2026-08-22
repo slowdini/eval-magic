@@ -56,6 +56,22 @@ fn write_grading_in(run_dir: &std::path::Path, pass_rate: f64) {
     .unwrap();
 }
 
+/// Write `eval-e1/<cond>/conversation.json` (the cond dir must already exist).
+fn write_conversation(
+    iteration_dir: &std::path::Path,
+    cond: &str,
+    conversation: serde_json::Value,
+) {
+    fs::write(
+        iteration_dir
+            .join("eval-e1")
+            .join(cond)
+            .join("conversation.json"),
+        serde_json::to_string(&conversation).unwrap(),
+    )
+    .unwrap();
+}
+
 /// Write `eval-e1/<cond>/timing.json` (the cond dir must already exist).
 fn write_timing(iteration_dir: &std::path::Path, cond: &str, timing: serde_json::Value) {
     write_timing_in(&iteration_dir.join("eval-e1").join(cond), timing);
@@ -449,6 +465,96 @@ fn aggregate_warns_on_mixed_timing_sources() {
         let s = w.as_str().unwrap();
         s.contains("timing source") && s.contains("transcript")
     }));
+}
+
+/// A run the responder could not carry to completion measured an interrupted
+/// task, so counting it beside a completed one biases the delta. The count is
+/// per condition on purpose: one arm being truncated more than the other is
+/// exactly the threat the reader needs to see.
+#[test]
+fn aggregate_warns_when_the_responder_ended_runs_early() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+    }
+    write_conversation(
+        &iteration_dir,
+        "with_skill",
+        json!({
+            "status": "stopped",
+            "delivered_followups": 1,
+            "stop_reason": "responder_cannot_answer",
+            "stopped_before_followup": 2,
+            "responder_outcome": { "ending": "cannot_answer", "cause": "declined" },
+            "events": [
+                { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+                { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which credential?" }
+            ]
+        }),
+    );
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    let warning = warns
+        .iter()
+        .find_map(|w| {
+            let s = w.as_str().unwrap();
+            s.contains("responder").then_some(s)
+        })
+        .unwrap_or_else(|| panic!("expected a responder warning in {warns:?}"));
+    assert!(warning.contains("with_skill"), "{warning}");
+    assert!(warning.contains("declined"), "{warning}");
+    assert!(
+        !warns
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("without_skill")
+                && w.as_str().unwrap().contains("responder")),
+        "the untruncated arm is not warned about: {warns:?}"
+    );
+}
+
+/// A conversation the responder carried to completion is not a threat to the
+/// comparison, so it must not add noise to every responder-driven campaign.
+#[test]
+fn aggregate_is_silent_when_the_responder_completed_every_run() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+        write_conversation(
+            &iteration_dir,
+            cond,
+            json!({
+                "status": "completed",
+                "delivered_followups": 1,
+                "responder_outcome": { "ending": "done" },
+                "events": [
+                    { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+                    { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Done." }
+                ]
+            }),
+        );
+    }
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    assert!(
+        !b["validity_warnings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("responder")),
+        "{}",
+        b["validity_warnings"]
+    );
 }
 
 /// `aggregate`: no timing-source warning when all runs share one source.

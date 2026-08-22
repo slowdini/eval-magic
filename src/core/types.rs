@@ -345,6 +345,12 @@ pub struct ConditionsRecord {
     /// Operator-declared judge model (provenance, like `agent_model`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge_model: Option<String>,
+    /// Operator-declared responder model (provenance, like `agent_model`). A
+    /// responder eval puts a third model in the attribution picture, so a
+    /// report that names the agent and the judge has to name this one too.
+    /// Appended last so a record written before it existed still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder_model: Option<String>,
     /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -427,6 +433,12 @@ pub struct ConversationRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timed_out_in_round: Option<u32>,
     pub events: Vec<ConversationEvent>,
+    /// How the responder ended the conversation, when it was the responder that
+    /// ended it. Absent for a scripted or one-shot task, for a timeout, and for
+    /// `max_turns_reached` — the bound is the runner's decision, not a verdict.
+    /// Appended last so a record written before it existed still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder_outcome: Option<ResponderOutcome>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -445,9 +457,11 @@ pub enum ConversationStatus {
 pub enum ConversationStopReason {
     AgentDidNotAsk,
     AgentResponseMismatch,
-    /// The agent asked something the responder could not answer mechanically.
-    /// This is the branch an LLM responder takes over; until then the run stops
-    /// here rather than inventing a reply.
+    /// The responder did not produce a usable reply — it declined, its dispatch
+    /// failed, or what it wrote failed validation. The specific cause is on the
+    /// record's [`ResponderOutcome`]. One reason covers all of them because the
+    /// outcome is the same: the run ended mid-task rather than being handed a
+    /// reply nobody vouched for.
     ResponderCannotAnswer,
     /// The agent was still asking when the responder's `max_turns` bound was
     /// reached. A bounded conversation, not a failed one.
@@ -491,45 +505,91 @@ pub enum ConversationEvent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TurnOrigin {
     pub responder: ResponderKind,
-    /// One entry per question the turn answered, in the order they were asked.
-    pub answers: Vec<ResponderAnswer>,
+    /// One line from the responder on why it answered this way. Absent when it
+    /// offered none; the tag above is what marks the turn derived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
 }
 
-/// Which responder produced a turn. `heuristic` is the only one that exists
-/// today; the LLM answering agent adds its own so the two stay distinguishable
-/// in a record.
+/// Which responder produced a turn. Named in the record even though there is
+/// one of them, because a record outlives the version that wrote it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ResponderKind {
-    Heuristic,
+    Llm,
 }
 
-/// How the responder answered one question, with the evidence it read.
+/// How the responder brought a conversation to an end, recorded once on the
+/// conversation rather than on a turn — no turn was delivered.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResponderAnswer {
-    /// The question line the options hung from, when the message carried one.
+pub struct ResponderOutcome {
+    pub ending: ResponderEnding,
+    /// Why no usable reply was produced. Absent for [`ResponderEnding::Done`],
+    /// where nothing went wrong.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub question: Option<String>,
-    /// The options as written, before markers were stripped.
-    pub options: Vec<String>,
-    pub rule: ResponderRule,
-    /// Empty when the rule selected nothing.
-    pub chosen: Vec<String>,
+    pub cause: Option<ResponderStopCause>,
+    /// The responder's own one-line account, when it produced one. A dispatch
+    /// that never answered has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
 }
 
-/// The mechanical rule that picked one answer. Naming it on the turn is what
-/// makes a synthesized conversation auditable rather than mysterious.
+/// The two ways a responder ends a conversation. Deliberately not the parsed
+/// verdict, which also carries an answer: an answer is recorded on the turn it
+/// became, so it cannot reach here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum ResponderRule {
-    /// Exactly one option was marked as recommended, or every recommended
-    /// option of a checkbox list was taken.
-    RecommendedOption,
-    /// Exactly one choice was required and none was recommended, so the first
-    /// option won.
-    FirstOption,
-    /// A checkbox list required zero or more choices and recommended none.
-    NoSelection,
+pub enum ResponderEnding {
+    /// The responder judged the agent finished and waiting on nothing.
+    Done,
+    /// No usable reply, for the reason in [`ResponderOutcome::cause`].
+    CannotAnswer,
+}
+
+/// Why the responder produced no usable reply. Every variant stops the run with
+/// [`ConversationStopReason::ResponderCannotAnswer`]; naming the cause is what
+/// lets an operator tell an honest refusal from a broken dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponderStopCause {
+    /// The responder said it could not answer without inventing something.
+    Declined,
+    /// The harness command exited nonzero or could not be spawned.
+    DispatchFailed,
+    /// The harness command outran the consultation budget.
+    DispatchTimedOut,
+    /// The dispatch succeeded but wrote no verdict file, or an empty one.
+    MissingVerdict,
+    /// The verdict file did not parse, or named a verdict that does not exist.
+    MalformedVerdict,
+    /// An `answer` verdict whose reply was blank.
+    EmptyReply,
+    /// The reply exceeded the byte cap — a simulated user answers in sentences,
+    /// so a long one means the responder started doing the agent's work.
+    ReplyTooLong,
+    /// The reply carried a fenced code block, for the same reason.
+    ReplyContainsCode,
+    /// The reply repeated the previous one verbatim: the exchange is circling,
+    /// and spending the remaining turns on it would only cost more.
+    ReplyRepeated,
+}
+
+impl ResponderStopCause {
+    /// The cause's serialized name. Warnings print this rather than prose so
+    /// what an operator reads is what they would grep the artifacts for.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Declined => "declined",
+            Self::DispatchFailed => "dispatch_failed",
+            Self::DispatchTimedOut => "dispatch_timed_out",
+            Self::MissingVerdict => "missing_verdict",
+            Self::MalformedVerdict => "malformed_verdict",
+            Self::EmptyReply => "empty_reply",
+            Self::ReplyTooLong => "reply_too_long",
+            Self::ReplyContainsCode => "reply_contains_code",
+            Self::ReplyRepeated => "reply_repeated",
+        }
+    }
 }
 
 /// The result of grading one assertion.
@@ -780,6 +840,7 @@ mod tests {
             agent_model: None,
             agent_env: BTreeMap::new(),
             judge_model: None,
+            responder_model: None,
             label: None,
             codebases: Vec::new(),
             skill_source: None,

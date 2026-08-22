@@ -52,6 +52,7 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
             agent_model: args.agent_model.as_deref(),
             agent_env,
             judge_model: args.judge_model.as_deref(),
+            responder_model: args.responder_model.as_deref(),
             label: args.label.as_deref(),
         },
     )?;

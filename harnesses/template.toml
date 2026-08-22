@@ -143,7 +143,8 @@ label = "{label}"
 ## -------------------------------------------------------------------------------------------
 ## [conversation] — native same-session continuation for multi-turn evals, both scripted `turns`
 ## and a `responder` that derives them. The responder needs nothing further from a descriptor: it
-## reads the agent's own message as Markdown, so declaring this table is all it takes.
+## reads the agent's own message out of the transcript and consults its model through the
+## [dispatch].exec_template below, so declaring this table is all it takes.
 ## This capability has no generic fallback: run rejects multi-turn evals for a harness that omits
 ## it. It requires
 ## [dispatch].exec_template plus transcript parsing that exposes both ordered assistant messages

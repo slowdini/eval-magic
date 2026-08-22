@@ -1,422 +1,463 @@
-//! The heuristic responder: what a user would say next, decided mechanically.
+//! The responder: what the person who asked for the work says next.
 //!
-//! It reads one round's final assistant message as plain Markdown, which is why
-//! it needs no harness-specific code — every harness's transcript parser
-//! normalizes that text into `TranscriptSummary::final_text` already.
+//! One small model, dispatched through the same harness as the agent under
+//! test, consulted once after every round. It answers the agent's question,
+//! judges the task finished, or says it cannot answer — and the runner never
+//! delivers a reply that fails validation, because a reply nobody vouched for
+//! silently changes what the agent was asked to do.
 
-use std::sync::LazyLock;
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use regex::Regex;
+use crate::adapters::descriptor_adapter::DescriptorAdapter;
+use crate::adapters::harness::HarnessAdapter;
+use crate::core::{ResponderStopCause, ShellOutcome, run_in_posix_shell};
 
-use crate::core::{ResponderAnswer, ResponderKind, ResponderRule, TurnOrigin};
+use super::render_dispatch_command;
 
-/// What the heuristic made of one assistant turn.
-pub(super) enum Reading {
-    /// No question was asked — the agent considers the task done.
-    NoQuestion,
-    /// A question with no option list the heuristic can answer.
-    Unanswerable,
-    /// A mechanically answerable question, with the reply and its provenance.
-    Answer { text: String, origin: TurnOrigin },
+/// How long one consultation may run. It is capped separately from the task's
+/// own budget so a hung responder stops the run as a responder failure rather
+/// than eating the agent's remaining time and being recorded as an agent
+/// timeout.
+const CONSULT_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// The byte ceiling on a reply. A simulated user answers in sentences; well
+/// past that means the responder started doing the agent's work, and putting
+/// that in the transcript would credit the agent under test with work it did
+/// not do.
+const MAX_REPLY_BYTES: usize = 2_000;
+
+/// The line the responder is told to write its verdict by. Named here because
+/// the prompt states it and a test reads it back.
+const VERDICT_PATH_LINE: &str = "Write your verdict as a JSON file to:";
+
+/// What the responder is shown. Deliberately only what the agent already knows:
+/// the request it was given, what the user has said since, and what it just
+/// said. The eval's `expected_output` and assertions are the grading criteria,
+/// and a responder that had read them could hand the agent the rubric.
+pub(super) struct Consultation<'a> {
+    pub(super) task_prompt: &'a str,
+    pub(super) prior_replies: &'a [String],
+    pub(super) final_message: &'a str,
 }
 
-/// A list item: `- text`, `* text`, `+ text`, `1. text`, or `1) text`. Up to
-/// three leading spaces, matching Markdown's own tolerance before a deeper
-/// indent turns the line into a continuation of the item above it.
-static OPTION_LINE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^ {0,3}(?:[-*+]|\d{1,3}[.)])\s+(.*)$").unwrap());
-
-/// A standalone `recommended`, in parentheses, brackets, or bold. Deliberately
-/// narrow: an option that merely discusses what it recommends is not a marker.
-/// A task-list marker at the head of an option body: `[ ]`, `[x]`, or `[X]`.
-/// Its presence anywhere in a group is what makes the group multi-select.
-static CHECKBOX: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[( |x|X)\]\s*").unwrap());
-
-static RECOMMENDED: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(\(\s*recommended\s*\)|\[\s*recommended\s*\]|\*\*\s*recommended\s*\*\*)")
-        .unwrap()
-});
-
-/// One list of options, with the lines that introduced it.
-struct OptionGroup {
-    question: Option<String>,
-    options: Vec<String>,
+/// What the responder decided. `Answer` carries a reply that has already passed
+/// validation by the time it leaves [`ResponderRuntime::consult`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum Verdict {
+    Answer {
+        reply: String,
+        rationale: Option<String>,
+    },
+    Done {
+        rationale: Option<String>,
+    },
+    CannotAnswer {
+        rationale: Option<String>,
+    },
 }
 
-pub(super) fn read(final_message: &str) -> Reading {
-    let lines: Vec<&str> = final_message.lines().collect();
-    let answers: Vec<ResponderAnswer> = question_groups(&lines)
-        .iter()
-        .filter_map(answer_for)
-        .collect();
-    if answers.is_empty() {
-        return if final_message.contains('?') {
-            Reading::Unanswerable
-        } else {
-            Reading::NoQuestion
-        };
-    }
-    Reading::Answer {
-        text: render_reply(&answers),
-        origin: TurnOrigin {
-            responder: ResponderKind::Heuristic,
-            answers,
-        },
-    }
+/// The verdict file as written, before it is known to be usable. Every field
+/// tolerates absence, following the judge's `JudgeResponse`: a sloppy responder
+/// should fail one named validation gate, not blow up parsing.
+#[derive(serde::Deserialize)]
+struct RawVerdict {
+    #[serde(default)]
+    verdict: String,
+    #[serde(default)]
+    reply: Option<String>,
+    #[serde(default)]
+    rationale: Option<String>,
 }
 
-/// Every option list in the message whose lead-in asks something.
-fn question_groups(lines: &[&str]) -> Vec<OptionGroup> {
-    let mut groups = Vec::new();
-    let mut index = 0;
-    while index < lines.len() {
-        let Some(option) = option_body(lines[index]) else {
-            index += 1;
-            continue;
-        };
-        let start = index;
-        let mut options = vec![option];
-        index += 1;
-        while index < lines.len() {
-            if let Some(option) = option_body(lines[index]) {
-                options.push(option);
-                index += 1;
-            } else if lines[index].trim().is_empty()
-                && lines
-                    .get(index + 1)
-                    .copied()
-                    .and_then(option_body)
-                    .is_some()
-            {
-                // A loose Markdown list puts a blank line between its items.
-                index += 1;
-            } else {
-                break;
+/// Everything a consultation needs that does not change between rounds.
+pub(super) struct ResponderRuntime<'a> {
+    pub(super) adapter: &'a DescriptorAdapter,
+    pub(super) model: Option<&'a str>,
+    pub(super) agent_env: &'a BTreeMap<String, String>,
+    /// Where consultations run and are captured — outside every task env, so
+    /// nothing the responder does can reach the codebase under measurement or
+    /// pick up its `CLAUDE.md` as instructions.
+    pub(super) responder_dir: PathBuf,
+    pub(super) deadline: Option<Instant>,
+}
+
+impl ResponderRuntime<'_> {
+    /// Ask the responder what the user says after `round`. Every failure is a
+    /// named cause rather than an error: the run stops mid-task, which is a
+    /// recorded result, not a broken campaign.
+    pub(super) fn consult(
+        &self,
+        round: u32,
+        consultation: &Consultation<'_>,
+        previous_reply: Option<&str>,
+    ) -> Result<Verdict, ResponderStopCause> {
+        let dir = self.responder_dir.join(format!("turn-{round}"));
+        fs::create_dir_all(&dir).map_err(|_| ResponderStopCause::DispatchFailed)?;
+        let prompt_path = dir.join("prompt.txt");
+        let verdict_path = dir.join("verdict.json");
+
+        // Clear any verdict left by an earlier dispatch of this task, or by a
+        // consultation that was killed part way through writing one. The file's
+        // presence is the only evidence that this consultation answered, so a
+        // stale one would be read as a reply written about a different
+        // conversation.
+        match fs::remove_file(&verdict_path) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(_) => return Err(ResponderStopCause::DispatchFailed),
+        }
+
+        fs::write(&prompt_path, build_prompt(consultation, &verdict_path))
+            .map_err(|_| ResponderStopCause::DispatchFailed)?;
+
+        // Guard arguments are deliberately off, for the reason a judge's are:
+        // this dispatch runs outside every guarded task env.
+        let template = self
+            .adapter
+            .cli_exec_command(false, self.model, self.agent_env)
+            .ok_or(ResponderStopCause::DispatchFailed)?;
+        let command = render_dispatch_command(
+            &template,
+            &dir.to_string_lossy(),
+            &prompt_path.to_string_lossy(),
+            &dir,
+        );
+
+        let budget = match self.deadline {
+            Some(deadline) => {
+                CONSULT_TIMEOUT.min(deadline.saturating_duration_since(Instant::now()))
             }
+            None => CONSULT_TIMEOUT,
+        };
+        match run_in_posix_shell(&command, &dir, self.agent_env, Some(budget)) {
+            Ok(ShellOutcome::Exited(status)) if status.success() => {}
+            Ok(ShellOutcome::Exited(_)) | Err(_) => return Err(ResponderStopCause::DispatchFailed),
+            Ok(ShellOutcome::TimedOut) => return Err(ResponderStopCause::DispatchTimedOut),
         }
-        if options.len() < 2 {
-            continue;
+
+        let raw = fs::read_to_string(&verdict_path)
+            .ok()
+            .filter(|body| !body.trim().is_empty())
+            .ok_or(ResponderStopCause::MissingVerdict)?;
+        let verdict = parse_verdict(&raw)?;
+        if let Verdict::Answer { reply, .. } = &verdict {
+            validate_reply(reply, previous_reply)?;
         }
-        if let Some(question) = lead_in_question(lines, start) {
-            groups.push(OptionGroup {
-                question: Some(question),
-                options,
-            });
-        }
+        Ok(verdict)
     }
-    groups
 }
 
-/// The text of a list item, or `None` when the line is not one.
-fn option_body(line: &str) -> Option<String> {
-    let body = OPTION_LINE.captures(line)?.get(1)?.as_str().trim();
-    (!body.is_empty()).then(|| body.to_string())
-}
-
-/// The question a group hangs from: the last line of the contiguous non-blank
-/// block directly above it, and only when that line *ends* with `?`.
+/// Build one consultation's prompt. Pure, so what the responder is and is not
+/// shown is testable without dispatching anything.
 ///
-/// Ending, not merely containing: a closing summary's list is introduced by a
-/// line like `Here is what changed:`, and that line may well also carry a
-/// rhetorical question earlier in the sentence. Answering such a list would
-/// derail a finished task, so the `?` has to be the last thing said before the
-/// options appear.
-fn lead_in_question(lines: &[&str], start: usize) -> Option<String> {
-    let mut end = start;
-    while end > 0 && lines[end - 1].trim().is_empty() {
-        end -= 1;
-    }
-    if end == 0 || option_body(lines[end - 1]).is_some() {
-        return None;
-    }
-    let question = strip_emphasis(lines[end - 1].trim());
-    question.ends_with('?').then(|| question.to_string())
-}
-
-fn strip_emphasis(text: &str) -> &str {
-    text.trim_matches(|c| c == '*' || c == '_' || c == '`' || c == '#')
-        .trim()
-}
-
-/// Apply the selection rules to one group.
-fn answer_for(group: &OptionGroup) -> Option<ResponderAnswer> {
-    // Checkbox syntax is the only mechanical signal that a question takes zero
-    // or more answers rather than exactly one.
-    let multi_select = group.options.iter().any(|option| CHECKBOX.is_match(option));
-    let recommended: Vec<String> = group
-        .options
-        .iter()
-        .filter(|option| is_recommended(option))
-        .map(|option| clean(option))
-        .collect();
-    let (rule, chosen) = match (recommended.is_empty(), multi_select) {
-        (false, true) => (ResponderRule::RecommendedOption, recommended),
-        (false, false) => (
-            ResponderRule::RecommendedOption,
-            vec![recommended[0].clone()],
-        ),
-        (true, true) => (ResponderRule::NoSelection, Vec::new()),
-        (true, false) => (ResponderRule::FirstOption, vec![clean(&group.options[0])]),
+/// The agent's own message goes in verbatim, and an agent could in principle
+/// write instructions to the responder into it. That is contained by the
+/// runner reading the verdict from the path it chose rather than one parsed
+/// out of anything: a redirected write is a missing verdict, which stops the
+/// run.
+fn build_prompt(consultation: &Consultation<'_>, verdict_path: &Path) -> String {
+    let said_since = if consultation.prior_replies.is_empty() {
+        String::new()
+    } else {
+        let replies: Vec<String> = consultation
+            .prior_replies
+            .iter()
+            .enumerate()
+            .map(|(index, reply)| format!("{}. {reply}", index + 1))
+            .collect();
+        format!("# What you have said since\n\n{}\n\n", replies.join("\n"))
     };
-    Some(ResponderAnswer {
-        question: group.question.clone(),
-        options: group.options.clone(),
-        rule,
-        chosen,
-    })
+
+    [
+        "You are the person who asked for this work. An AI coding agent is doing the task and has",
+        "stopped to say something. Decide what you say next.",
+        "",
+        "# What you originally asked for",
+        "",
+        consultation.task_prompt,
+        "",
+        // Folded into the heading rather than standing alone, so an absent
+        // section leaves no hole in a file a person reads while auditing.
+        &format!("{said_since}# What the agent just said"),
+        "",
+        consultation.final_message,
+        "",
+        "# How to decide",
+        "",
+        "- If the agent asked you something you can answer, answer it. Prefer whatever it marked",
+        "  as recommended; failing that, the simplest option and the least work.",
+        "- Never add requirements, never introduce facts you have not already stated, and never do",
+        "  the agent's work for it. No code, no file contents.",
+        "- Keep it to a couple of sentences, as a person typing a reply would.",
+        "- If the agent is reporting the task finished and is not waiting on you, the conversation",
+        "  is over: answer `done`.",
+        "- If you genuinely cannot answer without inventing something, answer `cannot_answer`",
+        "  rather than guessing.",
+        "",
+        "# Task",
+        "",
+        &format!("{VERDICT_PATH_LINE} {}", verdict_path.display()),
+        "",
+        "The JSON must match this schema (exactly these keys, no extra prose in the file):",
+        "",
+        "```json",
+        "{ \"verdict\": \"answer\"|\"done\"|\"cannot_answer\", \"reply\": \"what you say next\", \"rationale\": \"one line\" }",
+        "```",
+        "",
+        "`reply` is required for `answer` and ignored otherwise.",
+        "",
+    ]
+    .join("\n")
 }
 
-/// A marked recommendation, or a pre-checked box — the plainest statement of a
-/// suggested default a Markdown list can carry.
-fn is_recommended(option: &str) -> bool {
-    RECOMMENDED.is_match(option)
-        || CHECKBOX
-            .captures(option)
-            .and_then(|caps| caps.get(1))
-            .is_some_and(|marker| marker.as_str() != " ")
+/// Read one verdict file. A fence is stripped first because models add one out
+/// of habit, and stopping a run over punctuation would be a worse failure than
+/// the three lines it costs to tolerate.
+fn parse_verdict(raw: &str) -> Result<Verdict, ResponderStopCause> {
+    let raw: RawVerdict =
+        serde_json::from_str(unfence(raw)).map_err(|_| ResponderStopCause::MalformedVerdict)?;
+    let rationale = raw
+        .rationale
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty());
+    match raw.verdict.as_str() {
+        "answer" => Ok(Verdict::Answer {
+            reply: raw.reply.unwrap_or_default(),
+            rationale,
+        }),
+        "done" => Ok(Verdict::Done { rationale }),
+        "cannot_answer" => Ok(Verdict::CannotAnswer { rationale }),
+        _ => Err(ResponderStopCause::MalformedVerdict),
+    }
 }
 
-/// An option as a user would say it back: markers stripped, spacing tidied.
-fn clean(option: &str) -> String {
-    RECOMMENDED
-        .replace_all(&CHECKBOX.replace(option, ""), "")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .trim_end_matches(['-', '\u{2014}', ':', ','])
+/// Strip one wrapping code fence, if the whole body is inside it.
+fn unfence(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    let Some(rest) = trimmed.strip_prefix("```") else {
+        return trimmed;
+    };
+    let Some(body) = rest.split_once('\n').map(|(_language, body)| body) else {
+        return trimmed;
+    };
+    body.trim_end()
+        .strip_suffix("```")
+        .unwrap_or(trimmed)
         .trim()
-        .to_string()
 }
 
-/// What the responder says when a checkbox question recommends nothing. A user
-/// still has to answer, and "nothing" is the answer the rules produced.
-const NO_SELECTION_REPLY: &str = "None of these.";
-
-fn render_reply(answers: &[ResponderAnswer]) -> String {
-    answers
-        .iter()
-        .enumerate()
-        .map(|(index, answer)| {
-            let chosen = match answer.chosen.is_empty() {
-                true => NO_SELECTION_REPLY.to_string(),
-                false => answer.chosen.join(", "),
-            };
-            // A single answer needs no ordinal; several do, so the agent can
-            // tell which reply belongs to which question it asked.
-            match answers.len() {
-                1 => chosen,
-                _ => format!("{}. {chosen}", index + 1),
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+/// Decide whether a reply may be delivered. Every rejection stops the run,
+/// which is the safe direction: an undelivered reply is a loud, greppable stop,
+/// while a bad one enters the transcript as an ordinary user turn and is graded
+/// as though the exchange really happened.
+fn validate_reply(reply: &str, previous: Option<&str>) -> Result<(), ResponderStopCause> {
+    let trimmed = reply.trim();
+    if trimmed.is_empty() {
+        return Err(ResponderStopCause::EmptyReply);
+    }
+    if reply.len() > MAX_REPLY_BYTES {
+        return Err(ResponderStopCause::ReplyTooLong);
+    }
+    if reply.contains("```") {
+        return Err(ResponderStopCause::ReplyContainsCode);
+    }
+    if previous.is_some_and(|previous| previous.trim() == trimmed) {
+        return Err(ResponderStopCause::ReplyRepeated);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Reading, read};
-    use crate::core::ResponderRule;
+    use super::*;
+    use std::path::Path;
 
-    /// The happy path #244 names: an option marked as recommended is the answer.
-    #[test]
-    fn a_recommended_option_is_chosen() {
-        let message = "\
-I can add caching two ways. Which do you want?
-
-- Use an in-process LRU cache (Recommended)
-- Add Redis
-";
-
-        let Reading::Answer { text, origin } = read(message) else {
-            panic!("a recommended option must be answerable");
-        };
-
-        assert_eq!(text, "Use an in-process LRU cache");
-        assert_eq!(origin.answers.len(), 1);
-        assert_eq!(origin.answers[0].rule, ResponderRule::RecommendedOption);
-        assert_eq!(origin.answers[0].chosen, ["Use an in-process LRU cache"]);
+    fn consultation() -> Consultation<'static> {
+        Consultation {
+            task_prompt: "Requests to the pricing API are slow. Add caching.",
+            prior_replies: &[],
+            final_message: "Which cache should I use?",
+        }
     }
 
-    /// Exactly one choice is required and none is recommended, so the list's
-    /// first option wins. Mechanical, not a judgement about which is better.
     #[test]
-    fn a_plain_list_with_no_recommendation_takes_the_first_option() {
-        let message = "\
-Which database should I target?
+    fn the_prompt_carries_the_exchange_and_names_where_to_write() {
+        let prompt = build_prompt(
+            &consultation(),
+            Path::new("/w/responder/turn-1/verdict.json"),
+        );
 
-1. PostgreSQL
-2. MySQL
-3. SQLite
-";
-
-        let Reading::Answer { text, origin } = read(message) else {
-            panic!("a plain option list is answerable");
-        };
-
-        assert_eq!(text, "PostgreSQL");
-        assert_eq!(origin.answers[0].rule, ResponderRule::FirstOption);
-        assert_eq!(origin.answers[0].chosen, ["PostgreSQL"]);
+        assert!(prompt.contains("Requests to the pricing API are slow. Add caching."));
+        assert!(prompt.contains("Which cache should I use?"));
+        assert!(
+            prompt.contains(VERDICT_PATH_LINE),
+            "the responder is told where to write: {prompt}"
+        );
+        assert!(prompt.contains("/w/responder/turn-1/verdict.json"));
     }
 
-    /// A checkbox list asks for zero or more. With nothing recommended, zero is
-    /// the mechanical answer — the responder does not invent a preference.
+    /// A simulated user remembers what they already said, so a later round does
+    /// not contradict an earlier answer.
     #[test]
-    fn a_checkbox_list_with_no_recommendation_selects_nothing() {
-        let message = "\
-Which extras should I include?
-
-- [ ] Unit tests
-- [ ] Integration tests
-- [ ] Benchmarks
-";
-
-        let Reading::Answer { text, origin } = read(message) else {
-            panic!("a checkbox list is answerable");
+    fn prior_replies_are_carried_into_the_prompt() {
+        let replies = ["An in-process LRU is fine.".to_string()];
+        let consultation = Consultation {
+            prior_replies: &replies,
+            ..consultation()
         };
 
-        assert_eq!(text, "None of these.");
-        assert_eq!(origin.answers[0].rule, ResponderRule::NoSelection);
-        assert!(origin.answers[0].chosen.is_empty());
+        let prompt = build_prompt(&consultation, Path::new("/w/v.json"));
+        assert!(prompt.contains("1. An in-process LRU is fine."));
+        assert!(!prompt.contains("\n\n\n"), "{prompt}");
     }
 
-    /// Zero or more means every recommendation can be taken, unlike a
-    /// single-choice list where only the first can.
     #[test]
-    fn a_checkbox_list_selects_every_recommended_option() {
-        let message = "\
-Which extras should I include?
+    fn an_answer_verdict_parses_with_its_reply_and_rationale() {
+        let raw =
+            r#"{"verdict":"answer","reply":"Use the in-process LRU.","rationale":"simplest"}"#;
 
-- [ ] Unit tests (Recommended)
-- [ ] Integration tests
-- [ ] Docs (Recommended)
-";
-
-        let Reading::Answer { text, origin } = read(message) else {
-            panic!("a checkbox list is answerable");
+        let Verdict::Answer { reply, rationale } = parse_verdict(raw).unwrap() else {
+            panic!("expected an answer");
         };
-
-        assert_eq!(text, "Unit tests, Docs");
-        assert_eq!(origin.answers[0].rule, ResponderRule::RecommendedOption);
-        assert_eq!(origin.answers[0].chosen, ["Unit tests", "Docs"]);
+        assert_eq!(reply, "Use the in-process LRU.");
+        assert_eq!(rationale.as_deref(), Some("simplest"));
     }
 
-    /// A pre-checked box is the plainest possible statement of a suggested
-    /// default, so it reads as a recommendation.
     #[test]
-    fn a_pre_checked_box_counts_as_a_recommendation() {
-        let message = "\
-Which extras should I include?
+    fn a_done_verdict_parses_and_carries_no_reply() {
+        let raw = r#"{"verdict":"done","rationale":"the agent reported the cache in place"}"#;
 
-- [ ] Unit tests
-- [x] Docs
-";
-
-        let Reading::Answer { text, origin } = read(message) else {
-            panic!("a checkbox list is answerable");
+        let Verdict::Done { rationale } = parse_verdict(raw).unwrap() else {
+            panic!("expected done");
         };
-
-        assert_eq!(text, "Docs");
-        assert_eq!(origin.answers[0].rule, ResponderRule::RecommendedOption);
-    }
-
-    /// A message may ask more than one thing. Each list is answered under its
-    /// own rule, and the reply is numbered so the agent can tell them apart.
-    #[test]
-    fn two_option_groups_are_answered_in_order() {
-        let message = "\
-A couple of decisions before I start.
-
-Which database?
-
-- PostgreSQL (Recommended)
-- MySQL
-
-Which extras do you want?
-
-- [ ] Benchmarks
-- [ ] Fuzzing
-";
-
-        let Reading::Answer { text, origin } = read(message) else {
-            panic!("two option lists are answerable");
-        };
-
-        assert_eq!(text, "1. PostgreSQL\n2. None of these.");
-        assert_eq!(origin.answers.len(), 2);
-        assert_eq!(origin.answers[0].rule, ResponderRule::RecommendedOption);
-        assert_eq!(origin.answers[1].rule, ResponderRule::NoSelection);
         assert_eq!(
-            origin.answers[1].question.as_deref(),
-            Some("Which extras do you want?")
+            rationale.as_deref(),
+            Some("the agent reported the cache in place")
         );
     }
 
-    /// The load-bearing negative: a closing summary is mostly a bulleted list,
-    /// and answering one as if it were a question would derail a finished task.
-    /// Requiring the lead-in to ask something is what separates the two.
     #[test]
-    fn a_closing_summary_with_a_bulleted_list_is_not_a_question() {
-        let message = "\
-Done. I made these changes:
+    fn a_cannot_answer_verdict_parses() {
+        let raw = r#"{"verdict":"cannot_answer","rationale":"it asked for a credential"}"#;
 
-- Fixed the date parser
-- Added a regression test
-- Updated the changelog
-";
-
-        assert!(matches!(read(message), Reading::NoQuestion));
+        assert!(matches!(
+            parse_verdict(raw).unwrap(),
+            Verdict::CannotAnswer { .. }
+        ));
     }
 
-    /// A question with no options is the branch the LLM responder takes over.
-    /// Until then it stops the run rather than inventing an answer.
+    /// A rationale is a courtesy, not a contract: a verdict without one is
+    /// still usable, and refusing it would stop a run over prose.
     #[test]
-    fn a_free_form_question_is_unanswerable() {
-        let message = "Before I start — what should happen to rows with a null created_at?";
-
-        assert!(matches!(read(message), Reading::Unanswerable));
-    }
-
-    /// Completion detection: no question at all means the agent is done, so the
-    /// conversation ends instead of burning its remaining turns.
-    #[test]
-    fn a_message_with_no_question_reads_as_done() {
-        let message = "Caching is in place and the pricing endpoint is under 40ms.";
-
-        assert!(matches!(read(message), Reading::NoQuestion));
-    }
-
-    /// Removing a trailing marker can leave the separator that introduced it
-    /// dangling, and echoing "Use an in-process LRU —" back at the agent reads
-    /// as a truncated thought.
-    #[test]
-    fn a_separator_left_by_a_trailing_marker_is_cleaned_up() {
-        let message = "\
-Which cache should I use?
-
-- An in-process LRU — (Recommended)
-- Redis
-";
-
-        let Reading::Answer { text, .. } = read(message) else {
-            panic!("a recommended option must be answerable");
+    fn a_verdict_without_a_rationale_is_still_usable() {
+        let Verdict::Answer { rationale, .. } =
+            parse_verdict(r#"{"verdict":"answer","reply":"Yes, go ahead."}"#).unwrap()
+        else {
+            panic!("expected an answer");
         };
-
-        assert_eq!(text, "An in-process LRU");
+        assert_eq!(rationale, None);
     }
 
-    /// A deliberate, documented conservatism: a stray question mark anywhere in
-    /// an otherwise-finished message stops the run instead of calling it done.
-    /// Stopping wastes a dispatch; guessing "complete" while the agent waits
-    /// would record a half-finished run as data.
+    /// Models fence JSON out of habit. Stripping the fence costs three lines
+    /// and saves a run that would otherwise stop over punctuation.
     #[test]
-    fn a_stray_question_mark_stops_rather_than_claiming_completion() {
-        let message = "\
-Why a decorator? It keeps the call sites untouched. Here is what changed:
+    fn a_fenced_verdict_is_unwrapped_before_parsing() {
+        let raw = "```json\n{\"verdict\":\"done\"}\n```\n";
 
-- Wrapped the client
-- Added the cache
-";
+        assert!(matches!(parse_verdict(raw).unwrap(), Verdict::Done { .. }));
+    }
 
-        assert!(matches!(read(message), Reading::Unanswerable));
+    #[test]
+    fn an_unknown_verdict_is_malformed() {
+        assert_eq!(
+            parse_verdict(r#"{"verdict":"maybe","reply":"hmm"}"#).unwrap_err(),
+            ResponderStopCause::MalformedVerdict
+        );
+    }
+
+    #[test]
+    fn a_verdict_that_is_not_json_is_malformed() {
+        assert_eq!(
+            parse_verdict("I think you should use Redis.").unwrap_err(),
+            ResponderStopCause::MalformedVerdict
+        );
+    }
+
+    /// An `answer` with no reply is not an answer. Parsing yields an empty one
+    /// so a single validation gate rejects it, rather than two paths deciding
+    /// separately what "blank" means.
+    #[test]
+    fn an_answer_with_no_reply_parses_blank_and_fails_validation() {
+        let Verdict::Answer { reply, .. } = parse_verdict(r#"{"verdict":"answer"}"#).unwrap()
+        else {
+            panic!("expected an answer");
+        };
+        assert_eq!(
+            validate_reply(&reply, None).unwrap_err(),
+            ResponderStopCause::EmptyReply
+        );
+    }
+
+    #[test]
+    fn a_whitespace_only_reply_is_empty() {
+        assert_eq!(
+            validate_reply("   \n\t ", None).unwrap_err(),
+            ResponderStopCause::EmptyReply
+        );
+    }
+
+    #[test]
+    fn an_ordinary_reply_validates() {
+        assert_eq!(validate_reply("Use the in-process LRU.", None), Ok(()));
+    }
+
+    /// A simulated user answers in sentences. A reply this long means the
+    /// responder started doing the agent's work, and delivering it would put
+    /// work into the transcript that the agent under test did not do.
+    #[test]
+    fn a_reply_over_the_byte_cap_is_rejected() {
+        let long = "a".repeat(MAX_REPLY_BYTES + 1);
+
+        assert_eq!(
+            validate_reply(&long, None).unwrap_err(),
+            ResponderStopCause::ReplyTooLong
+        );
+        assert_eq!(validate_reply(&"a".repeat(MAX_REPLY_BYTES), None), Ok(()));
+    }
+
+    #[test]
+    fn a_reply_carrying_a_fenced_code_block_is_rejected() {
+        let reply = "Sure, use this:\n\n```rust\nlet cache = Lru::new(128);\n```\n";
+
+        assert_eq!(
+            validate_reply(reply, None).unwrap_err(),
+            ResponderStopCause::ReplyContainsCode
+        );
+    }
+
+    /// The same answer twice means the exchange is circling. Spending the
+    /// remaining turns on it would only cost more dispatches to reach the same
+    /// place, so stop where it is legible.
+    #[test]
+    fn a_reply_identical_to_the_previous_one_is_rejected() {
+        let reply = "Use the in-process LRU.";
+
+        assert_eq!(
+            validate_reply(reply, Some(reply)).unwrap_err(),
+            ResponderStopCause::ReplyRepeated
+        );
+        assert_eq!(validate_reply(reply, Some("Use Redis.")), Ok(()));
+    }
+
+    /// Trailing whitespace is not a new answer.
+    #[test]
+    fn the_repeat_check_ignores_surrounding_whitespace() {
+        assert_eq!(
+            validate_reply("  Use the LRU.\n", Some("Use the LRU.")).unwrap_err(),
+            ResponderStopCause::ReplyRepeated
+        );
     }
 }

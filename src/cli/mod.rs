@@ -98,6 +98,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         agent_model: None,
         agent_env: Vec::new(),
         judge_model: None,
+        responder_model: None,
         label: None,
     }));
 

@@ -95,6 +95,28 @@
     }
   },
   "definitions": {
+    "responderOutcome": {
+      "type": "object",
+      "required": ["ending"],
+      "additionalProperties": false,
+      "description": "How the responder ended the conversation, when it was the responder that ended it. Absent for a scripted or one-shot task, for a timeout, and for max_turns_reached, which is the runner's bound rather than a verdict.",
+      "properties": {
+        "ending": {
+          "type": "string",
+          "enum": ["done", "cannot_answer"],
+          "description": "Whether the responder judged the agent finished, or produced no usable reply."
+        },
+        "cause": {
+          "type": "string",
+          "enum": ["declined", "dispatch_failed", "dispatch_timed_out", "missing_verdict", "malformed_verdict", "empty_reply", "reply_too_long", "reply_contains_code", "reply_repeated"],
+          "description": "Why no usable reply was produced, so an honest refusal is distinguishable from a broken dispatch. Absent when ending is 'done'."
+        },
+        "rationale": {
+          "type": "string",
+          "description": "The responder's own one-line account. Absent when the dispatch never answered."
+        }
+      }
+    },
     "conversation": {
       "type": "object",
       "required": ["status", "delivered_followups", "events"],
@@ -131,7 +153,8 @@
               { "$ref": "#/definitions/conversationTool" }
             ]
           }
-        }
+        },
+        "responder_outcome": { "$ref": "#/definitions/responderOutcome" }
       },
       "allOf": [
         {
@@ -194,45 +217,18 @@
         "text": { "type": "string" },
         "origin": {
           "type": "object",
-          "required": ["responder", "answers"],
+          "required": ["responder"],
           "additionalProperties": false,
           "description": "How a responder derived this turn. Absent on the eval's opening prompt and on scripted turns, which are authored rather than derived.",
           "properties": {
             "responder": {
               "type": "string",
-              "enum": ["heuristic"],
+              "enum": ["llm"],
               "description": "Which responder produced the turn."
             },
-            "answers": {
-              "type": "array",
-              "minItems": 1,
-              "description": "One entry per question the turn answered, in the order they were asked.",
-              "items": {
-                "type": "object",
-                "required": ["options", "rule", "chosen"],
-                "additionalProperties": false,
-                "properties": {
-                  "question": {
-                    "type": "string",
-                    "description": "The question line the options hung from."
-                  },
-                  "options": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "The options as the agent wrote them, before markers were stripped."
-                  },
-                  "rule": {
-                    "type": "string",
-                    "enum": ["recommended_option", "first_option", "no_selection"],
-                    "description": "The mechanical rule that picked this answer, so a reader can audit the selection without rerunning it."
-                  },
-                  "chosen": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "The options selected, cleaned of their markers. Empty when the rule selected nothing."
-                  }
-                }
-              }
+            "rationale": {
+              "type": "string",
+              "description": "The responder's own one-line account of why it answered this way. Absent when it offered none."
             }
           }
         }

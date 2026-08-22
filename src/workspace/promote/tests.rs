@@ -46,6 +46,7 @@ fn opts<'a>(f: &'a Fixture, iteration: u32) -> PromoteOptions<'a> {
         label: None,
         agent_model: None,
         judge_model: None,
+        responder_model: None,
     }
 }
 
@@ -93,6 +94,7 @@ fn copies_benchmark_and_per_run_gradings_into_baseline() {
     assert!(provenance.contains("2026-05-27T00:00:00.000Z"));
     assert!(provenance.contains("Agent model | unspecified"));
     assert!(provenance.contains("Judge model | unspecified"));
+    assert!(provenance.contains("Responder model | unspecified"));
     assert!(provenance.contains("per-assertion pass counts"));
 }
 
@@ -202,11 +204,13 @@ fn records_agent_and_judge_models_when_provided() {
     let mut o = opts(&f, 1);
     o.agent_model = Some("claude-haiku-4-5-20251001");
     o.judge_model = Some("claude-opus-4-7");
+    o.responder_model = Some("claude-haiku-4-5-20251001");
     promote_baseline(&o).unwrap();
 
     let provenance = fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
     assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
     assert!(provenance.contains("Judge model | claude-opus-4-7"));
+    assert!(provenance.contains("Responder model | claude-haiku-4-5-20251001"));
 }
 
 const CONDITIONS_WITH_PROVENANCE: &str = r#"{
@@ -219,6 +223,7 @@ const CONDITIONS_WITH_PROVENANCE: &str = r#"{
   "harness": "claude-code",
   "agent_model": "claude-haiku-4-5-20251001",
   "judge_model": "claude-opus-4-8",
+  "responder_model": "claude-haiku-4-5-20251001",
   "label": "canonical-run"
 }"#;
 
@@ -239,6 +244,7 @@ fn provenance_falls_back_to_manifest_models_and_label() {
     let provenance = fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
     assert!(provenance.contains("Agent model | claude-haiku-4-5-20251001"));
     assert!(provenance.contains("Judge model | claude-opus-4-8"));
+    assert!(provenance.contains("Responder model | claude-haiku-4-5-20251001"));
     assert!(provenance.contains("Label | canonical-run"));
 }
 

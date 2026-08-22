@@ -216,22 +216,23 @@ or normal guardrail-stopped scenario. `ingest` skips an interrupted task with no
 artifact.
 
 A scripted turn is gated by `agent_asks` (`?`) plus the optional response regex. A responder instead
-*derives* each turn from the round's last assistant message and records the rule that produced it on
+*derives* each turn by consulting a small model, once after every round, and records that origin on
 the turn itself. **The responder needs no descriptor field and no named capability of its own:** it
-reads that message as plain Markdown — a question line followed by a list of options — so every
-harness that resolves a resume template gets it for free, and none can be "missing" it.
+reads the round's last assistant message out of `final_text`, which every transcript parser already
+normalizes, and it dispatches its own consultations through the same `[dispatch].exec_template` a
+judge uses. Every harness that resolves a resume template gets it for free, and none can be
+"missing" it.
 
 That portability is not a happy accident, it is forced. A dispatch runs headless with stdin
 detached, so a harness-native question tool has no channel to be answered on; the runner can only
 send free text as the next user turn. Text is therefore the only mechanism that fits, and it is the
 one every transcript parser already normalizes into `final_text`.
 
-What *is* borrowed from one harness is the convention — `(Recommended)` and checkbox lists are how
-Claude Code's own question UI renders choices. The recognized shapes are documented as a
-harness-neutral contract in `eval-magic docs conversations`, not as "what Claude does": an agent that
-offers options that way is answered identically whatever harness runs it, and one that phrases them
-differently stops the run with `responder_cannot_answer` — a documented gap in the shape table, not a
-missing descriptor field. Widening the table is a runner change that benefits every harness at once.
+A consultation binds the exec template's placeholders the way a judge dispatch does — guard
+arguments off, its own capture directory, its own prompt — with one addition: `<eval-root>` is the
+run's `responder/turn-N/` directory rather than the task env. A consultation must not be able to
+write into the codebase under measurement, nor inherit that codebase's `CLAUDE.md` as instructions
+to itself.
 
 *Fallback:* none. `run` rejects selected multi-turn evals — scripted or responder-driven — when the
 harness omits this capability; silently starting a fresh session would make the answer meaningless.
