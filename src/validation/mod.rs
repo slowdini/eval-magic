@@ -6,6 +6,8 @@
 pub mod batch;
 pub mod error;
 pub mod evals;
+#[cfg(test)]
+mod evals_guard_tests;
 pub mod schema;
 
 pub use batch::{FileOutcome, ValidationReport, validate_all, validate_one};

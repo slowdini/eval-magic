@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::core::RunContext;
 use crate::core::fs::copy_entry_materialized;
+use crate::sandbox::guard_profiles::{detect_profiles, expand_policy};
 use crate::sandbox::teardown_guard;
 
 use super::super::RunError;
@@ -96,6 +97,7 @@ pub(super) fn stage_conditions(
     // Distinct codebases materialized so far this iteration, by key. Every
     // environment sharing a codebase is provisioned from one materialization.
     let mut materialized: HashMap<String, PathBuf> = HashMap::new();
+    let mut guard_policies = HashMap::new();
 
     for target in &targets {
         // Disarm a prior run's guard before re-staging, so a crashed run can't leave
@@ -181,6 +183,24 @@ pub(super) fn stage_conditions(
                 copy_fixtures(ev, &skills.join(&ctx.skill_name), &target.root, &mut claims)?;
             }
         }
+
+        let eval = target
+            .eval_ids
+            .first()
+            .and_then(|eval_id| r.selected_evals.iter().find(|eval| &eval.id == eval_id))
+            .expect("canonical task environments contain one selected eval");
+        let policy = match eval.guard.as_ref() {
+            Some(policy) => expand_policy(policy),
+            None => {
+                let profiles = detect_profiles(&target.root)?;
+                expand_policy(&crate::core::GuardPolicyConfig {
+                    profiles,
+                    ..crate::core::GuardPolicyConfig::default()
+                })
+            }
+        }
+        .map_err(|message| RunError::msg(format!("eval '{}': {message}", eval.id)))?;
+        guard_policies.insert(target.root.clone(), policy);
     }
 
     Ok(Staged {
@@ -189,6 +209,7 @@ pub(super) fn stage_conditions(
         sibling_meta,
         bootstrap_content,
         plan_mode_content,
+        guard_policies,
     })
 }
 

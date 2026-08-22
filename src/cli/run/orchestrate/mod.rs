@@ -18,7 +18,8 @@ use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
 use crate::core::fs::artifact_path;
 use crate::core::{
-    CodebaseSource, CodebaseUse, Eval, Mode, RunContext, SkillSource, SourceKind, SourceRecord,
+    CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode, RunContext, SkillSource,
+    SourceKind, SourceRecord,
 };
 use crate::source::ResolvedSource;
 
@@ -224,6 +225,7 @@ struct Staged {
     sibling_meta: Vec<(String, String)>,
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
+    guard_policies: std::collections::HashMap<PathBuf, GuardPolicyConfig>,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.

@@ -223,6 +223,7 @@ mod tests {
             allowed_roots: Some(vec!["/env".to_string()]),
             expires_at: None,
             denial_log_path: None,
+            guard_policy: None,
         };
         let verdict = crate::sandbox::decide(
             "Write",

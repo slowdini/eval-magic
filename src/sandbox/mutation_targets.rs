@@ -421,6 +421,35 @@ fn classify_segment(
         .or_else(|| classify_sed(words, allowed_roots, invocation_cwd))
 }
 
+/// Whether this segment is one of the development mutations whose in-bounds
+/// execution still requires an explicit command-policy allowance.
+pub(super) fn segment_is_recognized(words: &[ShellWord]) -> bool {
+    let words: Vec<&ShellWord> = words.iter().collect();
+
+    let package = ["npm", "pnpm", "yarn", "bun"].iter().any(|manager| {
+        command_position(&words, &[*manager]).is_some_and(|command| {
+            words
+                .iter()
+                .skip(command + 1)
+                .take_while(|word| word.value != "--")
+                .any(|word| ["install", "add", "ci", "i"].contains(&word.value.as_str()))
+        })
+    });
+    let pip = command_position(&words, &["pip", "pip3"])
+        .is_some_and(|command| has_word(&words, command + 1, &["install"]));
+    let cargo = command_position(&words, &["cargo"])
+        .is_some_and(|command| has_word(&words, command + 1, &["build", "test"]));
+    let sed = command_position(&words, &["sed"]).is_some_and(|command| {
+        words.iter().skip(command + 1).any(|word| {
+            matches!(word.value.as_str(), "-i" | "--in-place")
+                || word.value.starts_with("--in-place=")
+                || word.value.starts_with("-i") && word.value.len() > 2
+        })
+    });
+
+    package || pip || cargo || sed
+}
+
 pub(super) fn classify_mutation_targets(
     command: &str,
     allowed_roots: &[String],

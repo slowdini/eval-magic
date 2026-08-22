@@ -52,11 +52,12 @@ pub(crate) fn install_guard(
     stage_root: &Path,
     guard_exe: &Path,
     ttl: Option<Duration>,
+    guard_policy: &crate::core::GuardPolicyConfig,
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    write_marker(&marker_path, stage_root, ttl)?;
+    write_marker(&marker_path, stage_root, ttl, guard_policy)?;
 
     match guard.engine {
         GuardEngine::JsonHooks => {
@@ -412,7 +413,6 @@ mod cline_plugin_tests;
 
 #[cfg(test)]
 mod guard_denial_tests;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +457,7 @@ mod tests {
             stage_root,
             Path::new("/g/eval-magic"),
             None,
+            &Default::default(),
         )
         .unwrap()
     }
@@ -491,8 +492,7 @@ mod tests {
         GuardMarker {
             active: Some(true),
             allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
-            expires_at: None,
-            denial_log_path: None,
+            ..Default::default()
         }
     }
 

@@ -299,6 +299,7 @@ pub trait HarnessAdapter {
         _stage_root: &Path,
         _guard_exe: &Path,
         _ttl: Option<Duration>,
+        _guard_policy: &crate::core::GuardPolicyConfig,
     ) -> io::Result<PathBuf> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

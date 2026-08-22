@@ -36,6 +36,7 @@ fn install(label: &str, stage_root: &Path) -> PathBuf {
         stage_root,
         Path::new("/g/eval-magic"),
         None,
+        &Default::default(),
     )
     .unwrap()
 }
@@ -51,6 +52,7 @@ fn marker() -> GuardMarker {
         allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
         expires_at: None,
         denial_log_path: None,
+        guard_policy: None,
     }
 }
 

@@ -1,0 +1,10 @@
+id = "language/rust"
+markers = ["Cargo.toml"]
+allow_commands = [
+  "cargo build",
+  "cargo check",
+  "cargo test",
+  "cargo run",
+  "cargo fmt",
+  "cargo clippy",
+]

@@ -1,0 +1,16 @@
+id = "language/python"
+markers = ["pyproject.toml", "setup.py"]
+marker_patterns = ["requirements*.txt"]
+allow_commands = [
+  "pip install",
+  "pip3 install",
+  "python -m pip install",
+  "python3 -m pip install",
+  "python -m build",
+  "python3 -m build",
+  "python -m pytest",
+  "python3 -m pytest",
+  "python -m unittest",
+  "python3 -m unittest",
+  "pytest",
+]

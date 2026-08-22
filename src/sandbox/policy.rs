@@ -190,9 +190,33 @@ pub(crate) fn classify_bash_with_cwd(
     allowed_roots: &[String],
     invocation_cwd: &Path,
 ) -> Option<BashClassification> {
+    classify_bash_with_policy(
+        command,
+        allowed_roots,
+        invocation_cwd,
+        &crate::core::GuardPolicyConfig::default(),
+    )
+}
+
+/// Classify one shell tool call under its resolved eval command policy.
+pub(crate) fn classify_bash_with_policy(
+    command: &str,
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+    policy: &crate::core::GuardPolicyConfig,
+) -> Option<BashClassification> {
     if command.is_empty() {
         return None;
     }
+    classify_fixed_containment(command, allowed_roots, invocation_cwd)
+        .or_else(|| super::command_policy::classify_command_policy(command, policy))
+}
+
+fn classify_fixed_containment(
+    command: &str,
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+) -> Option<BashClassification> {
     if let Some(denial) =
         super::shell_targets::classify_output_targets(command, allowed_roots, invocation_cwd)
     {
@@ -207,6 +231,11 @@ pub(crate) fn classify_bash_with_cwd(
         super::mutation_targets::classify_mutation_targets(command, allowed_roots, invocation_cwd)
     {
         return Some(denial);
+    }
+    for script in super::command_policy::literal_shell_scripts(command) {
+        if let Some(denial) = classify_fixed_containment(&script, allowed_roots, invocation_cwd) {
+            return Some(denial);
+        }
     }
     None
 }
@@ -225,6 +254,8 @@ pub fn classify_bash(command: &str, allowed_roots: &[String]) -> Option<&'static
 mod tests {
     use super::*;
     use serde_json::json;
+
+    mod command_policy;
 
     const ROOTS: [&str; 2] = ["/work/.eval-magic", "/work/.claude/skills"];
 
@@ -417,16 +448,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_bash_allows_package_install_from_an_allowed_cwd() {
-        let roots = vec!["/work/env".to_string()];
-
-        assert_eq!(
-            classify_bash_with_cwd("npm install left-pad", &roots, Path::new("/work/env")),
-            None
-        );
-    }
-
-    #[test]
     fn classify_bash_denies_package_install_with_an_outside_destination() {
         let roots = vec!["/work/env".to_string()];
 
@@ -439,6 +460,21 @@ mod tests {
 
         assert_eq!(denial.reason, "package install/add");
         assert_eq!(denial.resolved_targets, vec!["/outside/project"]);
+
+        let broad_policy = crate::core::GuardPolicyConfig {
+            allow_tools: vec!["npm".to_string()],
+            ..crate::core::GuardPolicyConfig::default()
+        };
+        assert_eq!(
+            classify_bash_with_policy(
+                "npm install left-pad --prefix /outside/project",
+                &roots,
+                Path::new("/work/env"),
+                &broad_policy,
+            )
+            .map(|classification| classification.reason),
+            Some("package install/add")
+        );
     }
 
     #[test]

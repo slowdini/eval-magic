@@ -127,6 +127,21 @@ pub struct Eval {
     /// serializes exactly as it did before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responder: Option<ResponderPolicy>,
+    /// Shell-command policy for this eval. When present it replaces the
+    /// config-level policy rather than extending it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardPolicyConfig>,
+}
+
+/// Authored shell-command allowances for a guarded eval run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardPolicyConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_commands: Vec<String>,
 }
 
 /// One scripted user follow-up delivered after an assistant response.
@@ -279,6 +294,17 @@ pub struct EvalsConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codebase: Option<CodebaseSource>,
     pub evals: Vec<Eval>,
+    /// Default shell-command policy for evals that do not replace it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardPolicyConfig>,
+}
+
+impl EvalsConfig {
+    /// Return the authored policy effective for `eval`. A per-eval block is a
+    /// complete replacement, including when it is empty.
+    pub fn guard_for<'a>(&'a self, eval: &'a Eval) -> Option<&'a GuardPolicyConfig> {
+        eval.guard.as_ref().or(self.guard.as_ref())
+    }
 }
 
 /// A skill staged and discoverable for an eval — its natural name, on-disk
@@ -722,6 +748,7 @@ mod tests {
             turns: None,
             codebase: None,
             responder: None,
+            guard: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -747,6 +774,7 @@ mod tests {
             turns: None,
             codebase: None,
             responder: None,
+            guard: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert_eq!(

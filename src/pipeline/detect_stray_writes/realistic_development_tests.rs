@@ -2,9 +2,9 @@ use std::path::Path;
 
 use serde_json::json;
 
-use super::detect_stray_writes;
+use super::detect_stray_writes_with_policy;
 use crate::adapters::all_tool_vocabulary;
-use crate::core::ToolInvocation;
+use crate::core::{GuardPolicyConfig, ToolInvocation};
 use crate::sandbox::decide::{GuardMarker, decide_with_cwd};
 
 const ALLOWED_ROOT: &str = "/work/iteration-1/env-g1-with_skill";
@@ -116,11 +116,21 @@ fn realistic_development_commands_match_between_guard_and_stray_write_audit() {
         cwd,
         allow: false,
     });
+    let policy = GuardPolicyConfig {
+        allow_tools: [
+            "npm", "pnpm", "yarn", "bun", "pip", "python", "cargo", "pytest", "sed", "mkdir",
+            "touch",
+        ]
+        .map(str::to_string)
+        .to_vec(),
+        ..GuardPolicyConfig::default()
+    };
     let marker = GuardMarker {
         active: Some(true),
         allowed_roots: Some(vec![ALLOWED_ROOT.to_string()]),
         expires_at: None,
         denial_log_path: None,
+        guard_policy: Some(policy.clone()),
     };
 
     for case in allowed.into_iter().chain(denied) {
@@ -132,10 +142,11 @@ fn realistic_development_commands_match_between_guard_and_stray_write_audit() {
                 0,
                 Path::new(case.cwd),
             );
-            let findings = detect_stray_writes(
+            let findings = detect_stray_writes_with_policy(
                 &[invocation(tool, case.command)],
                 ALLOWED_ROOT,
                 Path::new(case.cwd),
+                &policy,
             );
 
             assert_eq!(

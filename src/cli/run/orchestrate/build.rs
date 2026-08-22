@@ -211,7 +211,7 @@ pub(super) fn write_dispatch(
                     let outputs_dir_str = outputs_dir.to_string_lossy().into_owned();
                     let run_dir_str = run_dir.to_string_lossy().into_owned();
 
-                    tasks.push(build_dispatch_task(&DispatchTaskOpts {
+                    let mut task = build_dispatch_task(&DispatchTaskOpts {
                         eval_id: &ev.id,
                         condition: cond_name,
                         skill_path: cond_skill_path,
@@ -237,7 +237,13 @@ pub(super) fn write_dispatch(
                         eval_root: Some(env_root_str.as_str()),
                         codebase: codebase_record.as_ref(),
                         skill_source: Some(&skill_source_record),
-                    })?);
+                    })?;
+                    task.guard_policy = staged
+                        .guard_policies
+                        .get(&env_root)
+                        .cloned()
+                        .expect("every staged task environment has a guard policy");
+                    tasks.push(task);
                 }
             }
         }
@@ -399,7 +405,11 @@ pub(super) fn post_build(
         let adapter = adapter_for(ctx.harness);
         let exe = std::env::current_exe()?;
         for target in &targets {
-            adapter.install_guard(&target.root, &exe, None)?;
+            let policy = staged
+                .guard_policies
+                .get(&target.root)
+                .expect("every staged task environment has a guard policy");
+            adapter.install_guard(&target.root, &exe, None, policy)?;
         }
         if let Some(msg) = adapter.guard_armed_message() {
             println!("{msg}");

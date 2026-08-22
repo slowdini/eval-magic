@@ -12,10 +12,12 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;
 
+use crate::core::GuardPolicyConfig;
 use crate::core::fs::artifact_path;
 
+use super::command_policy::COMMAND_POLICY_REASON;
 use super::policy::{
-    OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_with_cwd, is_patch_tool,
+    OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_with_policy, is_patch_tool,
     is_shell_tool, is_under_any, is_write_tool, path_arg, resolve_path,
 };
 
@@ -40,6 +42,8 @@ pub struct GuardMarker {
     pub expires_at: Option<String>,
     #[serde(default)]
     pub denial_log_path: Option<String>,
+    #[serde(default)]
+    pub guard_policy: Option<GuardPolicyConfig>,
 }
 
 /// The outcome of [`decide`]: allow, or deny with a human-readable reason.
@@ -158,6 +162,10 @@ pub(crate) fn decide_with_cwd(
     let roots = marker
         .and_then(|m| m.allowed_roots.clone())
         .unwrap_or_default();
+    let default_policy = GuardPolicyConfig::default();
+    let guard_policy = marker
+        .and_then(|m| m.guard_policy.as_ref())
+        .unwrap_or(&default_policy);
 
     if is_write_tool(tool_name) {
         if let Some(p) = path_arg(tool_input)
@@ -212,15 +220,22 @@ pub(crate) fn decide_with_cwd(
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if let Some(classification) = classify_bash_with_cwd(command, &roots, invocation_cwd) {
+        if let Some(classification) =
+            classify_bash_with_policy(command, &roots, invocation_cwd, guard_policy)
+        {
             let hint = if classification.reason == OUTPUT_REDIRECTION_REASON {
                 scratch_hint(&roots)
             } else {
                 String::new()
             };
+            let boundary = if classification.reason == COMMAND_POLICY_REASON {
+                ""
+            } else {
+                " — runs outside the eval sandbox"
+            };
             return GuardEvaluation::deny(
                 format!(
-                    "{GUARD_REASON_PREFIX}blocked {tool_name} ({}) — runs outside the eval sandbox{hint}",
+                    "{GUARD_REASON_PREFIX}blocked {tool_name} ({}){boundary}{hint}",
                     classification.reason,
                 ),
                 classification.resolved_targets,
@@ -262,6 +277,7 @@ mod tests {
             allowed_roots: Some(ROOTS.iter().map(|s| s.to_string()).collect()),
             expires_at: Some(future()),
             denial_log_path: None,
+            guard_policy: None,
         }
     }
 
@@ -355,6 +371,40 @@ mod tests {
         let reason = d.reason.unwrap();
         assert!(reason.to_lowercase().contains("install"));
         assert!(!reason.contains("temporary or scratch"));
+    }
+
+    #[test]
+    fn marker_command_policy_allows_a_configured_tool() {
+        let marker: GuardMarker = serde_json::from_value(json!({
+            "active": true,
+            "allowedRoots": ["/work/.eval-magic/task"],
+            "guardPolicy": { "allow_tools": ["cargo"] }
+        }))
+        .unwrap();
+
+        let d = decide_with_cwd(
+            "Bash",
+            &json!({ "command": "cargo build --release" }),
+            Some(&marker),
+            now_ms(),
+            Path::new("/work/.eval-magic/task"),
+        )
+        .decision;
+
+        assert!(d.allow, "{:?}", d.reason);
+
+        let denied = decide_with_cwd(
+            "Bash",
+            &json!({ "command": "npm install" }),
+            Some(&marker),
+            now_ms(),
+            Path::new("/work/.eval-magic/task"),
+        )
+        .decision;
+        assert_eq!(
+            denied.reason.as_deref(),
+            Some("eval guard: blocked Bash (command not allowed by eval guard policy)")
+        );
     }
 
     #[test]

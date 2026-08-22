@@ -17,9 +17,11 @@
 //! enforces the shared boundary; put harness integration and descriptor
 //! rendering in `adapters`.
 
+pub(crate) mod command_policy;
 pub mod decide;
 mod git_command;
 pub mod guard;
+pub(crate) mod guard_profiles;
 pub mod install;
 mod mutation_targets;
 pub mod policy;

@@ -297,13 +297,21 @@ impl HarnessAdapter for DescriptorAdapter {
         stage_root: &Path,
         guard_exe: &Path,
         ttl: Option<Duration>,
+        guard_policy: &crate::core::GuardPolicyConfig,
     ) -> io::Result<PathBuf> {
         match &self.descriptor.guard {
             Some(guard) => {
                 let skills_dir = self
                     .skills_dir(stage_root)
                     .expect("descriptor validation pairs [guard] with skills_dir");
-                super::guard::install_guard(guard, &skills_dir, stage_root, guard_exe, ttl)
+                super::guard::install_guard(
+                    guard,
+                    &skills_dir,
+                    stage_root,
+                    guard_exe,
+                    ttl,
+                    guard_policy,
+                )
             }
             None => Err(io::Error::new(
                 io::ErrorKind::Unsupported,

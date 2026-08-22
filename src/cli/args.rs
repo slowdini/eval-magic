@@ -432,9 +432,15 @@ pub struct RunArgs {
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover and acting as a backstop when the isolated session
-    /// runs with relaxed permissions. Ordinary dependency installs, builds, tests,
-    /// and `sed -i` edits are allowed when their invocation cwd and recognized
-    /// project/output destinations stay inside the env. Known destination options
+    /// runs with relaxed permissions. Recognized development mutations require an
+    /// allowance from the eval's `guard` configuration. `allow_commands` grants
+    /// literal shell-token prefixes; `allow_tools` grants every invocation of an
+    /// executable basename. A per-eval block replaces the config-level default. With
+    /// no explicit block, eval-magic composes packaged profiles detected from the
+    /// staged task tree. See `eval-magic docs guard` for configuration, matching,
+    /// packaged profiles, and examples.
+    ///
+    /// Command allowances never bypass containment checks. Known destination options
     /// with dynamic, missing, or outside values are blocked, as are global/user
     /// install modes that do not have a supported in-env destination. Recognized
     /// destinations include npm `--prefix`, pnpm `-C`/`--dir`, Yarn/Bun `--cwd`,

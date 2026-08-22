@@ -131,7 +131,13 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
         );
     }
 
-    let selected_evals = select_evals(&config.evals, opts.only, opts.skip)?;
+    let selected_evals = select_evals(&config.evals, opts.only, opts.skip)?
+        .into_iter()
+        .map(|mut eval| {
+            eval.guard = config.guard_for(&eval).cloned();
+            eval
+        })
+        .collect::<Vec<_>>();
     let total_evals = config.evals.len();
 
     // Resolve declared codebases here, while the run has still created nothing:

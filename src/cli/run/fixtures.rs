@@ -201,6 +201,7 @@ mod tests {
             turns: None,
             codebase: None,
             responder: None,
+            guard: None,
         }
     }
 

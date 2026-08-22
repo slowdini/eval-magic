@@ -22,6 +22,38 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     fs::write(out_dir.join("guide_topics.rs"), generated)
         .expect("failed to write generated guide topic table");
+
+    let profile_dir = manifest_dir.join("guard-profiles");
+    println!("cargo:rerun-if-changed={}", profile_dir.display());
+    let generated = render_guard_profiles(&profile_dir);
+    fs::write(out_dir.join("guard_profiles.rs"), generated)
+        .expect("failed to write generated guard profile table");
+}
+
+fn render_guard_profiles(profile_dir: &Path) -> String {
+    let mut profiles: Vec<PathBuf> = fs::read_dir(profile_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", profile_dir.display()))
+        .map(|entry| entry.expect("failed to read guard profile entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("toml"))
+        .collect();
+    profiles.sort();
+    assert!(
+        !profiles.is_empty(),
+        "guard-profiles must contain a TOML profile"
+    );
+
+    let mut generated = String::from("const PACKAGED_GUARD_PROFILES: &[(&str, &str)] = &[\n");
+    for path in profiles {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_else(|| panic!("guard profile path is not UTF-8: {}", path.display()));
+        let body = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        generated.push_str(&format!("    ({name:?}, {body:?}),\n"));
+    }
+    generated.push_str("];\n");
+    generated
 }
 
 fn discover_guides(guide_dir: &Path) -> Vec<Guide> {
