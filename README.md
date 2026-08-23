@@ -136,6 +136,9 @@ eval-magic harness show codex
 - `eval-magic docs isolation` explains how live or installed skill sources can contaminate a
   comparison and how to verify isolation. Its source is
   [docs/guides/isolation.md](docs/guides/isolation.md).
+- `eval-magic docs guard` explains eval-authored command allowances, packaged defaults, and the
+  containment checks those allowances cannot bypass. Its source is
+  [docs/guides/guard.md](docs/guides/guard.md).
 - [docs/developer_overview.md](docs/developer_overview.md) maps the codebase, sources of truth,
   verification workflow, and internal documentation.
 

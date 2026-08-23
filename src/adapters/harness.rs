@@ -95,13 +95,10 @@ pub trait HarnessAdapter {
     /// The project-local config dir names this harness reads or the adapter
     /// writes (e.g. `.claude`). Staging excludes every harness's config dirs
     /// when copying a skill's sibling assets, so a stray checked-in config dir
-    /// never rides into a staged env. Via
-    /// [`all_config_dir_names`](super::registry::all_config_dir_names) this list
-    /// also feeds the guard's Bash tamper rule and detect-stray-writes'
-    /// staging-dir lookbehind, so adding a dir here automatically grows the
-    /// write-guard's deny surface. List the parent of
-    /// [`skills_dir`](Self::skills_dir) plus any hook/config dirs the adapter
-    /// writes.
+    /// never rides into a staged env. The task-repository baseline also force-adds
+    /// existing config dirs when a sourced codebase's `.gitignore` covers them.
+    /// List the parent of [`skills_dir`](Self::skills_dir) plus any hook/config
+    /// dirs the adapter writes.
     fn config_dir_names(&self) -> Vec<String> {
         Vec::new()
     }
@@ -302,6 +299,7 @@ pub trait HarnessAdapter {
         _stage_root: &Path,
         _guard_exe: &Path,
         _ttl: Option<Duration>,
+        _guard_policy: &crate::core::GuardPolicyConfig,
     ) -> io::Result<PathBuf> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,

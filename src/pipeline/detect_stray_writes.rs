@@ -5,9 +5,10 @@
 //!
 //! - **violations**: file-write tools (per the adapters' cross-harness
 //!   vocabulary union) whose target path resolves outside the task's eval root.
-//! - **warnings**: shell commands matching a mutating pattern that don't
-//!   reference the eval root, or literal redirect/`tee` targets resolving
-//!   outside it from the invocation cwd.
+//! - **warnings**: recognized development mutations whose invocation cwd or
+//!   explicit destination escapes the eval root, output redirect/`tee` targets
+//!   that cannot be proven in bounds, and Git operations that escape the local
+//!   task repository.
 //! - **live_source_reads**: read tools / shell commands that touched the live
 //!   skill-under-test directory instead of its staged copy.
 //! - **guard denials**: raw per-task JSONL is joined through `dispatch.json`
@@ -20,12 +21,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::all_tool_vocabulary;
 use crate::core::fs::{normalize_separators, write_json};
-use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
+use crate::core::{ConditionsRecord, GuardPolicyConfig, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::guard_denials::collect_guard_denials;
 use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
-use crate::sandbox::policy::classify_bash_with_cwd;
+use crate::sandbox::policy::classify_bash_with_policy;
 use crate::sandbox::{is_shell_tool, is_under, is_write_tool, lexically_absolute, path_arg};
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -74,6 +75,21 @@ pub fn detect_stray_writes(
     eval_root: &str,
     invocation_cwd: &Path,
 ) -> RunFindings {
+    detect_stray_writes_with_policy(
+        invocations,
+        eval_root,
+        invocation_cwd,
+        &GuardPolicyConfig::default(),
+    )
+}
+
+/// Classify invocations with the command policy frozen for this task.
+pub fn detect_stray_writes_with_policy(
+    invocations: &[ToolInvocation],
+    eval_root: &str,
+    invocation_cwd: &Path,
+    guard_policy: &GuardPolicyConfig,
+) -> RunFindings {
     let mut findings = RunFindings::default();
 
     for inv in invocations {
@@ -94,10 +110,11 @@ pub fn detect_stray_writes(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
-            if let Some(classification) = classify_bash_with_cwd(
+            if let Some(classification) = classify_bash_with_policy(
                 command,
                 std::slice::from_ref(&eval_root.to_string()),
                 invocation_cwd,
+                guard_policy,
             ) {
                 findings.warnings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -226,6 +243,13 @@ struct DispatchRef {
     run_index: Option<u32>,
     #[serde(default)]
     eval_root: Option<String>,
+    #[serde(default)]
+    guard_policy: GuardPolicyConfig,
+}
+
+struct TaskBoundary {
+    eval_root: String,
+    guard_policy: GuardPolicyConfig,
 }
 
 /// Build, validate, and write `<iteration_dir>/stray-writes.json` for every
@@ -252,7 +276,7 @@ pub fn detect_stray_writes_report(
         .map(|c| c.name.clone())
         .collect();
 
-    let allowed_roots_by_key = eval_roots_by_key(iteration_dir);
+    let boundaries_by_key = task_boundaries_by_key(iteration_dir);
     let guard_denials = collect_guard_denials(iteration_dir, iteration, repo_root)?;
 
     let mut runs = Vec::new();
@@ -289,15 +313,20 @@ pub fn detect_stray_writes_report(
                     &source,
                 )?;
 
-                let eval_root = allowed_roots_by_key.get(&run_key(eval_id, cond, slot.run_index));
+                let boundary = boundaries_by_key.get(&run_key(eval_id, cond, slot.run_index));
 
                 invocations_inspected += run.tool_invocations.len();
                 // `dispatch.json` is the authoritative source of the private task
                 // environment boundary. Without it we skip out-of-bounds write
                 // classification rather than guess. Live-source-read detection is
                 // independent of this boundary and still runs.
-                let findings = match eval_root {
-                    Some(dir) => detect_stray_writes(&run.tool_invocations, dir, Path::new(dir)),
+                let findings = match boundary {
+                    Some(boundary) => detect_stray_writes_with_policy(
+                        &run.tool_invocations,
+                        &boundary.eval_root,
+                        Path::new(&boundary.eval_root),
+                        &boundary.guard_policy,
+                    ),
                     None => {
                         let run_label = slot
                             .run_index
@@ -355,21 +384,30 @@ pub fn detect_stray_writes_report(
     Ok(report)
 }
 
-/// Map `"<eval_id>:<condition>[:r<k>]"` → the task's `eval_root` from
-/// `dispatch.json`. Empty when the file is absent or malformed.
-fn eval_roots_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, String> {
+/// Map `"<eval_id>:<condition>[:r<k>]"` to the task boundary and frozen guard
+/// policy from `dispatch.json`. Empty when the file is absent or malformed.
+fn task_boundaries_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, TaskBoundary> {
     let mut out = std::collections::HashMap::new();
     if let Ok(raw) = std::fs::read_to_string(iteration_dir.join("dispatch.json"))
         && let Ok(env) = serde_json::from_str::<DispatchEnvelope>(&raw)
     {
         for t in env.tasks.unwrap_or_default() {
-            if let Some(dir) = t.eval_root {
-                out.insert(run_key(&t.eval_id, &t.condition, t.run_index), dir);
+            if let Some(eval_root) = t.eval_root {
+                out.insert(
+                    run_key(&t.eval_id, &t.condition, t.run_index),
+                    TaskBoundary {
+                        eval_root,
+                        guard_policy: t.guard_policy,
+                    },
+                );
             }
         }
     }
     out
 }
+
+#[cfg(test)]
+mod realistic_development_tests;
 
 #[cfg(test)]
 mod tests {
@@ -473,6 +511,23 @@ mod tests {
     }
 
     #[test]
+    fn configured_command_policy_is_shared_with_the_stray_write_audit() {
+        let policy = crate::core::GuardPolicyConfig {
+            allow_commands: vec!["cargo test".to_string()],
+            ..crate::core::GuardPolicyConfig::default()
+        };
+
+        let findings = detect_stray_writes_with_policy(
+            &[inv("Bash", json!({"command": "cargo test --workspace"}), 0)],
+            ALLOWED_ROOT,
+            Path::new(ALLOWED_ROOT),
+            &policy,
+        );
+
+        assert!(findings.warnings.is_empty());
+    }
+
+    #[test]
     fn a_codex_command_execution_install_is_a_warning() {
         let f = detect_stray_writes(
             &[inv(
@@ -549,32 +604,6 @@ mod tests {
         );
         assert_eq!(f.warnings.len(), 1);
         assert!(f.warnings[0].reason.to_lowercase().contains("worktree"));
-    }
-
-    #[test]
-    fn creating_a_path_under_dot_claude_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv("Bash", json!({"command": "mkdir -p .claude/foo"}), 0)],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
-    }
-
-    #[test]
-    fn creating_a_path_under_dot_codex_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": "cp evil.json .codex/hooks.json"}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
     }
 
     #[test]

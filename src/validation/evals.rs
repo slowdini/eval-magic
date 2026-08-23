@@ -8,6 +8,8 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::core::{Assertion, DeliverWhen, EvalsConfig};
+use crate::sandbox::command_policy::validate_policy_syntax;
+use crate::sandbox::guard_profiles::has_profile;
 use crate::validation::error::ValidationError;
 use crate::validation::schema::{SchemaName, validate_against_schema};
 
@@ -19,6 +21,10 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     validate_turn_source_declarations(config, source)?;
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
+    if let Some(policy) = &validated.guard {
+        validate_guard_policy(policy, source, "guard")?;
+    }
+
     let mut seen = HashSet::new();
     for (index, ev) in validated.evals.iter().enumerate() {
         if !seen.insert(ev.id.as_str()) {
@@ -27,6 +33,9 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
                 index,
                 id: ev.id.clone(),
             });
+        }
+        if let Some(policy) = &ev.guard {
+            validate_guard_policy(policy, source, &format!("eval '{}', guard", ev.id))?;
         }
 
         for (turn_index, turn) in ev.turns.as_deref().unwrap_or(&[]).iter().enumerate() {
@@ -133,6 +142,25 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     }
 
     Ok(validated)
+}
+
+fn validate_guard_policy(
+    policy: &crate::core::GuardPolicyConfig,
+    source: &str,
+    label: &str,
+) -> Result<(), ValidationError> {
+    for profile in &policy.profiles {
+        if !has_profile(profile) {
+            return Err(ValidationError::InvalidConfig {
+                path: source.to_string(),
+                message: format!("{label}: unknown guard profile {profile:?}"),
+            });
+        }
+    }
+    validate_policy_syntax(policy).map_err(|message| ValidationError::InvalidConfig {
+        path: source.to_string(),
+        message: format!("{label}: {message}"),
+    })
 }
 
 /// Name what is wrong with a `codebase` block before the schema reports only

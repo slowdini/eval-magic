@@ -104,9 +104,11 @@ Two boundary notes, shared with the other harnesses' guards:
 - The marker's sole allowed root is the private task env on every host. Host temp locations such
   as `/tmp` and `$TMPDIR` remain out of bounds; dispatch prompts direct scratch work to
   `<env>/tmp/` instead without rewriting `TMPDIR`, `TMP`, or `TEMP`.
-- Bash coverage is the shared heuristic denylist (installs, git mutations, redirects, config-dir
-  tampering): a bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
-  detection of those is `detect-stray-writes`' job, same as claude/codex.
+- Bash coverage is the shared target-aware heuristic. Ordinary installs, builds, tests, and
+  in-place edits run from the task env; recognized explicit project/output destinations must also
+  remain there. Output redirects, repository-routing escapes, and remote Git mutations remain
+  blocked. A bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
+  detection of those is `detect-stray-writes`' job, same as the other harnesses.
 
 One hook-shape caveat: `tool.execute.before` fires for *every* tool (OpenCode has no matcher
 surface), so each tool call spawns one `eval-magic guard-hook`. Classification stays in the

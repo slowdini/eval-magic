@@ -15,8 +15,8 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
 use crate::core::{
-    AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ResponderPolicy, ScriptedTurn,
-    SkillSource, SourceRecord,
+    AvailableSkill, Eval, GuardPolicyConfig, Harness, POSIX_TOOLING_REQUIREMENT, ResponderPolicy,
+    ScriptedTurn, SkillSource, SourceRecord,
 };
 
 use super::RunError;
@@ -75,6 +75,9 @@ pub struct DispatchTask {
     /// without one serializes exactly as it did before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responder_dir: Option<String>,
+    /// Fully expanded command policy used by the live guard and post-run audit.
+    #[serde(default)]
+    pub guard_policy: GuardPolicyConfig,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -309,6 +312,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         responder_dir: opts
             .responder
             .map(|_| artifact_path(&cond_dir.join("responder"))),
+        guard_policy: GuardPolicyConfig::default(),
         dispatch_prompt: sections.join(""),
     })
 }
@@ -536,6 +540,7 @@ mod tests {
     use super::*;
 
     mod conversation;
+    mod guard_policy;
 
     fn mk_evals(ids: &[&str]) -> Vec<Eval> {
         ids.iter()
@@ -552,6 +557,7 @@ mod tests {
                 turns: None,
                 codebase: None,
                 responder: None,
+                guard: None,
             })
             .collect()
     }

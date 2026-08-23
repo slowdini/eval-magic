@@ -52,11 +52,12 @@ pub(crate) fn install_guard(
     stage_root: &Path,
     guard_exe: &Path,
     ttl: Option<Duration>,
+    guard_policy: &crate::core::GuardPolicyConfig,
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    write_marker(&marker_path, stage_root, ttl)?;
+    write_marker(&marker_path, stage_root, ttl, guard_policy)?;
 
     match guard.engine {
         GuardEngine::JsonHooks => {
@@ -412,7 +413,6 @@ mod cline_plugin_tests;
 
 #[cfg(test)]
 mod guard_denial_tests;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +457,7 @@ mod tests {
             stage_root,
             Path::new("/g/eval-magic"),
             None,
+            &Default::default(),
         )
         .unwrap()
     }
@@ -491,8 +492,7 @@ mod tests {
         GuardMarker {
             active: Some(true),
             allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
-            expires_at: None,
-            denial_log_path: None,
+            ..Default::default()
         }
     }
 
@@ -639,8 +639,7 @@ mod tests {
              /work/.eval-magic/tmp.\"}}"
         );
 
-        let payload =
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#;
+        let payload = r#"{ "tool_name": "Bash", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
         assert_eq!(
             verdict("codex", payload, Some(marker())).expect("should block"),
             "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
@@ -737,7 +736,7 @@ mod tests {
 
     #[test]
     fn codex_deny_returns_decision_block_json() {
-        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#;
+        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
         let out = verdict("codex", payload, Some(marker())).expect("should block");
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["decision"], "block");

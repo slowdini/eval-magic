@@ -165,7 +165,7 @@ fn check_config_dirs_cover_skills_dir(d: &HarnessDescriptor) -> Result<(), Strin
         if !d.config_dirs.iter().any(|dir| dir == top) {
             return Err(format!(
                 "config_dirs {:?} misses \"{top}\", the parent of skills_dir — staging's \
-                 sibling-asset filter and the guard tamper rules key off config_dirs",
+                 sibling-asset filter keys off config_dirs",
                 d.config_dirs
             ));
         }

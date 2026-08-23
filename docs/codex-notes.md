@@ -165,7 +165,10 @@ update/delete source, and move destination from that body and resolves relative 
 hook payload's `cwd`. Bash output validation uses a quote-aware lexical scan for `>`, `>>`, `>|`,
 file-descriptor-prefixed redirects, and `tee`: every literal target must resolve under an allowed
 root, while dynamic, malformed, or outside targets are blocked. Merely mentioning an allowed root
-elsewhere in the command does not scope an unrelated redirect.
+elsewhere in the command does not scope an unrelated redirect. The same cwd-aware policy allows
+ordinary installs, builds, tests, and in-place edits inside the task env while denying recognized
+explicit destinations outside it. Repository-routing escapes and remote Git mutations remain
+blocked.
 
 Guard installation initializes `.eval-magic-outputs/guard-denials.jsonl` and records its absolute
 path in the optional marker field `denialLogPath`. Each block appends only timestamp, harness,

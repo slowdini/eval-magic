@@ -22,8 +22,7 @@ label = "{label}"
 
 ## Where the harness discovers project-local skills. Declaring skills_dir unlocks native
 ## staging; without it every run is forced to --no-stage. The first path segment of skills_dir
-## must appear in config_dirs (it feeds the staging sibling filter, guard tamper rules, and
-## stray-write lookbehind).
+## must appear in config_dirs (it feeds the staging sibling filter and task-repository baseline).
 ## VERIFY: which directory does the harness actually scan for skills? Quote the doc or the
 ## observed behavior in the notes file.
 # skills_dir = ".{label}/skills"

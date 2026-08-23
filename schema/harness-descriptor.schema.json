@@ -20,7 +20,7 @@
     "config_dirs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "Harness-owned config directory names (e.g. \".claude\"). Feeds the staging sibling filter, guard tamper rules, and stray-write lookbehind."
+      "description": "Harness-owned config directory names (e.g. \".claude\"). Feeds the staging sibling filter and task-repository baseline inclusion."
     },
     "run": {
       "type": "object",

@@ -190,6 +190,28 @@ fn docs_codebase_keeps_the_declaration_rules_caveat_and_provisioning_contract() 
 }
 
 #[test]
+fn docs_guard_keeps_configuration_defaults_and_boundary_contracts() {
+    skill_eval()
+        .args(["docs", "guard"])
+        .assert()
+        .success()
+        .stdout(contains("# Configuring guarded commands"))
+        .stdout(contains("allow_tools"))
+        .stdout(contains("allow_commands"))
+        .stdout(contains("language/rust"))
+        .stdout(contains("framework/nextjs"))
+        .stdout(contains("replaces"))
+        .stdout(contains("dispatch.json"))
+        .stdout(contains("cannot override"));
+
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("eval-magic docs guard"));
+}
+
+#[test]
 fn shipped_guides_do_not_depend_on_repository_relative_links() {
     for (topic, _, body, path) in guide_sources() {
         for destination in body

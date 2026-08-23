@@ -431,14 +431,29 @@ pub struct RunArgs {
     /// not rewrite `TMPDIR`, `TMP`, or `TEMP`.
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
-    /// cwd boundary doesn't cover — `npm install`, `git worktree add`, `sed -i`,
-    /// redirects that resolve outside the env — and acting as a backstop when the
-    /// isolated session runs with relaxed permissions. Local Git operations such
-    /// as status, diff, add, commit, and branching are allowed inside the task
-    /// repository. Repository-routing escapes and remote Git operations are
-    /// blocked; `--no-guard` opts out of those blocks, though task repositories
-    /// still begin with no remotes. Literal relative redirect and `tee` targets
-    /// resolve from the tool invocation cwd; dynamic, malformed, or outside
+    /// cwd boundary doesn't cover and acting as a backstop when the isolated session
+    /// runs with relaxed permissions. Recognized development mutations require an
+    /// allowance from the eval's `guard` configuration. `allow_commands` grants
+    /// literal shell-token prefixes; `allow_tools` grants every invocation of an
+    /// executable basename. A per-eval block replaces the config-level default. With
+    /// no explicit block, eval-magic composes packaged profiles detected from the
+    /// staged task tree. See `eval-magic docs guard` for configuration, matching,
+    /// packaged profiles, and examples.
+    ///
+    /// Command allowances never bypass containment checks. Known destination options
+    /// with dynamic, missing, or outside values are blocked, as are global/user
+    /// install modes that do not have a supported in-env destination. Recognized
+    /// destinations include npm `--prefix`, pnpm `-C`/`--dir`, Yarn/Bun `--cwd`,
+    /// pip `--target`/`--prefix`/`--root`/`--src`, and Cargo `-C`/`--target-dir`
+    /// plus its target-dir environment variables. Generic shell commands are not a
+    /// complete parser: for example, a bare `touch /outside` remains an
+    /// after-the-fact `detect-stray-writes` concern.
+    ///
+    /// Local Git operations such as status, diff, add, commit, and branching are
+    /// allowed inside the task repository. Repository-routing escapes and remote Git
+    /// operations are blocked; `--no-guard` opts out of those blocks, though task
+    /// repositories still begin with no remotes. Literal relative redirect and `tee`
+    /// targets resolve from the tool invocation cwd; dynamic, malformed, or outside
     /// targets are blocked. Every denial appends privacy-safe metadata
     /// (never the full command or patch) to the task's
     /// `.eval-magic-outputs/guard-denials.jsonl`; `ingest` joins those logs into

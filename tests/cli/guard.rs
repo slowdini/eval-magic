@@ -6,6 +6,8 @@ use predicates::str::contains;
 use std::fs;
 use tempfile::TempDir;
 
+mod development_tests;
+
 /// The internal `guard` hook entry point is hidden from `--help` (its unique
 /// description never appears) yet remains callable.
 #[test]
@@ -132,13 +134,20 @@ fn guard_allows_fd_duplication_and_the_null_device() {
 #[test]
 fn guard_codex_subcommand_blocks_with_codex_verdict_shape() {
     let tmp = TempDir::new().unwrap();
-    let marker = write_codex_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+    let workspace = tmp.path().join(".eval-magic");
+    fs::create_dir_all(&workspace).unwrap();
+    let marker = write_codex_armed_marker(tmp.path(), &workspace);
 
     skill_eval()
         .arg("guard-codex")
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+            serde_json::json!({
+                "tool_name": "Bash",
+                "cwd": workspace,
+                "tool_input": { "command": "npm install --prefix /outside left-pad" },
+            })
+            .to_string(),
         )
         .assert()
         .success()
@@ -189,7 +198,7 @@ fn guard_codex_block_verdict_bytes_are_stable() {
         .arg("guard-codex")
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+            r#"{ "tool_name": "Bash", "cwd": "/work/env", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#,
         )
         .assert()
         .success()
@@ -233,7 +242,12 @@ fn guard_hook_resolves_the_harness_verdict_shape() {
         .args(["guard-hook", "--harness", "codex"])
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+            serde_json::json!({
+                "tool_name": "Bash",
+                "cwd": tmp.path().join(".eval-magic"),
+                "tool_input": { "command": "npm install --prefix /outside left-pad" },
+            })
+            .to_string(),
         )
         .assert()
         .success()
@@ -293,22 +307,31 @@ fn guard_hook_opencode_round_trips_write_verdicts() {
         .stdout("");
 }
 
-/// The plugin file itself is protected: a bash call mutating anything under
-/// `.opencode` trips the config-dir tamper rule.
+/// Harness config directories are ordinary paths inside the isolated env; the
+/// guard does not special-case a Bash command that works there.
 #[test]
-fn guard_hook_opencode_blocks_bash_tampering_with_the_plugin() {
+fn guard_hook_opencode_allows_bash_work_inside_the_environment() {
     let tmp = TempDir::new().unwrap();
-    let marker = write_opencode_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+    let workspace = tmp.path().join(".eval-magic");
+    fs::create_dir_all(&workspace).unwrap();
+    let marker = write_opencode_armed_marker(tmp.path(), &workspace);
 
     skill_eval()
         .args(["guard-hook", "--harness", "opencode"])
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "bash", "tool_input": { "command": "touch .opencode/plugins/slow-powers-eval-guard.js" } }"#,
+            serde_json::json!({
+                "tool_name": "bash",
+                "cwd": workspace,
+                "tool_input": {
+                    "command": "touch .opencode/plugins/slow-powers-eval-guard.js"
+                },
+            })
+            .to_string(),
         )
         .assert()
         .success()
-        .stdout(contains(r#""decision":"block""#));
+        .stdout("");
 }
 
 /// Byte-pin of the OpenCode block verdict — same compatibility contract as

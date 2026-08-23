@@ -51,6 +51,7 @@ preconditions, handoffs, and recovery commands.
   a task environment is built from and the skills under test resolve through it.
 - `schema/` contains the JSON schemas for user input and generated artifacts.
 - `harnesses/` contains built-in descriptors, descriptor scaffolding, and embedded harness assets.
+- `guard-profiles/` contains packaged command-policy defaults discovered and embedded by `build.rs`.
 - `profiles/` contains shared prompt profiles.
 - `tests/cli/` covers CLI and packaging contracts; `tests/run/` covers campaign behavior across
   the run boundary. Focused unit tests normally live beside the implementation.
@@ -148,5 +149,7 @@ implementation evidence in an internal note.
   `eval-magic docs isolation`.
 - [Shipped codebase guide](guides/codebase.md) is the repository source for
   `eval-magic docs codebase`.
+- [Shipped guard guide](guides/guard.md) is the repository source for
+  `eval-magic docs guard`.
 - [Shipped conversations guide](guides/conversations.md) is the repository source for
   `eval-magic docs conversations`.

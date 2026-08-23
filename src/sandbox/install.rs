@@ -20,7 +20,7 @@ use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::core::Harness;
+use crate::core::{GuardPolicyConfig, Harness};
 
 use super::now_ms;
 use super::{guard::read_marker, marker_is_armed};
@@ -83,6 +83,7 @@ pub(crate) fn write_marker(
     marker_path: &Path,
     stage_root: &Path,
     ttl: Option<Duration>,
+    guard_policy: &GuardPolicyConfig,
 ) -> io::Result<()> {
     let expires_ms = now_ms() + ttl.unwrap_or(GUARD_TTL).as_millis() as i64;
     let denial_log_path = absolutize(&stage_root.join(GUARD_DENIALS_DIR).join(GUARD_DENIALS_LOG));
@@ -99,6 +100,7 @@ pub(crate) fn write_marker(
             "allowedRoots": marker_allowed_roots(stage_root),
             "expiresAt": iso_millis(expires_ms),
             "denialLogPath": denial_log_path,
+            "guardPolicy": guard_policy,
         }),
     )
 }
@@ -253,7 +255,12 @@ mod tests {
         let c = setup();
         let adapter = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
         let marker = adapter
-            .install_guard(&c.stage_root, Path::new("/g/eval-magic"), None)
+            .install_guard(
+                &c.stage_root,
+                Path::new("/g/eval-magic"),
+                None,
+                &Default::default(),
+            )
             .unwrap();
 
         let settings =
@@ -287,7 +294,12 @@ mod tests {
         let c = setup();
         let adapter = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
         let marker = adapter
-            .install_guard(&c.stage_root, Path::new("/g/eval-magic"), None)
+            .install_guard(
+                &c.stage_root,
+                Path::new("/g/eval-magic"),
+                None,
+                &Default::default(),
+            )
             .unwrap();
 
         let hooks = fs::read_to_string(c.stage_root.join(".codex").join("hooks.json")).unwrap();
@@ -320,13 +332,17 @@ mod tests {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
         let claude = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
-        claude.install_guard(&c.stage_root, exe, None).unwrap();
+        claude
+            .install_guard(&c.stage_root, exe, None, &Default::default())
+            .unwrap();
         assert!(guard_is_armed(&c.stage_root));
         teardown_guard(&c.stage_root);
         assert!(!guard_is_armed(&c.stage_root));
 
         let codex = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
-        codex.install_guard(&c.stage_root, exe, None).unwrap();
+        codex
+            .install_guard(&c.stage_root, exe, None, &Default::default())
+            .unwrap();
         assert!(guard_is_armed(&c.stage_root));
     }
 }

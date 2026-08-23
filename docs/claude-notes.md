@@ -169,3 +169,6 @@ only write boundary a dispatch has, since the session itself runs under `bypassP
 invokes the hidden `guard` subcommand (**stable on-disk contract — never rename**), which denies
 via Claude Code's `hookSpecificOutput` JSON shape and stays silent to allow. Both layers fail open.
 A deny aborts the offending dispatch; `detect-stray-writes` remains the after-the-fact backstop.
+The shared cwd-aware policy allows ordinary installs, builds, tests, and in-place edits inside the
+task env, while explicit outside destinations, output escapes, repository-routing escapes, and
+remote Git mutations remain blocked.

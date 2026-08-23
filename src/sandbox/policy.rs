@@ -7,9 +7,7 @@
 //! ([`all_tool_vocabulary`]), so no harness's tool naming is hardcoded here.
 
 use std::path::{Component, Path, PathBuf};
-use std::sync::LazyLock;
 
-use regex::Regex;
 use serde_json::Value;
 
 use crate::adapters::all_tool_vocabulary;
@@ -40,60 +38,6 @@ pub fn is_shell_tool(tool_name: &str) -> bool {
         .iter()
         .any(|t| t == tool_name)
 }
-
-/// Bash command patterns that mutate state outside an eval's sandbox. Heuristics
-/// — Bash is too flexible to parse exactly. `detect-stray-writes` surfaces these
-/// as warnings; the opt-in guard denies them. Each is meaningful only when the
-/// command does not reference an allowed root (see [`classify_bash`]).
-///
-/// Output redirects and `tee` are intentionally absent. The quote-aware target
-/// scanner resolves relative paths from the tool invocation cwd instead of
-/// relying on command-text containment.
-///
-/// Compiled once. The patterns are known-valid, so a compile failure here is a
-/// programmer error and panics.
-static BASH_MUTATION_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
-    let config_dirs = crate::adapters::all_config_dir_names()
-        .iter()
-        .map(|d| regex::escape(d))
-        .collect::<Vec<_>>()
-        .join("|");
-    [
-        (
-            r"\b(npm|pnpm|yarn|bun)\s+(install|add|ci|i)\b".to_string(),
-            "package install/add",
-        ),
-        (r"\bpip3?\s+install\b".to_string(), "pip install"),
-        (r"\bsed\s+-i\b".to_string(), "in-place file edit (sed -i)"),
-        // A create/copy/move/link verb whose operand is a path under any
-        // harness config dir (`adapters::all_config_dir_names`) — catches
-        // stray writes to a config dir that aren't a `>` redirect (caught
-        // below). Read-only verbs (`cat`, `ls`) aren't listed, so inspecting
-        // the dirs stays allowed.
-        (
-            format!(r"\b(cp|mv|mkdir|touch|ln|rsync|install)\b[^|;&\n]*({config_dirs})(/|\b)"),
-            "path under a harness config dir",
-        ),
-        // The same create verbs whose operand is a top-level `skills/` directory —
-        // catches a bare `skills/` left in the cwd. `skills-data` and other
-        // `skills`-prefixed names are excluded by the trailing `/`, whitespace, or
-        // end-of-string boundary.
-        (
-            r#"\b(cp|mv|mkdir|touch|ln|rsync)\b[^|;&\n]*[\s'"=/]\.{0,2}/?skills(/|\s|$)"#
-                .to_string(),
-            "creates a bare skills/ dir",
-        ),
-    ]
-    .into_iter()
-    .map(|(re, reason)| {
-        (
-            Regex::new(&re)
-                .unwrap_or_else(|e| panic!("bundled bash pattern {re:?} is invalid: {e}")),
-            reason,
-        )
-    })
-    .collect()
-});
 
 /// Pull the target path from a write tool's arguments (`file_path` →
 /// `notebook_path` → `path` → `filePath`, the last being OpenCode's camelCase
@@ -246,9 +190,33 @@ pub(crate) fn classify_bash_with_cwd(
     allowed_roots: &[String],
     invocation_cwd: &Path,
 ) -> Option<BashClassification> {
+    classify_bash_with_policy(
+        command,
+        allowed_roots,
+        invocation_cwd,
+        &crate::core::GuardPolicyConfig::default(),
+    )
+}
+
+/// Classify one shell tool call under its resolved eval command policy.
+pub(crate) fn classify_bash_with_policy(
+    command: &str,
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+    policy: &crate::core::GuardPolicyConfig,
+) -> Option<BashClassification> {
     if command.is_empty() {
         return None;
     }
+    classify_fixed_containment(command, allowed_roots, invocation_cwd)
+        .or_else(|| super::command_policy::classify_command_policy(command, policy))
+}
+
+fn classify_fixed_containment(
+    command: &str,
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+) -> Option<BashClassification> {
     if let Some(denial) =
         super::shell_targets::classify_output_targets(command, allowed_roots, invocation_cwd)
     {
@@ -259,23 +227,24 @@ pub(crate) fn classify_bash_with_cwd(
     {
         return Some(denial);
     }
-    if allowed_roots.iter().any(|r| command.contains(r)) {
-        return None;
+    if let Some(denial) =
+        super::mutation_targets::classify_mutation_targets(command, allowed_roots, invocation_cwd)
+    {
+        return Some(denial);
     }
-    BASH_MUTATION_PATTERNS
-        .iter()
-        .find(|(re, _)| re.is_match(command))
-        .map(|(_, reason)| BashClassification {
-            reason,
-            resolved_targets: Vec::new(),
-        })
+    for script in super::command_policy::literal_shell_scripts(command) {
+        if let Some(denial) = classify_fixed_containment(&script, allowed_roots, invocation_cwd) {
+            return Some(denial);
+        }
+    }
+    None
 }
 
-/// If a Bash command matches a mutation pattern and is not scoped to one of
-/// `allowed_roots`, return the human reason; otherwise `None`. A command is
-/// treated as scoped when it textually references an allowed root. Output-file
-/// targets are the exception: they are resolved lexically from the process cwd
-/// and every target must fall under an allowed root.
+/// Return the human reason when a Bash command has a recognized output,
+/// repository, project, or mutation target that cannot be proven inside
+/// `allowed_roots`; otherwise return `None`. Relative targets and commands with
+/// an implicit destination resolve from the process cwd. Hook and audit callers
+/// use [`classify_bash_with_cwd`] with the invocation cwd instead.
 pub fn classify_bash(command: &str, allowed_roots: &[String]) -> Option<&'static str> {
     let cwd = std::env::current_dir().unwrap_or_default();
     classify_bash_with_cwd(command, allowed_roots, &cwd).map(|result| result.reason)
@@ -285,6 +254,8 @@ pub fn classify_bash(command: &str, allowed_roots: &[String]) -> Option<&'static
 mod tests {
     use super::*;
     use serde_json::json;
+
+    mod command_policy;
 
     const ROOTS: [&str; 2] = ["/work/.eval-magic", "/work/.claude/skills"];
 
@@ -459,18 +430,50 @@ mod tests {
     }
 
     #[test]
-    fn classify_bash_flags_installs_and_git_worktree_escape() {
+    fn classify_bash_flags_targets_outside_allowed_roots() {
+        let cwd = Path::new("/outside/project");
         assert_eq!(
-            classify_bash("npm install left-pad", &roots()),
+            classify_bash_with_cwd("npm install left-pad", &roots(), cwd).map(|d| d.reason),
+            Some("package install/add"),
+        );
+        assert_eq!(
+            classify_bash_with_cwd("git worktree add ../wt -b scratch", &roots(), cwd)
+                .map(|d| d.reason),
+            Some("git worktree add (working tree outside the sandbox)"),
+        );
+        assert_eq!(
+            classify_bash_with_cwd("echo hi > out.log", &roots(), cwd).map(|d| d.reason),
+            Some("output redirection to a file"),
+        );
+    }
+
+    #[test]
+    fn classify_bash_denies_package_install_with_an_outside_destination() {
+        let roots = vec!["/work/env".to_string()];
+
+        let denial = classify_bash_with_cwd(
+            "npm install left-pad --prefix /outside/project",
+            &roots,
+            Path::new("/work/env"),
+        )
+        .expect("outside package destination should be denied");
+
+        assert_eq!(denial.reason, "package install/add");
+        assert_eq!(denial.resolved_targets, vec!["/outside/project"]);
+
+        let broad_policy = crate::core::GuardPolicyConfig {
+            allow_tools: vec!["npm".to_string()],
+            ..crate::core::GuardPolicyConfig::default()
+        };
+        assert_eq!(
+            classify_bash_with_policy(
+                "npm install left-pad --prefix /outside/project",
+                &roots,
+                Path::new("/work/env"),
+                &broad_policy,
+            )
+            .map(|classification| classification.reason),
             Some("package install/add")
-        );
-        assert_eq!(
-            classify_bash("git worktree add ../wt -b scratch", &roots()),
-            Some("git worktree add (working tree outside the sandbox)")
-        );
-        assert_eq!(
-            classify_bash("echo hi > out.log", &roots()),
-            Some("output redirection to a file")
         );
     }
 
@@ -569,30 +572,34 @@ mod tests {
     }
 
     #[test]
-    fn classify_bash_flags_creates_under_every_harness_config_dir_but_allows_reads() {
+    fn classify_bash_does_not_special_case_harness_config_dirs() {
+        let cwd = Path::new("/work/.eval-magic/task");
         for dir in crate::adapters::all_config_dir_names() {
             assert_eq!(
-                classify_bash(&format!("mkdir -p {dir}/x"), &[]),
-                Some("path under a harness config dir"),
-                "mkdir under {dir} should be flagged"
+                classify_bash_with_cwd(&format!("mkdir -p {dir}/x"), &roots(), cwd),
+                None,
+                "mkdir under {dir} should be allowed"
             );
             assert_eq!(
-                classify_bash(&format!("cp evil.json {dir}/hooks.json"), &[]),
-                Some("path under a harness config dir"),
-                "cp into {dir} should be flagged"
+                classify_bash_with_cwd(&format!("cp hooks.json {dir}/hooks.json"), &roots(), cwd),
+                None,
+                "cp into {dir} should be allowed"
             );
             assert_eq!(
-                classify_bash(&format!("cat {dir}/settings.json"), &[]),
+                classify_bash_with_cwd(&format!("cat {dir}/settings.json"), &roots(), cwd),
                 None,
                 "read of {dir} should stay allowed"
             );
-            assert_eq!(classify_bash(&format!("ls {dir}"), &[]), None);
+            assert_eq!(
+                classify_bash_with_cwd(&format!("ls {dir}"), &roots(), cwd),
+                None
+            );
         }
     }
 
     #[test]
-    fn classify_bash_allows_scoped_and_readonly_commands() {
-        // Textually references an allowed root → scoped → allowed.
+    fn classify_bash_allows_in_bounds_outputs_and_readonly_commands() {
+        // The redirect target resolves under an allowed root.
         assert_eq!(
             classify_bash("echo hi > /work/.eval-magic/x/log", &roots()),
             None
