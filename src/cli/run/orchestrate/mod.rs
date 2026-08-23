@@ -14,12 +14,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
+use crate::adapters::skill_shadow::ShadowSource;
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
 use crate::core::fs::artifact_path;
 use crate::core::{
-    CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode, RunContext, SkillSource,
-    SourceKind, SourceRecord,
+    CodebaseRecord, CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode, RunContext,
+    SkillSource, SourceKind, SourceRecord,
 };
 use crate::source::ResolvedSource;
 
@@ -154,26 +155,29 @@ impl RunSkill {
 impl RunCodebase {
     /// The artifact form, shared by every provenance surface so a reader never
     /// has to reconcile two spellings of the same resolution.
-    fn record(&self) -> SourceRecord {
-        SourceRecord {
-            kind: match self.declared {
-                CodebaseSource::Git { .. } => SourceKind::Git,
-                CodebaseSource::Path { .. } => SourceKind::Path,
+    fn record(&self) -> CodebaseRecord {
+        CodebaseRecord {
+            source: SourceRecord {
+                kind: match self.declared {
+                    CodebaseSource::Git { .. } => SourceKind::Git,
+                    CodebaseSource::Path { .. } => SourceKind::Path,
+                },
+                source: self.source.source.clone(),
+                resolved_path: self
+                    .source
+                    .resolved_path
+                    .as_deref()
+                    .map(|path| artifact_path(Path::new(path))),
+                reference: self.source.reference.clone(),
+                revision: self.source.revision.clone(),
+                origin_url: self.source.origin_url.clone(),
+                branch: self.source.branch.clone(),
+                host_local: self.source.host_local,
+                // Materialization checks out a commit, so the environment never
+                // carries uncommitted work however the source directory looked.
+                dirty: false,
             },
-            source: self.source.source.clone(),
-            resolved_path: self
-                .source
-                .resolved_path
-                .as_deref()
-                .map(|path| artifact_path(Path::new(path))),
-            reference: self.source.reference.clone(),
-            revision: self.source.revision.clone(),
-            origin_url: self.source.origin_url.clone(),
-            branch: self.source.branch.clone(),
-            host_local: self.source.host_local,
-            // Materialization checks out a commit, so the environment never
-            // carries uncommitted work however the source directory looked.
-            dirty: false,
+            exclude_skill_sources: self.declared.exclude_skill_sources(),
         }
     }
 
@@ -226,6 +230,9 @@ struct Staged {
     bootstrap_content: Option<String>,
     plan_mode_content: Option<String>,
     guard_policies: std::collections::HashMap<PathBuf, GuardPolicyConfig>,
+    /// Matching project skill sources inventoried from each sourced codebase
+    /// before exclusion or staging changes its discovery roots.
+    codebase_shadow_sources: std::collections::HashMap<PathBuf, Vec<ShadowSource>>,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.

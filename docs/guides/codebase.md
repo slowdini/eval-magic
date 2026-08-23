@@ -54,6 +54,45 @@ all.
 Resolution happens before any environment is created. An unreachable repository or a ref that does
 not exist fails the run while it has still built nothing.
 
+## Project config and skill sources
+
+The sourced tree is preserved by default, including harness instructions, settings, plugins, and
+project-local skills. For example, `CLAUDE.md`, `AGENTS.md`, `.claude/settings.json`, and
+`.opencode/settings.json` remain visible in every comparison arm.
+
+Preserving project skills can contaminate a comparison when the codebase provides the
+subject or one of its staged siblings. `run` records those matches in `plugin-shadow.json` with
+`class: "codebase-sourced"`, separately from `class: "operator-environment"` findings caused by
+global skills or installed plugins. Subject collisions are comparison-invalid; sibling collisions
+follow the symmetric/asymmetric rules in `eval-magic docs isolation`.
+
+Opt an eval out of only the harness-discoverable project skill roots when the codebase's skills are
+not part of the task being measured:
+
+```json
+{
+  "codebase": {
+    "url": "https://github.com/slowdini/example-project",
+    "ref": "v1.4.0",
+    "exclude_skill_sources": true
+  }
+}
+```
+
+The default is `false`. When set to `true`, eval-magic moves every project skill root declared by
+the selected harness out of each task environment before staging. It applies equally to both arms,
+every repetition, revision mode, and `--no-stage`. Root instruction files and other harness config
+remain in place. OpenCode, for example, excludes `.opencode/skills`, `.claude/skills`, and
+`.agents/skills` because its descriptor declares all three discovery roots. For a BYOH descriptor
+with no project skill roots, the setting is recorded and makes no filesystem change.
+
+Generated staging slugs are collision-safe: if the codebase owns that exact directory, the
+runner backs it up, stages the evaluated copy for that arm, and restores the original during
+cleanup. An explicit `--stage-name` remains stricter and refuses to clobber an occupied directory.
+
+The effective `exclude_skill_sources` value is recorded with each codebase in `conditions.json`,
+every task in `dispatch.json`, every `run.json`, `benchmark.json`, and promoted `BASELINE.md`.
+
 ## What the environment contains
 
 Each dispatch gets its own private environment holding:
@@ -172,9 +211,9 @@ head -50 diff.patch
 The same difference, spelled by Git itself, is `git diff refs/eval-magic/baseline` inside the
 environment.
 
-The resolved commit appears in `conditions.json`, each `run.json`, `benchmark.json`, and the
-`BASELINE.md` written by `promote-baseline` — alongside the skill the run measured, which
-is recorded the same way:
+The resolved commit and effective skill-source policy appear in `conditions.json`, each `run.json`,
+`benchmark.json`, and the `BASELINE.md` written by `promote-baseline` — alongside the skill the run
+measured, which is recorded the same way:
 
 ```sh
 jq '.codebases, .skill_source' conditions.json

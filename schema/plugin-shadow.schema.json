@@ -12,7 +12,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": 2
+      "const": 3
     },
     "config_dir": {
       "type": "string"
@@ -35,12 +35,20 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
+        "class",
         "skill_name",
         "role",
         "severity",
         "sources"
       ],
       "properties": {
+        "class": {
+          "enum": [
+            "operator-environment",
+            "codebase-sourced"
+          ],
+          "description": "Whether the non-staged source comes from the operator environment or from the sourced task codebase."
+        },
         "skill_name": {
           "type": "string",
           "minLength": 1

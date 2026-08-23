@@ -128,8 +128,9 @@ Each `claude -p` dispatch loads the user/global plugins and skills from its Clau
 staging slug prevents an on-disk collision but not runtime discovery — an installed plugin exposing
 a same-named skill is discoverable in *both* arms, so the control arm is not truly skill-absent.
 `plugin_shadow.rs` detects this in every comparison environment. The shared shadow policy records
-one finding per logical skill in schema-v2 `plugin-shadow.json`, including every affected cell,
-canonical/discovery paths, source-specific remediation, and the runtime identifier the agent sees.
+one finding per logical skill and source class in schema-v3 `plugin-shadow.json`, including every
+affected cell, canonical/discovery paths, source-specific remediation, and the runtime identifier
+the agent sees.
 Claude plugin skills use their namespaced `<plugin>:<skill>` runtime ID, direct live skills retain
 the logical name, and staged subjects use their staging-directory slug. Direct live duplicates
 record user-before-project precedence; a staged subject with its distinct slug remains selected.

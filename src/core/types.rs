@@ -210,10 +210,29 @@ pub enum CodebaseSource {
         /// tracked a moving branch could not be re-run against what it measured.
         #[serde(rename = "ref")]
         reference: String,
+        #[serde(default)]
+        exclude_skill_sources: bool,
     },
     Path {
         path: String,
+        #[serde(default)]
+        exclude_skill_sources: bool,
     },
+}
+
+impl CodebaseSource {
+    pub fn exclude_skill_sources(&self) -> bool {
+        match self {
+            Self::Git {
+                exclude_skill_sources,
+                ..
+            }
+            | Self::Path {
+                exclude_skill_sources,
+                ..
+            } => *exclude_skill_sources,
+        }
+    }
 }
 
 /// Whether a source came from a repository URL or a directory on this host.
@@ -277,11 +296,19 @@ pub struct SkillSource {
 
 /// One resolved codebase plus the evals built from it. `conditions.json` and
 /// `benchmark.json` carry a list of these; a `run.json` carries the bare
-/// [`SourceRecord`], having exactly one.
+/// [`CodebaseRecord`], having exactly one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseRecord {
+    #[serde(flatten)]
+    pub source: SourceRecord,
+    #[serde(default)]
+    pub exclude_skill_sources: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodebaseUse {
     #[serde(flatten)]
-    pub codebase: SourceRecord,
+    pub codebase: CodebaseRecord,
     pub evals: Vec<String>,
 }
 
@@ -438,7 +465,7 @@ pub struct RunRecord {
     /// the record names one. Appended last, and omitted when absent, so a
     /// fixture-only record serializes as it always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub codebase: Option<SourceRecord>,
+    pub codebase: Option<CodebaseRecord>,
     /// The skill under test this run staged. Grading reads `run.json` and nothing
     /// else, so a result can only be tied to a skill revision if the record names
     /// one. Appended last, and omitted when absent.
@@ -882,6 +909,22 @@ mod tests {
         // Absent optionals omitted.
         assert!(out.get("baseline").is_none());
         assert!(out.get("run_nonce").is_none());
+    }
+
+    #[test]
+    fn codebase_use_records_effective_skill_source_exclusion() {
+        let value = serde_json::json!({
+            "kind": "path",
+            "source": "../fixture",
+            "branch": "work",
+            "exclude_skill_sources": true,
+            "evals": ["e1"]
+        });
+
+        let record: CodebaseUse = serde_json::from_value(value).unwrap();
+        let rendered = serde_json::to_value(record).unwrap();
+
+        assert_eq!(rendered["exclude_skill_sources"], true);
     }
 
     #[test]

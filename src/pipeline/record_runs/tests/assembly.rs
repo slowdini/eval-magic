@@ -70,7 +70,8 @@ fn carries_the_codebase_from_dispatch_task_into_each_run_record() {
         "source": "https://example.com/project.git",
         "ref": "main",
         "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
-        "branch": "main"
+        "branch": "main",
+        "exclude_skill_sources": true
     });
     fs::write(
         iter.join("dispatch.json"),

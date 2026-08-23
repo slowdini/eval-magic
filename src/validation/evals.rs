@@ -819,6 +819,7 @@ mod tests {
             Some(CodebaseSource::Git {
                 url: "https://example.com/project.git".to_string(),
                 reference: "main".to_string(),
+                exclude_skill_sources: false,
             })
         );
     }
@@ -835,6 +836,7 @@ mod tests {
             parsed.evals[0].codebase,
             Some(CodebaseSource::Path {
                 path: "../fixtures/legacy-service".to_string(),
+                exclude_skill_sources: false,
             })
         );
     }
@@ -850,8 +852,23 @@ mod tests {
             parsed.codebase,
             Some(CodebaseSource::Path {
                 path: "/srv/projects/legacy-service".to_string(),
+                exclude_skill_sources: false,
             })
         );
+    }
+
+    #[test]
+    fn accepts_codebase_skill_source_exclusion() {
+        let mut config = base();
+        config["codebase"] = json!({
+            "path": "/srv/projects/legacy-service",
+            "exclude_skill_sources": true
+        });
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let declared = serde_json::to_value(parsed.codebase.unwrap()).unwrap();
+
+        assert_eq!(declared["exclude_skill_sources"], true);
     }
 
     /// `minLength: 1` admits `" "`, so the schema cannot carry this on its own.

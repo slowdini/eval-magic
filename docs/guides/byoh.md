@@ -93,6 +93,21 @@ The scaffold and resolved descriptor output are the installed references. Reposi
 can trace the underlying schema and adapter contracts from `docs/developer_overview.md` in a source
 checkout.
 
+When a harness discovers project skills from more than its native staging directory, declare the
+extra roots beside `skills_dir`:
+
+```toml
+skills_dir = ".cool/skills"
+additional_project_skill_dirs = [".claude/skills", ".agents/skills"]
+config_dirs = [".cool", ".claude", ".agents"]
+```
+
+`skills_dir` is the only staging destination. The additional roots participate in sourced-codebase
+shadow detection and `codebase.exclude_skill_sources`; eval-magic never stages into them. Every
+path must be normalized, `/`-separated, and relative to the task repository. Its first segment must
+also appear in `config_dirs`, keeping discovery, sibling filtering, and task-repository baselining
+on one descriptor surface.
+
 ## Layer descriptors by field
 
 Descriptors load in this order:

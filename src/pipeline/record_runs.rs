@@ -31,7 +31,7 @@ use serde::Deserialize;
 use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
 use crate::core::fs::write_json;
 use crate::core::{
-    ConversationEvent, ConversationRecord, Harness, RunRecord, SkillSource, SourceRecord,
+    CodebaseRecord, ConversationEvent, ConversationRecord, Harness, RunRecord, SkillSource,
     TimingRecord, TimingSource,
 };
 use crate::pipeline::error::PipelineError;
@@ -85,7 +85,7 @@ struct DispatchTask {
     /// The codebase the environment was built from, copied through to the run
     /// record so grading can name the tree a result came from.
     #[serde(default)]
-    codebase: Option<SourceRecord>,
+    codebase: Option<CodebaseRecord>,
     skill_source: Option<SkillSource>,
 }
 

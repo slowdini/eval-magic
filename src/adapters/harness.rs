@@ -77,6 +77,15 @@ pub trait HarnessAdapter {
     /// `--no-stage` (each SKILL.md is inlined into its dispatch prompt).
     fn skills_dir(&self, repo_root: &Path) -> Option<PathBuf>;
 
+    /// Every project-local skill root this harness may discover. The native
+    /// staging root comes first, followed by any cross-harness compatibility
+    /// roots declared by the descriptor. This surface is used for codebase
+    /// shadow detection and opt-in source exclusion; staging still writes only
+    /// to [`skills_dir`](Self::skills_dir).
+    fn project_skill_dirs(&self, repo_root: &Path) -> Vec<PathBuf> {
+        self.skills_dir(repo_root).into_iter().collect()
+    }
+
     // ── Run-option capabilities (defaulted) ──────────────────────────────────
 
     /// The run options the generic `run` preflight may accept for this
@@ -529,6 +538,23 @@ mod tests {
         assert_eq!(
             adapter_for(Harness::resolve("opencode").unwrap()).skills_dir(root),
             Some(root.join(".opencode").join("skills"))
+        );
+    }
+
+    #[test]
+    fn project_skill_dirs_include_cross_harness_roots_declared_by_the_descriptor() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).project_skill_dirs(root),
+            vec![root.join(".claude/skills")]
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).project_skill_dirs(root),
+            vec![
+                root.join(".opencode/skills"),
+                root.join(".claude/skills"),
+                root.join(".agents/skills"),
+            ]
         );
     }
 

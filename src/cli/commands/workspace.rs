@@ -3,6 +3,7 @@
 
 use std::path::Path;
 
+use crate::adapters::adapter_for;
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
 use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
@@ -97,6 +98,9 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
     if let Ok(dir) = iteration_dir(&ctx, args.iteration) {
         for env in staged_env_roots(&dir) {
             torn |= sandbox::teardown_guard(&env);
+            if adapter_for(ctx.harness).skills_dir(&env).is_some() {
+                crate::cli::run::staging::cleanup_staged_skills(&env, ctx.harness)?;
+            }
         }
     }
     let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
