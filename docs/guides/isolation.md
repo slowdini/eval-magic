@@ -20,9 +20,14 @@ Sibling collisions have two outcomes:
 - A sibling visible in only one arm is comparison-invalid because its effect cannot be separated
   from the skill under test.
 
-The preflight reports what the environment makes discoverable. Transcript evidence can later show
-what a dispatch loaded. Eval-magic does not parse shell templates to infer that a flag or environment
-variable isolates the process.
+The preflight reports two source classes in schema-v3 `plugin-shadow.json`:
+
+- `operator-environment` — global skills, enabled plugins, and other sources inherited from the
+  machine running eval-magic.
+- `codebase-sourced` — matching project-local skills preserved from the task codebase.
+
+Transcript evidence can later show what a dispatch loaded. Eval-magic does not parse shell
+templates to infer that a flag or environment variable isolates the process.
 
 Apply the remedy to **every eval-agent command**, including every resumed turn of a scripted eval.
 Isolating only the first round allows the live copy to return on the next round. Judge commands do
@@ -80,9 +85,14 @@ label = "claude-code"
 isolates_live_sources = true
 ```
 
+The declaration covers only `operator-environment` findings. It does not claim that skills sourced
+from the task codebase are isolated. Use `codebase.exclude_skill_sources: true` for that separate
+policy when project skills should not participate; see `eval-magic docs codebase`.
+
 The declaration does not disable detection. `plugin-shadow.json` retains every source and its
-intrinsic severity as provenance. `run` presents the finding as informational, and `aggregate`
-omits the warning only while no transcript evidence contradicts the declaration.
+intrinsic severity as provenance. `run` presents operator-environment findings as informational,
+and `aggregate` omits those warnings only while no transcript evidence contradicts the declaration.
+Codebase-sourced findings remain warnings regardless of this descriptor setting.
 
 Do not set it when:
 

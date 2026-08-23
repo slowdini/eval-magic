@@ -422,6 +422,37 @@ fn provenance_names_the_codebase_and_the_commit_it_resolved_to() {
     assert!(provenance.contains("a1b2c3d"), "{provenance}");
 }
 
+#[test]
+fn provenance_names_when_codebase_skill_sources_were_excluded() {
+    let f = fixture(1);
+    let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+    conditions["codebases"] = serde_json::json!([{
+        "kind": "git",
+        "source": "https://example.com/project.git",
+        "ref": "v1.4.0",
+        "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+        "branch": "v1.4.0",
+        "exclude_skill_sources": true,
+        "evals": ["e1"]
+    }]);
+    write(
+        &f.iteration_dir.join("conditions.json"),
+        &serde_json::to_string(&conditions).unwrap(),
+    );
+    write(
+        &f.iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0}}"#,
+    );
+
+    promote_baseline(&opts(&f, 1)).unwrap();
+
+    let provenance = fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+    assert!(
+        provenance.contains("project skill sources excluded"),
+        "{provenance}"
+    );
+}
+
 /// A host-local path is not reproducible by the reader, so the row says so
 /// rather than presenting it like a resolvable reference.
 #[test]

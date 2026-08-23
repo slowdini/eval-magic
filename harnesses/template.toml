@@ -23,10 +23,15 @@ label = "{label}"
 ## Where the harness discovers project-local skills. Declaring skills_dir unlocks native
 ## staging; without it every run is forced to --no-stage. The first path segment of skills_dir
 ## must appear in config_dirs (it feeds the staging sibling filter and task-repository baseline).
+## If the harness also discovers compatibility roots, list them in
+## additional_project_skill_dirs. They participate in sourced-codebase shadow detection and
+## codebase.exclude_skill_sources but never receive staged skills. Each first path segment must
+## also appear in config_dirs.
 ## VERIFY: which directory does the harness actually scan for skills? Quote the doc or the
 ## observed behavior in the notes file.
 # skills_dir = ".{label}/skills"
-# config_dirs = [".{label}"]
+# additional_project_skill_dirs = [".claude/skills", ".agents/skills"]
+# config_dirs = [".{label}", ".claude", ".agents"]
 
 ## -------------------------------------------------------------------------------------------
 ## [dispatch] — the highest-leverage first enhancement: with exec_template declared, the

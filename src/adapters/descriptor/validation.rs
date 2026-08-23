@@ -30,6 +30,7 @@ type Check = fn(&HarnessDescriptor) -> Result<(), String>;
 const CHECKS: &[Check] = &[
     check_dispatch_env,
     check_guard_lockstep,
+    check_project_skill_dirs,
     check_skills_dir_requirements,
     check_slug_shape,
     check_config_dirs_cover_skills_dir,
@@ -43,6 +44,42 @@ const CHECKS: &[Check] = &[
     check_manifest_template_newline,
     check_skills_block_item,
 ];
+
+/// Skill-root paths drive staging cleanup and opt-in codebase source moves, so
+/// every one must stay beneath the task repository and name a single normalized
+/// location.
+fn check_project_skill_dirs(d: &HarnessDescriptor) -> Result<(), String> {
+    let mut roots = Vec::new();
+    if let Some(native) = &d.skills_dir {
+        roots.push(("skills_dir", native));
+    }
+    roots.extend(
+        d.additional_project_skill_dirs
+            .iter()
+            .map(|path| ("additional_project_skill_dirs", path)),
+    );
+    for (field, path) in roots {
+        if path.starts_with('/')
+            || path.contains('\\')
+            || path
+                .split('/')
+                .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+        {
+            return Err(format!(
+                "{field} project skill path must be a relative `/`-separated path without empty, \
+                 `.` or `..` segments (got \"{path}\")"
+            ));
+        }
+    }
+    if let Some(native) = &d.skills_dir
+        && d.additional_project_skill_dirs.contains(native)
+    {
+        return Err(format!(
+            "additional project skill dirs duplicate skills_dir \"{native}\""
+        ));
+    }
+    Ok(())
+}
 
 /// Check every cross-field invariant, returning the first violation with an
 /// actionable message.
@@ -94,6 +131,14 @@ fn check_guard_lockstep(d: &HarnessDescriptor) -> Result<(), String> {
 /// Without a skills_dir neither has anywhere to operate.
 fn check_skills_dir_requirements(d: &HarnessDescriptor) -> Result<(), String> {
     if d.skills_dir.is_none() {
+        if !d.additional_project_skill_dirs.is_empty() {
+            return Err(
+                "additional_project_skill_dirs is declared but skills_dir is not; exclusion and \
+                 cleanup record project skill roots in the native skills_dir manifest — declare \
+                 it, or drop additional_project_skill_dirs"
+                    .into(),
+            );
+        }
         if d.staging.is_configured() {
             return Err(
                 "[staging] is configured but skills_dir is not declared; native staging \
@@ -166,6 +211,17 @@ fn check_config_dirs_cover_skills_dir(d: &HarnessDescriptor) -> Result<(), Strin
             return Err(format!(
                 "config_dirs {:?} misses \"{top}\", the parent of skills_dir — staging's \
                  sibling-asset filter keys off config_dirs",
+                d.config_dirs
+            ));
+        }
+    }
+    for skills_dir in &d.additional_project_skill_dirs {
+        let top = skills_dir.split('/').next().unwrap_or_default();
+        if !d.config_dirs.iter().any(|dir| dir == top) {
+            return Err(format!(
+                "config_dirs {:?} misses \"{top}\", the parent of additional project skill dir \
+                 \"{skills_dir}\" — discovery, sibling filtering, and task-repository baselining \
+                 must use the same harness config surface",
                 d.config_dirs
             ));
         }

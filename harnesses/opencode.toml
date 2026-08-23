@@ -9,7 +9,8 @@
 
 label = "opencode"
 skills_dir = ".opencode/skills"
-config_dirs = [".opencode"]
+additional_project_skill_dirs = [".claude/skills", ".agents/skills"]
+config_dirs = [".opencode", ".claude", ".agents"]
 
 [run]
 supports_guard = true

@@ -126,6 +126,18 @@ impl HarnessAdapter for DescriptorAdapter {
         })
     }
 
+    fn project_skill_dirs(&self, repo_root: &Path) -> Vec<PathBuf> {
+        self.descriptor
+            .skills_dir
+            .iter()
+            .chain(&self.descriptor.additional_project_skill_dirs)
+            .map(|dir| {
+                dir.split('/')
+                    .fold(repo_root.to_path_buf(), |path, segment| path.join(segment))
+            })
+            .collect()
+    }
+
     fn run_capabilities(&self) -> HarnessRunCapabilities {
         HarnessRunCapabilities {
             supports_guard: self.descriptor.run.supports_guard,

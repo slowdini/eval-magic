@@ -313,20 +313,24 @@ fn codebase_rows(conditions: Option<&ConditionsRecord>) -> String {
             } else {
                 "Codebase".to_string()
             };
-            let mut cell = used.codebase.source.clone();
-            if let Some(reference) = &used.codebase.reference {
+            let source = &used.codebase.source;
+            let mut cell = source.source.clone();
+            if let Some(reference) = &source.reference {
                 cell.push('@');
                 cell.push_str(reference);
             }
-            if let Some(revision) = &used.codebase.revision {
+            if let Some(revision) = &source.revision {
                 let short: String = revision.chars().take(7).collect();
                 cell.push_str(&format!(" ({short})"));
             }
-            if used.codebase.host_local {
+            if source.host_local {
                 cell.push_str(" — host-local path, not reproducible from this config alone");
-                if let Some(origin) = &used.codebase.origin_url {
+                if let Some(origin) = &source.origin_url {
                     cell.push_str(&format!("; origin {origin}"));
                 }
+            }
+            if used.codebase.exclude_skill_sources {
+                cell.push_str("; project skill sources excluded");
             }
             format!("| {label} | {cell} |")
         })

@@ -306,6 +306,9 @@ fn aggregate_help_documents_declared_shadow_isolation() {
         .success()
         .stdout(contains("plugin-shadow.json"))
         .stdout(contains("isolates_live_sources"))
+        .stdout(contains("schema-v3"))
+        .stdout(contains("codebase-sourced"))
+        .stdout(contains("exclude_skill_sources"))
         .stdout(contains("validity_warnings"))
         .stdout(contains("eval-magic docs isolation"));
 }

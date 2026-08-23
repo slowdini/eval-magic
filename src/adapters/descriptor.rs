@@ -59,6 +59,8 @@ pub struct HarnessDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skills_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_project_skill_dirs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_dirs: Vec<String>,
     #[serde(default, skip_serializing_if = "RunSection::is_default")]
     pub run: RunSection,
@@ -639,6 +641,72 @@ timestamp_spread = "timestamp"
         assert!(!d.staging.rewrites_frontmatter_name);
         assert!(d.guard.is_none());
         assert!(d.transcript.is_none());
+    }
+
+    #[test]
+    fn additional_project_skill_dirs_load_and_reserialize() {
+        let d = load(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\n\
+             additional_project_skill_dirs = [\".claude/skills\", \".agents/skills\"]\n\
+             config_dirs = [\".demo\", \".claude\", \".agents\"]\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            d.additional_project_skill_dirs,
+            vec![".claude/skills", ".agents/skills"]
+        );
+        let shown = toml::to_string(&d).unwrap();
+        assert!(shown.contains("additional_project_skill_dirs"), "{shown}");
+    }
+
+    #[test]
+    fn rejects_config_dirs_missing_an_additional_project_skill_parent() {
+        let error = err_of(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\n\
+             additional_project_skill_dirs = [\".claude/skills\"]\n\
+             config_dirs = [\".demo\"]\n",
+        );
+
+        assert!(error.contains(".claude"), "{error}");
+        assert!(error.contains("additional project skill"), "{error}");
+    }
+
+    #[test]
+    fn rejects_additional_project_skill_dirs_without_a_native_skills_dir() {
+        let error = err_of(
+            "label = \"demo\"\nadditional_project_skill_dirs = [\".claude/skills\"]\n\
+             config_dirs = [\".claude\"]\n",
+        );
+
+        assert!(error.contains("additional_project_skill_dirs"), "{error}");
+        assert!(error.contains("skills_dir"), "{error}");
+    }
+
+    #[test]
+    fn rejects_project_skill_dirs_that_escape_or_duplicate_the_native_root() {
+        for additional in [
+            "../skills",
+            "/tmp/skills",
+            ".claude/../skills",
+            ".demo/skills",
+        ] {
+            let error = err_of(&format!(
+                "{MINIMAL}\nadditional_project_skill_dirs = [\"{additional}\"]\n"
+            ));
+            assert!(error.contains("project skill"), "{additional}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_backslash_separated_project_skill_dirs() {
+        let error = err_of(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\n\
+             additional_project_skill_dirs = [\".claude\\\\skills\"]\n\
+             config_dirs = [\".demo\", \".claude\\\\skills\"]\n",
+        );
+
+        assert!(error.contains("`/`-separated"), "{error}");
     }
 
     #[test]

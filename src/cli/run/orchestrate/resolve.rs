@@ -47,11 +47,11 @@ fn resolve_codebases(
         }
 
         let spec = match declared {
-            CodebaseSource::Git { url, reference } => SourceSpec::Git {
+            CodebaseSource::Git { url, reference, .. } => SourceSpec::Git {
                 url: url.clone(),
                 reference: reference.clone(),
             },
-            CodebaseSource::Path { path } => SourceSpec::Path { path: path.clone() },
+            CodebaseSource::Path { path, .. } => SourceSpec::Path { path: path.clone() },
         };
         let source = resolve_source(&spec, &base_dir, "codebase")
             .map_err(|error| RunError::msg(format!("eval '{}': {error}", eval.id)))?;

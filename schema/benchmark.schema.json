@@ -107,6 +107,10 @@
           "type": "boolean",
           "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
         },
+        "exclude_skill_sources": {
+          "type": "boolean",
+          "description": "Whether project-local skill roots discoverable by the selected harness were removed from the comparison environment before staging."
+        },
         "evals": {
           "type": "array",
           "items": { "type": "string" },

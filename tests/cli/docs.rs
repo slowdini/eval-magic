@@ -140,6 +140,7 @@ fn docs_byoh_keeps_the_authoring_workflow() {
         .stdout(contains("harness init"))
         .stdout(contains("harness lint"))
         .stdout(contains("--probe"))
+        .stdout(contains("additional_project_skill_dirs"))
         .stdout(contains("Upstreaming your descriptor"));
 }
 
@@ -156,6 +157,9 @@ fn docs_isolation_keeps_remedies_and_verification() {
         .stdout(contains("OPENCODE_DISABLE_EXTERNAL_SKILLS"))
         .stdout(contains("resumed"))
         .stdout(contains("isolates_live_sources"))
+        .stdout(contains("operator-environment"))
+        .stdout(contains("codebase-sourced"))
+        .stdout(contains("codebase.exclude_skill_sources"))
         .stdout(contains("claude plugin list"))
         .stdout(contains("`comparison-invalid`"))
         .stdout(contains("\"subtype\":\"init\""));
@@ -186,7 +190,11 @@ fn docs_codebase_keeps_the_declaration_rules_caveat_and_provisioning_contract() 
         .stdout(contains("independent working tree"))
         .stdout(contains("diff-scope.json"))
         .stdout(contains("diff.patch"))
-        .stdout(contains(".gitignore"));
+        .stdout(contains(".gitignore"))
+        .stdout(contains("exclude_skill_sources"))
+        .stdout(contains("codebase-sourced"))
+        .stdout(contains("CLAUDE.md"))
+        .stdout(contains(".opencode/skills"));
 }
 
 #[test]

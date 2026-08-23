@@ -250,7 +250,7 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
         "preflight detected the project-enabled plugin shadow by scanning the staged env"
     );
     let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(artifact["schema_version"], 2);
+    assert_eq!(artifact["schema_version"], 3);
     assert!(
         artifact.get("isolates_live_sources").is_none(),
         "false isolation assertions stay omitted"
@@ -291,7 +291,7 @@ fn declared_shadow_isolation_records_findings_as_informational_provenance() {
     assert!(!stderr.contains("Plugin-shadow warning"), "{stderr}");
 
     let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(artifact["schema_version"], 2);
+    assert_eq!(artifact["schema_version"], 3);
     assert_eq!(artifact["isolates_live_sources"], true);
     assert_eq!(artifact["findings"][0]["skill_name"], "mr-review");
     assert_eq!(artifact["findings"][0]["severity"], "comparison-invalid");

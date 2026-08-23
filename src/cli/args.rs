@@ -623,13 +623,15 @@ pub(crate) enum Commands {
     /// and rebuilding an explicit iteration resets prior Git history, branches,
     /// and remotes before dispatch.
     ///
-    /// Before dispatch, a shadow preflight scans every task environment for live
-    /// copies of the staged skills — installed plugins, global and cross-harness
-    /// skill directories — and warns when one could contaminate the comparison. It
-    /// reports what is discoverable, not what a dispatch loaded: eval-magic never
-    /// reads your command templates, so a remedy you applied is invisible to it.
-    /// Isolating each dispatch from those sources, and confirming it worked, is
-    /// `eval-magic docs isolation`.
+    /// Before dispatch, a shadow preflight scans every task environment for other
+    /// discoverable copies of evaluated skills. Schema-v3 `plugin-shadow.json`
+    /// distinguishes operator-environment sources (installed plugins, global and
+    /// cross-harness directories) from project skills preserved from a sourced
+    /// codebase. A codebase keeps its instructions, harness config, and project
+    /// skills by default; set its `exclude_skill_sources` field to remove only the
+    /// selected harness's project skill roots symmetrically before staging. See
+    /// `eval-magic docs codebase` for configuration and provenance, and
+    /// `eval-magic docs isolation` for operator-source remedies and verification.
     Run(RunArgs),
     /// Run every task in a prepared iteration through its harness CLI.
     ///
@@ -789,15 +791,18 @@ pub(crate) enum Commands {
     /// `validity_warnings` (including incomplete timing sample counts, one per
     /// task in `guard-denials.json`, and one per task in
     /// `permission-denials.json` whose refusals were not the guard's own, plus
-    /// grouped findings in schema-v2 `plugin-shadow.json` (legacy unversioned
-    /// reports remain readable) unless it records the resolved descriptor's
-    /// `isolates_live_sources = true` assertion), and raw per-run files/lines/hunks
-    /// from `diff-scope.json`. Each run's changed-file list and its `diff.patch`
-    /// stay in the run directory. Shadow findings retain their intrinsic warning or
-    /// comparison-invalid severity, per-cell appearances, resolution, and
-    /// remediation. A timing metric with `n: 0` is unavailable, not a measured
-    /// zero. The top-level `diff_scope` field is omitted for compatible older
-    /// iterations that predate metric capture.
+    /// grouped findings in schema-v3 `plugin-shadow.json` (v2 and legacy
+    /// unversioned reports remain readable). Findings distinguish
+    /// `operator-environment` sources from `codebase-sourced` project skills.
+    /// The resolved descriptor's `isolates_live_sources = true` assertion
+    /// suppresses only operator-environment findings; codebase findings require
+    /// the eval's separate `codebase.exclude_skill_sources` policy. The benchmark
+    /// also carries raw per-run files/lines/hunks from `diff-scope.json`. Each run's
+    /// changed-file list and its `diff.patch` stay in the run directory. Shadow
+    /// findings retain their intrinsic warning or comparison-invalid severity,
+    /// per-cell appearances, resolution, and remediation. A timing metric with
+    /// `n: 0` is unavailable, not a measured zero. The top-level `diff_scope` field
+    /// is omitted for compatible older iterations that predate metric capture.
     ///
     /// Read `validity_warnings` before trusting the delta. Raw `diff_scope` entries
     /// are diagnostic context rather than an optimization target: smaller is not

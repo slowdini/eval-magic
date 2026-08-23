@@ -574,6 +574,9 @@ fn collect_shadow_warnings(
         .as_ref()
         .is_some_and(|verification| verification.assertion_contradicted);
     if artifact.isolates_live_sources && !contradicted {
+        warnings.extend(artifact.validity_warnings_for_class(
+            crate::adapters::skill_shadow::ShadowFindingClass::CodebaseSourced,
+        ));
         return;
     }
     if contradicted {

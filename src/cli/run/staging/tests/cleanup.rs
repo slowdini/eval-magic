@@ -169,3 +169,123 @@ fn leaves_preexisting_skills_dir_in_place() {
     assert_eq!(read(&skills_dir.join("user-owned/SKILL.md")), "USER");
     assert!(!skills_dir.join("alpha").exists());
 }
+
+#[test]
+fn codebase_skill_exclusion_moves_all_discovery_roots_and_cleanup_restores_them() {
+    let tmp = TempDir::new().unwrap();
+    write(
+        &tmp.path().join(".opencode/skills/native/SKILL.md"),
+        "NATIVE",
+    );
+    write(
+        &tmp.path().join(".claude/skills/claude-compat/SKILL.md"),
+        "CLAUDE",
+    );
+    write(
+        &tmp.path().join(".agents/skills/agents-compat/SKILL.md"),
+        "AGENTS",
+    );
+    write(&tmp.path().join(".opencode/settings.json"), "{}");
+    write(&tmp.path().join("CLAUDE.md"), "claude instructions");
+    write(&tmp.path().join("AGENTS.md"), "agent instructions");
+
+    exclude_codebase_skill_sources(tmp.path(), "subject", Harness::resolve("opencode").unwrap())
+        .unwrap();
+
+    assert!(!tmp.path().join(".opencode/skills/native").exists());
+    assert!(!tmp.path().join(".claude/skills").exists());
+    assert!(!tmp.path().join(".agents/skills").exists());
+    assert_eq!(read(&tmp.path().join(".opencode/settings.json")), "{}");
+    assert_eq!(read(&tmp.path().join("CLAUDE.md")), "claude instructions");
+    assert_eq!(read(&tmp.path().join("AGENTS.md")), "agent instructions");
+
+    cleanup_staged_skills(tmp.path(), Harness::resolve("opencode").unwrap()).unwrap();
+
+    assert_eq!(
+        read(&tmp.path().join(".opencode/skills/native/SKILL.md")),
+        "NATIVE"
+    );
+    assert_eq!(
+        read(&tmp.path().join(".claude/skills/claude-compat/SKILL.md")),
+        "CLAUDE"
+    );
+    assert_eq!(
+        read(&tmp.path().join(".agents/skills/agents-compat/SKILL.md")),
+        "AGENTS"
+    );
+}
+
+#[test]
+fn cleanup_rejects_undeclared_excluded_root_before_removing_native_skills() {
+    let tmp = TempDir::new().unwrap();
+    let harness = Harness::resolve("opencode").unwrap();
+    write(
+        &tmp.path().join(".opencode/skills/native/SKILL.md"),
+        "NATIVE",
+    );
+    let backup = make_backup_root().unwrap().join("skill-root");
+    write(&backup.join("subject/SKILL.md"), "SUBJECT");
+    let manifest = SiblingManifest {
+        created_at: "test".into(),
+        staged_under_test: "subject".into(),
+        skills_dir_preexisting: Some(true),
+        created_entries: Vec::new(),
+        excluded_roots: vec![ExcludedRoot {
+            path: "undeclared/skills".into(),
+            backup_path: backup.display().to_string(),
+        }],
+    };
+    write_json(
+        &tmp.path()
+            .join(".opencode/skills")
+            .join(STAGED_SIBLING_MANIFEST),
+        &manifest,
+    )
+    .unwrap();
+
+    let error = cleanup_staged_skills(tmp.path(), harness).unwrap_err();
+
+    assert!(error.to_string().contains("undeclared project skill root"));
+    assert_eq!(
+        read(&tmp.path().join(".opencode/skills/native/SKILL.md")),
+        "NATIVE"
+    );
+}
+
+#[test]
+fn cleanup_rejects_unmanaged_exclusion_backup_before_removing_native_skills() {
+    let tmp = TempDir::new().unwrap();
+    let harness = Harness::resolve("opencode").unwrap();
+    write(
+        &tmp.path().join(".opencode/skills/native/SKILL.md"),
+        "NATIVE",
+    );
+    let backup = tmp.path().join("unmanaged/skill-root");
+    write(&backup.join("subject/SKILL.md"), "SUBJECT");
+    let manifest = SiblingManifest {
+        created_at: "test".into(),
+        staged_under_test: "subject".into(),
+        skills_dir_preexisting: Some(true),
+        created_entries: Vec::new(),
+        excluded_roots: vec![ExcludedRoot {
+            path: ".opencode/skills".into(),
+            backup_path: backup.display().to_string(),
+        }],
+    };
+    write_json(
+        &tmp.path()
+            .join(".opencode/skills")
+            .join(STAGED_SIBLING_MANIFEST),
+        &manifest,
+    )
+    .unwrap();
+
+    let error = cleanup_staged_skills(tmp.path(), harness).unwrap_err();
+
+    assert!(error.to_string().contains("unmanaged exclusion backup"));
+    assert_eq!(
+        read(&tmp.path().join(".opencode/skills/native/SKILL.md")),
+        "NATIVE"
+    );
+    assert!(backup.exists());
+}

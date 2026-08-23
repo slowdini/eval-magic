@@ -17,6 +17,12 @@
       "minLength": 1,
       "description": "Project-local staged-skills directory, `/`-separated relative to the repo root (e.g. \".claude/skills\"). Optional: a harness without one cannot stage skills natively, so runs fall back to --no-stage (each SKILL.md inlined into its dispatch prompt) with a preflight warning."
     },
+    "additional_project_skill_dirs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Additional project-local skill roots the harness discovers for compatibility with other harness conventions. These roots participate in codebase shadow detection and opt-in exclusion but never receive staged skills."
+    },
     "config_dirs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },

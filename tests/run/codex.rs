@@ -457,7 +457,7 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
         .stderr(contains("Move or rename"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["schema_version"], 3);
     assert_eq!(report["findings"][0]["skill_name"], "mr-review");
     assert_eq!(report["findings"][0]["role"], "subject");
     let sources = report["findings"][0]["sources"].as_array().unwrap();

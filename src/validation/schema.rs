@@ -298,11 +298,12 @@ mod tests {
     }
 
     #[test]
-    fn validates_v2_plugin_shadow_artifacts() {
+    fn validates_v3_plugin_shadow_artifacts() {
         let artifact = json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "config_dir": "/home/u/.config/opencode",
             "findings": [{
+                "class": "operator-environment",
                 "skill_name": "mr-review",
                 "role": "subject",
                 "severity": "comparison-invalid",

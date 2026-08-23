@@ -347,16 +347,19 @@ global `.opencode`, `.claude`, and `.agents` skill dirs — including skills ins
 harnesses. A logical eval skill present in any such source can contaminate the with/without
 comparison when dispatches load that source, even when the staged copy uses a unique slug.
 
-*What it unlocks:* a build-time contamination warning (shared banner + schema-v2
+*What it unlocks:* a build-time contamination warning (shared banner + schema-v3
 `plugin-shadow.json` in the iteration dir), which `aggregate` folds into `benchmark.json`
 validity warnings. The runner scans every matrix environment and the shared policy groups scanner
-facts by logical skill, records live/staged sources and affected cells, and assigns role-aware
-severity. Subject and asymmetric sibling collisions invalidate the comparison; symmetric sibling
-collisions warn. Because the scan runs before dispatch it reports *risk*, so the banner states the
-consequence conditionally; the verdict is settled afterwards by the session-surface sub-capability
-below. When the resolved descriptor declares `isolates_live_sources = true`, the scan, intrinsic
-severity, and artifact are retained, but the banner becomes an informational notice and `aggregate`
-omits the findings from validity warnings. Historical unversioned artifacts remain readable.
+facts by logical skill and source class, records live/staged sources and affected cells, and assigns
+role-aware severity. `operator-environment` findings come from inherited global/plugin sources;
+`codebase-sourced` findings come from project roots the harness descriptor declares. Subject and
+asymmetric sibling collisions invalidate the comparison; symmetric sibling collisions warn.
+Because the scan runs before dispatch it reports *risk*, so the banner states the consequence
+conditionally; the verdict is settled afterwards by the session-surface sub-capability below. When
+the resolved descriptor declares `isolates_live_sources = true`, operator-source scan facts,
+intrinsic severity, and artifact are retained, but the banner becomes informational and `aggregate`
+omits those findings. Codebase findings use the eval's separate `exclude_skill_sources` policy and
+remain warnings when preserved. Schema-v2 and historical unversioned artifacts remain readable.
 
 ### Session surface (sub-capability of transcript ingest)
 

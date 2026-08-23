@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::adapters::adapter_for;
 use crate::core::RunContext;
 use crate::core::fs::copy_entry_materialized;
 use crate::sandbox::guard_profiles::{detect_profiles, expand_policy};
@@ -14,8 +15,9 @@ use super::super::RunError;
 use super::super::dispatch::get_skill_description;
 use super::super::fixtures::{FixtureClaims, copy_fixtures};
 use super::super::staging::{
-    StageSiblingOpts, StageSkillOpts, cleanup_staged_skills, register_staged_skill_for_cleanup,
-    skills_dir_for_harness, stage_sibling_skills, stage_skill_for_harness,
+    StageSiblingOpts, StageSkillOpts, cleanup_staged_skills, exclude_codebase_skill_sources,
+    register_staged_skill_for_cleanup, skills_dir_for_harness, stage_sibling_skills,
+    stage_skill_for_harness,
 };
 use super::super::util::{harness_label, resolve_plan_mode_profile};
 use super::envs::{EnvLayoutInput, env_targets};
@@ -98,6 +100,10 @@ pub(super) fn stage_conditions(
     // environment sharing a codebase is provisioned from one materialization.
     let mut materialized: HashMap<String, PathBuf> = HashMap::new();
     let mut guard_policies = HashMap::new();
+    let mut codebase_shadow_sources = HashMap::new();
+    let evaluated_names = std::iter::once(ctx.skill_name.as_str())
+        .chain(ctx.sibling_skill_names.iter().map(String::as_str))
+        .collect::<Vec<_>>();
 
     for target in &targets {
         // Disarm a prior run's guard before re-staging, so a crashed run can't leave
@@ -106,6 +112,13 @@ pub(super) fn stage_conditions(
         teardown_guard(&target.root);
 
         let codebase = r.codebase_for(&target.eval_ids)?;
+        if target.root.exists() && adapter_for(ctx.harness).skills_dir(&target.root).is_some() {
+            // Undo only runner-owned staging/exclusion from the reused environment
+            // before it is reused or replaced. Never run this legacy cleanup
+            // against a freshly provisioned codebase: it may legitimately own
+            // a directory whose name uses the historical staging prefix.
+            cleanup_staged_skills(&target.root, ctx.harness)?;
+        }
         if codebase.is_some() && target.root.exists() {
             // An explicit `--iteration N` rebuild would otherwise lay a fresh
             // codebase over the last run's tree, including whatever the previous
@@ -125,16 +138,26 @@ pub(super) fn stage_conditions(
             fs::create_dir_all(&target.root)?;
         }
 
-        if !opts.no_stage {
-            cleanup_staged_skills(&target.root, ctx.harness)?;
-            if ctx.stage_siblings {
-                stage_sibling_skills(&StageSiblingOpts {
-                    skill_under_test: &ctx.skill_name,
-                    skills_source_dir: &skills,
-                    repo_root: &target.root,
-                    harness: ctx.harness,
-                })?;
+        if let Some(codebase) = codebase {
+            let inventoried = super::shadow_preflight::scan_codebase_skill_sources(
+                &target.root,
+                ctx.harness,
+                &evaluated_names,
+            );
+            if codebase.declared.exclude_skill_sources() {
+                exclude_codebase_skill_sources(&target.root, &ctx.skill_name, ctx.harness)?;
+            } else if !inventoried.is_empty() {
+                codebase_shadow_sources.insert(target.root.clone(), inventoried);
             }
+        }
+
+        if !opts.no_stage && ctx.stage_siblings {
+            stage_sibling_skills(&StageSiblingOpts {
+                skill_under_test: &ctx.skill_name,
+                skills_source_dir: &skills,
+                repo_root: &target.root,
+                harness: ctx.harness,
+            })?;
         }
 
         for (cond_name, cond_skill_path) in &target.conditions {
@@ -210,6 +233,7 @@ pub(super) fn stage_conditions(
         bootstrap_content,
         plan_mode_content,
         guard_policies,
+        codebase_shadow_sources,
     })
 }
 

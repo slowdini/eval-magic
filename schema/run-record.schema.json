@@ -274,6 +274,10 @@
           "type": "boolean",
           "description": "True when the source cannot be resolved off the host that ran it, so a published claim citing it is not reproducible from the eval config alone."
         },
+        "exclude_skill_sources": {
+          "type": "boolean",
+          "description": "Whether project-local skill roots discoverable by the selected harness were removed from the task environment before staging."
+        },
         "dirty": {
           "type": "boolean",
           "description": "True when the copy this record describes carries uncommitted work from its source, so revision alone does not name what ran. A codebase is checked out at a commit and is never dirty; a skill is copied as it sits on disk and can be."

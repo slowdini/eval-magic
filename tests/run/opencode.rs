@@ -367,7 +367,7 @@ fn opencode_warns_when_live_skill_shadows_staged_skill() {
         .stderr(contains("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["schema_version"], 3);
     assert_eq!(report["findings"][0]["skill_name"], "mr-review");
     let sources = report["findings"][0]["sources"].as_array().unwrap();
     let live = sources
