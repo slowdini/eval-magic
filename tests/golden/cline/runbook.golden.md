@@ -33,7 +33,10 @@ eval-magic ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --h
 `ingest` records each run, backfills transcripts, scans for stray writes, collects guarded-task
 blocks into `guard-denials.json`, and grades every mechanical assertion. Inspect any denial
 warning before trusting the affected task. It then prints any `llm_judge` tasks it could not
-grade itself.
+grade itself. Each run's bounded `judge-evidence.md` combines the task, final message, diff,
+conversation, tool summary, and source paths; those exact bytes are the primary input shared by
+that run's judge tasks. Read `eval-magic docs judging` for its caps, truncation markers, and
+retention contract.
 
 ## 2. Dispatch the judge agents, then finalize
 

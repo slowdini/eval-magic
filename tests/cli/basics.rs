@@ -184,7 +184,21 @@ fn promote_help_documents_baseline_artifacts() {
         .stdout(contains("evals/baseline"))
         .stdout(contains("benchmark.json"))
         .stdout(contains("grading/"))
+        .stdout(contains("evidence/"))
+        .stdout(contains("judge-evidence.md"))
         .stdout(contains("NOTES.md"));
+}
+
+#[test]
+fn grade_help_documents_bounded_judge_evidence() {
+    skill_eval()
+        .args(["grade", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("judge-evidence.md"))
+        .stdout(contains("98,304-byte"))
+        .stdout(contains("131,072-byte"))
+        .stdout(contains("eval-magic docs judging"));
 }
 
 /// `--guard` and `--no-guard` are contradictory and rejected at parse time.

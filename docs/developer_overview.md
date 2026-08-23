@@ -25,8 +25,10 @@ focused internal notes instead of duplicating their details.
    its turns. Each task ends with a `conversation.json`, which is also what a rerun skips on.
 4. `eval-magic ingest` reads the harness outputs, transcript evidence, guard denials, and final
    task state. Runner-owned deterministic checks and diff-scope evidence are collected here.
-5. `eval-magic grade` evaluates runner-owned assertions and emits tasks for assertions that require
-   an LLM. `eval-magic dispatch --judges` runs those judge tasks through the selected harness.
+5. `eval-magic grade` evaluates runner-owned assertions, writes one bounded `judge-evidence.md`
+   per recorded run, and emits tasks for assertions that require an LLM. Each task inlines the
+   exact bundle for its run. `eval-magic dispatch --judges` runs those judge tasks through the
+   selected harness.
 6. `eval-magic finalize` checks that required work is complete and writes the final per-run and
    benchmark artifacts. `eval-magic aggregate` combines campaigns when a larger comparison is
    needed.
@@ -153,3 +155,5 @@ implementation evidence in an internal note.
   `eval-magic docs guard`.
 - [Shipped conversations guide](guides/conversations.md) is the repository source for
   `eval-magic docs conversations`.
+- [Shipped judging guide](guides/judging.md) is the repository source for
+  `eval-magic docs judging`.

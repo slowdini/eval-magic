@@ -13,6 +13,7 @@
 
 pub mod command_check;
 pub mod diff_scope;
+pub mod evidence;
 pub mod finalize;
 pub mod judge_tasks;
 pub mod transcript_check;

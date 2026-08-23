@@ -55,6 +55,11 @@ fn promote_baseline_copies_artifacts_and_reports() {
         r#"{"summary":{"pass_rate":1}}"#,
     )
     .unwrap();
+    fs::write(
+        cond_dir.join("judge-evidence.md"),
+        "# Judge evidence bundle\n\nexact bounded evidence\n",
+    )
+    .unwrap();
 
     skill_eval()
         .current_dir(&cwd)
@@ -65,17 +70,22 @@ fn promote_baseline_copies_artifacts_and_reports() {
         .success()
         .stderr("")
         .stdout(contains("Promoted baseline for mr-review"))
-        .stdout(contains("1 grading file "));
+        .stdout(contains("1 grading file "))
+        .stdout(contains("1 evidence bundle"));
 
     let baseline = skill_sub.join("evals").join("baseline");
     assert!(baseline.join("benchmark.json").exists());
     assert!(baseline.join("grading/e1__with_skill.json").exists());
+    assert_eq!(
+        fs::read_to_string(baseline.join("evidence/e1__with_skill.md")).unwrap(),
+        "# Judge evidence bundle\n\nexact bounded evidence\n"
+    );
     assert!(baseline.join("BASELINE.md").exists());
     assert!(iteration_dir.join(".promoted.json").exists());
 }
 
 /// `promote-baseline`: a multi-run (`runs > 1`) cell stores each run's grading
-/// under an `__r<k>` filename, and the reported count covers every run.
+/// and exact bounded evidence under matching `__r<k>` filenames.
 #[test]
 fn promote_baseline_captures_multi_run_gradings() {
     let (_tmp, root) = canonical_root();
@@ -104,6 +114,11 @@ fn promote_baseline_captures_multi_run_gradings() {
             r#"{"summary":{"pass_rate":1}}"#,
         )
         .unwrap();
+        fs::write(
+            run_dir.join("judge-evidence.md"),
+            format!("# Judge evidence bundle\n\nrun {k}\n"),
+        )
+        .unwrap();
     }
 
     skill_eval()
@@ -114,11 +129,20 @@ fn promote_baseline_captures_multi_run_gradings() {
         .assert()
         .success()
         .stderr("")
-        .stdout(contains("2 grading files"));
+        .stdout(contains("2 grading files"))
+        .stdout(contains("2 evidence bundles"));
 
     let baseline = skill_sub.join("evals").join("baseline");
     assert!(baseline.join("grading/e1__with_skill__r1.json").exists());
     assert!(baseline.join("grading/e1__with_skill__r2.json").exists());
+    assert_eq!(
+        fs::read_to_string(baseline.join("evidence/e1__with_skill__r1.md")).unwrap(),
+        "# Judge evidence bundle\n\nrun 1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(baseline.join("evidence/e1__with_skill__r2.md")).unwrap(),
+        "# Judge evidence bundle\n\nrun 2\n"
+    );
 }
 
 /// `promote-baseline`: a run cell dispatched but never graded is surfaced as a
@@ -153,7 +177,53 @@ fn promote_baseline_warns_when_run_cells_missing_gradings() {
         .args(["--skill", "mr-review", "--iteration", "2"])
         .assert()
         .success()
-        .stderr(contains("missing grading.json"));
+        .stderr(contains("missing grading.json"))
+        .stderr(contains("1 run cell missing judge-evidence.md"));
+}
+
+/// A missing legacy bundle cannot leave an older run's evidence beside the new
+/// grading, where it would appear to support a verdict it never informed.
+#[test]
+fn promote_baseline_removes_stale_evidence_when_legacy_bundle_is_missing() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+    let stale = skill_sub
+        .join("evals/baseline/evidence")
+        .join("e1__with_skill.md");
+    fs::create_dir_all(stale.parent().unwrap()).unwrap();
+    fs::write(&stale, "stale evidence from an older baseline\n").unwrap();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join(".eval-magic")
+        .join("mr-review")
+        .join("iteration-2");
+    let cond_dir = iteration_dir.join("eval-e1/with_skill");
+    fs::create_dir_all(&cond_dir).unwrap();
+    fs::write(
+        iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0.5}}"#,
+    )
+    .unwrap();
+    fs::write(
+        cond_dir.join("grading.json"),
+        r#"{"summary":{"pass_rate":1}}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["promote-baseline", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "2"])
+        .assert()
+        .success()
+        .stderr(contains("1 run cell missing judge-evidence.md"));
+
+    assert!(
+        !stale.exists(),
+        "a prior bundle cannot describe a new grading"
+    );
 }
 
 /// `promote-baseline`: a fresh promotion (no prior NOTES.md) writes a stub and
