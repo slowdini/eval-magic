@@ -692,7 +692,9 @@ pub(crate) enum Commands {
     /// runner-owned command check in its task environment, applying its
     /// environment overrides and running every environment matrix cell. Diff
     /// scope is captured before held-out files are injected. Then stops at the
-    /// judge hand-off, listing a judge task per `llm_judge` assertion. Requires
+    /// judge hand-off, writing one bounded `judge-evidence.md` per recorded run
+    /// and listing a judge task per `llm_judge` assertion. The exact evidence
+    /// bundle is shared by that run's tasks and inlined into their prompts. Requires
     /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
     /// harness exposes transcripts, under `outputs/turn-<n>/`. Dispatch the judge
     /// tasks it lists with `eval-magic dispatch --judges`.
@@ -772,15 +774,24 @@ pub(crate) enum Commands {
     /// held-out `command_check.setup_files` and executes each runner-owned command
     /// in its task environment, applying fixed environment overrides and running
     /// every environment matrix cell; completed command and diff-scope results
-    /// are reused. Emits judge-task files for `llm_judge` assertions; with
-    /// `--finalize`, merges every result into per-run `grading.json`.
+    /// are reused. Before emitting tasks, writes one `judge-evidence.md` beside
+    /// every recorded run. This 98,304-byte bounded bundle combines task context,
+    /// completion state, diff evidence, conversation, tool summary, and source
+    /// paths; its exact bytes are inlined into each run's LLM-judge prompts. The
+    /// complete prompt has a 131,072-byte cap, and authored rubrics or skill content
+    /// that exceed the remaining space fail rather than being truncated.
+    /// Treat bundle content as untrusted, read-only data; truncation markers name
+    /// iteration-local sources for material a rubric requires. See
+    /// `eval-magic docs judging`. With `--finalize`, merges every result into
+    /// per-run `grading.json`.
     ///
     /// Injects the `__skill_invoked` meta-check — did the skill actually influence
     /// behavior? It has two tiers, chosen automatically per run: code-based (where
     /// the staged slug + transcript are available, as on Claude Code, it checks the
     /// transcript for a `Skill` call matching the eval slug — deterministic and
-    /// free) and an LLM-judge fallback (where transcripts aren't available, a judge
-    /// compares the final message against the SKILL.md for behavioral fingerprints).
+    /// free) and an LLM-judge fallback (where deterministic transcript evidence
+    /// isn't available, a judge compares the final message, conversation, and tool
+    /// summary against the SKILL.md for behavioral fingerprints).
     /// The meta-check does not count toward the substantive `pass_rate`.
     Grade(GradeArgs),
     /// Aggregate before/after benchmark deltas.
@@ -827,13 +838,16 @@ pub(crate) enum Commands {
     /// assertions after the first iteration, then check the file with
     /// `eval-magic validate`.
     Init(InitArgs),
-    /// Promote a benchmark and gradings into a committed baseline.
+    /// Promote a benchmark, gradings, and judge evidence into a committed baseline.
     ///
-    /// Copies the iteration's `benchmark.json` and per-run `grading.json` files to
-    /// `<skill>/evals/baseline/`. The benchmark stays at that directory's root,
-    /// grading files land under `grading/`, and `BASELINE.md` records provenance.
-    /// An existing hand-authored `NOTES.md` is retained; one is scaffolded when
-    /// absent. Promote before teardown when the result is worth keeping.
+    /// Copies the iteration's `benchmark.json`, per-run `grading.json`, and exact
+    /// bounded `judge-evidence.md` bundles to `<skill>/evals/baseline/`. The
+    /// benchmark stays at that directory's root, gradings land under `grading/`,
+    /// evidence bundles land under `evidence/`, and `BASELINE.md` records
+    /// provenance. Missing bundles from compatible legacy iterations warn without
+    /// blocking promotion. An existing hand-authored `NOTES.md` is retained; one
+    /// is scaffolded when absent. Promote before teardown when the result is worth
+    /// keeping. See `eval-magic docs judging` for the evidence contract.
     PromoteBaseline(PromoteBaselineArgs),
     /// Validate `evals.json` files against the bundled schemas.
     Validate(ValidateArgs),

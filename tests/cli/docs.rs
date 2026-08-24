@@ -219,6 +219,29 @@ fn docs_guard_keeps_configuration_defaults_and_boundary_contracts() {
         .stdout(contains("eval-magic docs guard"));
 }
 
+/// Judge evidence is the primary grading input, so the shipped reference must
+/// keep the bounds, trust boundary, source fallback, and retention contract.
+#[test]
+fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
+    skill_eval()
+        .args(["docs", "judging"])
+        .assert()
+        .success()
+        .stdout(contains("# Judge evidence bundles"))
+        .stdout(contains("judge-evidence.md"))
+        .stdout(contains("98,304 bytes"))
+        .stdout(contains("131,072 bytes"))
+        .stdout(contains("diff.patch"))
+        .stdout(contains("run.json"))
+        .stdout(contains("final_message"))
+        .stdout(contains("conversation transcript"))
+        .stdout(contains("tool invocation summary"))
+        .stdout(contains("truncated"))
+        .stdout(contains("untrusted"))
+        .stdout(contains("read-only"))
+        .stdout(contains("evals/baseline/evidence"));
+}
+
 #[test]
 fn shipped_guides_do_not_depend_on_repository_relative_links() {
     for (topic, _, body, path) in guide_sources() {

@@ -102,6 +102,9 @@ fn grade_codex_staged_run_uses_llm_meta_check_with_skill_content() {
     let prompt =
         fs::read_to_string(cond_dir.join("judge-prompts").join("__skill_invoked.txt")).unwrap();
     assert!(prompt.contains("MERGE-RISK-LADDER"));
+    assert!(prompt.contains(
+        "Compare the agent's `final_message`, conversation transcript, and tool invocation summary against the skill content."
+    ));
 }
 
 /// `grade` (emit): evals marked `skill_should_trigger: false` get no meta-check.
@@ -644,6 +647,30 @@ fn grade_writes_prompt_files_and_drops_inline_prompt() {
         let assertion_id = t["assertion_id"].as_str().unwrap();
         assert!(prompt_path.ends_with(&format!("{assertion_id}.txt")));
         let contents = fs::read_to_string(prompt_path).unwrap();
+        let evidence = &t["evidence_bundle"];
+        assert_eq!(evidence["byte_limit"], json!(98_304));
+        assert_eq!(evidence["truncated"], json!(false));
+        let evidence_path = evidence["path"].as_str().unwrap();
+        assert!(evidence_path.ends_with("judge-evidence.md"));
+        let evidence_contents = fs::read_to_string(evidence_path).unwrap();
+        assert_eq!(
+            evidence["bytes"],
+            json!(evidence_contents.len()),
+            "judge-tasks records the exact persisted bundle size"
+        );
+        assert!(evidence_contents.contains("# Judge evidence bundle"));
+        assert!(evidence_contents.contains("## `prompt`"));
+        assert!(evidence_contents.contains("## `final_message`"));
+        assert!(evidence_contents.contains("done"));
+        assert!(evidence_contents.contains("one-shot run; no conversation record"));
+        assert!(evidence_contents.contains("diff evidence is unavailable"));
+        assert!(contents.contains(&evidence_contents));
+        assert_eq!(t["dispatch_prompt_byte_limit"], json!(131_072));
+        assert_eq!(
+            t["dispatch_prompt_bytes"],
+            json!(contents.len()),
+            "judge-tasks records the exact prompt size"
+        );
         assert!(contents.contains(t["response_path"].as_str().unwrap()));
         assert!(contents.contains("Grade only this one assertion"));
         assert!(contents.contains("Do not run eval-magic"));

@@ -38,8 +38,8 @@ pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Promote an iteration's `benchmark.json` + per-run gradings into the skill's
-/// committed `evals/baseline/`, dropping a `.promoted.json` marker.
+/// Promote an iteration's benchmark, gradings, and bounded judge evidence into
+/// the skill's committed `evals/baseline/`, dropping a `.promoted.json` marker.
 pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
     let iteration = resolve_iteration(&ctx, args.common.iteration)?;
@@ -57,17 +57,26 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
     })?;
 
     let n = result.gradings_copied;
+    let evidence = result.evidence_copied;
     println!(
-        "Promoted baseline for {} → {} (benchmark.json + {n} grading file{} + BASELINE.md)",
+        "Promoted baseline for {} → {} (benchmark.json + {n} grading file{} + {evidence} evidence bundle{} + BASELINE.md)",
         ctx.skill_name,
         result.baseline_dir.display(),
-        if n == 1 { "" } else { "s" }
+        if n == 1 { "" } else { "s" },
+        if evidence == 1 { "" } else { "s" }
     );
     if result.missing_gradings > 0 {
         let m = result.missing_gradings;
         eprintln!(
             "⚠ {m} run cell{} missing grading.json — omitted from the baseline. \
              Run grade/aggregate to complete the iteration before promoting.",
+            if m == 1 { "" } else { "s" }
+        );
+    }
+    if result.missing_evidence > 0 {
+        let m = result.missing_evidence;
+        eprintln!(
+            "⚠ {m} run cell{} missing judge-evidence.md — retained gradings have no bounded evidence bundle. Re-grade the iteration to create it before promoting again.",
             if m == 1 { "" } else { "s" }
         );
     }

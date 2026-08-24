@@ -1,11 +1,12 @@
 //! Baseline promotion.
 //!
 //! Copy the durable, reference-worthy
-//! subset of a workspace iteration (`benchmark.json`, per-run `grading.json`, a
-//! `BASELINE.md` provenance file) into the skill's version-controlled
-//! `evals/baseline/`, and drop a `.promoted.json` marker so `teardown` can
-//! reclaim the iteration. Ephemeral scaffolding (dispatch/timing/run records,
-//! produced outputs, transcripts) is intentionally left behind.
+//! subset of a workspace iteration (`benchmark.json`, per-run `grading.json`
+//! and bounded `judge-evidence.md`, a `BASELINE.md` provenance file) into the
+//! skill's version-controlled `evals/baseline/`, and drop a `.promoted.json`
+//! marker so `teardown` can reclaim the iteration. Unbounded scaffolding
+//! (dispatch/timing/run records, produced outputs, transcripts) is intentionally
+//! left behind.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -39,10 +40,14 @@ pub struct PromoteOptions<'a> {
 pub struct PromoteResult {
     pub baseline_dir: PathBuf,
     pub gradings_copied: usize,
+    pub evidence_copied: usize,
     /// Run slots whose `grading.json` was absent and therefore not copied — a
     /// sign the iteration was promoted before grading finished. Surfaced as a
     /// warning so the gap isn't silent.
     pub missing_gradings: usize,
+    /// Run slots whose bounded evidence bundle was absent. Older iterations did
+    /// not produce one, so promotion reports rather than rejects the gap.
+    pub missing_evidence: usize,
     pub notes: NotesStatus,
 }
 
@@ -98,11 +103,14 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
         .unwrap_or_else(|| opts.skill_subdir.to_path_buf());
     let baseline_dir = skill_subdir.join("evals").join("baseline");
     let grading_dir = baseline_dir.join("grading");
+    let evidence_dir = baseline_dir.join("evidence");
     fs::create_dir_all(&grading_dir)?;
+    fs::create_dir_all(&evidence_dir)?;
 
     fs::copy(&benchmark_src, baseline_dir.join("benchmark.json"))?;
 
     let (gradings_copied, missing_gradings) = copy_gradings(&iteration_dir, &grading_dir)?;
+    let (evidence_copied, missing_evidence) = copy_evidence(&iteration_dir, &evidence_dir)?;
 
     let head = git_head(&skill_subdir);
     fs::write(
@@ -126,7 +134,9 @@ pub fn promote_baseline(opts: &PromoteOptions) -> Result<PromoteResult, Workspac
     Ok(PromoteResult {
         baseline_dir,
         gradings_copied,
+        evidence_copied,
         missing_gradings,
+        missing_evidence,
         notes,
     })
 }
@@ -193,6 +203,53 @@ fn copy_gradings(
                     None => format!("{eval_id}__{cond_name}.json"),
                 };
                 fs::copy(&grading_src, grading_dir.join(dest))?;
+                copied += 1;
+            }
+        }
+    }
+    Ok((copied, missing))
+}
+
+/// Copy the exact bounded evidence behind each retained grading. Destination
+/// names mirror `grading/`, so one stem joins a verdict to its evidence; an
+/// ungraded run is already reported by `copy_gradings` and has nothing to pair.
+fn copy_evidence(
+    iteration_dir: &Path,
+    evidence_dir: &Path,
+) -> Result<(usize, usize), WorkspaceError> {
+    let mut copied = 0;
+    let mut missing = 0;
+    for eval_name in sorted_entry_names(iteration_dir) {
+        let Some(eval_id) = eval_name.strip_prefix("eval-") else {
+            continue;
+        };
+        let eval_dir = iteration_dir.join(&eval_name);
+        if !eval_dir.is_dir() {
+            continue;
+        }
+        for cond_name in sorted_entry_names(&eval_dir) {
+            let cond_dir = eval_dir.join(&cond_name);
+            if !cond_dir.is_dir() {
+                continue;
+            }
+            for slot in run_slots(&cond_dir) {
+                if !slot.dir.join("grading.json").exists() {
+                    continue;
+                }
+                let destination = match slot.run_index {
+                    Some(run) => format!("{eval_id}__{cond_name}__r{run}.md"),
+                    None => format!("{eval_id}__{cond_name}.md"),
+                };
+                let destination = evidence_dir.join(destination);
+                let source = slot.dir.join("judge-evidence.md");
+                if !source.exists() {
+                    if destination.exists() {
+                        fs::remove_file(&destination)?;
+                    }
+                    missing += 1;
+                    continue;
+                }
+                fs::copy(source, destination)?;
                 copied += 1;
             }
         }
@@ -410,6 +467,8 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         "- `benchmark.json` — aggregate pass-rate / duration / token deltas plus per-assertion pass counts."
             .to_string(),
         "- `grading/<eval-id>__<condition>.json` (multi-run cells add an `__r<k>` suffix per run) — assertion results and judge rationales."
+            .to_string(),
+        "- `evidence/<eval-id>__<condition>.md` (multi-run cells add an `__r<k>` suffix per run) — the exact bounded run evidence inlined for judge tasks."
             .to_string(),
         "- `NOTES.md` — operator-authored observations for this baseline (never overwritten by promote)."
             .to_string(),

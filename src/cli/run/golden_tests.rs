@@ -139,6 +139,8 @@ fn golden_runbook_per_harness() {
             num_tasks: 6,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
         });
+        assert!(book.contains("judge-evidence.md"));
+        assert!(book.contains("eval-magic docs judging"));
         assert_golden(&format!("{label}/runbook.golden.md"), &book);
     }
 }

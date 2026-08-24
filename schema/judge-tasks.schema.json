@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/judge-tasks.schema.json",
   "title": "Judge Tasks",
-  "description": "Output of evals:grade (emit mode). The list of LLM judge tasks the orchestrator dispatches, plus the skill-invocation meta-checks. Lives at <workspace>/iteration-N/judge-tasks.json. The full prompt is written to dispatch_prompt_path and is NOT inlined here.",
+  "description": "Output of evals:grade (emit mode). The list of LLM judge tasks the orchestrator dispatches, plus the skill-invocation meta-checks. Lives at <workspace>/iteration-N/judge-tasks.json. The full prompt is written to dispatch_prompt_path and is NOT inlined here; evidence_bundle accounts for the exact bounded run evidence inlined into that prompt.",
   "type": "object",
   "required": [
     "generated",
@@ -35,7 +35,10 @@
         "run_record_path",
         "outputs_dir",
         "response_path",
-        "dispatch_prompt_path"
+        "dispatch_prompt_path",
+        "evidence_bundle",
+        "dispatch_prompt_bytes",
+        "dispatch_prompt_byte_limit"
       ],
       "additionalProperties": false,
       "properties": {
@@ -59,7 +62,31 @@
         "dispatch_prompt_path": {
           "type": "string",
           "description": "Absolute path to the file holding the full judge prompt."
+        },
+        "evidence_bundle": {
+          "$ref": "#/definitions/evidenceBundle",
+          "description": "The persisted, bounded evidence shared by every judge task for this run and inlined byte-for-byte into the dispatch prompt."
+        },
+        "dispatch_prompt_bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Actual UTF-8 byte length of the complete dispatch prompt."
+        },
+        "dispatch_prompt_byte_limit": {
+          "type": "integer",
+          "const": 131072
         }
+      }
+    },
+    "evidenceBundle": {
+      "type": "object",
+      "required": ["path", "bytes", "byte_limit", "truncated"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "description": "Absolute grading-iteration path to judge-evidence.md." },
+        "bytes": { "type": "integer", "minimum": 0, "description": "Actual UTF-8 byte length of the persisted bundle." },
+        "byte_limit": { "type": "integer", "const": 98304 },
+        "truncated": { "type": "boolean", "description": "True when any bundle section or the captured source patch was truncated." }
       }
     }
   }

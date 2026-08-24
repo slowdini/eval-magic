@@ -483,6 +483,11 @@ fn revision_mode_measures_and_captures_the_diff_for_both_arms() {
         let patch = read_str(&cell.join("diff.patch"));
         assert!(patch.contains("-old"), "{condition}: {patch}");
         assert!(patch.contains("+new"), "{condition}: {patch}");
+        let evidence = read_str(&cell.join("judge-evidence.md"));
+        assert!(evidence.contains(&format!("Condition: `{condition}`")));
+        assert!(evidence.contains("1 files, +1/-1 lines"));
+        assert!(evidence.contains("-old"), "{condition}: {evidence}");
+        assert!(evidence.contains("+new"), "{condition}: {evidence}");
     }
 
     // The codebase and skill provenance #244 requires must survive the change.

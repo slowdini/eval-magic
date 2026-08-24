@@ -120,6 +120,9 @@ During `ingest`, Git measures that difference. Each run gets:
   any good. It always exists; for a run that changed nothing it is empty. A diff past the capture
   cap is cut at a line boundary and carries a marker saying so, and `patch.truncated` in
   `diff-scope.json` records it.
+- `judge-evidence.md` — the bounded grading input that combines this diff with the task, completion
+  state, conversation, and tool summary. See `eval-magic docs judging` for its limits, trust
+  boundary, and retained-baseline behavior.
 
 What counts is what Git counts, under the same rules the baseline commit was built under:
 
@@ -206,6 +209,7 @@ After a dispatch and `ingest`, read what the run produced:
 ```sh
 jq '{files_touched, lines_added, lines_removed, hunks, files, patch}' diff-scope.json
 head -50 diff.patch
+sed -n '1,240p' judge-evidence.md
 ```
 
 The same difference, spelled by Git itself, is `git diff refs/eval-magic/baseline` inside the

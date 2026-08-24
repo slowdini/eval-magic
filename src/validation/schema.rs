@@ -487,7 +487,13 @@ mod tests {
                 "rubric": "did it apply the skill?", "model": null, "is_meta": true,
                 "run_record_path": "/w/run.json", "outputs_dir": "/w/outputs",
                 "response_path": "/w/judge-responses/__skill_invoked.json",
-                "dispatch_prompt_path": "/w/judge-prompts/__skill_invoked.txt"
+                "dispatch_prompt_path": "/w/judge-prompts/__skill_invoked.txt",
+                "evidence_bundle": {
+                    "path": "/w/judge-evidence.md", "bytes": 1024,
+                    "byte_limit": 98304, "truncated": false
+                },
+                "dispatch_prompt_bytes": 4096,
+                "dispatch_prompt_byte_limit": 131072
             }]
         });
         let r: Result<Value, _> =
@@ -506,6 +512,12 @@ mod tests {
                 "rubric": "r", "model": null, "is_meta": false,
                 "run_record_path": "/w/run.json", "outputs_dir": "/w/outputs",
                 "response_path": "/w/r.json", "dispatch_prompt_path": "/w/p.txt",
+                "evidence_bundle": {
+                    "path": "/w/judge-evidence.md", "bytes": 1024,
+                    "byte_limit": 98304, "truncated": false
+                },
+                "dispatch_prompt_bytes": 4096,
+                "dispatch_prompt_byte_limit": 131072,
                 "dispatch_prompt": "SHOULD NOT BE HERE"
             }]
         });
