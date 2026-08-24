@@ -4,6 +4,7 @@
 //! below; the handlers lean on the shared context/iteration helpers in
 //! [`super`] (`crate::cli`).
 
+mod compare;
 mod docs;
 mod fixture;
 mod guard;
@@ -14,6 +15,7 @@ mod run;
 mod validate;
 mod workspace;
 
+pub(crate) use compare::run_compare;
 pub(crate) use docs::run_docs;
 pub(crate) use fixture::run_fixture;
 pub(crate) use guard::{run_guard, run_guard_codex, run_guard_hook, run_teardown_guard};

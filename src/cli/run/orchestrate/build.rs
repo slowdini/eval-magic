@@ -366,6 +366,11 @@ pub(super) fn write_dispatch(
     // `iteration_dir`, so `RunbookContext` keeps `iteration_dir`, not the env, and
     // the human drives from there. Generated, not version controlled.
     let target_args = command_target_args(ctx);
+    let eval_ids = r
+        .selected_evals
+        .iter()
+        .map(|eval| eval.id.clone())
+        .collect::<Vec<_>>();
     let runbook = build_runbook(&RunbookContext {
         harness: ctx.harness,
         skill_name: &ctx.skill_name,
@@ -375,6 +380,7 @@ pub(super) fn write_dispatch(
         cond_a: r.cond_a,
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
+        eval_ids: &eval_ids,
         target_args: &target_args,
     });
     fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;

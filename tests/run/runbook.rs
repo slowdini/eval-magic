@@ -38,6 +38,13 @@ fn the_runbook_names_exactly_one_task_dispatch_command() {
         book.contains("eval-magic dispatch --judges"),
         "judges dispatch through the runner too: {book}"
     );
+    assert_eq!(
+        book.matches("eval-magic compare --").count(),
+        2,
+        "one comparison command per selected eval: {book}"
+    );
+    assert!(book.contains("--eval one-shot"), "{book}");
+    assert!(book.contains("--eval scripted"), "{book}");
     for recipe_tool in ["xargs", "jq ", "tr -d"] {
         assert!(
             !book.contains(recipe_tool),

@@ -31,6 +31,7 @@ pub(crate) struct RunbookContext<'a> {
     pub cond_a: &'a str,
     pub cond_b: &'a str,
     pub num_tasks: usize,
+    pub eval_ids: &'a [String],
     /// The self-sufficient `--skill-dir … --skill …` selector (leading space),
     /// from [`command_target_args`](crate::cli::command_target_args).
     pub target_args: &'a str,
@@ -83,10 +84,22 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         "eval-magic finalize{} --iteration {} --harness {label}",
         ctx.target_args, ctx.iteration
     );
+    let compare_commands = ctx
+        .eval_ids
+        .iter()
+        .map(|eval_id| {
+            format!(
+                "eval-magic compare{} --iteration {} --eval {eval_id}",
+                ctx.target_args, ctx.iteration
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let teardown_cmd = format!("eval-magic teardown{} --harness {label}", ctx.target_args);
     vars.push(("HARNESS", &label));
     vars.push(("DISPATCH_CMD", &dispatch_cmd));
     vars.push(("INGEST_CMD", &ingest_cmd));
+    vars.push(("COMPARE_COMMANDS", &compare_commands));
     vars.push(("JUDGE_CMD", &judge_cmd));
     vars.push(("FINALIZE_CMD", &finalize_cmd));
     vars.push(("TEARDOWN_CMD", &teardown_cmd));
@@ -138,6 +151,7 @@ mod tests {
     #[test]
     fn runbook_is_human_followed_cli_recipe() {
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
+        let eval_ids = vec!["implement-widget".to_string()];
         let ctx = RunbookContext {
             harness: Harness::resolve("codex").unwrap(),
             skill_name: "widget-skill",
@@ -147,6 +161,7 @@ mod tests {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
+            eval_ids: &eval_ids,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
         };
         let book = build_runbook(&ctx);
@@ -226,6 +241,7 @@ mod tests {
     #[test]
     fn a_scripted_plan_reads_the_same_as_a_one_shot_plan() {
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
+        let eval_ids = vec!["implement-widget".to_string()];
         let context = |num_tasks: usize| RunbookContext {
             harness: Harness::resolve("codex").unwrap(),
             skill_name: "widget-skill",
@@ -235,6 +251,7 @@ mod tests {
             cond_a: "with_skill",
             cond_b: "without_skill",
             num_tasks,
+            eval_ids: &eval_ids,
             target_args: " --skill /tmp/widget-skill",
         };
         let book = build_runbook(&context(4));

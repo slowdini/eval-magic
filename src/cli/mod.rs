@@ -2,8 +2,9 @@
 //!
 //! A `clap` derive tree owns flag parsing and the generated help.
 //!
-//! - [`args`] — the command tree and every flag's doc comment (the primary
-//!   documentation surface); [`help`] holds the long-form worked examples.
+//! - [`args`] — the command tree and shared flag documentation (the primary
+//!   documentation surface); command-specific argument modules keep focused
+//!   additions out of that large tree, and [`help`] holds worked examples.
 //! - [`commands`] — one thin handler per subcommand, grouped by concern. Each
 //!   maps parsed args onto a library module and renders the result.
 //! - [`run`] — the `run` orchestrator. This is the bulk of the module: staging,
@@ -31,6 +32,7 @@ use crate::core::{DetectInput, Harness, RunContext, detect_run_context};
 
 mod args;
 mod commands;
+mod compare_args;
 mod help;
 mod run;
 
@@ -107,6 +109,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         Commands::Run(args) => run_run(args),
         Commands::Dispatch(args) => run_dispatch(args),
         Commands::Ingest(args) => run_ingest(args),
+        Commands::Compare(args) => run_compare(args),
         Commands::Finalize(args) => run_finalize(args),
         Commands::Init(args) => run_init(args),
         Commands::Validate(args) => run_validate(args),

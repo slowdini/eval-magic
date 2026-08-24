@@ -38,7 +38,20 @@ conversation, tool summary, and source paths; those exact bytes are the primary 
 that run's judge tasks. Read `eval-magic docs judging` for its caps, truncation markers, and
 retention contract.
 
-## 2. Dispatch the judge agents, then finalize
+## 2. Optional: explore paired evidence before grading
+
+`compare` puts both conditions' evidence for one eval in a single Markdown report and prints its
+path. Read that report with the driving agent to identify concrete candidate assertions. A single
+comparison is exploratory evidence, not a grade or a statistically reliable result.
+
+```
+eval-magic compare --skill-dir /tmp/skills --skill widget-skill --iteration 2 --eval implement-widget
+```
+
+The commands cover every eval selected for this iteration. They require no authored assertions,
+judge dispatches, or finalized benchmark.
+
+## 3. Dispatch the judge agents, then finalize
 
 ```
 eval-magic dispatch --judges --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code
@@ -53,7 +66,7 @@ Then merge the verdicts and aggregate:
 eval-magic finalize --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code
 ```
 
-## 3. Read the result
+## 4. Read the result
 
 `finalize` writes the cross-condition benchmark to:
 
@@ -63,7 +76,7 @@ eval-magic finalize --skill-dir /tmp/skills --skill widget-skill --iteration 2 -
 
 Read it for the per-condition pass rates and the `old_skill` − `new_skill` deltas.
 
-## 4. Tear down
+## 5. Tear down
 
 ```
 eval-magic teardown --skill-dir /tmp/skills --skill widget-skill --harness claude-code
