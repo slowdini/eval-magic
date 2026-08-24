@@ -30,6 +30,7 @@ mod grouping;
 mod guard_policy;
 mod judges;
 mod lifecycle;
+mod multi_skill;
 mod opencode;
 mod opencode_permission_denials;
 mod runbook;

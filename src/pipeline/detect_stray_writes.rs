@@ -15,7 +15,7 @@
 //!   into the separate schema-gated `guard-denials.json` artifact, even when a
 //!   task has no `run.json`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -270,6 +270,26 @@ pub fn detect_stray_writes_report(
     }
     let conditions: ConditionsRecord =
         serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+    let live_skill_dirs = conditions
+        .skill_source
+        .as_ref()
+        .and_then(|source| source.skills.as_ref())
+        .map(|skills| {
+            skills
+                .iter()
+                .map(|skill| {
+                    PathBuf::from(
+                        skill
+                            .source
+                            .resolved_path
+                            .as_deref()
+                            .unwrap_or(&skill.source.source),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|skills| !skills.is_empty())
+        .unwrap_or_else(|| vec![live_skill_dir.to_path_buf()]);
     let condition_names: Vec<String> = conditions
         .conditions
         .iter()
@@ -339,8 +359,16 @@ pub fn detect_stray_writes_report(
                         RunFindings::default()
                     }
                 };
-                let live_reads =
-                    detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root);
+                let mut live_reads = Vec::new();
+                for live_skill_dir in &live_skill_dirs {
+                    for finding in
+                        detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root)
+                    {
+                        if !live_reads.contains(&finding) {
+                            live_reads.push(finding);
+                        }
+                    }
+                }
 
                 totals.violations += findings.violations.len();
                 totals.warnings += findings.warnings.len();

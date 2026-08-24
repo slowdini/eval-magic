@@ -2,6 +2,7 @@
 //! per-condition skill paths, before any directory is created.
 
 use std::fs;
+use std::path::{Component, Path};
 
 use serde_json::Value;
 
@@ -85,36 +86,6 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
         return Err(RunError::msg("--runs must be at least 1"));
     }
 
-    let skill_md_path = ctx.skill_subdir.join("SKILL.md");
-    if !skill_md_path.exists() {
-        return Err(RunError::msg(format!(
-            "skill not found: {}",
-            skill_md_path.display()
-        )));
-    }
-
-    // Resolve the skill as a source, the same way a codebase is: this is what
-    // gives a report a revision to cite on the skill side. Read-only, like every
-    // resolution here — the copy itself is taken during staging.
-    let skill_source = resolve_source(
-        &SourceSpec::Path {
-            path: ctx.skill_subdir.to_string_lossy().into_owned(),
-        },
-        &ctx.skill_dir,
-        "skill",
-    )
-    .map_err(|error| RunError::msg(error.to_string()))?;
-    let skill = RunSkill {
-        source: skill_source,
-        // The roster describes what each environment received. `--no-stage`
-        // populates no skills directory at all, so there is nothing to name.
-        siblings: if ctx.stage_siblings && !opts.no_stage {
-            ctx.sibling_skill_names.clone()
-        } else {
-            Vec::new()
-        },
-    };
-
     let evals_path = ctx.skill_subdir.join("evals").join("evals.json");
     if !evals_path.exists() {
         return Err(RunError::msg(format!(
@@ -124,12 +95,82 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     }
     let value: Value = serde_json::from_str(&fs::read_to_string(&evals_path)?)?;
     let config = validate_evals_config(&value, &evals_path.to_string_lossy())?;
-    if config.skill_name != ctx.skill_name {
+    if config.skill_name.is_multi() && !config.skill_names().contains(&ctx.skill_name) {
+        return Err(RunError::msg(format!(
+            "eval owner '{}' must be listed in skill_name",
+            ctx.skill_name
+        )));
+    }
+    if !config.skill_name.is_multi() && config.skill_names().first() != Some(&ctx.skill_name) {
         eprintln!(
             "warning: evals.json skill_name ({}) does not match the skill folder ({}). Proceeding with {}.",
             config.skill_name, ctx.skill_name, ctx.skill_name
         );
     }
+
+    // A scalar config retains the historical "selected folder wins" behavior.
+    // A list is an explicit treatment roster, so every authored member resolves
+    // from the selected skills root in its authored order.
+    let treatment_names = if config.skill_name.is_multi() {
+        config.skill_names().to_vec()
+    } else {
+        vec![ctx.skill_name.clone()]
+    };
+    let mut treatments = Vec::with_capacity(treatment_names.len());
+    for name in &treatment_names {
+        let mut components = Path::new(name).components();
+        if !matches!(components.next(), Some(Component::Normal(_)))
+            || components.next().is_some()
+            || name.contains('\\')
+        {
+            return Err(RunError::msg(format!(
+                "invalid skill_name member '{name}': expected one skill directory name"
+            )));
+        }
+        let path = ctx.skill_dir.join(name);
+        let skill_md_path = path.join("SKILL.md");
+        if !skill_md_path.exists() {
+            return Err(RunError::msg(format!(
+                "skill not found: {}",
+                skill_md_path.display()
+            )));
+        }
+        let source = resolve_source(
+            &SourceSpec::Path {
+                path: path.to_string_lossy().into_owned(),
+            },
+            &ctx.skill_dir,
+            "skill",
+        )
+        .map_err(|error| RunError::msg(error.to_string()))?;
+        treatments.push(super::TreatmentSkill {
+            name: name.clone(),
+            source,
+        });
+    }
+    let owner_source = treatments
+        .iter()
+        .find(|skill| skill.name == ctx.skill_name)
+        .expect("scalar owner or validated multi owner")
+        .source
+        .clone();
+    let skill = RunSkill {
+        eval_owner: ctx.skill_name.clone(),
+        multi: config.skill_name.is_multi(),
+        source: owner_source,
+        treatments,
+        // The ambient roster is what remains after removing every treatment
+        // member from the selected skills directory.
+        siblings: if ctx.stage_siblings && !opts.no_stage {
+            ctx.sibling_skill_names
+                .iter()
+                .filter(|name| !treatment_names.contains(name))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        },
+    };
 
     let selected_evals = select_evals(&config.evals, opts.only, opts.skip)?
         .into_iter()
@@ -204,42 +245,79 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
     // Conditions stage from the copy the eval home will hold, never from the
     // operator's tree. The copy does not exist yet; `stage_conditions` creates it
     // before anything reads these paths.
-    let copied_skill_md = skills_copy_root(&iteration_dir)
-        .join(&ctx.skill_name)
-        .join("SKILL.md")
-        .to_string_lossy()
-        .into_owned();
-    let (skill_path_a, skill_path_b): (Option<String>, Option<String>) = match mode {
-        Mode::NewSkill => (Some(copied_skill_md.clone()), None),
+    let copied_skill_paths = skill
+        .treatments
+        .iter()
+        .map(|treatment| {
+            (
+                treatment.name.clone(),
+                skills_copy_root(&iteration_dir)
+                    .join(&treatment.name)
+                    .join("SKILL.md")
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let copied_owner_skill_md = copied_skill_paths
+        .iter()
+        .find(|(name, _)| name == &ctx.skill_name)
+        .map(|(_, path)| path.clone())
+        .expect("the eval owner belongs to the treatment");
+    let (skill_paths_a, skill_paths_b) = match mode {
+        Mode::NewSkill => (copied_skill_paths.clone(), Vec::new()),
         Mode::Revision => {
             let baseline = baseline.as_deref().expect("revision baseline set above");
-            let baseline_skill = workspace_skill_dir
-                .join("snapshots")
-                .join(baseline)
-                .join("SKILL.md");
-            if !baseline_skill.exists() {
-                let target_args = command_target_args(ctx);
-                return Err(RunError::msg(format!(
-                    "baseline snapshot not found: {}\n  Run: eval-magic snapshot{target_args} --label {} (before editing)",
-                    baseline_skill.display(),
-                    baseline
-                )));
-            }
-            (
-                Some(baseline_skill.to_string_lossy().into_owned()),
-                Some(copied_skill_md.clone()),
-            )
+            let baseline_root = workspace_skill_dir.join("snapshots").join(baseline);
+            let baseline_paths = skill
+                .treatments
+                .iter()
+                .map(|treatment| {
+                    let path = if skill.multi {
+                        baseline_root
+                            .join("skills")
+                            .join(&treatment.name)
+                            .join("SKILL.md")
+                    } else {
+                        baseline_root.join("SKILL.md")
+                    };
+                    if !path.exists() {
+                        let target_args = command_target_args(ctx);
+                        return Err(RunError::msg(format!(
+                            "baseline snapshot not found: {}\n  Run: eval-magic snapshot{target_args} --label {} (before editing)",
+                            path.display(),
+                            baseline
+                        )));
+                    }
+                    Ok((treatment.name.clone(), path.to_string_lossy().into_owned()))
+                })
+                .collect::<Result<Vec<_>, RunError>>()?;
+            (baseline_paths, copied_skill_paths.clone())
         }
     };
+    let owner_path = |paths: &[(String, String)]| {
+        paths
+            .iter()
+            .find(|(name, _)| name == &ctx.skill_name)
+            .map(|(_, path)| path.clone())
+    };
+    let skill_path_a = owner_path(&skill_paths_a);
+    let skill_path_b = owner_path(&skill_paths_b);
+    if mode == Mode::NewSkill {
+        debug_assert_eq!(
+            skill_path_a.as_deref(),
+            Some(copied_owner_skill_md.as_str())
+        );
+    }
 
     // The mirror image of the codebase warning: a skill is copied as it sits, so
     // uncommitted work is in what ran, and the recorded revision alone does not
     // name it.
-    if skill.source.dirty {
+    for treatment in skill.treatments.iter().filter(|skill| skill.source.dirty) {
         eprintln!(
             "⚠ skill '{}' has uncommitted changes; the run measures them, so its recorded \
              revision alone does not identify what was evaluated",
-            ctx.skill_name
+            treatment.name
         );
     }
 
@@ -256,6 +334,8 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
         cond_b,
         skill_path_a,
         skill_path_b,
+        skill_paths_a,
+        skill_paths_b,
         selected_evals,
         total_evals,
         groups,

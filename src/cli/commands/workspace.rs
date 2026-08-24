@@ -1,6 +1,8 @@
 //! Workspace lifecycle command handlers: `snapshot`, `promote-baseline`, and the
 //! end-of-run `teardown`.
 
+use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 
 use crate::adapters::adapter_for;
@@ -8,6 +10,7 @@ use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
 use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
 };
+use crate::core::SkillNames;
 use crate::sandbox;
 use crate::workspace;
 
@@ -19,13 +22,52 @@ pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
     let label = args.label.unwrap_or_else(|| "baseline".to_string());
     let reference = args.reference.as_deref();
 
-    let dest = workspace::snapshot(
-        &ctx.workspace_root,
-        &ctx.skill_name,
-        &ctx.skill_subdir,
-        &label,
-        reference,
-    )?;
+    let evals_path = ctx.skill_subdir.join("evals/evals.json");
+    let (skill_names, multi_skill) =
+        if evals_path.exists() {
+            let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&evals_path)?)?;
+            let authored: SkillNames =
+                serde_json::from_value(value.get("skill_name").cloned().ok_or_else(|| {
+                    anyhow::anyhow!("{}: missing skill_name", evals_path.display())
+                })?)?;
+            match authored {
+                SkillNames::Many(names) => {
+                    let mut unique = HashSet::new();
+                    if names.is_empty() || names.iter().any(|name| !unique.insert(name)) {
+                        anyhow::bail!("skill_name list must be non-empty and contain unique names");
+                    }
+                    if !names.contains(&ctx.skill_name) {
+                        anyhow::bail!(
+                            "eval owner '{}' must be listed in skill_name",
+                            ctx.skill_name
+                        );
+                    }
+                    (names, true)
+                }
+                SkillNames::One(_) => (vec![ctx.skill_name.clone()], false),
+            }
+        } else {
+            (vec![ctx.skill_name.clone()], false)
+        };
+
+    let dest = if multi_skill {
+        workspace::snapshot_set(
+            &ctx.workspace_root,
+            &ctx.skill_name,
+            &ctx.skill_dir,
+            &skill_names,
+            &label,
+            reference,
+        )?
+    } else {
+        workspace::snapshot(
+            &ctx.workspace_root,
+            &ctx.skill_name,
+            &ctx.skill_subdir,
+            &label,
+            reference,
+        )?
+    };
 
     match reference {
         Some(reference) => println!(

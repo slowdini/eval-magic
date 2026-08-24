@@ -963,3 +963,6 @@ mod tests {
         assert!(error.contains("ref"), "error was: {error}");
     }
 }
+
+#[cfg(test)]
+mod multi_skill_tests;

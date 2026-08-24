@@ -8,7 +8,8 @@
 //! source so `teardown` knows whether the snapshot is reproducible.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::json;
 
@@ -42,6 +43,70 @@ pub fn snapshot(
     match reference {
         Some(reference) => snapshot_from_ref(reference, skill_subdir, &dest_dir)?,
         None => snapshot_from_working_tree(skill_subdir, &dest_dir)?,
+    }
+    Ok(dest_dir)
+}
+
+/// Atomically snapshot an ordered treatment set under
+/// `snapshots/<label>/skills/<name>/`. The scalar wrapper remains unchanged so
+/// existing snapshot paths and teardown behavior stay stable.
+pub fn snapshot_set(
+    workspace_root: &Path,
+    eval_owner: &str,
+    skills_root: &Path,
+    skill_names: &[String],
+    label: &str,
+    reference: Option<&str>,
+) -> Result<PathBuf, WorkspaceError> {
+    let snapshots_dir = workspace_root.join(eval_owner).join("snapshots");
+    let dest_dir = snapshots_dir.join(label);
+    if dest_dir.exists() {
+        return Err(WorkspaceError::Message(format!(
+            "snapshot already exists: {}\n  Use a different --label or delete the existing snapshot first.",
+            dest_dir.display()
+        )));
+    }
+    fs::create_dir_all(&snapshots_dir)?;
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
+    let pending = snapshots_dir.join(format!(".{label}.pending-{}-{nonce}", std::process::id()));
+
+    let result = (|| {
+        for name in skill_names {
+            let mut components = Path::new(name).components();
+            if !matches!(components.next(), Some(Component::Normal(_)))
+                || components.next().is_some()
+                || name.contains('\\')
+            {
+                return Err(WorkspaceError::Message(format!(
+                    "invalid skill_name member '{name}': expected one skill directory name"
+                )));
+            }
+            let source = skills_root.join(name);
+            let dest = pending.join("skills").join(name);
+            match reference {
+                Some(reference) => snapshot_from_ref(reference, &source, &dest)?,
+                None => snapshot_from_working_tree(&source, &dest)?,
+            }
+        }
+        write_json(
+            &pending.join(SNAPSHOT_META),
+            &match reference {
+                Some(reference) => json!({ "source": "ref", "ref": reference }),
+                None => json!({ "source": "working-tree" }),
+            },
+        )?;
+        fs::rename(&pending, &dest_dir)?;
+        Ok::<(), WorkspaceError>(())
+    })();
+
+    if let Err(error) = result {
+        if pending.exists() {
+            let _ = fs::remove_dir_all(&pending);
+        }
+        return Err(error);
     }
     Ok(dest_dir)
 }

@@ -27,6 +27,11 @@
       "type": ["string", "null"],
       "description": "Absolute path to the SKILL.md the subagent could load, or null if no skill was provided (without_skill condition)."
     },
+    "skills": {
+      "type": "array",
+      "description": "Ordered treatment roster for list-authored evals. Empty in the control arm and absent in scalar legacy records.",
+      "items": { "$ref": "#/definitions/conditionSkill" }
+    },
     "prompt": {
       "type": "string",
       "description": "The user prompt as dispatched to the subagent."
@@ -95,6 +100,16 @@
     }
   },
   "definitions": {
+    "conditionSkill": {
+      "type": "object",
+      "required": ["name", "skill_path", "staged_skill_slug"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "skill_path": { "type": "string" },
+        "staged_skill_slug": { "type": ["string", "null"] }
+      }
+    },
     "responderOutcome": {
       "type": "object",
       "required": ["ending"],
@@ -321,7 +336,34 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Sibling skills staged alongside the skill under test, as the roster was captured at resolution."
+        },
+        "eval_owner": {
+          "type": "string",
+          "description": "CLI-selected skill that owns the eval definitions and workspace namespace. Present for multi-skill treatments."
+        },
+        "skills": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/definitions/skillSourceEntry" },
+          "description": "Ordered resolved source and revision for every multi-skill treatment member."
         }
+      }
+    },
+    "skillSourceEntry": {
+      "type": "object",
+      "required": ["name", "kind", "source", "branch"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "kind": { "type": "string", "enum": ["git", "path"] },
+        "source": { "type": "string" },
+        "resolved_path": { "type": "string" },
+        "ref": { "type": "string" },
+        "revision": { "type": "string" },
+        "origin_url": { "type": "string" },
+        "branch": { "type": "string" },
+        "host_local": { "type": "boolean" },
+        "dirty": { "type": "boolean" }
       }
     },
     "conversationTool": {

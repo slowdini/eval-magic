@@ -10,7 +10,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::adapters::adapter_for;
-use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
+use crate::core::{AvailableSkill, ConditionEntry, ConditionSkill, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
 use super::super::RunError;
@@ -25,6 +25,10 @@ use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_i
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
 use crate::core::fs::{artifact_path, write_json};
+
+mod roster;
+
+use roster::condition_roster;
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.
@@ -41,6 +45,15 @@ pub(super) fn write_dispatch(
     let condition_skill_path = |path: &Option<String>| -> Option<String> {
         path.as_deref().map(|p| artifact_path(Path::new(p)))
     };
+    let multi_skill = r.skill.multi;
+    let treatment_names = r
+        .skill
+        .treatments
+        .iter()
+        .map(|skill| skill.name.clone())
+        .collect::<Vec<_>>();
+    let cond_a_roster = condition_roster(&r.skill_paths_a, &staged.cond_a_skills);
+    let cond_b_roster = condition_roster(&r.skill_paths_b, &staged.cond_b_skills);
     let conditions = ConditionsRecord {
         mode: r.mode,
         baseline: r.baseline.clone(),
@@ -49,11 +62,13 @@ pub(super) fn write_dispatch(
                 name: r.cond_a.to_string(),
                 skill_path: condition_skill_path(&r.skill_path_a),
                 staged_skill_slug: Some(staged.cond_a_slug.clone()),
+                skills: multi_skill.then(|| cond_a_roster.clone()),
             },
             ConditionEntry {
                 name: r.cond_b.to_string(),
                 skill_path: condition_skill_path(&r.skill_path_b),
                 staged_skill_slug: Some(staged.cond_b_slug.clone()),
+                skills: multi_skill.then(|| cond_b_roster.clone()),
             },
         ],
         timestamp: now_iso8601(),
@@ -88,7 +103,8 @@ pub(super) fn write_dispatch(
     // skill-under-test when that condition loads it. Paths are task-env-specific.
     let available_skills_for = |env_root: &Path,
                                 cond_skill_path: Option<&str>,
-                                cond_slug: Option<&str>|
+                                cond_slug: Option<&str>,
+                                roster: &[ConditionSkill]|
      -> Vec<AvailableSkill> {
         if opts.no_stage {
             return Vec::new();
@@ -106,7 +122,25 @@ pub(super) fn write_dispatch(
                 description: description.clone(),
             })
             .collect();
-        if let Some(csp) = cond_skill_path {
+        if multi_skill {
+            for treatment in roster {
+                let name = match treatment.staged_skill_slug.as_deref() {
+                    Some(slug) if adapter_for(ctx.harness).advertises_staged_slug_name() => {
+                        slug.to_string()
+                    }
+                    _ => treatment.name.clone(),
+                };
+                skills.push(AvailableSkill {
+                    name,
+                    path: treatment
+                        .staged_skill_slug
+                        .as_deref()
+                        .and_then(|slug| staged_skill_path_for(env_root, Some(slug)))
+                        .unwrap_or_else(|| treatment.skill_path.clone()),
+                    description: get_skill_description(Path::new(&treatment.skill_path)),
+                });
+            }
+        } else if let Some(csp) = cond_skill_path {
             let name = match cond_slug {
                 Some(slug) if adapter_for(ctx.harness).advertises_staged_slug_name() => {
                     slug.to_string()
@@ -141,16 +175,18 @@ pub(super) fn write_dispatch(
     let mut tasks = Vec::new();
     // Build tasks CONDITION-outer, GROUP-inner. A single group collapses this to
     // the legacy condition-outer order.
-    for (cond_name, cond_skill_path, cond_slug) in [
+    for (cond_name, cond_skill_path, cond_slug, condition_roster) in [
         (
             r.cond_a,
             r.skill_path_a.as_deref(),
             staged.cond_a_slug.as_deref(),
+            cond_a_roster.as_slice(),
         ),
         (
             r.cond_b,
             r.skill_path_b.as_deref(),
             staged.cond_b_slug.as_deref(),
+            cond_b_roster.as_slice(),
         ),
     ] {
         for group in &r.groups {
@@ -189,8 +225,12 @@ pub(super) fn write_dispatch(
                     );
                     let env_root_str = env_root.to_string_lossy().into_owned();
                     let staged_path = staged_skill_path_for(&env_root, cond_slug);
-                    let available_skills =
-                        available_skills_for(&env_root, cond_skill_path, cond_slug);
+                    let available_skills = available_skills_for(
+                        &env_root,
+                        cond_skill_path,
+                        cond_slug,
+                        condition_roster,
+                    );
                     // Create the per-run meta dir (run.json / timing.json), which
                     // lives above the env.
                     fs::create_dir_all(&run_dir)?;
@@ -218,6 +258,8 @@ pub(super) fn write_dispatch(
                         skill_path: cond_skill_path,
                         staged_skill_slug: cond_slug,
                         staged_skill_path: staged_path.as_deref(),
+                        skills: multi_skill.then_some(condition_roster),
+                        treatment_names: multi_skill.then_some(treatment_names.as_slice()),
                         user_prompt: &ev.prompt,
                         fixtures,
                         turns: ev.turns.as_deref(),
@@ -276,7 +318,11 @@ pub(super) fn write_dispatch(
 
     let dispatch_json_path = r.iteration_dir.join("dispatch.json");
     let mut dispatch_json = json!({
-        "skill_name": ctx.skill_name,
+        "skill_name": if multi_skill {
+            json!(r.skill.treatments.iter().map(|skill| &skill.name).collect::<Vec<_>>())
+        } else {
+            json!(ctx.skill_name)
+        },
         "iteration": r.iteration,
         "run_nonce": r.run_nonce,
         "iteration_dir": artifact_path(&r.iteration_dir),

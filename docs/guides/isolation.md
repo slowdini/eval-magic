@@ -144,29 +144,52 @@ then use `isolates_live_sources` to record the operator assertion.
 dispatch's setting-source selection. A plugin can appear there and remain absent from the dispatch,
 or the reverse. Use the dispatch's init event.
 
-## The skill under test is a copy
+## Treatment skills are copies
 
-Every skill an eval stages is copied into the eval home before any dispatch runs, and
-each condition stages from that copy. Nothing the agent can reach is read from your own
-skill directory, so editing a skill mid-campaign cannot change what a prepared iteration
-measures.
+`skill_name` in the `evals/evals.json` file accepts either one skill name or an ordered,
+non-empty list:
 
-The copy is the working tree as it sits on disk, not a checkout of a commit —
-evaluating an uncommitted revision is the ordinary case, and in a `--mode revision` run
-the edit under test is uncommitted by definition. What the run measured is recorded rather than inferred, in
-`conditions.json`, each `run.json`, `benchmark.json`, and the `BASELINE.md` written by
+```json
+{
+  "skill_name": ["review-workflow", "review-verification"],
+  "evals": [
+    {
+      "id": "review-change",
+      "prompt": "Review this change.",
+      "expected_output": "A prioritized review."
+    }
+  ]
+}
+```
+
+With a list, `--skill` selects the eval owner: the member whose `evals/` directory supplies the
+definitions and fixtures, and whose name owns the workspace and promotion destination. The owner
+must appear in the list. `--stage-name` is unavailable because one override cannot name several
+staged skills.
+
+Every treatment member is copied into the eval home before any dispatch runs, and each condition
+stages from those copies. Mode A stages all treatment members in `with_skill` and none in
+`without_skill`. Other siblings from `--skill-dir` remain ambient in both arms. Mode B snapshots
+and stages the complete set in both revisions. A scalar `skill_name` retains the existing
+single-skill paths and artifacts.
+
+Each copy is the working tree as it sits on disk, not a checkout of a commit. Evaluating an
+uncommitted revision is the ordinary case, and in a `--mode revision` run the edit under test is
+uncommitted by definition. What the run measured is recorded rather than inferred in
+`conditions.json`, each `run.json`, `benchmark.json`, and the `BASELINE.md` file written by
 `promote-baseline`:
 
 ```sh
 jq '.skill_source' conditions.json
 ```
 
-`dirty: true` means the recorded revision alone does not identify what ran. Commit the
-skill before a run whose result you intend to publish.
+`dirty: true` means the recorded revision alone does not identify what ran. Commit the treatment
+skills before a run whose result you intend to publish.
 
-Sibling skills staged by `--skill-dir` are copied the same way, and the roster is
-captured once when the run resolves. The `siblings` field names exactly what every
-environment received.
+Ambient skills staged by `--skill-dir` are copied the same way, and the roster is captured once
+when the run resolves. For a multi-skill treatment, `skill_source.eval_owner` names the owner and
+`skill_source.skills` records every treatment member's resolved source and revision. The
+`siblings` field, when present, names ambient skills staged in both arms.
 
 The eval home sits outside the skill's own repository: under `$XDG_DATA_HOME/eval-magic`
 (or `~/.local/share/eval-magic`), in a directory named for the skill directory it serves.
@@ -174,10 +197,10 @@ The eval home sits outside the skill's own repository: under `$XDG_DATA_HOME/eva
 so there is nothing to remember. `EVAL_MAGIC_WORKSPACE_DIR` moves the default;
 `--workspace-dir` overrides both.
 
-Copying does not remove the live directory from the machine, so a dispatch can still read
-it by absolute path. `detect-stray-writes` reports that as a live-source read, and
-`aggregate` carries it into `validity_warnings` for the same reason a discoverable
-plugin copy is carried there: the arm may not be comparing what it claims to.
+Copying does not remove the live directories from the machine, so a dispatch can still read one by
+absolute path. `detect-stray-writes` checks every treatment source and reports that as a live-source
+read. `aggregate` carries it into `validity_warnings` for the same reason a discoverable plugin
+copy is carried there: the arm may not be comparing what it claims to.
 
 ## The task repository is a separate boundary
 

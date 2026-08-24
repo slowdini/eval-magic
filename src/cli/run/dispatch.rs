@@ -15,11 +15,15 @@ use serde::{Deserialize, Serialize};
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
 use crate::core::{
-    AvailableSkill, CodebaseRecord, Eval, GuardPolicyConfig, Harness, POSIX_TOOLING_REQUIREMENT,
-    ResponderPolicy, ScriptedTurn, SkillSource,
+    AvailableSkill, CodebaseRecord, ConditionSkill, Eval, GuardPolicyConfig, Harness,
+    POSIX_TOOLING_REQUIREMENT, ResponderPolicy, ScriptedTurn, SkillSource,
 };
 
 use super::RunError;
+
+mod prompt_components;
+
+use prompt_components::{effective_bootstrap, render_fixtures_block, render_skill_block};
 
 /// One dispatchable task: the metadata the orchestrator persists per
 /// `(eval, condition)`. `dispatch_prompt` is held in memory (for manifest
@@ -34,6 +38,10 @@ pub struct DispatchTask {
     pub run_index: Option<u32>,
     pub skill_path: Option<String>,
     pub staged_skill_slug: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<ConditionSkill>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_skills: Option<Vec<AvailableSkill>>,
     pub user_prompt: String,
     pub fixtures: Vec<String>,
     pub outputs_dir: String,
@@ -92,6 +100,12 @@ pub struct DispatchTaskOpts<'a> {
     /// Absolute path to the staged per-condition `SKILL.md`, surfaced as an
     /// explicit fallback for a mid-session discovery miss (issue #6).
     pub staged_skill_path: Option<&'a str>,
+    /// Complete treatment roster for list-authored evals. `Some(empty)` is the
+    /// control arm; `None` preserves the scalar task shape.
+    pub skills: Option<&'a [ConditionSkill]>,
+    /// Full treatment names even in the empty control arm, used to remove every
+    /// treatment reference from optional bootstrap content.
+    pub treatment_names: Option<&'a [String]>,
     pub user_prompt: &'a str,
     pub fixtures: Vec<String>,
     pub turns: Option<&'a [ScriptedTurn]>,
@@ -148,72 +162,23 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     let mut staged_skills = opts.available_skills.clone();
     staged_skills.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let skill_block = if let Some(slug) = opts.staged_skill_slug {
-        // Neutral slug disambiguation only — surface the staged identifier so a
-        // deliberate invocation hits the staged copy (and the meta-check finds
-        // it), without instructing invocation or implying a global plugin.
-        let adapter = adapter_for(harness);
-        let surface = adapter.skill_surface_phrase();
-        let mut lines = vec![format!(
-            "The `{}` skill is registered under the identifier `{slug}` and is discoverable {surface}. If you invoke it, use that identifier.",
-            opts.skill_name
-        )];
-        if let Some(staged_path) = &staged_skill_path {
-            let cannot_resolve = adapter.skill_unresolved_phrase();
-            lines.push(format!(
-                "{cannot_resolve}, read the skill from `{staged_path}` instead."
-            ));
-        }
-        lines.join("\n")
-    } else if let Some(skill_path) = &skill_path {
-        let content = fs::read_to_string(skill_path)?;
-        let dir_name = Path::new(skill_path)
-            .parent()
-            .and_then(Path::file_name)
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        [
-            "The following skill is loaded into your operating guidelines. Apply it where relevant to the user's request.",
-            "",
-            &format!("<skill name=\"{dir_name}\">"),
-            content.trim(),
-            "</skill>",
-        ]
-        .join("\n")
-    } else if !staged_skills.is_empty() || is_truthy(opts.bootstrap_content) {
-        // Skill-absent arm in a realistic environment: stay silent. The
-        // available-skills block already omits the skill-under-test, so any
-        // commentary here would only announce the eval.
-        String::new()
-    } else {
-        "No skill is loaded. Respond as you naturally would.".to_string()
-    };
+    let skill_block = render_skill_block(
+        opts,
+        skill_path.as_deref(),
+        staged_skill_path.as_deref(),
+        &staged_skills,
+    )?;
 
-    let fixtures_block = if opts.fixtures.is_empty() {
-        "Available fixture files: none".to_string()
-    } else {
-        format!(
-            "Available fixture files:\n{}",
-            opts.fixtures
-                .iter()
-                .map(|f| format!("  - {f}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
+    let fixtures_block = render_fixtures_block(&opts.fixtures);
 
     // A condition that does not load the skill-under-test must carry zero
     // reference to it: the available-skills block auto-omits it, and a
     // user-supplied bootstrap that names it in prose is redacted here.
-    let skill_absent = skill_path.is_none() && opts.staged_skill_slug.is_none();
-    let effective_bootstrap: Option<String> = match opts.bootstrap_content {
-        Some(b) if !b.is_empty() => Some(if skill_absent {
-            redact_skill_from_bootstrap(b, opts.skill_name)
-        } else {
-            b.to_string()
-        }),
-        _ => None,
-    };
+    let skill_absent = opts.skills.map_or_else(
+        || skill_path.is_none() && opts.staged_skill_slug.is_none(),
+        <[ConditionSkill]>::is_empty,
+    );
+    let effective_bootstrap = effective_bootstrap(opts, skill_absent);
 
     let mut sections: Vec<String> = Vec::new();
     if let Some(boot) = &effective_bootstrap {
@@ -292,6 +257,8 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         run_index: opts.run_index,
         skill_path,
         staged_skill_slug: opts.staged_skill_slug.map(str::to_string),
+        skills: opts.skills.map(<[ConditionSkill]>::to_vec),
+        available_skills: opts.skills.map(|_| staged_skills),
         user_prompt: opts.user_prompt.to_string(),
         fixtures: opts.fixtures.clone(),
         run_record_path: artifact_path(&cond_dir.join("run.json")),

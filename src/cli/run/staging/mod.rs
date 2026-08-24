@@ -250,8 +250,18 @@ pub fn register_staged_skill_for_cleanup(
 /// its `evals/`) into the harness skills dir, backing up any colliding
 /// pre-existing entry, and write the manifest.
 pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, RunError> {
+    stage_sibling_skills_excluding(opts, &[opts.skill_under_test.to_string()])
+}
+
+/// Stage ambient skills while excluding a complete coordinated treatment set.
+/// The scalar wrapper above preserves the established public helper contract.
+pub fn stage_sibling_skills_excluding(
+    opts: &StageSiblingOpts,
+    skills_under_test: &[String],
+) -> Result<SiblingManifest, RunError> {
     let skills_dir = skills_dir_for_harness(opts.repo_root, opts.harness);
-    let mut manifest = load_or_create_manifest(&skills_dir, opts.skill_under_test)?;
+    let staged_label = skills_under_test.join(",");
+    let mut manifest = load_or_create_manifest(&skills_dir, &staged_label)?;
     fs::create_dir_all(&skills_dir)?;
     write_json(&skills_dir.join(STAGED_SIBLING_MANIFEST), &manifest)?;
 
@@ -259,7 +269,7 @@ pub fn stage_sibling_skills(opts: &StageSiblingOpts) -> Result<SiblingManifest, 
     for entry in fs::read_dir(opts.skills_source_dir)? {
         let entry = entry?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name == opts.skill_under_test {
+        if skills_under_test.contains(&name) {
             continue;
         }
         let src_dir = opts.skills_source_dir.join(&name);

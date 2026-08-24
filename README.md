@@ -110,6 +110,10 @@ eval-magic run --mode revision
 
 The command help and generated runbook describe baseline selection and the rest of the workflow.
 
+An eval can treat coordinated skills as one treatment by setting `skill_name` to an ordered list.
+Pass one listed member with `--skill`; it remains the eval owner and supplies fixtures. See
+`eval-magic docs isolation` for the complete configuration, Mode A/B behavior, and provenance.
+
 ## How it works
 
 Each eval case runs once per condition and repetition in its own clean Git repository. The two arms

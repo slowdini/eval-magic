@@ -8,7 +8,7 @@ pub mod snapshot;
 pub mod teardown;
 
 pub use promote::{NotesStatus, PromoteOptions, PromoteResult, promote_baseline};
-pub use snapshot::snapshot;
+pub use snapshot::{snapshot, snapshot_set};
 pub use teardown::{
     KeptIteration, PROMOTED_MARKER, SNAPSHOT_META, WorkspaceCleanupSummary, cleanup_workspace,
 };

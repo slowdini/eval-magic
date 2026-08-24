@@ -54,6 +54,10 @@
           "description": "1-based run index within a multi-run (eval, condition) cell; absent for single-run cells."
         },
         "assertion_id": { "type": "string" },
+        "skill_name": {
+          "type": "string",
+          "description": "Treatment member checked by a multi-skill invocation meta task."
+        },
         "sample_index": {
           "type": "integer",
           "minimum": 1,

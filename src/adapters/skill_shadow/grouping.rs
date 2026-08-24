@@ -48,10 +48,10 @@ impl PluginShadowReport {
         subject_skill_name: &str,
         expected_cells: &[(String, String)],
     ) -> Self {
-        Self::from_observed_sources_with_class(
+        Self::from_observed_sources_for_subjects_with_class(
             config_dir,
             sources,
-            subject_skill_name,
+            &[subject_skill_name],
             expected_cells,
             ShadowFindingClass::OperatorEnvironment,
         )
@@ -61,6 +61,22 @@ impl PluginShadowReport {
         config_dir: impl Into<String>,
         sources: Vec<ShadowSource>,
         subject_skill_name: &str,
+        expected_cells: &[(String, String)],
+        class: ShadowFindingClass,
+    ) -> Self {
+        Self::from_observed_sources_for_subjects_with_class(
+            config_dir,
+            sources,
+            &[subject_skill_name],
+            expected_cells,
+            class,
+        )
+    }
+
+    pub(crate) fn from_observed_sources_for_subjects_with_class(
+        config_dir: impl Into<String>,
+        sources: Vec<ShadowSource>,
+        subject_skill_names: &[&str],
         expected_cells: &[(String, String)],
         class: ShadowFindingClass,
     ) -> Self {
@@ -88,7 +104,7 @@ impl PluginShadowReport {
         }
         for finding in &mut report.findings {
             finding.class = class;
-            finding.role = if finding.skill_name == subject_skill_name {
+            finding.role = if subject_skill_names.contains(&finding.skill_name.as_str()) {
                 ShadowSkillRole::Subject
             } else {
                 ShadowSkillRole::Sibling

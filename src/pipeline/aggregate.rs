@@ -11,7 +11,7 @@
 
 mod assertions;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -92,6 +92,16 @@ struct ConditionSummary {
     /// Present (possibly `null`) only when the skill was loaded.
     #[serde(skip_serializing_if = "Option::is_none")]
     skill_invocation_rate: Option<Option<f64>>,
+    /// Per-treatment-member invocation rollup. Present only for multi-skill
+    /// artifacts; the suite-level fields above retain their established shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_invocations: Option<BTreeMap<String, SkillInvocationSummary>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkillInvocationSummary {
+    n: usize,
+    rate: f64,
 }
 
 /// The `a - b` differences between the two compared conditions.
@@ -160,6 +170,7 @@ struct Bucket {
     durations: Vec<f64>,
     tokens: Vec<f64>,
     skill_invoked: Vec<bool>,
+    skill_invoked_by_skill: HashMap<String, Vec<bool>>,
     had_skill_loaded: bool,
 }
 
@@ -217,7 +228,10 @@ pub fn aggregate(
         by_condition.insert(
             c.name.clone(),
             Bucket {
-                had_skill_loaded: c.skill_path.is_some(),
+                had_skill_loaded: c
+                    .skills
+                    .as_ref()
+                    .map_or_else(|| c.skill_path.is_some(), |skills| !skills.is_empty()),
                 ..Bucket::default()
             },
         );
@@ -308,6 +322,17 @@ pub fn aggregate(
                 {
                     bucket.skill_invoked.push(invoked);
                 }
+                if let Some(results) = &grading.meta_results {
+                    for result in results {
+                        if let Some(skill_name) = &result.skill_name {
+                            bucket
+                                .skill_invoked_by_skill
+                                .entry(skill_name.clone())
+                                .or_default()
+                                .push(result.passed);
+                        }
+                    }
+                }
 
                 if timing_path.exists() {
                     let timing: TimingRecord =
@@ -353,6 +378,22 @@ pub fn aggregate(
             total_tokens: stats(&bucket.tokens, 0),
             skill_invocation_n,
             skill_invocation_rate,
+            skill_invocations: (!bucket.skill_invoked_by_skill.is_empty()).then(|| {
+                bucket
+                    .skill_invoked_by_skill
+                    .iter()
+                    .map(|(name, results)| {
+                        let passed = results.iter().filter(|&&invoked| invoked).count();
+                        (
+                            name.clone(),
+                            SkillInvocationSummary {
+                                n: results.len(),
+                                rate: round(passed as f64 / results.len() as f64, 3),
+                            },
+                        )
+                    })
+                    .collect()
+            }),
         };
         run_summary.insert(cond.clone(), serde_json::to_value(&summary)?);
         summaries.insert(cond.clone(), summary);

@@ -17,7 +17,7 @@ use super::super::fixtures::{FixtureClaims, copy_fixtures};
 use super::super::staging::{
     StageSiblingOpts, StageSkillOpts, cleanup_staged_skills, exclude_codebase_skill_sources,
     register_staged_skill_for_cleanup, skills_dir_for_harness, stage_sibling_skills,
-    stage_skill_for_harness,
+    stage_sibling_skills_excluding, stage_skill_for_harness,
 };
 use super::super::util::{harness_label, resolve_plan_mode_profile};
 use super::envs::{EnvLayoutInput, env_targets};
@@ -33,10 +33,12 @@ pub(super) fn stage_conditions(
     // even under `--no-stage`, where the dispatch prompt inlines the skill body
     // by reading the same path.
     let skills = materialize_skills(ctx, r)?;
-    fs::copy(
-        skills.join(&ctx.skill_name).join("SKILL.md"),
-        r.iteration_dir.join("skill-snapshot.md"),
-    )?;
+    if !r.skill.multi {
+        fs::copy(
+            skills.join(&ctx.skill_name).join("SKILL.md"),
+            r.iteration_dir.join("skill-snapshot.md"),
+        )?;
+    }
 
     let bootstrap_content = match &ctx.bootstrap_path {
         Some(path) => Some(fs::read_to_string(path)?),
@@ -71,6 +73,12 @@ pub(super) fn stage_conditions(
             .collect()
     };
 
+    if opts.stage_name.is_some() && r.skill.multi {
+        return Err(RunError::msg(
+            "--stage-name is only supported for a single skill under test",
+        ));
+    }
+
     // --stage-name overrides the conspicuous slug with a verbatim name; it targets
     // the single staging condition, so reject the both-stage case up front.
     if let Some(_stage_name) = opts.stage_name
@@ -96,13 +104,19 @@ pub(super) fn stage_conditions(
 
     let mut cond_a_slug = None;
     let mut cond_b_slug = None;
+    let mut cond_a_skills = Vec::new();
+    let mut cond_b_skills = Vec::new();
     // Distinct codebases materialized so far this iteration, by key. Every
     // environment sharing a codebase is provisioned from one materialization.
     let mut materialized: HashMap<String, PathBuf> = HashMap::new();
     let mut guard_policies = HashMap::new();
     let mut codebase_shadow_sources = HashMap::new();
-    let evaluated_names = std::iter::once(ctx.skill_name.as_str())
-        .chain(ctx.sibling_skill_names.iter().map(String::as_str))
+    let evaluated_names = r
+        .skill
+        .treatments
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .chain(r.skill.siblings.iter().map(String::as_str))
         .collect::<Vec<_>>();
 
     for target in &targets {
@@ -152,19 +166,35 @@ pub(super) fn stage_conditions(
         }
 
         if !opts.no_stage && ctx.stage_siblings {
-            stage_sibling_skills(&StageSiblingOpts {
+            let treatment_names = r
+                .skill
+                .treatments
+                .iter()
+                .map(|skill| skill.name.clone())
+                .collect::<Vec<_>>();
+            let sibling_opts = StageSiblingOpts {
                 skill_under_test: &ctx.skill_name,
                 skills_source_dir: &skills,
                 repo_root: &target.root,
                 harness: ctx.harness,
-            })?;
+            };
+            if treatment_names.len() == 1 {
+                stage_sibling_skills(&sibling_opts)?;
+            } else {
+                stage_sibling_skills_excluding(&sibling_opts, &treatment_names)?;
+            }
         }
 
-        for (cond_name, cond_skill_path) in &target.conditions {
+        for (cond_name, _cond_skill_path) in &target.conditions {
+            let condition_skills = if *cond_name == r.cond_a {
+                &r.skill_paths_a
+            } else {
+                &r.skill_paths_b
+            };
             // Refuse to clobber a pre-existing --stage-name dir in this env.
             if let Some(stage_name) = opts.stage_name
                 && !opts.no_stage
-                && cond_skill_path.is_some()
+                && !condition_skills.is_empty()
             {
                 let dir = skills_dir_for_harness(&target.root, ctx.harness).join(stage_name);
                 if dir.exists() {
@@ -175,25 +205,39 @@ pub(super) fn stage_conditions(
                 }
             }
 
-            if let Some(slug) = stage_for(
-                ctx,
-                opts,
-                r,
-                cond_name,
-                cond_skill_path.as_deref(),
-                &target.root,
-            )? {
-                if *cond_name == r.cond_a {
-                    cond_a_slug = Some(slug.clone());
+            let mut staged_condition = Vec::new();
+            for (skill_name, skill_path) in condition_skills {
+                let slug = stage_for(
+                    ctx,
+                    opts,
+                    r,
+                    cond_name,
+                    skill_name,
+                    Some(skill_path),
+                    &target.root,
+                )?;
+                if let Some(slug) = &slug
+                    && opts.stage_name == Some(slug.as_str())
+                {
+                    register_staged_skill_for_cleanup(&target.root, slug, ctx.harness)?;
                 }
-                if *cond_name == r.cond_b {
-                    cond_b_slug = Some(slug.clone());
-                }
-                // A custom-named dir isn't caught by the prefix scan; record it in
-                // this env's manifest so cleanup removes it.
-                if opts.stage_name == Some(slug.as_str()) {
-                    register_staged_skill_for_cleanup(&target.root, &slug, ctx.harness)?;
-                }
+                staged_condition.push(super::StagedTreatmentSkill {
+                    name: skill_name.clone(),
+                    slug,
+                });
+            }
+            if *cond_name == r.cond_a {
+                cond_a_skills = staged_condition;
+                cond_a_slug = cond_a_skills
+                    .iter()
+                    .find(|skill| skill.name == ctx.skill_name)
+                    .and_then(|skill| skill.slug.clone());
+            } else {
+                cond_b_skills = staged_condition;
+                cond_b_slug = cond_b_skills
+                    .iter()
+                    .find(|skill| skill.name == ctx.skill_name)
+                    .and_then(|skill| skill.slug.clone());
             }
         }
 
@@ -229,6 +273,8 @@ pub(super) fn stage_conditions(
     Ok(Staged {
         cond_a_slug,
         cond_b_slug,
+        cond_a_skills,
+        cond_b_skills,
         sibling_meta,
         bootstrap_content,
         plan_mode_content,
@@ -250,7 +296,13 @@ fn materialize_skills(ctx: &RunContext, r: &Resolved) -> Result<PathBuf, RunErro
         fs::remove_dir_all(&root)?;
     }
     fs::create_dir_all(&root)?;
-    for name in std::iter::once(&ctx.skill_name).chain(r.skill.siblings.iter()) {
+    for name in r
+        .skill
+        .treatments
+        .iter()
+        .map(|skill| &skill.name)
+        .chain(r.skill.siblings.iter())
+    {
         copy_skill_dir(&ctx.skill_dir.join(name), &root.join(name), &root)?;
     }
     Ok(root)
@@ -313,6 +365,7 @@ fn stage_for(
     opts: &RunOptions,
     r: &Resolved,
     cond_name: &str,
+    skill_name: &str,
     cond_skill_path: Option<&str>,
     root: &Path,
 ) -> Result<Option<String>, RunError> {
@@ -324,7 +377,7 @@ fn stage_for(
         content: &content,
         iteration: r.iteration,
         condition: cond_name,
-        skill_name: &ctx.skill_name,
+        skill_name,
         repo_root: root,
         assets_dir: Path::new(path).parent(),
         stage_name_override: opts.stage_name,
