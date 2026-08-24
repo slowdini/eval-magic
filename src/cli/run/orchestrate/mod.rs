@@ -19,8 +19,8 @@ use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
 use crate::core::fs::artifact_path;
 use crate::core::{
-    CodebaseRecord, CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode, RunContext,
-    SkillSource, SourceKind, SourceRecord,
+    Assertion, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode,
+    RunContext, SkillSource, SourceKind, SourceRecord,
 };
 use crate::source::ResolvedSource;
 
@@ -61,6 +61,9 @@ pub struct RunOptions<'a> {
     /// Resolved descriptor defaults plus run-level agent environment overrides.
     pub agent_env: BTreeMap<String, String>,
     pub judge_model: Option<&'a str>,
+    /// Non-default judge sample count. Absence means one and keeps legacy
+    /// manifests byte-compatible.
+    pub judge_samples: Option<u32>,
     pub responder_model: Option<&'a str>,
     pub label: Option<&'a str>,
 }
@@ -360,17 +363,47 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
             ids.join(", ")
         );
     }
-    let effective_run_counts: BTreeSet<u32> = r
-        .selected_evals
-        .iter()
-        .map(|eval| eval.runs.unwrap_or(opts.runs))
-        .collect();
-    for runs in effective_run_counts {
+    let mut binary_run_counts = BTreeSet::new();
+    let mut sampled_endpoints: BTreeSet<(u32, Vec<u32>)> = BTreeSet::new();
+    for eval in &r.selected_evals {
+        let runs = eval.runs.unwrap_or(opts.runs);
+        let sample_counts: BTreeSet<u32> = eval
+            .assertions
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|assertion| match assertion {
+                Assertion::LlmJudge(judge) => {
+                    Some(judge.samples.or(opts.judge_samples).unwrap_or(1))
+                }
+                _ => None,
+            })
+            .collect();
+        if sample_counts.iter().any(|count| *count > 1) {
+            sampled_endpoints.insert((runs, sample_counts.into_iter().collect()));
+        } else {
+            binary_run_counts.insert(runs);
+        }
+    }
+    for runs in binary_run_counts {
         let run_label = if runs == 1 { "run" } else { "runs" };
         println!(
             "  statistical floor: 2 conditions × {runs} {run_label}; minimum attainable \
              two-sided Fisher exact p on a binary endpoint is {}",
             format_minimum_attainable_fisher_p_value(runs)
+        );
+    }
+    for (runs, sample_counts) in sampled_endpoints {
+        let run_label = if runs == 1 { "run" } else { "runs" };
+        let counts = sample_counts
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  statistical endpoint: 2 conditions × {runs} {run_label}; LLM judge sample counts \
+             per assertion: {counts}; report vote proportion and pass^k; the binary Fisher exact \
+             floor does not apply"
         );
     }
     if opts.no_stage {

@@ -84,6 +84,67 @@ fn promote_baseline_copies_artifacts_and_reports() {
     assert!(iteration_dir.join(".promoted.json").exists());
 }
 
+/// Promotion keeps every independent judge vote in the grading artifact while
+/// retaining the one bounded evidence bundle all of those votes inspected.
+#[test]
+fn promote_baseline_preserves_sampled_grading_and_shared_evidence() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join(".eval-magic")
+        .join("mr-review")
+        .join("iteration-2");
+    let cond_dir = iteration_dir.join("eval-e1").join("new_skill");
+    fs::create_dir_all(&cond_dir).unwrap();
+    fs::write(
+        iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0.5,"vote_proportion":0.5,"pass_power_k":0.0625}}"#,
+    )
+    .unwrap();
+    let grading = r#"{
+      "summary":{"total":1,"pass_rate":0.5,"vote_proportion":0.5,"pass_power_k":0.0625},
+      "assertion_results":[{
+        "id":"clear","grader":"llm_judge",
+        "votes":{"passed":2,"failed":2,"total":4,"proportion":0.5,"pass_power_k":0.0625},
+        "judge_samples":[
+          {"sample_index":1,"passed":true,"evidence":"yes","confidence":0.8},
+          {"sample_index":2,"passed":true,"evidence":"yes","confidence":0.8},
+          {"sample_index":3,"passed":false,"evidence":"no","confidence":0.7},
+          {"sample_index":4,"passed":false,"evidence":"no","confidence":0.7}
+        ]
+      }],
+      "meta_results":[]
+    }"#;
+    fs::write(cond_dir.join("grading.json"), grading).unwrap();
+    fs::write(
+        cond_dir.join("judge-evidence.md"),
+        "# Judge evidence bundle\n\nshared by four samples\n",
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["promote-baseline", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "2"])
+        .assert()
+        .success()
+        .stdout(contains("1 grading file "))
+        .stdout(contains("1 evidence bundle"));
+
+    let baseline = skill_sub.join("evals").join("baseline");
+    assert_eq!(
+        fs::read_to_string(baseline.join("grading/e1__new_skill.json")).unwrap(),
+        grading
+    );
+    assert_eq!(
+        fs::read_to_string(baseline.join("evidence/e1__new_skill.md")).unwrap(),
+        "# Judge evidence bundle\n\nshared by four samples\n"
+    );
+}
+
 /// `promote-baseline`: a multi-run (`runs > 1`) cell stores each run's grading
 /// and exact bounded evidence under matching `__r<k>` filenames.
 #[test]

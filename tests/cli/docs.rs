@@ -220,7 +220,8 @@ fn docs_guard_keeps_configuration_defaults_and_boundary_contracts() {
 }
 
 /// Judge evidence is the primary grading input, so the shipped reference must
-/// keep the bounds, trust boundary, source fallback, and retention contract.
+/// keep the bounds, sampling semantics, trust boundary, source fallback, and
+/// retention contract.
 #[test]
 fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
     skill_eval()
@@ -239,7 +240,21 @@ fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
         .stdout(contains("truncated"))
         .stdout(contains("untrusted"))
         .stdout(contains("read-only"))
+        .stdout(contains("\"samples\": 10"))
+        .stdout(contains("--judge-samples"))
+        .stdout(contains("6 / 10"))
+        .stdout(contains("0.6^10"))
+        .stdout(contains("__sample-N"))
+        .stdout(contains("missing response"))
+        .stdout(contains("__skill_invoked"))
         .stdout(contains("evals/baseline/evidence"));
+
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--judge-samples"))
+        .stdout(contains("pass^k"));
 }
 
 #[test]

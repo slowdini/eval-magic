@@ -347,6 +347,37 @@ fn omitted_models_and_label_are_absent_from_conditions() {
     assert!(conditions.get("judge_model").is_none());
     assert!(conditions.get("label").is_none());
     assert!(conditions.get("agent_env").is_none());
+    assert!(conditions.get("judge_samples").is_none());
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert!(dispatch.get("judge_samples").is_none());
+}
+
+#[test]
+fn records_a_non_default_judge_sample_count_in_manifests() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--judge-samples",
+            "10",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let iteration = iteration_dir(&cwd);
+    let conditions = read_json(&iteration.join("conditions.json"));
+    let dispatch = read_json(&iteration.join("dispatch.json"));
+    assert_eq!(conditions["judge_samples"], serde_json::json!(10));
+    assert_eq!(dispatch["judge_samples"], serde_json::json!(10));
 }
 
 #[test]
@@ -511,6 +542,28 @@ fn runs_zero_is_rejected() {
         ])
         .assert()
         .failure();
+}
+
+#[test]
+fn judge_samples_zero_is_rejected() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--judge-samples",
+            "0",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("invalid value '0' for '--judge-samples"));
 }
 
 #[test]

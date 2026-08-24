@@ -1,6 +1,7 @@
 //! Shared kernel used by nearly every other module.
 //!
-//! - [`types`]        — domain types (`Eval`, `RunRecord`, `Assertion`, `GradingResult`, …)
+//! - [`types`]        — domain types (`Eval`, `RunRecord`, `Assertion`, …)
+//! - [`grading`]      — binary and sampled grading artifact types
 //! - [`context`]      — `RunContext` detection from parsed flags / environment
 //! - [`capabilities`] — per-harness run-option capabilities
 //! - [`git`]          — git spawned with the operator's configuration held off
@@ -13,6 +14,7 @@ pub mod capabilities;
 pub mod context;
 pub mod fs;
 pub mod git;
+pub mod grading;
 pub mod runtime;
 pub mod types;
 

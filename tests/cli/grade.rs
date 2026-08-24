@@ -5,6 +5,8 @@ use assert_cmd::Command;
 use predicates::str::contains;
 use std::fs;
 
+mod sampling;
+
 /// Write `<skill_sub>/SKILL.md` and `<skill_sub>/evals/evals.json`.
 fn write_skill(skill_sub: &std::path::Path, skill_md: &str, evals: &serde_json::Value) {
     fs::create_dir_all(skill_sub.join("evals")).unwrap();

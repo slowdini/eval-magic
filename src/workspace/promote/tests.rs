@@ -95,7 +95,7 @@ fn copies_benchmark_and_per_run_gradings_into_baseline() {
     assert!(provenance.contains("Agent model | unspecified"));
     assert!(provenance.contains("Judge model | unspecified"));
     assert!(provenance.contains("Responder model | unspecified"));
-    assert!(provenance.contains("per-assertion pass counts"));
+    assert!(provenance.contains("per-assertion pass or sampled-vote counts"));
 }
 
 #[test]

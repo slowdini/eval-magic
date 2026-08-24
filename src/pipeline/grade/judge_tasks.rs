@@ -7,6 +7,7 @@
 //! per-assertion prompt files. `transcript_check` assertions are not dispatched
 //! here — they are graded directly in `finalize`.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -35,6 +36,13 @@ pub struct JudgeTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_index: Option<u32>,
     pub assertion_id: String,
+    /// 1-based verdict index when this assertion requests more than one sample.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_index: Option<u32>,
+    /// Total verdicts requested for a sampled assertion. Paired with
+    /// `sample_index`; both stay absent for the legacy single-verdict shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sample_count: Option<u32>,
     pub rubric: String,
     pub model: Option<String>,
     pub is_meta: bool,
@@ -271,6 +279,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                 )?;
                 fs::write(&evidence_path, &evidence.content)?;
 
+                let mut task_stem_owners: HashMap<String, String> = HashMap::new();
                 for assertion in assertions {
                     let j = match assertion {
                         Assertion::LlmJudge(j) => j,
@@ -282,28 +291,50 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                         // task emission and is folded in during finalize.
                         Assertion::CommandCheck(_) | Assertion::DiffScope(_) => continue,
                     };
-                    let response_path = judge_responses_dir.join(format!("{}.json", j.id));
-                    let dispatch_prompt =
-                        build_judge_prompt(&j.id, &j.rubric, &evidence.content, &response_path)?;
-                    let prompt_path = judge_prompts_dir.join(format!("{}.txt", j.id));
-                    fs::write(&prompt_path, &dispatch_prompt)?;
-                    tasks.push(JudgeTask {
-                        eval_id: ev.id.clone(),
-                        condition: cond.clone(),
-                        run_index: slot.run_index,
-                        assertion_id: j.id.clone(),
-                        rubric: j.rubric.clone(),
-                        model: j.model.clone().or_else(|| default_judge_model.clone()),
-                        is_meta: false,
-                        run_record_path: artifact_path(&run_record_path),
-                        outputs_dir: artifact_path(&outputs_dir),
-                        response_path: artifact_path(&response_path),
-                        dispatch_prompt_path: artifact_path(&prompt_path),
-                        evidence_bundle: evidence.reference.clone(),
-                        dispatch_prompt_bytes: dispatch_prompt.len(),
-                        dispatch_prompt_byte_limit: JUDGE_PROMPT_BYTE_LIMIT,
-                        dispatch_prompt,
-                    });
+                    let sample_count = j.samples.or(ctx.conditions.judge_samples).unwrap_or(1);
+                    for index in 1..=sample_count {
+                        let sampled_index = (sample_count > 1).then_some(index);
+                        let stem = sampled_index.map_or_else(
+                            || j.id.clone(),
+                            |sample| format!("{}__sample-{sample}", j.id),
+                        );
+                        if let Some(first_assertion) =
+                            task_stem_owners.insert(stem.clone(), j.id.clone())
+                        {
+                            return Err(PipelineError::Message(format!(
+                                "judge task filename collision for {}/{cond}: assertions '{}' and '{}' both resolve to '{stem}'. Rename one assertion id.",
+                                ev.id, first_assertion, j.id
+                            )));
+                        }
+                        let response_path = judge_responses_dir.join(format!("{stem}.json"));
+                        let dispatch_prompt = build_judge_prompt(
+                            &j.id,
+                            &j.rubric,
+                            &evidence.content,
+                            &response_path,
+                        )?;
+                        let prompt_path = judge_prompts_dir.join(format!("{stem}.txt"));
+                        fs::write(&prompt_path, &dispatch_prompt)?;
+                        tasks.push(JudgeTask {
+                            eval_id: ev.id.clone(),
+                            condition: cond.clone(),
+                            run_index: slot.run_index,
+                            assertion_id: j.id.clone(),
+                            sample_index: sampled_index,
+                            sample_count: (sample_count > 1).then_some(sample_count),
+                            rubric: j.rubric.clone(),
+                            model: j.model.clone().or_else(|| default_judge_model.clone()),
+                            is_meta: false,
+                            run_record_path: artifact_path(&run_record_path),
+                            outputs_dir: artifact_path(&outputs_dir),
+                            response_path: artifact_path(&response_path),
+                            dispatch_prompt_path: artifact_path(&prompt_path),
+                            evidence_bundle: evidence.reference.clone(),
+                            dispatch_prompt_bytes: dispatch_prompt.len(),
+                            dispatch_prompt_byte_limit: JUDGE_PROMPT_BYTE_LIMIT,
+                            dispatch_prompt,
+                        });
+                    }
                 }
 
                 // Skill-invocation meta-check. Negative evals (skill_should_trigger:
@@ -360,6 +391,8 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                             condition: cond.clone(),
                             run_index: slot.run_index,
                             assertion_id: SKILL_INVOKED_META_ID.to_string(),
+                            sample_index: None,
+                            sample_count: None,
                             rubric,
                             model: default_judge_model.clone(),
                             is_meta: true,

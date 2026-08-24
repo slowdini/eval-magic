@@ -464,9 +464,9 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Promoted from commit | {head} |"),
         String::new(),
         "Files:".to_string(),
-        "- `benchmark.json` — aggregate pass-rate / duration / token deltas plus per-assertion pass counts."
+        "- `benchmark.json` — aggregate grading / duration / token deltas plus per-assertion pass or sampled-vote counts."
             .to_string(),
-        "- `grading/<eval-id>__<condition>.json` (multi-run cells add an `__r<k>` suffix per run) — assertion results and judge rationales."
+        "- `grading/<eval-id>__<condition>.json` (multi-run cells add an `__r<k>` suffix per run) — assertion results, sampled verdicts, and judge rationales."
             .to_string(),
         "- `evidence/<eval-id>__<condition>.md` (multi-run cells add an `__r<k>` suffix per run) — the exact bounded run evidence inlined for judge tasks."
             .to_string(),

@@ -40,6 +40,10 @@
         "dispatch_prompt_bytes",
         "dispatch_prompt_byte_limit"
       ],
+      "dependencies": {
+        "sample_index": ["sample_count"],
+        "sample_count": ["sample_index"]
+      },
       "additionalProperties": false,
       "properties": {
         "eval_id": { "type": "string" },
@@ -50,6 +54,16 @@
           "description": "1-based run index within a multi-run (eval, condition) cell; absent for single-run cells."
         },
         "assertion_id": { "type": "string" },
+        "sample_index": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "1-based verdict index for an assertion requesting more than one judge sample; absent for the legacy single-verdict shape."
+        },
+        "sample_count": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "Total verdicts requested for this sampled assertion; absent together with sample_index when the effective count is 1."
+        },
         "rubric": { "type": "string" },
         "model": {
           "type": ["string", "null"],

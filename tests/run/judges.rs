@@ -20,6 +20,18 @@ const JUDGED_EVALS: &str = r#"{
   }]
 }"#;
 
+const SAMPLED_JUDGED_EVALS: &str = r#"{
+  "skill_name": "mr-review",
+  "evals": [{
+    "id": "reviewed",
+    "prompt": "Review this MR.",
+    "expected_output": "a clear review",
+    "assertions": [
+      {"id": "clear", "type": "llm_judge", "rubric": "Was the review clear?", "samples": 2}
+    ]
+  }]
+}"#;
+
 /// The runner dispatches judge tasks the same way it dispatches eval tasks: it
 /// skips verdicts that already exist, runs the ones that do not, and reports
 /// how many are present. Before this, an operator pasted a `jq`/`xargs`
@@ -151,6 +163,49 @@ fn dispatch_judges_exits_nonzero_while_a_verdict_is_missing() {
         .failure()
         .stdout(contains("0/"))
         .stderr(contains("verdict"));
+}
+
+/// Sample coordinates belong in dispatch failures so an operator can rerun
+/// the exact missing judge without confusing it with another independent vote.
+#[test]
+fn sampled_judge_failures_name_the_sample() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), SAMPLED_JUDGED_EVALS);
+    prepare_and_dispatch(tmp.path(), &skill_dir, &cwd);
+
+    let script = tmp.path().join("fail-second-sample.sh");
+    fs::write(
+        &script,
+        r#"#!/bin/sh
+outputs=$1
+case "$outputs" in
+  *__sample-2) exit 7 ;;
+  *) printf '%s\n' '{"passed":true,"evidence":"stub verdict","confidence":0.8}' > "${outputs}.json" ;;
+esac
+"#,
+    )
+    .unwrap();
+    stub_judge_template(
+        &cwd,
+        &format!("sh \"{}\" <outputs_dir>", script.to_string_lossy()),
+    );
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["dispatch", "--judges", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--iteration",
+            "1",
+            "--harness",
+            "codex",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("reviewed:with_skill:clear:sample-2-of-2"))
+        .stderr(contains("reviewed:without_skill:clear:sample-2-of-2"));
 }
 
 /// Prepare an iteration, dispatch its eval tasks through a stub, and ingest, so

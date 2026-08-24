@@ -491,6 +491,7 @@ mod tests {
             id: "a2".into(),
             rubric: "r".into(),
             model: None,
+            samples: None,
         });
 
         assert!(evals_use_transcript_check(&[eval_with(Some(vec![

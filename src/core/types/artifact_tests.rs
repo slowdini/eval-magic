@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::Grader;
 use serde_json::{Value, json};
 
 #[test]

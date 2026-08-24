@@ -440,11 +440,24 @@ fn revision_mode_provisions_both_arms_from_the_cached_codebase() {
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "revision", "--dry-run"])
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "revision",
+            "--judge-samples",
+            "3",
+            "--dry-run",
+        ])
         .assert()
         .success();
 
     let iteration = iteration_dir(&cwd);
+    let conditions = read_json(&iteration.join("conditions.json"));
+    assert_eq!(conditions["mode"], "revision");
+    assert_eq!(conditions["judge_samples"], 3);
+    assert_eq!(conditions["codebases"][0]["source"], wire_path(&origin));
+    assert!(conditions["codebases"][0]["revision"].is_string());
     let cached: Vec<_> = fs::read_dir(iteration.join(".codebase")).unwrap().collect();
     assert_eq!(
         cached.len(),

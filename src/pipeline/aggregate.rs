@@ -1,12 +1,13 @@
 //! Stage 5 — `aggregate`.
 //!
 //! Compares exactly two conditions: collects
-//! `pass_rate` (from `grading.json`), `total_tokens`/`duration_ms` (from
-//! `timing.json`), per-assertion pass counts, raw per-run diff scope, and the
-//! skill-invocation determination per condition; computes mean/stddev and the
-//! `a - b` delta; accumulates validity warnings (mixed timing sources, sub-100%
-//! invocation rate, stray-write violations + live-source reads, guard denials,
-//! permission-denied tool calls, plugin shadows); and writes `benchmark.json`.
+//! grading endpoints (binary pass rate or sampled vote proportion and pass^k),
+//! `total_tokens`/`duration_ms` (from `timing.json`), per-assertion pass or vote
+//! counts, raw per-run diff scope, and the skill-invocation determination per
+//! condition; computes mean/stddev and the `a - b` delta; accumulates validity
+//! warnings (mixed timing sources, sub-100% invocation rate, stray-write
+//! violations + live-source reads, guard denials, permission-denied tool calls,
+//! plugin shadows); and writes `benchmark.json`.
 
 mod assertions;
 
@@ -80,6 +81,10 @@ pub struct Stats {
 #[derive(Debug, Clone, Serialize)]
 struct ConditionSummary {
     pass_rate: Stats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vote_proportion: Option<Stats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_power_k: Option<Stats>,
     duration_ms: Stats,
     total_tokens: Stats,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,6 +99,10 @@ struct ConditionSummary {
 struct Delta {
     direction: String,
     pass_rate: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vote_proportion: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_power_k: Option<f64>,
     duration_ms: f64,
     total_tokens: f64,
 }
@@ -146,6 +155,8 @@ struct DiffScopeRun {
 #[derive(Default)]
 struct Bucket {
     pass_rates: Vec<f64>,
+    vote_proportions: Vec<f64>,
+    pass_power_k: Vec<f64>,
     durations: Vec<f64>,
     tokens: Vec<f64>,
     skill_invoked: Vec<bool>,
@@ -216,6 +227,7 @@ pub fn aggregate(
     let mut warnings: Vec<String> = Vec::new();
     let mut timing_sources: HashSet<String> = HashSet::new();
     let mut assertion_counts = AssertionRollup::default();
+    let mut has_sampled_gradings = false;
     let mut diff_scope_by_condition: HashMap<String, Vec<DiffScopeRun>> = condition_names
         .iter()
         .map(|condition| (condition.clone(), Vec::new()))
@@ -277,9 +289,20 @@ pub fn aggregate(
                     .strip_prefix("eval-")
                     .unwrap_or(eval_dir)
                     .to_string();
-                assertion_counts.record(&eval_id, cond, &grading.assertion_results);
+                assertion_counts.record(&eval_id, cond, &grading.assertion_results)?;
                 let bucket = by_condition.get_mut(cond).expect("condition bucket");
-                bucket.pass_rates.push(grading.summary.pass_rate);
+                bucket.pass_rates.push(grading.summary.pass_rate());
+                let vote_proportion = grading
+                    .summary
+                    .vote_proportion()
+                    .unwrap_or_else(|| grading.summary.pass_rate());
+                let pass_power_k = grading
+                    .summary
+                    .pass_power_k()
+                    .unwrap_or_else(|| grading.summary.pass_rate());
+                has_sampled_gradings |= grading.summary.vote_proportion().is_some();
+                bucket.vote_proportions.push(vote_proportion);
+                bucket.pass_power_k.push(pass_power_k);
                 if let Some(meta) = &grading.meta_summary
                     && let Some(invoked) = meta.skill_invoked
                 {
@@ -324,6 +347,8 @@ pub fn aggregate(
         };
         let summary = ConditionSummary {
             pass_rate: stats(&bucket.pass_rates, 3),
+            vote_proportion: has_sampled_gradings.then(|| stats(&bucket.vote_proportions, 3)),
+            pass_power_k: has_sampled_gradings.then(|| stats(&bucket.pass_power_k, 6)),
             duration_ms: stats(&bucket.durations, 0),
             total_tokens: stats(&bucket.tokens, 0),
             skill_invocation_n,
@@ -340,6 +365,20 @@ pub fn aggregate(
     let delta = Delta {
         direction: format!("{a} - {b}"),
         pass_rate: round(sa.pass_rate.mean - sb.pass_rate.mean, 3),
+        vote_proportion: has_sampled_gradings.then(|| {
+            round(
+                sa.vote_proportion.expect("sampled vote stats").mean
+                    - sb.vote_proportion.expect("sampled vote stats").mean,
+                3,
+            )
+        }),
+        pass_power_k: has_sampled_gradings.then(|| {
+            round(
+                sa.pass_power_k.expect("sampled pass^k stats").mean
+                    - sb.pass_power_k.expect("sampled pass^k stats").mean,
+                6,
+            )
+        }),
         duration_ms: round(sa.duration_ms.mean - sb.duration_ms.mean, 0),
         total_tokens: round(sa.total_tokens.mean - sb.total_tokens.mean, 0),
     };
