@@ -7,6 +7,7 @@
 //! be run (and re-run) standalone.
 
 pub mod aggregate;
+pub mod compare;
 pub mod detect_stray_writes;
 pub mod diff_scope;
 pub mod error;
@@ -22,6 +23,7 @@ pub(crate) mod shadow_verification;
 pub mod slots;
 
 pub use aggregate::{Benchmark, aggregate};
+pub use compare::{CompareResult, compare};
 pub use detect_stray_writes::{
     StrayFinding, StrayWritesReport, detect_live_source_reads, detect_stray_writes,
     detect_stray_writes_report,

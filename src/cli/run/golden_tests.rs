@@ -128,6 +128,7 @@ fn golden_runbook_per_harness() {
     for harness in Harness::known() {
         let label = adapter_for(harness).label();
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
+        let eval_ids = vec!["implement-widget".to_string()];
         let book = build_runbook(&RunbookContext {
             harness,
             skill_name: "widget-skill",
@@ -137,6 +138,7 @@ fn golden_runbook_per_harness() {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
+            eval_ids: &eval_ids,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
         });
         assert!(book.contains("judge-evidence.md"));

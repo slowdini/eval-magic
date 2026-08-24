@@ -247,6 +247,10 @@ fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
         .stdout(contains("__sample-N"))
         .stdout(contains("missing response"))
         .stdout(contains("__skill_invoked"))
+        .stdout(contains("Explore before writing assertions"))
+        .stdout(contains("eval-magic compare"))
+        .stdout(contains("no assertions"))
+        .stdout(contains("not a grade"))
         .stdout(contains("evals/baseline/evidence"));
 
     skill_eval()

@@ -711,6 +711,8 @@ pub(crate) enum Commands {
     /// `eval-magic dispatch --judges`.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
+    #[command(about = super::compare_args::ABOUT, long_about = super::compare_args::LONG_ABOUT)]
+    Compare(super::compare_args::CompareArgs),
     /// Finalize grading after judge responses are in.
     ///
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts,

@@ -36,6 +36,9 @@ EXAMPLES:
   # property of the eval set
   eval-magic docs codebase
 
+  # Pair both conditions for exploratory review before writing assertions
+  eval-magic compare --iteration 1 --eval implement-feature
+
   # Select a built-in harness; `run --help` documents models and environment options
   eval-magic run --harness codex
 

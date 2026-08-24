@@ -66,6 +66,7 @@ fn help_lists_subcommands() {
         .success()
         .stdout(contains("init"))
         .stdout(contains("record-runs"))
+        .stdout(contains("compare"))
         .stdout(contains("grade"))
         .stdout(contains("validate"))
         .stdout(contains("aggregate"));
@@ -91,6 +92,7 @@ fn every_visible_command_and_harness_subcommand_renders_help() {
         "teardown --help",
         "teardown-guard --help",
         "ingest --help",
+        "compare --help",
         "finalize --help",
         "record-runs --help",
         "fill-transcripts --help",
@@ -146,6 +148,7 @@ fn top_level_examples_stop_after_orientation_and_handoffs() {
         .success()
         .stdout(contains("eval-magic init"))
         .stdout(contains("eval-magic run"))
+        .stdout(contains("eval-magic compare"))
         .stdout(contains("RUNBOOK.md"))
         .stdout(contains("--agent-env TZ=America/Los_Angeles").not())
         .stdout(contains("harness show claude-code").not());
@@ -198,6 +201,20 @@ fn grade_help_documents_bounded_judge_evidence() {
         .stdout(contains("judge-evidence.md"))
         .stdout(contains("98,304-byte"))
         .stdout(contains("131,072-byte"))
+        .stdout(contains("eval-magic docs judging"));
+}
+
+#[test]
+fn compare_help_documents_exploration_and_completeness_boundaries() {
+    skill_eval()
+        .args(["compare", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("no authored assertions"))
+        .stdout(contains("not a grade"))
+        .stdout(contains("multi-run"))
+        .stdout(contains("untrusted"))
+        .stdout(contains("validity"))
         .stdout(contains("eval-magic docs judging"));
 }
 
