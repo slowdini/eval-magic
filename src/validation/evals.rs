@@ -305,7 +305,7 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::validate_evals_config;
-    use crate::core::CodebaseSource;
+    use crate::core::{Assertion, CodebaseSource};
     use serde_json::{Value, json};
 
     /// The minimal valid config the cases below mutate.
@@ -336,6 +336,39 @@ mod tests {
         let parsed = validate_evals_config(&config, "evals.json").unwrap();
         assert_eq!(parsed.skill_name, "demo");
         assert_eq!(parsed.evals[0].skill_should_trigger, None);
+    }
+
+    #[test]
+    fn llm_judge_accepts_a_positive_sample_count() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "quality",
+            "type": "llm_judge",
+            "rubric": "Is the implementation well designed?",
+            "samples": 10
+        }]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let Assertion::LlmJudge(judge) = &parsed.evals[0].assertions.as_ref().unwrap()[0] else {
+            panic!("expected llm_judge assertion");
+        };
+        assert_eq!(judge.samples, Some(10));
+    }
+
+    #[test]
+    fn llm_judge_rejects_zero_samples() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "quality",
+            "type": "llm_judge",
+            "rubric": "Is the implementation well designed?",
+            "samples": 0
+        }]);
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("samples"), "error was: {error}");
     }
 
     #[test]

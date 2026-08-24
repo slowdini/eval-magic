@@ -38,11 +38,19 @@ struct JudgeTask {
     model: Option<String>,
     response_path: String,
     dispatch_prompt_path: String,
+    #[serde(default)]
+    sample_index: Option<u32>,
+    #[serde(default)]
+    sample_count: Option<u32>,
 }
 
 impl JudgeTask {
     fn description(&self) -> String {
-        format!("{}:{}:{}", self.eval_id, self.condition, self.assertion_id)
+        let base = format!("{}:{}:{}", self.eval_id, self.condition, self.assertion_id);
+        match (self.sample_index, self.sample_count) {
+            (Some(index), Some(count)) => format!("{base}:sample-{index}-of-{count}"),
+            _ => base,
+        }
     }
 
     /// A verdict is present once its response file exists and is non-empty —

@@ -9,6 +9,10 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+
+// Preserve the established `core::types::*` artifact API while the focused
+// implementation lives in `core::grading`.
+pub use super::grading::*;
 use serde_json::Value;
 
 use crate::core::context::Harness;
@@ -44,6 +48,10 @@ pub struct AssertionLlmJudge {
     pub rubric: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Independent judge verdicts requested for this assertion. Absence resolves
+    /// through the run-level default and ultimately to one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub samples: Option<u32>,
 }
 
 /// A runner-owned command assertion evaluated against the final task environment.
@@ -398,6 +406,10 @@ pub struct ConditionsRecord {
     /// Operator-declared judge model (provenance, like `agent_model`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge_model: Option<String>,
+    /// Non-default judge verdict count selected for authored `llm_judge`
+    /// assertions. Absence means one for compatibility with older iterations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_samples: Option<u32>,
     /// Operator-declared responder model (provenance, like `agent_model`). A
     /// responder eval puts a third model in the attribution picture, so a
     /// report that names the agent and the judge has to name this one too.
@@ -645,60 +657,6 @@ impl ResponderStopCause {
     }
 }
 
-/// The result of grading one assertion.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AssertionResult {
-    pub id: String,
-    pub passed: bool,
-    pub evidence: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grader: Option<Grader>,
-}
-
-/// Which grader produced an assertion result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Grader {
-    TranscriptCheck,
-    LlmJudge,
-    CommandCheck,
-    DiffScope,
-}
-
-/// The full grading output for one run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GradingResult {
-    pub assertion_results: Vec<AssertionResult>,
-    // Substantive results + summary first, then the optional meta block —
-    // grading.json reads as "the verdict, then the validity check on it".
-    pub summary: GradingSummary,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta_results: Option<Vec<AssertionResult>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta_summary: Option<MetaSummary>,
-}
-
-/// Pass/fail tallies for the main assertions.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct GradingSummary {
-    pub passed: u32,
-    pub failed: u32,
-    pub total: u32,
-    pub pass_rate: f64,
-}
-
-/// Tallies for the meta-assertions, plus the skill-invocation determination.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct MetaSummary {
-    pub passed: u32,
-    pub failed: u32,
-    pub total: u32,
-    /// `None` (serialized `null`) when invocation could not be determined.
-    pub skill_invoked: Option<bool>,
-}
-
 /// Token/duration provenance for a run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct TimingRecord {
@@ -724,7 +682,7 @@ pub enum TimingSource {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::Harness;
+    use crate::core::{MetaSummary, context::Harness};
     use serde_json::{Value, json};
 
     #[test]
@@ -895,6 +853,7 @@ mod tests {
             agent_model: None,
             agent_env: BTreeMap::new(),
             judge_model: None,
+            judge_samples: None,
             responder_model: None,
             label: None,
             codebases: Vec::new(),

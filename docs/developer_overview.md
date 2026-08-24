@@ -26,9 +26,9 @@ focused internal notes instead of duplicating their details.
 4. `eval-magic ingest` reads the harness outputs, transcript evidence, guard denials, and final
    task state. Runner-owned deterministic checks and diff-scope evidence are collected here.
 5. `eval-magic grade` evaluates runner-owned assertions, writes one bounded `judge-evidence.md`
-   per recorded run, and emits tasks for assertions that require an LLM. Each task inlines the
-   exact bundle for its run. `eval-magic dispatch --judges` runs those judge tasks through the
-   selected harness.
+   per recorded run, and emits one or more tasks for assertions that require an LLM. Every sample
+   inlines the exact same bundle for its run. `eval-magic dispatch --judges` runs those judge tasks
+   through the selected harness.
 6. `eval-magic finalize` checks that required work is complete and writes the final per-run and
    benchmark artifacts. `eval-magic aggregate` combines campaigns when a larger comparison is
    needed.

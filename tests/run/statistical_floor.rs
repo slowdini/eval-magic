@@ -84,3 +84,69 @@ fn excluded_evals_do_not_influence_the_statistical_floor() {
         "excluded evals must not influence the notice: {stdout}"
     );
 }
+
+#[test]
+fn sampled_judging_prints_the_non_binary_endpoint_instead_of_a_fisher_floor() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [{
+        "id": "quality", "prompt": "review it", "expected_output": "a review",
+        "assertions": [{
+            "id": "design", "type": "llm_judge", "rubric": "Is it well designed?", "samples": 3
+        }]
+    }] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(
+        stdout.contains(
+            "statistical endpoint: 2 conditions × 1 run; LLM judge sample counts per assertion: 3"
+        ),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("vote proportion and pass^k; the binary Fisher exact floor does not apply"),
+        "{stdout}"
+    );
+    assert!(!stdout.contains("statistical floor:"), "{stdout}");
+}
+
+#[test]
+fn sampled_endpoint_resolves_run_default_and_assertion_overrides() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{ "skill_name": "mr-review", "evals": [{
+        "id": "quality", "prompt": "review it", "expected_output": "a review",
+        "assertions": [
+            {"id": "defaulted", "type": "llm_judge", "rubric": "Good?"},
+            {"id": "overridden", "type": "llm_judge", "rubric": "Safe?", "samples": 3}
+        ]
+    }] }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--judge-samples",
+            "5",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+
+    assert!(
+        stdout.contains("LLM judge sample counts per assertion: 3, 5"),
+        "{stdout}"
+    );
+}

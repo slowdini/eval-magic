@@ -63,6 +63,7 @@ pub(super) fn write_dispatch(
         agent_model: opts.agent_model.map(str::to_owned),
         agent_env: opts.agent_env.clone(),
         judge_model: opts.judge_model.map(str::to_owned),
+        judge_samples: opts.judge_samples,
         responder_model: opts.responder_model.map(str::to_owned),
         label: opts.label.map(str::to_owned),
         codebases: r.codebases.iter().map(super::RunCodebase::usage).collect(),
@@ -296,6 +297,12 @@ pub(super) fn write_dispatch(
             .as_object_mut()
             .expect("dispatch envelope is an object")
             .insert("agent_env".to_string(), json!(conditions.agent_env));
+    }
+    if let Some(samples) = conditions.judge_samples {
+        dispatch_json
+            .as_object_mut()
+            .expect("dispatch envelope is an object")
+            .insert("judge_samples".to_string(), json!(samples));
     }
     // Unconditional: `dispatch` drives every task from this envelope, so the
     // descriptor it freezes and the guard state it dispatches under are needed

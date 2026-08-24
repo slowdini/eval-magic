@@ -520,11 +520,12 @@ pub struct RunArgs {
     /// unchanged (artifacts sit directly in the condition directory). The
     /// benchmark's per-condition `mean`/`stddev`/`n` then reflect all runs. A
     /// per-eval `runs` field in evals.json overrides this flag for that eval.
-    /// Before staging, the run summary prints the minimum attainable two-sided
-    /// Fisher exact p-value for each effective run count, assuming a binary
-    /// endpoint and perfect separation between the two conditions. This is a
-    /// sample-size bound only: eval-magic does not calculate observed p-values or
-    /// apply a significance threshold.
+    /// Before staging, a fully binary run summary prints the minimum attainable
+    /// two-sided Fisher exact p-value for each effective run count, assuming
+    /// perfect separation between the two conditions. A run with sampled LLM
+    /// assertions instead identifies vote proportion and pass^k as non-binary
+    /// endpoints. eval-magic does not calculate observed p-values or apply a
+    /// significance threshold.
     #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
     pub runs: u32,
     /// Agent-under-test model for CLI dispatches; otherwise recorded as
@@ -554,6 +555,15 @@ pub struct RunArgs {
     /// `conditions.json` for `promote-baseline`.
     #[arg(long)]
     pub judge_model: Option<String>,
+    /// Default verdict count for authored LLM-judge assertions (default: 1).
+    ///
+    /// An assertion-level `samples` value overrides this option. Counts above one
+    /// dispatch independent judges over the same bounded evidence bundle and are
+    /// reported as vote proportion p plus pass^k = p^N. The framework-injected
+    /// skill-invocation meta-check remains single-shot. See
+    /// `eval-magic docs judging`.
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub judge_samples: u32,
     /// Model that answers the agent for evals declaring a `responder`.
     ///
     /// `dispatch` consults it once after every round, through the same harness
@@ -613,9 +623,9 @@ pub(crate) enum Commands {
     /// per condition and repetition. Scripted follow-ups add up to `2R × F` model
     /// turns for `F` declared follow-ups. A `responder` case instead adds one
     /// agent turn and one small responder dispatch per round, up to its
-    /// `max_turns` bound. Each `llm_judge` assertion creates a judge task per
-    /// condition and repetition. Review the printed run summary and obtain
-    /// confirmation before spending model usage.
+    /// `max_turns` bound. Each `llm_judge` assertion creates its effective sample
+    /// count of judge tasks per condition and repetition. Review the printed run
+    /// summary and obtain confirmation before spending model usage.
     ///
     /// Git is required. Every task environment is initialized as an independent,
     /// clean repository on branch `work` with a deterministic baseline commit and
@@ -693,11 +703,12 @@ pub(crate) enum Commands {
     /// environment overrides and running every environment matrix cell. Diff
     /// scope is captured before held-out files are injected. Then stops at the
     /// judge hand-off, writing one bounded `judge-evidence.md` per recorded run
-    /// and listing a judge task per `llm_judge` assertion. The exact evidence
-    /// bundle is shared by that run's tasks and inlined into their prompts. Requires
-    /// `--iteration`; reads each task's `outputs/<harness>-events.jsonl` when the
-    /// harness exposes transcripts, under `outputs/turn-<n>/`. Dispatch the judge
-    /// tasks it lists with `eval-magic dispatch --judges`.
+    /// and listing the effective sample count of judge tasks per `llm_judge`
+    /// assertion. The exact evidence bundle is shared by that run's tasks and
+    /// inlined into their prompts. Requires `--iteration`; reads each task's
+    /// `outputs/<harness>-events.jsonl` when the harness exposes transcripts,
+    /// under `outputs/turn-<n>/`. Dispatch the judge tasks it lists with
+    /// `eval-magic dispatch --judges`.
     /// Re-running after a fix is safe — every sub-step skips work already done.
     Ingest(CommonArgs),
     /// Finalize grading after judge responses are in.
@@ -705,9 +716,11 @@ pub(crate) enum Commands {
     /// Fixed-order chain: grade `--finalize` → aggregate. Merges judge verdicts,
     /// runner-owned `command_check` results, and deterministic `diff_scope`
     /// files/lines thresholds into normal `grading.json` files, then writes
-    /// `benchmark.json` with a per-assertion `passed`/`n` rollup from observed
-    /// assertion results and raw per-run metrics from `diff-scope.json`. The
-    /// per-run changed-file list and `diff.patch` stay beside each run rather
+    /// `benchmark.json` with per-assertion rollups from observed assertion
+    /// results. Binary assertions keep their `passed`/`n` rollup; sampled LLM
+    /// assertions retain every verdict, pooled vote counts, vote proportion, and
+    /// pass^k. Raw per-run metrics come from `diff-scope.json`.
+    /// The per-run changed-file list and `diff.patch` stay beside each run rather
     /// than being rolled up. If a live
     /// guard remains armed — the cwd guard, or any per-task Cli env guard — prints
     /// a `teardown` reminder before source edits. Requires `--iteration`.
@@ -785,6 +798,12 @@ pub(crate) enum Commands {
     /// `eval-magic docs judging`. With `--finalize`, merges every result into
     /// per-run `grading.json`.
     ///
+    /// An authored `llm_judge.samples` count overrides `run --judge-samples`.
+    /// Counts above one emit independent `__sample-N` tasks over the shared
+    /// evidence bundle. Finalization retains each verdict and reports vote
+    /// proportion plus pass^k; one missing response fails only that sample. An
+    /// effective count of one preserves the binary grading artifact.
+    ///
     /// Injects the `__skill_invoked` meta-check — did the skill actually influence
     /// behavior? It has two tiers, chosen automatically per run: code-based (where
     /// the staged slug + transcript are available, as on Claude Code, it checks the
@@ -797,8 +816,9 @@ pub(crate) enum Commands {
     /// Aggregate before/after benchmark deltas.
     ///
     /// Reads grading + timing from an iteration and writes `benchmark.json` with
-    /// pass-rate / duration / token stats per condition, a per-assertion
-    /// `passed`/`n` rollup from observed assertion results, the delta,
+    /// grading / duration / token stats per condition, a per-assertion binary
+    /// `passed`/`n` or sampled-vote rollup from observed assertion results, the
+    /// delta,
     /// `validity_warnings` (including incomplete timing sample counts, one per
     /// task in `guard-denials.json`, and one per task in
     /// `permission-denials.json` whose refusals were not the guard's own, plus

@@ -270,6 +270,11 @@
         "model": {
           "type": "string",
           "description": "Optional judge model override. When absent, defaults to the run-level judge model recorded in conditions.json, or the harness default when no run-level model was selected."
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Independent judge verdicts requested for this assertion. Overrides run --judge-samples and defaults to 1."
         }
       }
     },

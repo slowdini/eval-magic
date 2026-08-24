@@ -9,63 +9,15 @@
   "properties": {
     "assertion_results": {
       "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["id", "passed", "evidence"],
-        "additionalProperties": false,
-        "properties": {
-          "id": {
-            "type": "string",
-            "description": "Matches the assertion id in evals.json."
-          },
-          "passed": { "type": "boolean" },
-          "evidence": {
-            "type": "string",
-            "description": "Direct quote or specific reference from the run record. Vague summaries are not evidence."
-          },
-          "confidence": {
-            "type": "number",
-            "minimum": 0,
-            "maximum": 1,
-            "description": "Judge confidence. Low confidence (< 0.7) flags this result for human review. Always 1.0 for transcript_check results."
-          },
-          "grader": {
-            "type": "string",
-            "enum": ["transcript_check", "llm_judge", "command_check", "diff_scope"],
-            "description": "Which grader produced this result."
-          }
-        }
-      }
+      "items": { "$ref": "#/definitions/assertionResult" }
     },
     "summary": {
-      "type": "object",
-      "required": ["passed", "failed", "total", "pass_rate"],
-      "additionalProperties": false,
-      "properties": {
-        "passed": { "type": "integer", "minimum": 0 },
-        "failed": { "type": "integer", "minimum": 0 },
-        "total": { "type": "integer", "minimum": 0 },
-        "pass_rate": { "type": "number", "minimum": 0, "maximum": 1 }
-      }
+      "$ref": "#/definitions/gradingSummary"
     },
     "meta_results": {
       "type": "array",
       "description": "Framework-injected meta-assertions (e.g. skill-invocation check). Reserved id prefix: __ (double underscore). Tracked separately from substantive assertion_results so they do not pollute the skill effectiveness pass_rate.",
-      "items": {
-        "type": "object",
-        "required": ["id", "passed", "evidence"],
-        "additionalProperties": false,
-        "properties": {
-          "id": { "type": "string" },
-          "passed": { "type": "boolean" },
-          "evidence": { "type": "string" },
-          "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
-          "grader": {
-            "type": "string",
-            "enum": ["transcript_check", "llm_judge", "command_check", "diff_scope"]
-          }
-        }
-      }
+      "items": { "$ref": "#/definitions/binaryAssertionResult" }
     },
     "meta_summary": {
       "type": "object",
@@ -78,6 +30,108 @@
           "description": "True when the skill-invocation meta-check passed; false when the judge found no evidence the skill influenced behavior; null when no skill was loaded for this run.",
           "type": ["boolean", "null"]
         }
+      }
+    }
+  },
+  "definitions": {
+    "assertionResult": {
+      "oneOf": [
+        { "$ref": "#/definitions/binaryAssertionResult" },
+        { "$ref": "#/definitions/sampledAssertionResult" }
+      ]
+    },
+    "binaryAssertionResult": {
+      "type": "object",
+      "required": ["id", "passed", "evidence"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Matches the assertion id in evals.json."
+        },
+        "passed": { "type": "boolean" },
+        "evidence": {
+          "type": "string",
+          "description": "Direct quote or specific reference from the run record. Vague summaries are not evidence."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Judge confidence. Low confidence (< 0.7) flags this result for human review. Always 1.0 for transcript_check results."
+        },
+        "grader": {
+          "type": "string",
+          "enum": ["transcript_check", "llm_judge", "command_check", "diff_scope"],
+          "description": "Which grader produced this result."
+        }
+      }
+    },
+    "sampledAssertionResult": {
+      "type": "object",
+      "required": ["id", "grader", "votes", "judge_samples"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "description": "Matches the authored llm_judge assertion id in evals.json." },
+        "grader": { "const": "llm_judge", "description": "Sampled results are produced only by authored LLM-judge assertions." },
+        "votes": { "$ref": "#/definitions/judgeVotes" },
+        "judge_samples": {
+          "type": "array",
+          "minItems": 2,
+          "description": "Every requested verdict in sample-index order. A missing response is retained as a failed sample rather than failing the whole assertion.",
+          "items": { "$ref": "#/definitions/judgeSample" }
+        }
+      }
+    },
+    "judgeVotes": {
+      "type": "object",
+      "required": ["passed", "failed", "total", "proportion", "pass_power_k"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 2 },
+        "proportion": { "type": "number", "minimum": 0, "maximum": 1, "description": "Passed divided by total." },
+        "pass_power_k": { "type": "number", "minimum": 0, "maximum": 1, "description": "proportion raised to total: the estimated probability every requested judgment passes." }
+      }
+    },
+    "judgeSample": {
+      "type": "object",
+      "required": ["sample_index", "passed", "evidence", "confidence"],
+      "additionalProperties": false,
+      "properties": {
+        "sample_index": { "type": "integer", "minimum": 1 },
+        "passed": { "type": "boolean" },
+        "evidence": { "type": "string" },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "gradingSummary": {
+      "oneOf": [
+        { "$ref": "#/definitions/binaryGradingSummary" },
+        { "$ref": "#/definitions/sampledGradingSummary" }
+      ]
+    },
+    "binaryGradingSummary": {
+      "type": "object",
+      "required": ["passed", "failed", "total", "pass_rate"],
+      "additionalProperties": false,
+      "properties": {
+        "passed": { "type": "integer", "minimum": 0 },
+        "failed": { "type": "integer", "minimum": 0 },
+        "total": { "type": "integer", "minimum": 0 },
+        "pass_rate": { "type": "number", "minimum": 0, "maximum": 1 }
+      }
+    },
+    "sampledGradingSummary": {
+      "type": "object",
+      "required": ["total", "pass_rate", "vote_proportion", "pass_power_k"],
+      "additionalProperties": false,
+      "properties": {
+        "total": { "type": "integer", "minimum": 0 },
+        "pass_rate": { "type": "number", "minimum": 0, "maximum": 1, "description": "Compatibility alias for vote_proportion in a sampled grading." },
+        "vote_proportion": { "type": "number", "minimum": 0, "maximum": 1, "description": "Equal-weight mean of each substantive assertion's binary result or sampled vote proportion." },
+        "pass_power_k": { "type": "number", "minimum": 0, "maximum": 1, "description": "Equal-weight mean of each substantive assertion's binary result or sampled pass^k value." }
       }
     }
   }

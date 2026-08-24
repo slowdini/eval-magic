@@ -3,9 +3,9 @@
 //! For each
 //! `(eval, condition)` it grades `transcript_check` assertions directly, folds in
 //! persisted `command_check` results, deterministic `diff_scope` thresholds,
-//! and the `llm_judge` responses written by the orchestrator (missing → FAIL),
-//! assembles the skill-invocation meta result, and writes a schema-valid
-//! `grading.json` with pass/fail summaries.
+//! and the `llm_judge` responses written by the orchestrator (a missing response
+//! fails only that verdict), assembles the skill-invocation meta result, and
+//! writes a schema-valid `grading.json` with binary or sampled vote summaries.
 
 use std::fs;
 
@@ -14,8 +14,9 @@ use serde::Deserialize;
 use crate::adapters::adapter_for;
 use crate::core::fs::write_json;
 use crate::core::{
-    Assertion, AssertionResult, Grader, GradingResult, GradingSummary, MetaSummary, RunRecord,
-    SKILL_INVOKED_META_ID, ToolInvocation,
+    Assertion, AssertionResult, BinaryGradingSummary, GradedAssertionResult, Grader, GradingResult,
+    GradingSummary, JudgeSampleResult, JudgeVotes, MetaSummary, RunRecord, SKILL_INVOKED_META_ID,
+    SampledAssertionResult, SampledGradingSummary, ToolInvocation,
 };
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
@@ -95,7 +96,7 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                     None
                 };
 
-                let mut assertion_results: Vec<AssertionResult> = Vec::new();
+                let mut assertion_results: Vec<GradedAssertionResult> = Vec::new();
                 if has_assertions {
                     for assertion in assertions {
                         match assertion {
@@ -107,12 +108,15 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                 let conversation = run_record
                                     .as_ref()
                                     .and_then(|run| run.conversation.as_ref());
-                                assertion_results.push(grade_transcript_check_with_context(
-                                    tc,
-                                    invocations,
-                                    conversation,
-                                    &transcript_vocabulary,
-                                ));
+                                assertion_results.push(
+                                    grade_transcript_check_with_context(
+                                        tc,
+                                        invocations,
+                                        conversation,
+                                        &transcript_vocabulary,
+                                    )
+                                    .into(),
+                                );
                                 let unverifiable = match tc.check.as_str() {
                                     "assistant_message_matches" => conversation.is_none(),
                                     _ => invocations.is_empty(),
@@ -124,6 +128,62 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                 }
                             }
                             Assertion::LlmJudge(j) => {
+                                let sample_count =
+                                    j.samples.or(ctx.conditions.judge_samples).unwrap_or(1);
+                                if sample_count > 1 {
+                                    let mut judge_samples =
+                                        Vec::with_capacity(sample_count as usize);
+                                    for sample_index in 1..=sample_count {
+                                        let response_path = judge_responses_dir
+                                            .join(format!("{}__sample-{sample_index}.json", j.id));
+                                        if !response_path.exists() {
+                                            summary.warnings.push(format!(
+                                                "missing judge response: {} (sample will be FAIL)",
+                                                response_path.display()
+                                            ));
+                                            judge_samples.push(JudgeSampleResult {
+                                                sample_index,
+                                                passed: false,
+                                                evidence: format!(
+                                                    "judge response missing at {}",
+                                                    response_path.display()
+                                                ),
+                                                confidence: 0.0,
+                                            });
+                                            continue;
+                                        }
+                                        let response: JudgeResponse = serde_json::from_str(
+                                            &fs::read_to_string(&response_path)?,
+                                        )?;
+                                        judge_samples.push(JudgeSampleResult {
+                                            sample_index,
+                                            passed: response.passed,
+                                            evidence: response.evidence.unwrap_or_default(),
+                                            confidence: response.confidence.unwrap_or(0.0),
+                                        });
+                                    }
+                                    let passed =
+                                        judge_samples.iter().filter(|sample| sample.passed).count()
+                                            as u32;
+                                    let proportion = f64::from(passed) / f64::from(sample_count);
+                                    assertion_results.push(GradedAssertionResult::Sampled(
+                                        SampledAssertionResult {
+                                            id: j.id.clone(),
+                                            grader: Grader::LlmJudge,
+                                            votes: JudgeVotes {
+                                                passed,
+                                                failed: sample_count - passed,
+                                                total: sample_count,
+                                                proportion,
+                                                pass_power_k: proportion
+                                                    .powf(f64::from(sample_count)),
+                                            },
+                                            judge_samples,
+                                        },
+                                    ));
+                                    summary.total_graded += 1;
+                                    continue;
+                                }
                                 let response_path =
                                     judge_responses_dir.join(format!("{}.json", j.id));
                                 if !response_path.exists() {
@@ -131,27 +191,33 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                         "missing judge response: {} (assertion will be FAIL)",
                                         response_path.display()
                                     ));
-                                    assertion_results.push(AssertionResult {
-                                        id: j.id.clone(),
-                                        passed: false,
-                                        evidence: format!(
-                                            "judge response missing at {}",
-                                            response_path.display()
-                                        ),
-                                        confidence: Some(0.0),
-                                        grader: Some(Grader::LlmJudge),
-                                    });
+                                    assertion_results.push(
+                                        AssertionResult {
+                                            id: j.id.clone(),
+                                            passed: false,
+                                            evidence: format!(
+                                                "judge response missing at {}",
+                                                response_path.display()
+                                            ),
+                                            confidence: Some(0.0),
+                                            grader: Some(Grader::LlmJudge),
+                                        }
+                                        .into(),
+                                    );
                                     continue;
                                 }
                                 let response: JudgeResponse =
                                     serde_json::from_str(&fs::read_to_string(&response_path)?)?;
-                                assertion_results.push(AssertionResult {
-                                    id: j.id.clone(),
-                                    passed: response.passed,
-                                    evidence: response.evidence.unwrap_or_default(),
-                                    confidence: Some(response.confidence.unwrap_or(0.0)),
-                                    grader: Some(Grader::LlmJudge),
-                                });
+                                assertion_results.push(
+                                    AssertionResult {
+                                        id: j.id.clone(),
+                                        passed: response.passed,
+                                        evidence: response.evidence.unwrap_or_default(),
+                                        confidence: Some(response.confidence.unwrap_or(0.0)),
+                                        grader: Some(Grader::LlmJudge),
+                                    }
+                                    .into(),
+                                );
                                 summary.total_graded += 1;
                             }
                             Assertion::CommandCheck(check) => {
@@ -170,13 +236,16 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     &serde_json::from_str(&fs::read_to_string(&result_path)?)?,
                                     &result_path.to_string_lossy(),
                                 )?;
-                                assertion_results.push(AssertionResult {
-                                    id: check.id.clone(),
-                                    passed: result.passed,
-                                    evidence: result.evidence,
-                                    confidence: Some(1.0),
-                                    grader: Some(Grader::CommandCheck),
-                                });
+                                assertion_results.push(
+                                    AssertionResult {
+                                        id: check.id.clone(),
+                                        passed: result.passed,
+                                        evidence: result.evidence,
+                                        confidence: Some(1.0),
+                                        grader: Some(Grader::CommandCheck),
+                                    }
+                                    .into(),
+                                );
                                 summary.total_graded += 1;
                             }
                             Assertion::DiffScope(check) => {
@@ -192,7 +261,7 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                     &serde_json::from_str(&fs::read_to_string(&result_path)?)?,
                                     &result_path.to_string_lossy(),
                                 )?;
-                                assertion_results.push(grade_diff_scope(check, metrics));
+                                assertion_results.push(grade_diff_scope(check, metrics).into());
                                 summary.total_graded += 1;
                             }
                         }
@@ -237,17 +306,47 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                     }
                 }
 
-                let passed = assertion_results.iter().filter(|r| r.passed).count() as u32;
                 let total = assertion_results.len() as u32;
                 let meta_len = meta_results.len() as u32;
                 let meta_passed = meta_results.iter().filter(|r| r.passed).count() as u32;
                 let has_meta = !meta_results.is_empty();
                 let skill_invoked = has_meta.then(|| meta_results.iter().all(|r| r.passed));
 
-                let grading = GradingResult {
-                    assertion_results,
-                    meta_results: has_meta.then_some(meta_results),
-                    summary: GradingSummary {
+                let has_sampled = assertion_results
+                    .iter()
+                    .any(|result| matches!(result, GradedAssertionResult::Sampled(_)));
+                let grading_summary = if has_sampled {
+                    let divisor = f64::from(total);
+                    let vote_proportion = if total == 0 {
+                        0.0
+                    } else {
+                        assertion_results
+                            .iter()
+                            .map(GradedAssertionResult::vote_proportion)
+                            .sum::<f64>()
+                            / divisor
+                    };
+                    let pass_power_k = if total == 0 {
+                        0.0
+                    } else {
+                        assertion_results
+                            .iter()
+                            .map(GradedAssertionResult::pass_power_k)
+                            .sum::<f64>()
+                            / divisor
+                    };
+                    GradingSummary::Sampled(SampledGradingSummary {
+                        total,
+                        pass_rate: vote_proportion,
+                        vote_proportion,
+                        pass_power_k,
+                    })
+                } else {
+                    let passed = assertion_results
+                        .iter()
+                        .filter(|result| result.vote_proportion() == 1.0)
+                        .count() as u32;
+                    GradingSummary::Binary(BinaryGradingSummary {
                         passed,
                         failed: total - passed,
                         total,
@@ -256,7 +355,13 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                         } else {
                             f64::from(passed) / f64::from(total)
                         },
-                    },
+                    })
+                };
+
+                let grading = GradingResult {
+                    assertion_results,
+                    meta_results: has_meta.then_some(meta_results),
+                    summary: grading_summary,
                     meta_summary: has_meta.then_some(MetaSummary {
                         passed: meta_passed,
                         failed: meta_len - meta_passed,
