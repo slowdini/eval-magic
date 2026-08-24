@@ -73,7 +73,15 @@ An authored `llm_judge` assertion can request several independent verdicts for t
 
 Use `run --judge-samples N` to set a campaign-wide default. An assertion's `samples` field takes
 precedence over that default. The effective count must be at least one. The framework-injected
-`__skill_invoked` meta-check is not substantive grading and remains single-shot.
+`__skill_invoked` checks are not substantive grading and remain single-shot per treatment member.
+
+For a multi-skill treatment, deterministic transcript grading checks every staged slug separately.
+The response files use `__skill_invoked__skill-N.json`, and each meta result names its
+`skill_name`, so partial and complete invocation are distinguishable. Harness descriptors supply
+the tool and argument signature; a harness without deterministic invocation events receives one
+LLM fallback task per member. The suite-level `meta_summary.skill_invoked` value is true when any
+treatment member was invoked. The `benchmark.json` file retains the suite rate and adds per-skill
+counts and rates. A scalar treatment keeps the `__skill_invoked.json` filename and artifact shape.
 
 Each sample is a separate judge task and response, but every sample for a run receives the exact
 same bounded `judge-evidence.md`. The agent is not rerun, and eval-magic does not rebuild or expand

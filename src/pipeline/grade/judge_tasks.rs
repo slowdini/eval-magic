@@ -15,7 +15,7 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::core::fs::{artifact_path, write_json};
-use crate::core::{Assertion, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
+use crate::core::{Assertion, ConditionSkill, RunRecord, SKILL_INVOKED_META_ID, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::run_slots;
@@ -36,6 +36,10 @@ pub struct JudgeTask {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_index: Option<u32>,
     pub assertion_id: String,
+    /// Treatment member for a multi-skill meta task. Absent for authored
+    /// assertions and scalar invocation checks.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
     /// 1-based verdict index when this assertion requests more than one sample.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sample_index: Option<u32>,
@@ -103,6 +107,14 @@ pub fn check_skill_invoked_from_transcript(
                 .and_then(|v| v.as_str())
                 == Some(slug)
     })
+}
+
+pub(super) fn meta_response_stem(index: usize, multi_skill: bool) -> String {
+    if multi_skill {
+        format!("{SKILL_INVOKED_META_ID}__skill-{}", index + 1)
+    } else {
+        SKILL_INVOKED_META_ID.to_string()
+    }
 }
 
 /// The meta-check rubric asking a judge whether the agent actually applied the
@@ -203,16 +215,26 @@ fn build_judge_prompt(
 /// Emit judge tasks + prompt files for the iteration, writing `judge-tasks.json`.
 /// See the module docs for the per-assertion and meta-check behavior.
 pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError> {
-    let conds: Vec<(String, Option<String>, Option<String>)> = ctx
+    let default_skill_name = ctx.evals.skill_names().first().cloned().unwrap_or_default();
+    let conds: Vec<(String, Vec<ConditionSkill>, bool)> = ctx
         .conditions
         .conditions
         .iter()
         .map(|c| {
-            (
-                c.name.clone(),
-                c.skill_path.clone(),
-                c.staged_skill_slug.clone().flatten(),
-            )
+            let is_multi = c.skills.is_some();
+            let skills = c.skills.clone().unwrap_or_else(|| {
+                c.skill_path
+                    .as_ref()
+                    .map(|path| {
+                        vec![ConditionSkill {
+                            name: default_skill_name.clone(),
+                            skill_path: path.clone(),
+                            staged_skill_slug: c.staged_skill_slug.clone().flatten(),
+                        }]
+                    })
+                    .unwrap_or_default()
+            });
+            (c.name.clone(), skills, is_multi)
         })
         .collect();
     // The deterministic `__skill_invoked` code check needs a transcript that
@@ -233,7 +255,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
         let assertions = ev.assertions.as_deref().unwrap_or(&[]);
         let has_assertions = !assertions.is_empty();
 
-        for (cond, cond_skill_path, staged_slug) in &conds {
+        for (cond, condition_skills, multi_skill) in &conds {
             let cond_dir = ctx.iteration_dir.join(format!("eval-{}", ev.id)).join(cond);
             // `evals.json` is reloaded unfiltered, so evals that `--only`/
             // `--skip` kept out of this iteration are still listed here with no
@@ -320,6 +342,7 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
                             condition: cond.clone(),
                             run_index: slot.run_index,
                             assertion_id: j.id.clone(),
+                            skill_name: None,
                             sample_index: sampled_index,
                             sample_count: (sample_count > 1).then_some(sample_count),
                             rubric: j.rubric.clone(),
@@ -339,73 +362,93 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
 
                 // Skill-invocation meta-check. Negative evals (skill_should_trigger:
                 // false) expect non-invocation, so they carry no meta-check.
-                if cond_skill_path.is_some() && ev.skill_should_trigger != Some(false) {
-                    let response_path =
-                        judge_responses_dir.join(format!("{SKILL_INVOKED_META_ID}.json"));
+                if !condition_skills.is_empty() && ev.skill_should_trigger != Some(false) {
                     let transcript_filled = !run_record.tool_invocations.is_empty();
-
-                    if staged_slug.is_some() && transcript_filled && code_check_available {
-                        let (skill_tool, skill_arg) = skill_signature
-                            .clone()
-                            .unwrap_or_else(|| ("Skill".to_string(), "skill".to_string()));
-                        let invoked = check_skill_invoked_from_transcript(
-                            &run_record.tool_invocations,
-                            staged_slug.as_deref(),
-                            &skill_tool,
-                            &skill_arg,
-                        );
-                        let evidence = if invoked {
-                            "Skill invocation verified from transcript.".to_string()
-                        } else {
-                            format!(
-                                "No skill invocation found in transcript across {} transcript invocation(s).",
-                                run_record.tool_invocations.len()
-                            )
-                        };
-                        write_json(
-                            &response_path,
-                            &json!({
+                    for (index, treatment) in condition_skills.iter().enumerate() {
+                        let stem = meta_response_stem(index, *multi_skill);
+                        let response_path = judge_responses_dir.join(format!("{stem}.json"));
+                        if treatment.staged_skill_slug.is_some()
+                            && transcript_filled
+                            && code_check_available
+                        {
+                            let (skill_tool, skill_arg) = skill_signature
+                                .clone()
+                                .unwrap_or_else(|| ("Skill".to_string(), "skill".to_string()));
+                            let invoked = check_skill_invoked_from_transcript(
+                                &run_record.tool_invocations,
+                                treatment.staged_skill_slug.as_deref(),
+                                &skill_tool,
+                                &skill_arg,
+                            );
+                            let evidence = if invoked {
+                                if *multi_skill {
+                                    format!(
+                                        "Skill '{}' invocation verified from transcript.",
+                                        treatment.name
+                                    )
+                                } else {
+                                    "Skill invocation verified from transcript.".to_string()
+                                }
+                            } else if *multi_skill {
+                                format!(
+                                    "No invocation of skill '{}' found in transcript across {} transcript invocation(s).",
+                                    treatment.name,
+                                    run_record.tool_invocations.len()
+                                )
+                            } else {
+                                format!(
+                                    "No skill invocation found in transcript across {} transcript invocation(s).",
+                                    run_record.tool_invocations.len()
+                                )
+                            };
+                            let mut response = json!({
                                 "passed": invoked,
                                 "evidence": evidence,
                                 "confidence": 1.0,
                                 "grader": "transcript_check",
-                            }),
-                        )?;
-                        summary.meta_code_checked += 1;
-                    } else {
-                        let skill_content =
-                            fs::read_to_string(cond_skill_path.as_deref().unwrap_or(""))?;
-                        let rubric =
-                            skill_invoked_rubric(&ctx.evals.skill_name, Some(&skill_content));
-                        let dispatch_prompt = build_judge_prompt(
-                            SKILL_INVOKED_META_ID,
-                            &rubric,
-                            &evidence.content,
-                            &response_path,
-                        )?;
-                        let prompt_path =
-                            judge_prompts_dir.join(format!("{SKILL_INVOKED_META_ID}.txt"));
-                        fs::write(&prompt_path, &dispatch_prompt)?;
-                        tasks.push(JudgeTask {
-                            eval_id: ev.id.clone(),
-                            condition: cond.clone(),
-                            run_index: slot.run_index,
-                            assertion_id: SKILL_INVOKED_META_ID.to_string(),
-                            sample_index: None,
-                            sample_count: None,
-                            rubric,
-                            model: default_judge_model.clone(),
-                            is_meta: true,
-                            run_record_path: artifact_path(&run_record_path),
-                            outputs_dir: artifact_path(&outputs_dir),
-                            response_path: artifact_path(&response_path),
-                            dispatch_prompt_path: artifact_path(&prompt_path),
-                            evidence_bundle: evidence.reference.clone(),
-                            dispatch_prompt_bytes: dispatch_prompt.len(),
-                            dispatch_prompt_byte_limit: JUDGE_PROMPT_BYTE_LIMIT,
-                            dispatch_prompt,
-                        });
-                        summary.meta_injected += 1;
+                            });
+                            if *multi_skill {
+                                response
+                                    .as_object_mut()
+                                    .expect("object")
+                                    .insert("skill_name".to_string(), json!(treatment.name));
+                            }
+                            write_json(&response_path, &response)?;
+                            summary.meta_code_checked += 1;
+                        } else {
+                            let skill_content = fs::read_to_string(&treatment.skill_path)?;
+                            let rubric =
+                                skill_invoked_rubric(&treatment.name, Some(&skill_content));
+                            let dispatch_prompt = build_judge_prompt(
+                                SKILL_INVOKED_META_ID,
+                                &rubric,
+                                &evidence.content,
+                                &response_path,
+                            )?;
+                            let prompt_path = judge_prompts_dir.join(format!("{stem}.txt"));
+                            fs::write(&prompt_path, &dispatch_prompt)?;
+                            tasks.push(JudgeTask {
+                                eval_id: ev.id.clone(),
+                                condition: cond.clone(),
+                                run_index: slot.run_index,
+                                assertion_id: SKILL_INVOKED_META_ID.to_string(),
+                                skill_name: (*multi_skill).then(|| treatment.name.clone()),
+                                sample_index: None,
+                                sample_count: None,
+                                rubric,
+                                model: default_judge_model.clone(),
+                                is_meta: true,
+                                run_record_path: artifact_path(&run_record_path),
+                                outputs_dir: artifact_path(&outputs_dir),
+                                response_path: artifact_path(&response_path),
+                                dispatch_prompt_path: artifact_path(&prompt_path),
+                                evidence_bundle: evidence.reference.clone(),
+                                dispatch_prompt_bytes: dispatch_prompt.len(),
+                                dispatch_prompt_byte_limit: JUDGE_PROMPT_BYTE_LIMIT,
+                                dispatch_prompt,
+                            });
+                            summary.meta_injected += 1;
+                        }
                     }
                 }
             }
@@ -485,6 +528,30 @@ mod tests {
             "Skill",
             "skill"
         ));
+    }
+
+    #[test]
+    fn each_deterministic_harness_signature_distinguishes_treatment_members() {
+        let first = "first-treatment-slug";
+        let second = "second-treatment-slug";
+        for harness_name in ["claude-code", "cline", "opencode"] {
+            let harness = crate::core::Harness::resolve(harness_name).unwrap();
+            let (tool, arg) = crate::adapters::adapter_for(harness)
+                .transcript_skill_invocation()
+                .expect("these built-in harnesses expose deterministic invocation events");
+            let invocations = [inv(&tool, Some(json!({arg.clone(): second})), 0)];
+
+            assert!(
+                !check_skill_invoked_from_transcript(&invocations, Some(first), &tool, &arg),
+                "{harness_name} falsely attributed the second skill to the first"
+            );
+            assert!(check_skill_invoked_from_transcript(
+                &invocations,
+                Some(second),
+                &tool,
+                &arg
+            ));
+        }
     }
 
     #[test]

@@ -300,6 +300,20 @@ pub struct SkillSource {
     pub source: SourceRecord,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub siblings: Vec<String>,
+    /// Eval owner and complete treatment provenance for the multi-skill form.
+    /// Absent for scalar legacy records, whose flattened source remains the
+    /// authoritative single-skill record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<SkillSourceEntry>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillSourceEntry {
+    pub name: String,
+    #[serde(flatten)]
+    pub source: SourceRecord,
 }
 
 /// One resolved codebase plus the evals built from it. `conditions.json` and
@@ -320,10 +334,50 @@ pub struct CodebaseUse {
     pub evals: Vec<String>,
 }
 
-/// The parsed `evals.json` for one skill.
+/// One skill name or an ordered set of coordinated skills under test.
+///
+/// The scalar form remains the wire representation for existing evals. The
+/// list form is deliberately ordered: artifacts, prompts, and per-skill grading
+/// use the authored order so readers can join those surfaces without sorting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SkillNames {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl SkillNames {
+    pub fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(name) => std::slice::from_ref(name),
+            Self::Many(names) => names,
+        }
+    }
+
+    pub fn is_multi(&self) -> bool {
+        matches!(self, Self::Many(_))
+    }
+}
+
+impl std::fmt::Display for SkillNames {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::One(name) => formatter.write_str(name),
+            Self::Many(names) => formatter.write_str(&names.join(", ")),
+        }
+    }
+}
+
+impl PartialEq<&str> for SkillNames {
+    fn eq(&self, other: &&str) -> bool {
+        matches!(self, Self::One(name) if name == other)
+    }
+}
+
+/// The parsed `evals.json` for one skill or coordinated skill set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalsConfig {
-    pub skill_name: String,
+    pub skill_name: SkillNames,
     /// Default codebase for every eval in this config; a per-eval `codebase`
     /// overrides it. Mirrors how `runs` defaults and is overridden.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -335,6 +389,10 @@ pub struct EvalsConfig {
 }
 
 impl EvalsConfig {
+    pub fn skill_names(&self) -> &[String] {
+        self.skill_name.as_slice()
+    }
+
     /// Return the authored policy effective for `eval`. A per-eval block is a
     /// complete replacement, including when it is empty.
     pub fn guard_for<'a>(&'a self, eval: &'a Eval) -> Option<&'a GuardPolicyConfig> {
@@ -351,6 +409,14 @@ pub struct AvailableSkill {
     pub description: String,
 }
 
+/// One member of the treatment roster in a condition, dispatch task, or run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionSkill {
+    pub name: String,
+    pub skill_path: String,
+    pub staged_skill_slug: Option<String>,
+}
+
 /// One condition in a comparison run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConditionEntry {
@@ -363,6 +429,10 @@ pub struct ConditionEntry {
         deserialize_with = "deserialize_present_key"
     )]
     pub staged_skill_slug: Option<Option<String>>,
+    /// Present for list-authored evals, including an empty list in the control
+    /// arm. Absent for scalar artifacts so their established shape is stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<ConditionSkill>>,
 }
 
 /// Tri-state field deserializer: a present key — even an explicit `null` —
@@ -458,6 +528,8 @@ pub struct RunRecord {
     pub eval_id: String,
     pub condition: String,
     pub skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<ConditionSkill>>,
     pub prompt: String,
     pub files: Vec<String>,
     pub final_message: String,
@@ -776,6 +848,7 @@ mod tests {
             eval_id: "e".into(),
             condition: "with-skill".into(),
             skill_path: None,
+            skills: None,
             prompt: "p".into(),
             files: vec![],
             final_message: "done".into(),
@@ -815,6 +888,7 @@ mod tests {
             name: "c".into(),
             skill_path: Some("/p".into()),
             staged_skill_slug: slug,
+            skills: None,
         };
         // Absent → key omitted.
         let absent = serde_json::to_value(base(None)).unwrap();

@@ -31,8 +31,8 @@ use serde::Deserialize;
 use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
 use crate::core::fs::write_json;
 use crate::core::{
-    CodebaseRecord, ConversationEvent, ConversationRecord, Harness, RunRecord, SkillSource,
-    TimingRecord, TimingSource,
+    CodebaseRecord, ConditionSkill, ConversationEvent, ConversationRecord, Harness, RunRecord,
+    SkillSource, TimingRecord, TimingSource,
 };
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
@@ -59,6 +59,8 @@ struct DispatchTask {
     #[serde(default)]
     run_index: Option<u32>,
     skill_path: Option<String>,
+    #[serde(default)]
+    skills: Option<Vec<ConditionSkill>>,
     user_prompt: String,
     fixtures: Vec<String>,
     outputs_dir: String,
@@ -315,6 +317,7 @@ pub fn record_runs(
                 eval_id: task.eval_id.clone(),
                 condition: task.condition.clone(),
                 skill_path: task.skill_path.clone(),
+                skills: task.skills.clone(),
                 prompt: task.user_prompt.clone(),
                 files: task.fixtures.clone(),
                 final_message,

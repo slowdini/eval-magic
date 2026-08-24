@@ -287,6 +287,65 @@ fn provenance_names_the_skill_source_and_its_uncommitted_state() {
     );
 }
 
+#[test]
+fn provenance_names_every_multi_skill_source() {
+    let f = fixture(1);
+    let mut conditions: Value = serde_json::from_str(CONDITIONS_WITH_PROVENANCE).unwrap();
+    let owner_path = f.skill_subdir.to_string_lossy();
+    conditions["skill_source"] = serde_json::json!({
+        "kind": "path",
+        "source": owner_path,
+        "resolved_path": owner_path,
+        "branch": "main",
+        "host_local": true,
+        "dirty": false,
+        "eval_owner": "mr-review",
+        "skills": [
+            {
+                "name": "mr-review",
+                "kind": "path",
+                "source": owner_path,
+                "resolved_path": owner_path,
+                "revision": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+                "branch": "main",
+                "host_local": true,
+                "dirty": false
+            },
+            {
+                "name": "review-verification",
+                "kind": "path",
+                "source": "/skills/review-verification",
+                "resolved_path": "/skills/review-verification",
+                "revision": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+                "branch": "main",
+                "host_local": true,
+                "dirty": true
+            }
+        ],
+        "siblings": ["ambient-helper"]
+    });
+    write(
+        &f.iteration_dir.join("conditions.json"),
+        &serde_json::to_string(&conditions).unwrap(),
+    );
+    write(
+        &f.iteration_dir.join("benchmark.json"),
+        r#"{"delta":{"pass_rate":0}}"#,
+    );
+
+    promote_baseline(&opts(&f, 1)).unwrap();
+
+    let provenance = fs::read_to_string(f.skill_subdir.join("evals/baseline/BASELINE.md")).unwrap();
+    assert!(provenance.contains("mr-review:"), "{provenance}");
+    assert!(provenance.contains("a1b2c3d"), "{provenance}");
+    assert!(provenance.contains("review-verification:"), "{provenance}");
+    assert!(provenance.contains("b2c3d4e"), "{provenance}");
+    assert!(
+        provenance.contains("ambient skills: ambient-helper"),
+        "{provenance}"
+    );
+}
+
 /// The baseline belongs to the skill the *run* measured. Deriving it from the
 /// operator's current selection instead would write into whichever skill they
 /// happen to be pointing at now.

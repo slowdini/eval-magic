@@ -14,6 +14,22 @@ pub struct AssertionResult {
     pub grader: Option<Grader>,
 }
 
+/// A framework-injected binary result. Multi-skill invocation checks name the
+/// treatment member; scalar artifacts omit the field and retain their legacy
+/// shape.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MetaResult {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_name: Option<String>,
+    pub passed: bool,
+    pub evidence: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub grader: Option<Grader>,
+}
+
 /// One verdict inside a multi-sample LLM assertion result.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct JudgeSampleResult {
@@ -111,7 +127,7 @@ pub struct GradingResult {
     // grading.json reads as "the verdict, then the validity check on it".
     pub summary: GradingSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta_results: Option<Vec<AssertionResult>>,
+    pub meta_results: Option<Vec<MetaResult>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_summary: Option<MetaSummary>,
 }

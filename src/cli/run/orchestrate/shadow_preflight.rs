@@ -132,8 +132,13 @@ pub(super) fn run(
     staged: &Staged,
     targets: &[EnvTarget],
 ) -> Result<(), RunError> {
-    let mut names: Vec<&str> = vec![ctx.skill_name.as_str()];
-    names.extend(ctx.sibling_skill_names.iter().map(String::as_str));
+    let mut names = r
+        .skill
+        .treatments
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<Vec<_>>();
+    names.extend(r.skill.siblings.iter().map(String::as_str));
     let adapter = adapter_for(ctx.harness);
     let expected_cells = targets
         .iter()
@@ -210,19 +215,45 @@ pub(super) fn run(
         codebase_scans,
         &codebase_shadowed_names,
     );
-    let operator_report = PluginShadowReport::from_observed_sources(
-        config_dir.clone().unwrap_or_default(),
-        operator_sources,
-        &ctx.skill_name,
-        &expected_cells,
-    );
-    let codebase_report = PluginShadowReport::from_observed_sources_with_class(
-        config_dir.clone().unwrap_or_default(),
-        codebase_sources,
-        &ctx.skill_name,
-        &expected_cells,
-        ShadowFindingClass::CodebaseSourced,
-    );
+    let subject_names = r
+        .skill
+        .treatments
+        .iter()
+        .map(|skill| skill.name.as_str())
+        .collect::<Vec<_>>();
+    let operator_report = if subject_names.len() == 1 {
+        PluginShadowReport::from_observed_sources(
+            config_dir.clone().unwrap_or_default(),
+            operator_sources,
+            subject_names[0],
+            &expected_cells,
+        )
+    } else {
+        PluginShadowReport::from_observed_sources_for_subjects_with_class(
+            config_dir.clone().unwrap_or_default(),
+            operator_sources,
+            &subject_names,
+            &expected_cells,
+            ShadowFindingClass::OperatorEnvironment,
+        )
+    };
+    let codebase_report = if subject_names.len() == 1 {
+        PluginShadowReport::from_observed_sources_with_class(
+            config_dir.clone().unwrap_or_default(),
+            codebase_sources,
+            subject_names[0],
+            &expected_cells,
+            ShadowFindingClass::CodebaseSourced,
+        )
+    } else {
+        PluginShadowReport::from_observed_sources_for_subjects_with_class(
+            config_dir.clone().unwrap_or_default(),
+            codebase_sources,
+            &subject_names,
+            &expected_cells,
+            ShadowFindingClass::CodebaseSourced,
+        )
+    };
     let mut findings = operator_report.findings.clone();
     findings.extend(codebase_report.findings.clone());
     findings.sort_by(|a, b| {
@@ -283,23 +314,24 @@ fn collect_observed_sources(
             continue;
         };
         if !opts.no_stage {
-            let (condition, condition_skill_path) = &target.conditions[0];
-            let condition_slug = condition_slug(r, staged, condition);
-            if condition_skill_path.is_some()
-                && shadowed_names.contains(&ctx.skill_name)
-                && let Some(slug) = condition_slug
-            {
-                let mut source = ShadowSource::staged(
-                    &ctx.skill_name,
-                    slug,
-                    &skills_dir.join(slug),
-                    ShadowRoot::staged(&skills_dir),
-                );
-                source.add_appearance(appearance.clone());
-                sources.push(source);
+            let (condition, _condition_skill_path) = &target.conditions[0];
+            for skill in condition_skills(r, staged, condition) {
+                if !shadowed_names.contains(&skill.name) {
+                    continue;
+                }
+                if let Some(slug) = &skill.slug {
+                    let mut source = ShadowSource::staged(
+                        &skill.name,
+                        slug,
+                        &skills_dir.join(slug),
+                        ShadowRoot::staged(&skills_dir),
+                    );
+                    source.add_appearance(appearance.clone());
+                    sources.push(source);
+                }
             }
             if ctx.stage_siblings {
-                for sibling in &ctx.sibling_skill_names {
+                for sibling in &r.skill.siblings {
                     if !shadowed_names.contains(sibling) {
                         continue;
                     }
@@ -320,13 +352,17 @@ fn collect_observed_sources(
     observed
 }
 
-fn condition_slug<'a>(r: &Resolved, staged: &'a Staged, condition: &str) -> Option<&'a str> {
+fn condition_skills<'a>(
+    r: &Resolved,
+    staged: &'a Staged,
+    condition: &str,
+) -> &'a [super::StagedTreatmentSkill] {
     if condition == r.cond_a {
-        staged.cond_a_slug.as_deref()
+        &staged.cond_a_skills
     } else if condition == r.cond_b {
-        staged.cond_b_slug.as_deref()
+        &staged.cond_b_skills
     } else {
-        None
+        &[]
     }
 }
 
@@ -348,15 +384,16 @@ fn omit_sources_displaced_by_staging(
         return;
     };
     let mut displaced = BTreeSet::new();
-    let (condition, condition_skill_path) = &target.conditions[0];
-    if condition_skill_path.is_some()
-        && let Some(slug) = condition_slug(r, staged, condition)
-    {
-        displaced.insert(artifact_path(&skills_dir.join(slug)));
+    let (condition, _condition_skill_path) = &target.conditions[0];
+    for skill in condition_skills(r, staged, condition) {
+        if let Some(slug) = &skill.slug {
+            displaced.insert(artifact_path(&skills_dir.join(slug)));
+        }
     }
     if ctx.stage_siblings {
         displaced.extend(
-            ctx.sibling_skill_names
+            r.skill
+                .siblings
                 .iter()
                 .map(|name| artifact_path(&skills_dir.join(name))),
         );

@@ -62,7 +62,7 @@ pub struct CommonArgs {
     /// disagree. Omit it for the default single-skill isolated run.
     #[arg(long)]
     pub skill_dir: Option<String>,
-    /// Skill under evaluation.
+    /// Eval owner and, for a multi-skill treatment, one member of the set.
     ///
     /// With `--skill-dir`, this is the child folder name, inferred when the
     /// directory contains exactly one skill. Without `--skill-dir`, this is a
@@ -76,11 +76,10 @@ pub struct CommonArgs {
     /// Comparison mode: `new-skill` (default, with vs. without) or `revision`
     /// (old vs. new).
     ///
-    /// Mode A (`new-skill`) validates a brand-new skill against baseline behavior
-    /// with no skill loaded. Mode B (`revision`) tests a language change to an
-    /// existing skill: snapshot the old `SKILL.md` (see `snapshot`), then run both
-    /// variants against the same prompts. `revision` defaults `--baseline` to
-    /// `baseline`.
+    /// Mode A (`new-skill`) validates the skill or ordered skill set declared by
+    /// `skill_name` against baseline behavior with none of those treatment skills
+    /// loaded. Mode B (`revision`) snapshots and compares every treatment member.
+    /// `revision` defaults `--baseline` to `baseline`.
     #[arg(long)]
     pub mode: Option<String>,
     /// Target harness: `claude-code` (default), `cline`, `codex`, or `opencode`.
@@ -497,8 +496,10 @@ pub struct RunArgs {
     /// Stage the skill-under-test under this verbatim name instead of the
     /// conspicuous `slow-powers-eval-…` slug.
     ///
-    /// For name-confound experiments. Single-staging-condition modes only; refuses
-    /// to clobber an existing dir; registered for next-run cleanup.
+    /// For name-confound experiments. A scalar `skill_name` and one staging
+    /// condition are required; a multi-skill treatment is rejected because one
+    /// override cannot name every member. Refuses to clobber an existing dir and
+    /// registers the staged name for next-run cleanup.
     #[arg(long)]
     pub stage_name: Option<String>,
     /// Inject the shared plan-mode profile as an operating-context layer.
@@ -612,7 +613,7 @@ pub struct DispatchArgs {
 pub(crate) enum Commands {
     /// Build dispatches and run evals (the default action).
     ///
-    /// Builds the iteration workspace, snapshots the `SKILL.md`, stages skills, and
+    /// Builds the iteration workspace, copies and stages the treatment skill set, and
     /// emits `dispatch.json` (machine-readable) alongside `dispatch-manifest.md`
     /// (human-readable). It prepares the run but does not dispatch agents —
     /// `eval-magic dispatch` does. After setup, read `RUNBOOK.md` end to end; that
@@ -671,9 +672,10 @@ pub(crate) enum Commands {
     Dispatch(DispatchArgs),
     /// Snapshot a workspace baseline.
     ///
-    /// Snapshots the skill as a Mode B baseline under
-    /// `<workspace>/<skill>/snapshots/<label>/`. Snapshots persist across
-    /// iterations; delete them by hand when no longer needed.
+    /// Snapshots the treatment as a Mode B baseline under
+    /// `<workspace>/<eval-owner>/snapshots/<label>/`. A list-authored treatment
+    /// snapshots every member atomically. Snapshots persist across iterations;
+    /// delete them by hand when no longer needed.
     Snapshot(SnapshotArgs),
     /// Tear down a workspace.
     ///
@@ -806,13 +808,11 @@ pub(crate) enum Commands {
     /// proportion plus pass^k; one missing response fails only that sample. An
     /// effective count of one preserves the binary grading artifact.
     ///
-    /// Injects the `__skill_invoked` meta-check — did the skill actually influence
-    /// behavior? It has two tiers, chosen automatically per run: code-based (where
-    /// the staged slug + transcript are available, as on Claude Code, it checks the
-    /// transcript for a `Skill` call matching the eval slug — deterministic and
-    /// free) and an LLM-judge fallback (where deterministic transcript evidence
-    /// isn't available, a judge compares the final message, conversation, and tool
-    /// summary against the SKILL.md for behavioral fingerprints).
+    /// Injects one `__skill_invoked` meta-check per treatment member. Deterministic
+    /// harnesses match each member's staged slug using the invocation signature in
+    /// the harness descriptor; other harnesses emit one LLM fallback task per
+    /// member. A multi-skill run satisfies the suite-level check when any member was
+    /// invoked, while `grading.json` and `benchmark.json` retain each member's result.
     /// The meta-check does not count toward the substantive `pass_rate`.
     Grade(GradeArgs),
     /// Aggregate before/after benchmark deltas.

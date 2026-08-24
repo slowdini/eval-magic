@@ -20,7 +20,7 @@ use crate::cli::command_target_args;
 use crate::core::fs::artifact_path;
 use crate::core::{
     Assertion, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode,
-    RunContext, SkillSource, SourceKind, SourceRecord,
+    RunContext, SourceKind, SourceRecord,
 };
 use crate::source::ResolvedSource;
 
@@ -34,7 +34,10 @@ mod git;
 mod resolve;
 mod shadow_preflight;
 mod shell;
+mod skill;
 mod stage;
+
+use skill::{RunSkill, TreatmentSkill};
 
 /// Run options parsed from the `run` subcommand flags (everything beyond the
 /// shared skill/workspace/harness context, which lives in [`RunContext`]).
@@ -95,6 +98,8 @@ struct Resolved {
     cond_b: &'static str,
     skill_path_a: Option<String>,
     skill_path_b: Option<String>,
+    skill_paths_a: Vec<(String, String)>,
+    skill_paths_b: Vec<(String, String)>,
     selected_evals: Vec<Eval>,
     total_evals: usize,
     /// Task-scoped groups computed from the selected evals in config order.
@@ -119,40 +124,6 @@ struct RunCodebase {
 /// already a stray write.
 pub(super) fn skills_copy_root(iteration_dir: &Path) -> PathBuf {
     iteration_dir.join(".skills")
-}
-
-/// The resolved skill under test and the sibling roster staged with it.
-struct RunSkill {
-    source: ResolvedSource,
-    /// Captured at resolution. Staging copies exactly these names, so what the
-    /// record claims and what the environments hold cannot drift apart.
-    siblings: Vec<String>,
-}
-
-impl RunSkill {
-    fn record(&self) -> SkillSource {
-        SkillSource {
-            source: SourceRecord {
-                // A skill is named by a path on this host; there is no url form.
-                kind: SourceKind::Path,
-                source: self.source.source.clone(),
-                resolved_path: self
-                    .source
-                    .resolved_path
-                    .as_deref()
-                    .map(|path| artifact_path(Path::new(path))),
-                reference: self.source.reference.clone(),
-                revision: self.source.revision.clone(),
-                origin_url: self.source.origin_url.clone(),
-                branch: self.source.branch.clone(),
-                host_local: self.source.host_local,
-                // The copy is the working tree as it sits, so an uncommitted edit
-                // is in what ran and the revision alone does not name it.
-                dirty: self.source.dirty,
-            },
-            siblings: self.siblings.clone(),
-        }
-    }
 }
 
 impl RunCodebase {
@@ -227,6 +198,8 @@ impl Resolved {
 struct Staged {
     cond_a_slug: Option<String>,
     cond_b_slug: Option<String>,
+    cond_a_skills: Vec<StagedTreatmentSkill>,
+    cond_b_skills: Vec<StagedTreatmentSkill>,
     /// Sibling skills' `(name, description)` — env-independent. `build` resolves
     /// the on-disk path for each private task environment.
     sibling_meta: Vec<(String, String)>,
@@ -236,6 +209,12 @@ struct Staged {
     /// Matching project skill sources inventoried from each sourced codebase
     /// before exclusion or staging changes its discovery roots.
     codebase_shadow_sources: std::collections::HashMap<PathBuf, Vec<ShadowSource>>,
+}
+
+#[derive(Clone)]
+struct StagedTreatmentSkill {
+    name: String,
+    slug: Option<String>,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.
@@ -314,28 +293,40 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
         r.iteration,
         mode_str(r.mode)
     );
-    println!(
-        "  {}: {}",
-        r.cond_a,
-        r.skill_path_a.as_deref().unwrap_or("(no skill)")
-    );
-    println!(
-        "  {}: {}",
-        r.cond_b,
-        r.skill_path_b.as_deref().unwrap_or("(no skill)")
-    );
+    let render_paths = |paths: &[(String, String)]| {
+        if paths.is_empty() {
+            "(no skill)".to_string()
+        } else if !r.skill.multi {
+            paths[0].1.clone()
+        } else {
+            paths
+                .iter()
+                .map(|(name, path)| format!("{name}: {path}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    println!("  {}: {}", r.cond_a, render_paths(&r.skill_paths_a));
+    println!("  {}: {}", r.cond_b, render_paths(&r.skill_paths_b));
     // The conditions above name the copy; this names where the copy came from,
     // which is what a reader of the report has to be able to find again.
-    let source = &r.skill.source;
-    let revision = match (source.revision.as_deref(), source.dirty) {
-        (Some(sha), true) => format!(" ({}, uncommitted changes)", &sha[..7.min(sha.len())]),
-        (Some(sha), false) => format!(" ({})", &sha[..7.min(sha.len())]),
-        (None, _) => String::new(),
-    };
-    println!(
-        "  skill source: {}{revision}",
-        source.resolved_path.as_deref().unwrap_or(&source.source)
-    );
+    for treatment in &r.skill.treatments {
+        let source = &treatment.source;
+        let revision = match (source.revision.as_deref(), source.dirty) {
+            (Some(sha), true) => format!(" ({}, uncommitted changes)", &sha[..7.min(sha.len())]),
+            (Some(sha), false) => format!(" ({})", &sha[..7.min(sha.len())]),
+            (None, _) => String::new(),
+        };
+        println!(
+            "  skill source{}: {}{revision}",
+            if !r.skill.multi {
+                String::new()
+            } else {
+                format!(" ({})", treatment.name)
+            },
+            source.resolved_path.as_deref().unwrap_or(&source.source)
+        );
+    }
     // The codebases the environments are built from, in the same shape as the
     // skill source line — and the one-checkout-per-iteration fact the caching
     // makes true.

@@ -8,6 +8,8 @@
 //! (dispatch/timing/run records, produced outputs, transcripts) is intentionally
 //! left behind.
 
+mod source_row;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -19,6 +21,8 @@ use crate::core::{ConditionsRecord, Harness, run_git};
 use crate::pipeline::run_slots;
 use crate::workspace::teardown::PROMOTED_MARKER;
 use crate::workspace::{WorkspaceError, now_iso8601};
+
+use source_row::multi_skill_source_row;
 
 /// Inputs for [`promote_baseline`]. Borrowed for the duration of the call.
 pub struct PromoteOptions<'a> {
@@ -324,6 +328,9 @@ fn skill_source_row(conditions: Option<&ConditionsRecord>) -> String {
     let Some(skill) = conditions.and_then(|c| c.skill_source.as_ref()) else {
         return String::new();
     };
+    if let Some(row) = multi_skill_source_row(skill) {
+        return row;
+    }
     let source = &skill.source;
     let mut cell = source
         .resolved_path
