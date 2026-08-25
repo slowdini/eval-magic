@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand};
 
+pub(crate) use super::init_args::InitArgs;
+
 /// Run skill evals — measure whether an agent skill actually shifts behavior.
 ///
 /// An eval dispatches a fresh subagent twice per test case — once with the skill
@@ -261,56 +263,6 @@ pub struct ValidateArgs {
     /// Skill directory to validate when `--skill-dir` is omitted.
     #[arg(long)]
     pub skill: Option<String>,
-}
-
-/// `init` writes the first eval scaffold for a skill.
-#[derive(Debug, Args)]
-pub struct InitArgs {
-    /// Optional directory containing the skill under evaluation.
-    ///
-    /// Use this when the skill is an immediate child of a skills directory. If
-    /// omitted, `init` uses `--skill <path-or-name>` or the current directory.
-    /// `init` creates only the eval scaffold; it does not create the skill itself.
-    #[arg(long)]
-    pub skill_dir: Option<String>,
-    /// Skill under evaluation.
-    ///
-    /// With `--skill-dir`, this is the child folder name, inferred when the
-    /// directory contains exactly one skill. Without `--skill-dir`, this is a
-    /// skill directory path, or a child directory name relative to the current
-    /// directory. This value becomes the generated `skill_name`.
-    #[arg(long)]
-    pub skill: Option<String>,
-    /// Stable kebab-case id for the first eval case.
-    ///
-    /// If omitted, prompts interactively. The id is used as the workspace eval
-    /// directory name, so it must satisfy the eval schema's kebab-case pattern.
-    #[arg(long)]
-    pub id: Option<String>,
-    /// User-facing prompt the eval subagent receives.
-    ///
-    /// If omitted, prompts interactively. Write this like a realistic user
-    /// request, not like an instruction to satisfy the eval.
-    #[arg(long)]
-    pub prompt: Option<String>,
-    /// Human-readable description of a successful response.
-    ///
-    /// If omitted, prompts interactively. This seeds `expected_output`; add
-    /// concrete assertions after seeing iteration 1 outputs.
-    #[arg(long = "expected-output")]
-    pub expected_output: Option<String>,
-    /// Whether the skill is expected to trigger for this eval.
-    ///
-    /// Defaults to true and is omitted from the generated JSON. Set false for
-    /// negative evals where correct behavior is not invoking the skill.
-    #[arg(long)]
-    pub skill_should_trigger: Option<bool>,
-    /// Overwrite an existing `<skill>/evals/evals.json`.
-    ///
-    /// Refuses to overwrite existing evals by default and checks that before
-    /// prompting for seed fields.
-    #[arg(long)]
-    pub force: bool,
 }
 
 /// `grade` adds a finalize flag on top of the common set.
@@ -852,6 +804,12 @@ pub(crate) enum Commands {
     /// interactively for any missing seed fields, and refuses to overwrite an
     /// existing eval file unless `--force` is passed. This is scaffold-only: it
     /// does not run agents, ingest transcripts, finalize, or promote results.
+    ///
+    /// With no codebase option, the scaffold uses eval-magic's default example
+    /// codebase at a pinned commit. Choose an explicit remote with
+    /// `--codebase-url` plus `--codebase-ref`, a local directory with
+    /// `--codebase-path`, or the invocation directory with `--codebase-cwd`. See
+    /// `eval-magic docs codebase` for source and reproducibility details.
     ///
     /// Extend the seed in `evals/evals.json`: `turns` scripts same-session
     /// follow-ups and `responder` derives them instead (see

@@ -70,8 +70,11 @@ cd path/to/my-skill
 eval-magic init
 ```
 
-`init` creates `evals/evals.json` with one valid seed case. Edit the prompt and expected behavior to
-describe a realistic task, add concrete assertions as the eval matures, then check the file:
+`init` creates `evals/evals.json` with one valid seed case and the pinned Weeknight example
+codebase. Use `eval-magic init --help` to select another URL, local path, or the current directory,
+and use `eval-magic docs codebase` for fixture selection and provenance details. Edit the prompt
+and expected behavior to describe a realistic task, add concrete assertions as the eval matures,
+then check the file:
 
 ```bash
 eval-magic validate

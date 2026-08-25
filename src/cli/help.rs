@@ -31,9 +31,10 @@ EXAMPLES:
   # Reduce cost while iterating on the suite
   eval-magic run --only case-a,case-b
 
-  # Run the task against a real project instead of fixture files. The codebase
-  # is declared in evals.json, not on the command line, so it stays a reviewed
-  # property of the eval set
+  # Scaffold against the current project instead of the default example fixture;
+  # init records the selected source in evals.json
+  eval-magic init --codebase-cwd
+  # Source selection, fixture scale, pinning, and recorded provenance
   eval-magic docs codebase
 
   # Pair both conditions for exploratory review before writing assertions
