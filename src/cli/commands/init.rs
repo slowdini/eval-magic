@@ -2,6 +2,7 @@
 
 use std::fs;
 use std::io::{self, Write};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{anyhow, bail};
 use serde_json::{Value, json};
@@ -10,6 +11,9 @@ use crate::cli::args::InitArgs;
 use crate::cli::command_target_args;
 use crate::core::{DetectInput, detect_run_context};
 use crate::validation::validate_evals_config;
+
+const DEFAULT_CODEBASE_URL: &str = "https://github.com/slowdini/eval-magic-fixture";
+const DEFAULT_CODEBASE_REF: &str = "b6d269c1cdedf7cadb53bacc41acaf5f2cdbe03f";
 
 /// Create `<skill>/evals/evals.json` with one seed eval and print next steps.
 pub(crate) fn run_init(args: InitArgs) -> anyhow::Result<()> {
@@ -28,6 +32,8 @@ pub(crate) fn run_init(args: InitArgs) -> anyhow::Result<()> {
         );
     }
 
+    let codebase = resolve_codebase(&args, &ctx.stage_root, &evals_path)?;
+
     let id = value_or_prompt(args.id, "--id", "Eval id")?;
     let prompt = value_or_prompt(args.prompt, "--prompt", "Prompt")?;
     let expected_output =
@@ -39,6 +45,7 @@ pub(crate) fn run_init(args: InitArgs) -> anyhow::Result<()> {
         &prompt,
         &expected_output,
         args.skill_should_trigger,
+        codebase,
     );
     validate_evals_config(&document, &evals_path.to_string_lossy())?;
 
@@ -64,6 +71,89 @@ pub(crate) fn run_init(args: InitArgs) -> anyhow::Result<()> {
     println!("  eval-magic promote-baseline{}", target_args);
 
     Ok(())
+}
+
+fn resolve_codebase(
+    args: &InitArgs,
+    invocation_cwd: &Path,
+    evals_path: &Path,
+) -> anyhow::Result<Value> {
+    if let (Some(url), Some(reference)) = (&args.codebase_url, &args.codebase_ref) {
+        return Ok(json!({ "url": url, "ref": reference }));
+    }
+
+    let (candidate, preserve_absolute, option_name) = if args.codebase_cwd {
+        (invocation_cwd.to_path_buf(), false, "--codebase-cwd")
+    } else if let Some(raw) = &args.codebase_path {
+        let path = Path::new(raw);
+        (
+            if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                invocation_cwd.join(path)
+            },
+            path.is_absolute(),
+            "--codebase-path",
+        )
+    } else {
+        return Ok(json!({
+            "url": DEFAULT_CODEBASE_URL,
+            "ref": DEFAULT_CODEBASE_REF,
+        }));
+    };
+
+    let resolved = crate::core::fs::real_path(&candidate)?;
+    if !resolved.is_dir() {
+        bail!("{option_name} is not a directory: {}", candidate.display());
+    }
+
+    let rendered = if preserve_absolute {
+        crate::core::fs::artifact_path(&resolved)
+    } else {
+        let evals_dir = evals_path
+            .parent()
+            .ok_or_else(|| anyhow!("generated eval path has no parent"))?;
+        let evals_dir = crate::core::fs::real_path(evals_dir)?;
+        crate::core::fs::artifact_path(&relative_path(&evals_dir, &resolved)?)
+    };
+
+    Ok(json!({ "path": rendered }))
+}
+
+fn relative_path(from: &Path, to: &Path) -> anyhow::Result<PathBuf> {
+    let from_components: Vec<_> = from.components().collect();
+    let to_components: Vec<_> = to.components().collect();
+    let common = from_components
+        .iter()
+        .zip(&to_components)
+        .take_while(|(left, right)| left == right)
+        .count();
+
+    if common == 0 {
+        bail!(
+            "cannot render codebase path {} relative to {}",
+            to.display(),
+            from.display()
+        );
+    }
+
+    let mut relative = PathBuf::new();
+    for component in &from_components[common..] {
+        match component {
+            Component::Normal(_) => relative.push(".."),
+            _ => bail!("cannot render codebase path relative to generated evals directory"),
+        }
+    }
+    for component in &to_components[common..] {
+        match component {
+            Component::Normal(value) => relative.push(value),
+            _ => bail!("cannot render codebase path relative to generated evals directory"),
+        }
+    }
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+    Ok(relative)
 }
 
 fn value_or_prompt(value: Option<String>, flag: &str, label: &str) -> anyhow::Result<String> {
@@ -92,6 +182,7 @@ fn scaffold_json(
     prompt: &str,
     expected_output: &str,
     skill_should_trigger: Option<bool>,
+    codebase: Value,
 ) -> Value {
     let mut eval = json!({
         "id": id,
@@ -104,6 +195,7 @@ fn scaffold_json(
 
     json!({
         "skill_name": skill_name,
+        "codebase": codebase,
         "evals": [eval],
     })
 }
@@ -115,12 +207,20 @@ mod tests {
 
     #[test]
     fn scaffold_omits_default_skill_should_trigger() {
-        let doc = scaffold_json("demo", "e1", "prompt", "output", Some(true));
+        let doc = scaffold_json(
+            "demo",
+            "e1",
+            "prompt",
+            "output",
+            Some(true),
+            json!({ "path": "." }),
+        );
 
         assert_eq!(
             doc,
             json!({
                 "skill_name": "demo",
+                "codebase": { "path": "." },
                 "evals": [
                     {
                         "id": "e1",
@@ -134,7 +234,14 @@ mod tests {
 
     #[test]
     fn scaffold_writes_false_skill_should_trigger() {
-        let doc = scaffold_json("demo", "e1", "prompt", "output", Some(false));
+        let doc = scaffold_json(
+            "demo",
+            "e1",
+            "prompt",
+            "output",
+            Some(false),
+            json!({ "path": "." }),
+        );
 
         assert_eq!(doc["evals"][0]["skill_should_trigger"], false);
     }

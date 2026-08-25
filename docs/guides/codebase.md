@@ -1,11 +1,90 @@
 # Sourcing a codebase into a task environment
 
+> **Audience:** Eval authors choosing, pinning, and verifying a project for coding tasks.
+
 An eval's environment can be a real project rather than a handful of fixture files. Declare a
 `codebase` in `evals.json` and every `(eval, condition, run)` environment is built from a checkout
 of it — with history, on a branch, ready for the agent under test to work in.
 
 This matters for anything you cannot judge from a toy problem. Whether a skill makes an agent's
 code *better* is not answerable when the task is small enough that any model succeeds.
+
+## Choose a source during `init`
+
+With no codebase option, `eval-magic init` uses the Weeknight example fixture at its pinned
+baseline:
+
+```sh
+eval-magic init
+```
+
+The generated `evals/evals.json` contains this `codebase` value:
+
+```json
+{
+  "url": "https://github.com/slowdini/eval-magic-fixture",
+  "ref": "b6d269c1cdedf7cadb53bacc41acaf5f2cdbe03f"
+}
+```
+
+Choose another Git source by providing its URL and ref together:
+
+```sh
+eval-magic init \
+  --codebase-url https://github.com/slowdini/eval-magic-fixture \
+  --codebase-ref b6d269c1cdedf7cadb53bacc41acaf5f2cdbe03f
+```
+
+`init` records those values without contacting the remote. `run` resolves the source and fails
+before provisioning environments if the repository or ref is unavailable.
+
+For local work, name a directory already on disk or use the invocation directory itself:
+
+```sh
+eval-magic init --codebase-path .
+eval-magic init --codebase-cwd
+```
+
+A relative `--codebase-path` resolves from the directory where you invoke `init`. Relative path
+inputs and `--codebase-cwd` are written relative to the generated `evals/` directory. An absolute
+`--codebase-path` remains absolute. Local sources are convenient for iteration but carry the
+portability limits described under "A `path` source is not reproducible elsewhere."
+
+The URL/ref, local path, and current-directory modes are mutually exclusive. The chosen source is
+written into the eval file, so the committed configuration records which fixture the suite uses.
+
+## Choose the fixture scale
+
+### Start with Weeknight
+
+[Weeknight](https://github.com/slowdini/eval-magic-fixture) is a React and TypeScript meal-planning
+web app. It has multiple routes, browser persistence, ingredient aggregation, tests, linting, and a
+production build without a backend or external service. Use it for a first full-codebase eval or for
+tasks where a compact project makes the agent's decisions easy to inspect.
+
+Suitable tasks include changing planner validation, extending the recipe filters, migrating stored
+state, fixing shopping-list aggregation, or improving an interaction with focused tests. Pin the
+fixture commit in the eval file even when a later fixture revision exists; change the ref as a
+deliberate eval-suite revision.
+
+### Use eval-magic as a complex fixture
+
+Use [eval-magic](https://github.com/slowdini/eval-magic) when the skill needs a larger codebase with
+cross-module Rust behavior, schemas, generated artifacts, integration tests, and repository-level
+contributor instructions. This fixture is appropriate when navigating and preserving those
+contracts is part of what the eval should measure.
+
+This command scaffolds a pinned eval-magic source:
+
+```sh
+eval-magic init \
+  --codebase-url https://github.com/slowdini/eval-magic \
+  --codebase-ref e30a5091c844e07f3aa664413aa7735a11b0a52a
+```
+
+The larger repository increases preparation, dispatch, and review work. Prefer Weeknight unless the
+task genuinely needs the extra architectural surface. Project instructions and project-local skill
+sources remain part of either fixture unless the eval opts out as described below.
 
 ## Declare one
 

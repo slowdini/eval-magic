@@ -10,6 +10,8 @@ use predicates::str::contains;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod codebase;
+
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
@@ -163,38 +165,6 @@ fn docs_isolation_keeps_remedies_and_verification() {
         .stdout(contains("claude plugin list"))
         .stdout(contains("`comparison-invalid`"))
         .stdout(contains("\"subtype\":\"init\""));
-}
-
-/// The codebase guide is the reference surface for a feature with no CLI flag,
-/// so the parts a config author cannot infer have to survive an edit: that a
-/// git ref is mandatory, that `files` layers over the checkout, that a local
-/// path is not reproducible by anyone reading the results, how the
-/// per-iteration cache provisions environments, and what the baseline ref is
-/// measured into — including the `.gitignore` rule, which silently decides
-/// whether a `diff_scope` threshold is reachable at all.
-#[test]
-fn docs_codebase_keeps_the_declaration_rules_caveat_and_provisioning_contract() {
-    skill_eval()
-        .args(["docs", "codebase"])
-        .assert()
-        .success()
-        .stdout(contains("# Sourcing a codebase into a task environment"))
-        .stdout(contains("\"ref\""))
-        .stdout(contains("`ref` is required"))
-        .stdout(contains("overlay"))
-        .stdout(contains("refs/eval-magic/baseline"))
-        .stdout(contains("host_local"))
-        .stdout(contains("not reproducible"))
-        .stdout(contains("materialized once"))
-        .stdout(contains("hard-link"))
-        .stdout(contains("independent working tree"))
-        .stdout(contains("diff-scope.json"))
-        .stdout(contains("diff.patch"))
-        .stdout(contains(".gitignore"))
-        .stdout(contains("exclude_skill_sources"))
-        .stdout(contains("codebase-sourced"))
-        .stdout(contains("CLAUDE.md"))
-        .stdout(contains(".opencode/skills"));
 }
 
 #[test]
