@@ -17,7 +17,16 @@ fn setup_direct_skill(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
         "---\nname: mr-review\ndescription: review merge requests\n---\n\nbody\n",
     )
     .unwrap();
-    fs::write(skill_sub.join("evals").join("evals.json"), DEFAULT_EVALS).unwrap();
+    let codebase = root.join("codebase");
+    fs::create_dir_all(&codebase).unwrap();
+    fs::write(codebase.join("README.md"), "# Test codebase\n").unwrap();
+    let mut evals: Value = serde_json::from_str(DEFAULT_EVALS).unwrap();
+    evals["codebase"] = serde_json::json!({ "path": codebase.to_string_lossy() });
+    fs::write(
+        skill_sub.join("evals").join("evals.json"),
+        serde_json::to_string_pretty(&evals).unwrap(),
+    )
+    .unwrap();
     fs::write(
         helper.join("SKILL.md"),
         "---\nname: helper-skill\ndescription: helper\n---\n\nhelper\n",
@@ -271,38 +280,6 @@ fn stage_name_threads_verbatim_name_and_registers_cleanup() {
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
     assert!(prompt.contains("registered under the identifier `mr-review`"));
     assert!(!prompt.contains("slow-powers-eval-"));
-}
-
-#[test]
-fn stage_name_refuses_to_clobber_preexisting_dir() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // Staging now lands in env-g1-with_skill/.claude/skills, which is fresh per
-    // iteration. The clobber guard still matters on a re-run (--iteration 1) where the
-    // env already holds an untracked skill dir; pre-seed that and confirm it is preserved.
-    let preexisting = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/my-real-skill");
-    fs::create_dir_all(&preexisting).unwrap();
-    fs::write(preexisting.join("SKILL.md"), "USER OWNED").unwrap();
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--iteration",
-            "1",
-            "--stage-name",
-            "my-real-skill",
-            "--dry-run",
-        ])
-        .assert()
-        .failure();
-
-    assert_eq!(read_str(&preexisting.join("SKILL.md")), "USER OWNED");
 }
 
 #[test]

@@ -279,11 +279,7 @@ fn a_responder_eval_is_rejected_on_a_harness_without_native_resume() {
     fs::create_dir_all(&descriptor_dir).unwrap();
     fs::write(
         descriptor_dir.join("cool.toml"),
-        r#"label = "cool-custom-harness"
-
-[dispatch]
-exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/final-message.md"
-"#,
+        RUNNER_READY_NO_RESUME_DESCRIPTOR,
     )
     .unwrap();
 

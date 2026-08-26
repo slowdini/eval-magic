@@ -400,6 +400,10 @@ fn aggregate_echoes_the_resolved_codebases_into_the_benchmark() {
 
     let b = read_benchmark(&iteration_dir);
     assert_eq!(
+        b["codebases"][0]["source"],
+        "https://example.com/project.git"
+    );
+    assert_eq!(
         b["codebases"][0]["revision"],
         "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678"
     );

@@ -1,18 +1,15 @@
-//! Isolation-group batching during `run`: how the setup phase groups evals into
-//! environments and records the plan in `dispatch.json`. Covers the per-(group,
-//! condition) env split that closes the condition-isolation gap — emitted for every
-//! run now, including the bare default invocation — and the explicit
-//! `isolation: isolated` hint that fans a second group out into its own envs.
+//! Private eval-group planning during `run`: every eval receives a deterministic
+//! group, and every condition and run receives a private codebase environment.
 
 use crate::helpers::*;
 use serde_json::json;
 use std::fs;
 
-const TWO_EVALS_ONE_ISOLATED: &str = r#"{ "skill_name": "mr-review", "evals": [
+const TWO_EVALS: &str = r#"{ "skill_name": "mr-review", "evals": [
     { "id": "e1", "prompt": "p1", "expected_output": "o", "files": ["a.txt"] },
-    { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"], "isolation": "isolated" } ] }"#;
+    { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"] } ] }"#;
 
-fn write_fixtures(skill_dir: &std::path::Path) {
+fn write_overlays(skill_dir: &std::path::Path) {
     fs::write(skill_dir.join("mr-review/evals/a.txt"), "AAA").unwrap();
     fs::write(skill_dir.join("mr-review/evals/b.txt"), "BBB").unwrap();
 }
@@ -114,10 +111,10 @@ fn cli_single_group_emits_groups_and_splits_env_per_condition() {
 }
 
 #[test]
-fn isolated_hint_splits_into_two_groups() {
+fn every_eval_gets_a_private_group_and_overlay() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), TWO_EVALS_ONE_ISOLATED);
-    write_fixtures(&skill_dir);
+    let (skill_dir, cwd) = setup(tmp.path(), TWO_EVALS);
+    write_overlays(&skill_dir);
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -130,17 +127,10 @@ fn isolated_hint_splits_into_two_groups() {
     let groups = dispatch["groups"]
         .as_array()
         .expect("groups summary present");
-    assert_eq!(groups.len(), 2, "the isolated eval forms its own group");
+    assert_eq!(groups.len(), 2, "each eval forms its own group");
     assert_eq!(groups[0]["evals"], json!(["e1"]));
     assert_eq!(groups[1]["evals"], json!(["e2"]));
-    assert!(
-        groups[1]["rationale"]
-            .as_str()
-            .unwrap()
-            .contains("isolated"),
-        "second group's rationale names the hint: {}",
-        groups[1]["rationale"]
-    );
+    assert_eq!(groups[1]["rationale"], "private codebase");
 
     // With two groups, tasks are tagged with their group.
     let e2_task = dispatch["tasks"]
@@ -151,7 +141,7 @@ fn isolated_hint_splits_into_two_groups() {
         .unwrap();
     assert_eq!(e2_task["group"], "g2");
 
-    // Each group gets its own per-condition envs, holding only that group's fixtures —
+    // Each group gets its own per-condition envs, holding only that eval's overlays —
     // g1's a.txt never leaks into g2's env and vice versa.
     assert_eq!(
         read_str(&cli_env_dir(&cwd, "g1", "with_skill").join("a.txt")),
@@ -159,7 +149,7 @@ fn isolated_hint_splits_into_two_groups() {
     );
     assert!(
         !cli_env_dir(&cwd, "g1", "with_skill").join("b.txt").exists(),
-        "the isolated group's fixture is not staged into g1's env"
+        "the second eval's overlay is not staged into g1's env"
     );
     assert_eq!(
         read_str(&cli_env_dir(&cwd, "g2", "with_skill").join("b.txt")),
@@ -167,15 +157,15 @@ fn isolated_hint_splits_into_two_groups() {
     );
     assert!(
         !cli_env_dir(&cwd, "g2", "with_skill").join("a.txt").exists(),
-        "g1's fixture is not staged into the isolated group's env"
+        "g1's overlay is not staged into g2's env"
     );
 }
 
 #[test]
-fn isolated_hint_splits_into_separate_envs_cli() {
+fn private_groups_use_separate_environments_for_codex() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), TWO_EVALS_ONE_ISOLATED);
-    write_fixtures(&skill_dir);
+    let (skill_dir, cwd) = setup(tmp.path(), TWO_EVALS);
+    write_overlays(&skill_dir);
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -184,7 +174,7 @@ fn isolated_hint_splits_into_separate_envs_cli() {
         .assert()
         .success();
 
-    // Each group gets its own per-condition envs, holding only that group's fixtures.
+    // Each group gets its own per-condition envs, holding only that eval's overlays.
     assert_eq!(
         read_str(&cli_env_dir(&cwd, "g1", "with_skill").join("a.txt")),
         "AAA"

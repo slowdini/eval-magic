@@ -26,7 +26,7 @@ fn ingest_writes_diff_scope_for_every_run_without_an_assertion() {
     for task in dispatch["tasks"].as_array().unwrap() {
         let eval_root = Path::new(task["eval_root"].as_str().unwrap());
         let outputs_dir = Path::new(task["outputs_dir"].as_str().unwrap());
-        fs::write(outputs_dir.join("final-message.md"), "done").unwrap();
+        write_default_task_result(&cwd, task, "done");
         if task["condition"] == "with_skill" {
             fs::write(eval_root.join("source.txt"), "new\n").unwrap();
             fs::write(eval_root.join("notes.txt"), "one\n").unwrap();
@@ -161,9 +161,8 @@ fn diff_scope_is_captured_before_command_check_setup_and_reused() {
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     for task in dispatch["tasks"].as_array().unwrap() {
         let eval_root = Path::new(task["eval_root"].as_str().unwrap());
-        let outputs_dir = Path::new(task["outputs_dir"].as_str().unwrap());
         fs::write(eval_root.join("source.txt"), "new\n").unwrap();
-        fs::write(outputs_dir.join("final-message.md"), "done").unwrap();
+        write_default_task_result(&cwd, task, "done");
     }
 
     skill_eval()
@@ -240,8 +239,7 @@ fn finalize_grades_diff_scope_thresholds_from_the_persisted_measurement() {
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     for task in dispatch["tasks"].as_array().unwrap() {
         let eval_root = Path::new(task["eval_root"].as_str().unwrap());
-        let outputs_dir = Path::new(task["outputs_dir"].as_str().unwrap());
-        fs::write(outputs_dir.join("final-message.md"), "done").unwrap();
+        write_default_task_result(&cwd, task, "done");
         if task["condition"] == "with_skill" {
             fs::write(eval_root.join("source.txt"), "new\n").unwrap();
         }
@@ -364,11 +362,7 @@ fn benchmark_diff_scope_is_ordered_by_eval_id_then_run_index() {
 
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     for task in dispatch["tasks"].as_array().unwrap() {
-        fs::write(
-            Path::new(task["outputs_dir"].as_str().unwrap()).join("final-message.md"),
-            "done",
-        )
-        .unwrap();
+        write_default_task_result(&cwd, task, "done");
     }
 
     skill_eval()
@@ -453,8 +447,7 @@ fn revision_mode_measures_and_captures_the_diff_for_both_arms() {
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     for task in dispatch["tasks"].as_array().unwrap() {
         let eval_root = Path::new(task["eval_root"].as_str().unwrap());
-        let outputs_dir = Path::new(task["outputs_dir"].as_str().unwrap());
-        fs::write(outputs_dir.join("final-message.md"), "done").unwrap();
+        write_default_task_result(&cwd, task, "done");
         fs::write(eval_root.join("source.txt"), "new\n").unwrap();
     }
 

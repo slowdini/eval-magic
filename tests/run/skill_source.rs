@@ -73,7 +73,7 @@ fn the_copy_carries_an_uncommitted_edit() {
 }
 
 /// `evals/` is the eval author's material, not the agent's. It rides into the
-/// copy because fixtures are read from there, and must still be filtered out of
+/// copy because overlay sources are read from there, and must still be filtered out of
 /// what the agent can discover.
 #[test]
 fn the_copy_keeps_evals_while_the_staged_skill_still_excludes_them() {
@@ -89,7 +89,7 @@ fn the_copy_keeps_evals_while_the_staged_skill_still_excludes_them() {
             .join("evals")
             .join("evals.json")
             .exists(),
-        "the copy dropped evals/, which fixtures are read from"
+        "the copy dropped evals/, which overlay sources are read from"
     );
     let staged = cli_env_dir(&cwd, "g1", "with_skill")
         .join(".claude/skills")

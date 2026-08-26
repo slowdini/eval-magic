@@ -1,6 +1,7 @@
 //! Shared helpers for the `cli` integration tests.
 
 use assert_cmd::Command;
+use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -32,4 +33,14 @@ pub fn canonical_root() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
     let root = resolved(tmp.path());
     (tmp, root)
+}
+
+/// Give a test-authored eval config the mandatory local codebase when its
+/// subject is a later pipeline stage rather than environment provisioning.
+pub fn with_default_codebase(evals: &Value) -> Value {
+    let mut evals = evals.clone();
+    if evals.get("codebase").is_none() {
+        evals["codebase"] = json!({ "path": "." });
+    }
+    evals
 }

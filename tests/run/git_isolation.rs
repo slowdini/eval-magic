@@ -157,7 +157,7 @@ fn explicit_iteration_rebuild_resets_task_git_history_branch_and_remotes() {
 }
 
 #[test]
-fn nested_git_repository_fixture_is_preserved_inside_the_task_repo() {
+fn nested_git_repository_overlay_is_preserved_inside_the_task_repo() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review",

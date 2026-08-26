@@ -376,7 +376,19 @@ fn exclusion_is_a_noop_for_a_byoh_harness_without_project_skill_roots() {
     fs::create_dir_all(&harness_dir).unwrap();
     fs::write(
         harness_dir.join("cool.toml"),
-        "label = \"cool-custom-harness\"\n",
+        r#"label = "cool-custom-harness"
+
+[tools]
+write = ["file_change"]
+shell = ["command_execution"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+parser = "codex-items"
+
+[dispatch]
+exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
+"#,
     )
     .unwrap();
 

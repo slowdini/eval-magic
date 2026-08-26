@@ -62,7 +62,10 @@ fn init_with_flags_writes_valid_seed_evals() {
         .stderr("")
         .stdout(contains("Initialized evals for mr-review"))
         .stdout(contains("eval-magic run --skill-dir"))
-        .stdout(contains("eval-magic promote-baseline"));
+        .stdout(contains("follow the generated RUNBOOK.md"))
+        .stdout(contains("eval-magic ingest").not())
+        .stdout(contains("eval-magic finalize").not())
+        .stdout(contains("eval-magic promote-baseline").not());
 
     let written = fs::read_to_string(skill_sub.join("evals/evals.json")).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
@@ -268,12 +271,11 @@ fn init_from_skill_dir_prints_copy_pasteable_next_steps() {
         .success()
         .stdout(contains("  eval-magic run --skill-dir"))
         .stdout(contains("--skill mr-review --workspace-dir"))
-        .stdout(contains("--guard"))
-        // ingest auto-resolves the subagents dir now, so the placeholder is gone.
-        .stdout(contains("  eval-magic ingest --skill-dir"))
-        .stdout(contains("--subagents-dir <subagents-dir>").not())
-        .stdout(contains("  eval-magic finalize --skill-dir"))
-        .stdout(contains("  eval-magic promote-baseline --skill-dir"));
+        .stdout(contains("--guard").not())
+        .stdout(contains("follow the generated RUNBOOK.md"))
+        .stdout(contains("  eval-magic ingest --skill-dir").not())
+        .stdout(contains("  eval-magic finalize --skill-dir").not())
+        .stdout(contains("  eval-magic promote-baseline --skill-dir").not());
 }
 
 #[test]

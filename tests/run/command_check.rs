@@ -8,8 +8,16 @@ use std::path::{Path, PathBuf};
 
 const COOL_DESCRIPTOR: &str = r#"label = "cool-custom-harness"
 
+[tools]
+write = ["file_change"]
+shell = ["command_execution"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+parser = "codex-items"
+
 [dispatch]
-exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/final-message.md"
+exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
 "#;
 
 fn write_project_descriptor(cwd: &Path) {
@@ -32,6 +40,15 @@ fn dispatch_tasks(cwd: &Path) -> Vec<Value> {
         .as_array()
         .expect("dispatch.json carries tasks[]")
         .clone()
+}
+
+fn write_cool_task_result(cwd: &Path, task: &Value) {
+    write_task_transcript(
+        cwd,
+        task,
+        "cool-events.jsonl",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"done\"}}\n",
+    );
 }
 
 fn setup_exists_command() -> String {
@@ -74,7 +91,7 @@ fn auto_isolates_and_multi_run_tasks_get_distinct_hidden_envs() {
     assert_eq!(groups[0]["evals"], json!(["ordinary-1"]));
     assert_eq!(groups[1]["evals"], json!(["held-out"]));
     assert_eq!(groups[2]["evals"], json!(["ordinary-2"]));
-    assert_eq!(groups[1]["rationale"], "metric: diff_scope");
+    assert_eq!(groups[1]["rationale"], "private codebase");
 
     let command_tasks: Vec<_> = dispatch["tasks"]
         .as_array()
@@ -102,7 +119,7 @@ fn auto_isolates_and_multi_run_tasks_get_distinct_hidden_envs() {
             !root.join("holdout/secret.txt").exists(),
             "held-out setup is absent before ingest"
         );
-        assert_eq!(task["fixtures"], json!([]));
+        assert_eq!(task["files"], json!([]));
         let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
         assert!(!prompt.contains("holdout/secret.txt"));
     }
@@ -169,7 +186,7 @@ fn root_git_setup_path_is_rejected_before_staging() {
 }
 
 #[test]
-fn descriptor_without_transcript_support_runs_command_checks() {
+fn runner_ready_descriptor_runs_command_checks() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = json!({
         "skill_name": "mr-review",
@@ -213,9 +230,7 @@ fn descriptor_without_transcript_support_runs_command_checks() {
     for task in &tasks {
         let eval_root = resolve(&cwd, task["eval_root"].as_str().unwrap());
         assert!(!eval_root.join("holdout/secret.txt").exists());
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "done").unwrap();
+        write_cool_task_result(&cwd, task);
     }
 
     skill_eval()
@@ -231,8 +246,7 @@ fn descriptor_without_transcript_support_runs_command_checks() {
             "1",
         ])
         .assert()
-        .success()
-        .stderr(contains("no transcript parser"));
+        .success();
 
     for condition in ["with_skill", "without_skill"] {
         let result = read_json(
@@ -310,9 +324,7 @@ fn ingests_without_transcripts_while_guard_is_armed_and_aggregates() {
             },
         )
         .unwrap();
-        let outputs_dir = Path::new(task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(outputs_dir).unwrap();
-        fs::write(outputs_dir.join("final-message.md"), "done").unwrap();
+        write_default_task_result(&cwd, task, "done");
     }
 
     skill_eval()
