@@ -25,17 +25,14 @@ Treat this as a real user request — do NOT optimize behavior for the eval.
 The `widget-skill` skill is registered under the identifier `slow-powers-eval-2-with-skill-widget-skill` and is discoverable as an OpenCode skill. If you invoke it, use that identifier.
 If it does not load as an OpenCode skill, read the skill from `/work/staged/widget-skill/SKILL.md` instead.
 
-Available fixture files:
-  - /work/fixtures/input.txt
+Codebase overlay files:
+  - /work/overlays/input.txt
 Task environment: /work/task
 Task-local scratch directory: /work/task/tmp
-Framework output directory: /work/outputs
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
 - Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
-- Use the framework output directory only for framework artifacts.
-- After completing the task, write your final user-facing response to /work/outputs/final-message.md.
 - Do not write outside the task environment.
 
 User request:

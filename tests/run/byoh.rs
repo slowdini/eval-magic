@@ -13,11 +13,19 @@ use std::path::{Path, PathBuf};
 
 mod extract;
 
-/// A minimal BYOH descriptor: label + exec template, nothing else.
+/// A runner-ready BYOH descriptor using the named Codex transcript capability.
 const COOL_DESCRIPTOR: &str = r#"label = "cool-custom-harness"
 
+[tools]
+write = ["file_change"]
+shell = ["command_execution"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+parser = "codex-items"
+
 [dispatch]
-exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/final-message.md"
+exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
 "#;
 
 /// Write `<cwd>/.eval-magic/harnesses/cool.toml`.
@@ -45,6 +53,40 @@ fn dispatch_tasks(cwd: &Path) -> Vec<Value> {
         .clone()
 }
 
+fn write_completed_task(cwd: &Path, task: &Value, final_text: &str) {
+    let outputs = resolve(cwd, task["outputs_dir"].as_str().unwrap());
+    let turn = outputs.join("turn-1");
+    fs::create_dir_all(&turn).unwrap();
+    fs::write(
+        turn.join("cool-events.jsonl"),
+        format!(
+            "{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":{}}}}}\n",
+            serde_json::to_string(final_text).unwrap()
+        ),
+    )
+    .unwrap();
+    write_completion(cwd, task);
+}
+
+fn write_completion(cwd: &Path, task: &Value) {
+    let conversation_path = resolve(cwd, task["conversation_path"].as_str().unwrap());
+    fs::write(
+        conversation_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "completed",
+            "delivered_followups": 0,
+            "events": [{
+                "type": "user_message",
+                "ordinal": 0,
+                "round": 1,
+                "text": task["user_prompt"]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 /// Criterion: a descriptor file alone produces a complete llm_judge-graded
 /// run with the stray-writes audit — warnings name their fallbacks, and the
 /// exec recipe lands in RUNBOOK.md and dispatch-manifest.md.
@@ -54,7 +96,7 @@ fn descriptor_alone_carries_a_complete_run() {
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     write_project_descriptor(&cwd, COOL_DESCRIPTOR);
 
-    // Build the run: every undeclared enhancement warns naming its fallback.
+    // Build the run: optional undeclared enhancements warn naming their fallback.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -74,10 +116,6 @@ fn descriptor_alone_carries_a_complete_run() {
         .stderr(
             contains("declares no skills_dir")
                 .and(contains("--no-stage"))
-                .and(contains("declares no transcript parser"))
-                .and(contains("tokens/duration"))
-                .and(contains("unverifiable").not())
-                .and(contains("final-message.md"))
                 .and(contains("declares no model flag"))
                 .and(contains("provenance")),
         );
@@ -98,14 +136,12 @@ fn descriptor_alone_carries_a_complete_run() {
         "no-stage run stages nothing"
     );
 
-    // Simulate the dispatches: recover each final message by hand.
+    // Simulate runner-owned completion metadata and per-round transcripts.
     for task in &tasks {
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "I reviewed the MR.\n").unwrap();
+        write_completed_task(&cwd, task, "I reviewed the MR.");
     }
 
-    // Ingest: record-runs from final messages, the stray-writes audit, and
+    // Ingest: record-runs from transcripts, the stray-writes audit, and
     // grade's llm_judge hand-off all run without any harness code.
     skill_eval()
         .current_dir(&cwd)
@@ -120,8 +156,7 @@ fn descriptor_alone_carries_a_complete_run() {
             "1",
         ])
         .assert()
-        .success()
-        .stderr(contains("no transcript parser"));
+        .success();
 
     assert!(
         iteration_dir(&cwd).join("stray-writes.json").exists(),
@@ -138,16 +173,19 @@ fn descriptor_alone_carries_a_complete_run() {
     }
 }
 
-/// A descriptor without an exec_template warns at prep time, because the runner
-/// will have nothing to spawn: `eval-magic dispatch` fails outright for such a
-/// harness, so the gap is worth naming before the workspace is built. (The
-/// built-in-harness half of this pin — wired harnesses stay quiet — lives in
-/// src/cli/run/util.rs.)
+/// A descriptor without an exec_template is rejected before a workspace is
+/// built because the runner has no command to spawn.
 #[test]
-fn dispatchless_descriptor_warns_that_dispatch_has_nothing_to_run() {
+fn dispatchless_descriptor_is_rejected_before_build() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    write_project_descriptor(&cwd, "label = \"cool-custom-harness\"\n");
+    write_project_descriptor(
+        &cwd,
+        &COOL_DESCRIPTOR.replace(
+            "\n[dispatch]\nexec_template = \"cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl\"\n",
+            "\n",
+        ),
+    );
 
     skill_eval()
         .current_dir(&cwd)
@@ -162,12 +200,14 @@ fn dispatchless_descriptor_warns_that_dispatch_has_nothing_to_run() {
             "cool-custom-harness",
         ])
         .assert()
-        .success()
+        .failure()
         .stderr(
             contains("declares no dispatch exec template")
-                .and(contains("eval-magic dispatch"))
+                .and(contains("runner-ready"))
                 .and(contains("eval-magic docs byoh")),
         );
+
+    assert!(!iteration_dir(&cwd).join("dispatch.json").exists());
 }
 
 /// `--guard` with a harness that exists only in user-supplied descriptors is
@@ -238,17 +278,24 @@ fn auto_guard_stays_off_without_error_on_user_only_harness() {
     );
 }
 
-/// The transcript_check clause of the no-transcript-parser warning is scoped
-/// to eval configs that actually use the assertion type.
+/// A transcript parser is a runner-readiness requirement regardless of which
+/// assertion types the eval declares.
 #[test]
-fn transcript_check_warning_fires_only_when_evals_use_it() {
+fn transcriptless_descriptor_is_rejected_before_build() {
     let evals = r#"{ "skill_name": "mr-review", "evals": [ {
         "id": "e1", "prompt": "review this MR", "expected_output": "a review",
         "assertions": [ { "id": "a1", "type": "transcript_check",
                           "check": "ran tests", "pattern": "cargo test" } ] } ] }"#;
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), evals);
-    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
+    write_project_descriptor(
+        &cwd,
+        r#"label = "cool-custom-harness"
+
+[dispatch]
+exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path>"
+"#,
+    );
 
     skill_eval()
         .current_dir(&cwd)
@@ -263,13 +310,14 @@ fn transcript_check_warning_fires_only_when_evals_use_it() {
             "cool-custom-harness",
         ])
         .assert()
-        .success()
+        .failure()
         .stderr(
             contains("declares no transcript parser")
-                .and(contains("unverifiable"))
-                .and(contains("llm_judge"))
-                .and(contains("final-message.md")),
+                .and(contains("runner-ready"))
+                .and(contains("eval-magic docs byoh")),
         );
+
+    assert!(!iteration_dir(&cwd).join("dispatch.json").exists());
 }
 
 /// A `--harness-file` descriptor becomes the invocation's default harness
@@ -340,10 +388,10 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
     // Simulate dispatches that emit Codex-compatible JSONL events.
     for task in dispatch_tasks(&cwd) {
         let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Done.\n").unwrap();
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
         fs::write(
-            outputs.join("cool-events.jsonl"),
+            turn.join("cool-events.jsonl"),
             concat!(
                 r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'cat notes.md'","aggregated_output":"notes","status":"completed"}}"#,
                 "\n",
@@ -352,6 +400,7 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
             ),
         )
         .unwrap();
+        write_completion(&cwd, &task);
     }
 
     skill_eval()

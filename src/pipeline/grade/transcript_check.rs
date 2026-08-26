@@ -68,10 +68,9 @@ pub fn grade_transcript_check_with_context(
     if assertion.check == "tool_invocation_matches" && invocations.is_empty() {
         return fail(
             &assertion.id,
-            "tool_invocations is empty — run record was not filled by a transcript adapter. \
-             Run `eval-magic fill-transcripts` for Claude Code, or `eval-magic fill-transcripts \
-             --harness codex` when outputs/codex-events.jsonl is present; otherwise rely on \
-             `llm_judge` assertions for harnesses without an adapter."
+            "tool_invocations is empty — the task transcript contained no recorded tool call. \
+             Re-dispatch the task if its transcript is missing; otherwise verify the agent \
+             actually invoked the expected tool."
                 .to_string(),
         );
     }

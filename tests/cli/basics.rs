@@ -7,7 +7,7 @@ use std::fs;
 use tempfile::TempDir;
 
 /// A minimal valid `evals.json` body.
-const VALID_EVALS: &str = r#"{ "skill_name": "demo", "evals": [
+const VALID_EVALS: &str = r#"{ "skill_name": "demo", "codebase": { "path": "." }, "evals": [
     { "id": "e1", "prompt": "p", "expected_output": "o" } ] }"#;
 
 /// Build `<root>/<skill>/evals/evals.json` with the given contents.
@@ -95,7 +95,6 @@ fn every_visible_command_and_harness_subcommand_renders_help() {
         "compare --help",
         "finalize --help",
         "record-runs --help",
-        "fill-transcripts --help",
         "detect-stray-writes --help",
         "grade --help",
         "aggregate --help",
@@ -118,6 +117,15 @@ fn every_visible_command_and_harness_subcommand_renders_help() {
 }
 
 #[test]
+fn retired_fill_transcripts_command_is_not_exposed() {
+    skill_eval()
+        .args(["fill-transcripts", "--help"])
+        .assert()
+        .failure()
+        .stderr(contains("unrecognized subcommand 'fill-transcripts'"));
+}
+
+#[test]
 fn init_help_documents_extended_eval_authoring() {
     skill_eval()
         .args(["init", "--help"])
@@ -125,6 +133,7 @@ fn init_help_documents_extended_eval_authoring() {
         .success()
         .stdout(contains("turns"))
         .stdout(contains("files_root"))
+        .stdout(contains("overlay sources"))
         .stdout(contains("per-eval `runs`"))
         .stdout(contains("eval-magic validate"));
 }

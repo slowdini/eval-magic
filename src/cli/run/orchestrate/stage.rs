@@ -13,7 +13,7 @@ use crate::sandbox::teardown_guard;
 
 use super::super::RunError;
 use super::super::dispatch::get_skill_description;
-use super::super::fixtures::{FixtureClaims, copy_fixtures};
+use super::super::overlays::copy_overlay_files;
 use super::super::staging::{
     StageSiblingOpts, StageSkillOpts, cleanup_staged_skills, exclude_codebase_skill_sources,
     register_staged_skill_for_cleanup, skills_dir_for_harness, stage_sibling_skills,
@@ -92,7 +92,7 @@ pub(super) fn stage_conditions(
     }
 
     // The environments to stage: one per (group, condition), each with only its
-    // condition's skill + its group's fixtures.
+    // condition's skill and its eval's overlay files.
     let targets = env_targets(&EnvLayoutInput {
         iteration_dir: &r.iteration_dir,
         groups: &r.groups,
@@ -122,7 +122,7 @@ pub(super) fn stage_conditions(
     for target in &targets {
         // Disarm a prior run's guard before re-staging, so a crashed run can't leave
         // the write-blocking hook armed across runs. Created unconditionally — even
-        // under --no-stage, each env's fixtures still land here.
+        // under --no-stage, each env's overlays still land here.
         teardown_guard(&target.root);
 
         let codebase = r.codebase_for(&target.eval_ids)?;
@@ -133,7 +133,7 @@ pub(super) fn stage_conditions(
             // a directory whose name uses the historical staging prefix.
             cleanup_staged_skills(&target.root, ctx.harness)?;
         }
-        if codebase.is_some() && target.root.exists() {
+        if target.root.exists() {
             // An explicit `--iteration N` rebuild would otherwise lay a fresh
             // codebase over the last run's tree, including whatever the previous
             // agent left behind. Start from nothing instead.
@@ -144,25 +144,19 @@ pub(super) fn stage_conditions(
         // iteration's single cached materialization of it — a local clone while
         // the host allows the hard link, a plain copy otherwise — so `--runs 10`
         // against a real repository costs one checkout, not ten copies.
-        if let Some(codebase) = codebase {
-            let source_tree = materialize_codebase(&r.iteration_dir, codebase, &mut materialized)?;
-            crate::source::provision_env(&codebase.source, &source_tree, &target.root)
-                .map_err(|error| RunError::msg(error.to_string()))?;
-        } else {
-            fs::create_dir_all(&target.root)?;
-        }
+        let source_tree = materialize_codebase(&r.iteration_dir, codebase, &mut materialized)?;
+        crate::source::provision_env(&codebase.source, &source_tree, &target.root)
+            .map_err(|error| RunError::msg(error.to_string()))?;
 
-        if let Some(codebase) = codebase {
-            let inventoried = super::shadow_preflight::scan_codebase_skill_sources(
-                &target.root,
-                ctx.harness,
-                &evaluated_names,
-            );
-            if codebase.declared.exclude_skill_sources() {
-                exclude_codebase_skill_sources(&target.root, &ctx.skill_name, ctx.harness)?;
-            } else if !inventoried.is_empty() {
-                codebase_shadow_sources.insert(target.root.clone(), inventoried);
-            }
+        let inventoried = super::shadow_preflight::scan_codebase_skill_sources(
+            &target.root,
+            ctx.harness,
+            &evaluated_names,
+        );
+        if codebase.declared.exclude_skill_sources() {
+            exclude_codebase_skill_sources(&target.root, &ctx.skill_name, ctx.harness)?;
+        } else if !inventoried.is_empty() {
+            codebase_shadow_sources.insert(target.root.clone(), inventoried);
         }
 
         if !opts.no_stage && ctx.stage_siblings {
@@ -241,13 +235,10 @@ pub(super) fn stage_conditions(
             }
         }
 
-        // Copy this env's group's fixtures. Claims are per env (each env is
-        // independent); grouping has already routed clobbering evals into separate
-        // groups, so within one env the same-source/idempotent rule never trips.
-        let mut claims = FixtureClaims::new();
+        // Apply this eval's authored files on top of the staged codebase.
         for eval_id in &target.eval_ids {
             if let Some(ev) = r.selected_evals.iter().find(|e| &e.id == eval_id) {
-                copy_fixtures(ev, &skills.join(&ctx.skill_name), &target.root, &mut claims)?;
+                copy_overlay_files(ev, &skills.join(&ctx.skill_name), &target.root)?;
             }
         }
 

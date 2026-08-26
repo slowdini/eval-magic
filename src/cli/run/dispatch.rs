@@ -23,7 +23,7 @@ use super::RunError;
 
 mod prompt_components;
 
-use prompt_components::{effective_bootstrap, render_fixtures_block, render_skill_block};
+use prompt_components::{effective_bootstrap, render_overlay_files_block, render_skill_block};
 
 /// One dispatchable task: the metadata the orchestrator persists per
 /// `(eval, condition)`. `dispatch_prompt` is held in memory (for manifest
@@ -43,7 +43,8 @@ pub struct DispatchTask {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_skills: Option<Vec<AvailableSkill>>,
     pub user_prompt: String,
-    pub fixtures: Vec<String>,
+    #[serde(alias = "fixtures")]
+    pub files: Vec<String>,
     pub outputs_dir: String,
     pub run_record_path: String,
     pub timing_path: String,
@@ -107,7 +108,7 @@ pub struct DispatchTaskOpts<'a> {
     /// treatment reference from optional bootstrap content.
     pub treatment_names: Option<&'a [String]>,
     pub user_prompt: &'a str,
-    pub fixtures: Vec<String>,
+    pub files: Vec<String>,
     pub turns: Option<&'a [ScriptedTurn]>,
     pub outputs_dir: &'a str,
     pub cond_dir: &'a str,
@@ -169,7 +170,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         &staged_skills,
     )?;
 
-    let fixtures_block = render_fixtures_block(&opts.fixtures);
+    let overlay_files_block = render_overlay_files_block(&opts.files);
 
     // A condition that does not load the skill-under-test must carry zero
     // reference to it: the available-skills block auto-omits it, and a
@@ -218,11 +219,10 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         task_lines.push(skill_block);
     }
     task_lines.push(String::new());
-    task_lines.push(fixtures_block);
+    task_lines.push(overlay_files_block);
     if let Some(eval_root) = &eval_root {
         task_lines.push(super::scratch::context(eval_root));
     }
-    task_lines.push(format!("Framework output directory: {outputs_dir}"));
     task_lines.push(String::new());
     task_lines.push("Instructions:".to_string());
     task_lines.push(
@@ -230,11 +230,6 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
             .to_string(),
     );
     super::scratch::push_instruction(&mut task_lines, eval_root.as_deref());
-    task_lines
-        .push("- Use the framework output directory only for framework artifacts.".to_string());
-    task_lines.push(format!(
-        "- After completing the task, write your final user-facing response to {outputs_dir}/final-message.md."
-    ));
     task_lines.push("- Do not write outside the task environment.".to_string());
     task_lines.push(String::new());
     task_lines.push("User request:".to_string());
@@ -260,7 +255,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         skills: opts.skills.map(<[ConditionSkill]>::to_vec),
         available_skills: opts.skills.map(|_| staged_skills),
         user_prompt: opts.user_prompt.to_string(),
-        fixtures: opts.fixtures.clone(),
+        files: opts.files.clone(),
         run_record_path: artifact_path(&cond_dir.join("run.json")),
         timing_path: artifact_path(&cond_dir.join("timing.json")),
         turns: opts.turns.map(<[ScriptedTurn]>::to_vec),
@@ -461,10 +456,8 @@ pub fn build_manifest(
     header.extend([
         "After all dispatches:".to_string(),
         String::new(),
-        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/turn-<n>/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
+        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json`, `conversation.json`, and the harness events under `outputs/turn-<n>/`, and backfills `timing.json`; never clobbers an existing record), detect-stray-writes, and grade.".to_string(),
         "2. Run `eval-magic dispatch --judges --harness <harness>` to grade the judge tasks ingest listed, then `eval-magic finalize` for the benchmark.".to_string(),
-        String::new(),
-        "On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.".to_string(),
         String::new(),
         "## Dispatches".to_string(),
         String::new(),
@@ -520,7 +513,6 @@ mod tests {
                 assertions: None,
                 skill_should_trigger: None,
                 runs: None,
-                isolation: None,
                 turns: None,
                 codebase: None,
                 responder: None,
@@ -641,7 +633,7 @@ mod tests {
     // ── build_dispatch_task: bootstrap injection ──────────────────────────
 
     #[test]
-    fn prompt_allows_task_edits_but_reserves_outputs_for_framework_artifacts() {
+    fn prompt_allows_task_edits_without_requesting_agent_authored_framework_artifacts() {
         let task = build_dispatch_task(&DispatchTaskOpts {
             eval_root: Some("/tmp/env"),
             ..base_opts()
@@ -651,8 +643,10 @@ mod tests {
 
         assert!(prompt.contains("Task environment: /tmp/env"));
         assert!(prompt.contains("edit existing files and create new files inside"));
-        assert!(prompt.contains("framework artifacts"));
         assert!(prompt.contains("Do not write outside the task environment."));
+        assert!(!prompt.contains("Framework output directory:"));
+        assert!(!prompt.contains("framework artifacts"));
+        assert!(!prompt.contains("final-message.md"));
         assert!(!prompt.contains("Write any files you produce into the output directory."));
         assert!(!prompt.contains("Do not write outside the output directory."));
     }

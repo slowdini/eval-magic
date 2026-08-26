@@ -55,9 +55,7 @@ fn reports_cells_and_any_failure_fails_finalized_grading() {
         .assert()
         .success();
     for task in dispatch_tasks(&cwd) {
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "done").unwrap();
+        write_cool_task_result(&cwd, &task);
     }
 
     skill_eval()

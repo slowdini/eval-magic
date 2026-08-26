@@ -1,7 +1,7 @@
 //! Isolated-run env builder: staging redirects into the per-`(group, condition)`
-//! `env-<group>-<condition>/` dirs, fixtures are copied into each like a real repo,
-//! and `RUNBOOK.md` lives above them in `iteration-N/`. eval-magic meta stays above
-//! the envs in `iteration-N/`.
+//! `env-<group>-<condition>/` dirs, overlays are applied to each codebase, and
+//! `RUNBOOK.md` lives above them in `iteration-N/`. eval-magic meta stays above the
+//! envs in `iteration-N/`.
 
 use crate::helpers::*;
 use serde_json::json;
@@ -60,13 +60,13 @@ fn env_dir_created_even_with_no_stage() {
         .success();
 
     // Even with staging disabled, each per-(group, condition) env must exist for
-    // fixtures + the per-env guard.
+    // the codebase + the per-env guard.
     assert!(cli_env_dir(&cwd, "g1", "with_skill").is_dir());
     assert!(cli_env_dir(&cwd, "g1", "without_skill").is_dir());
 }
 
 #[test]
-fn fixtures_copied_into_env_like_a_real_repo() {
+fn overlay_files_are_applied_to_each_private_codebase() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review",
@@ -87,7 +87,7 @@ fn fixtures_copied_into_env_like_a_real_repo() {
         .success();
 
     // Structure preserved under each per-condition env, not flattened into an
-    // inputs/ bucket. Fixtures are copied into every relevant env (per its group).
+    // inputs/ bucket. Overlay files are copied into every relevant environment.
     for cond in ["with_skill", "without_skill"] {
         let env = cli_env_dir(&cwd, "g1", cond);
         assert_eq!(read_str(&env.join("src/main.rs")), "fn main() {}");
@@ -95,7 +95,7 @@ fn fixtures_copied_into_env_like_a_real_repo() {
         assert!(!env.join("inputs").exists());
     }
 
-    // The dispatch prompt lists fixtures env-relative — the agent's cwd is env.
+    // The dispatch prompt and task record list overlays relative to the codebase.
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     let task = dispatch["tasks"]
         .as_array()
@@ -104,20 +104,22 @@ fn fixtures_copied_into_env_like_a_real_repo() {
         .find(|t| t["condition"] == "with_skill")
         .unwrap();
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+    assert_eq!(task["files"], json!(["src/main.rs", "data/x.json"]));
+    assert!(task.get("fixtures").is_none());
     assert!(prompt.contains("- src/main.rs"));
     assert!(prompt.contains("- data/x.json"));
     assert!(!prompt.contains("inputs/"));
 }
 
 #[test]
-fn files_root_mounts_nested_fixture_sources_at_task_root() {
+fn files_root_resolves_nested_overlay_sources_at_codebase_root() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review",
-          "files_root": "fixtures/todo-app",
+          "files_root": "overlays/todo-app",
           "files": ["package.json", "src/hooks/useDebounce.ts"] } ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
-    let source_root = skill_dir.join("mr-review/evals/fixtures/todo-app");
+    let source_root = skill_dir.join("mr-review/evals/overlays/todo-app");
     fs::create_dir_all(source_root.join("src/hooks")).unwrap();
     fs::write(source_root.join("package.json"), "{}").unwrap();
     fs::write(
@@ -141,7 +143,7 @@ fn files_root_mounts_nested_fixture_sources_at_task_root() {
             read_str(&env.join("src/hooks/useDebounce.ts")),
             "export function useDebounce() {}"
         );
-        assert!(!env.join("fixtures").exists());
+        assert!(!env.join("overlays").exists());
     }
 
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
@@ -152,13 +154,13 @@ fn files_root_mounts_nested_fixture_sources_at_task_root() {
         .find(|task| task["condition"] == "with_skill")
         .unwrap();
     assert_eq!(
-        task["fixtures"],
+        task["files"],
         json!(["package.json", "src/hooks/useDebounce.ts"])
     );
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
     assert!(prompt.contains("- package.json"));
     assert!(prompt.contains("- src/hooks/useDebounce.ts"));
-    assert!(!prompt.contains("fixtures/todo-app"));
+    assert!(!prompt.contains("overlays/todo-app"));
 }
 
 #[test]
@@ -291,13 +293,13 @@ fn dispatch_outputs_live_under_env() {
 }
 
 #[test]
-fn fixture_is_copied_into_each_private_run_environment() {
+fn overlay_is_applied_to_each_private_run_environment() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review",
-          "files": ["fixture.txt"] } ] }"#;
+          "files": ["TASK.md"] } ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
-    fs::write(skill_dir.join("mr-review/evals/fixture.txt"), "DATA").unwrap();
+    fs::write(skill_dir.join("mr-review/evals/TASK.md"), "DATA").unwrap();
 
     skill_eval()
         .current_dir(&cwd)
@@ -320,16 +322,13 @@ fn fixture_is_copied_into_each_private_run_environment() {
     assert_eq!(tasks.len(), 4, "1 eval × 2 conditions × 2 runs");
     for task in tasks {
         let eval_root = Path::new(task["eval_root"].as_str().unwrap());
-        assert_eq!(read_str(&eval_root.join("fixture.txt")), "DATA");
-        assert_eq!(
-            task["fixtures"].as_array().unwrap(),
-            &vec![json!("fixture.txt")]
-        );
+        assert_eq!(read_str(&eval_root.join("TASK.md")), "DATA");
+        assert_eq!(task["files"].as_array().unwrap(), &vec![json!("TASK.md")]);
     }
 }
 
 #[test]
-fn two_evals_sharing_a_fixture_declaration_succeeds() {
+fn two_evals_sharing_an_overlay_declaration_succeeds() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "p1", "expected_output": "o", "files": ["shared.txt"] },
@@ -355,7 +354,7 @@ fn two_evals_sharing_a_fixture_declaration_succeeds() {
             .find(|t| t["eval_id"] == id && t["condition"] == "with_skill")
             .unwrap();
         assert_eq!(
-            task["fixtures"].as_array().unwrap(),
+            task["files"].as_array().unwrap(),
             &vec![json!("shared.txt")]
         );
         assert_eq!(

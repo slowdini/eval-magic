@@ -19,6 +19,7 @@ fn finalize_folds_command_check_result_into_normal_pass_rate() {
         skill_sub.join("evals/evals.json"),
         serde_json::to_string_pretty(&json!({
             "skill_name": "mr-review",
+            "codebase": { "path": "." },
             "evals": [{
                 "id": "pos-eval",
                 "prompt": "Fix it.",

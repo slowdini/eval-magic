@@ -44,7 +44,7 @@ pub(crate) struct InitArgs {
     /// negative evals where correct behavior is not invoking the skill.
     #[arg(long)]
     pub skill_should_trigger: Option<bool>,
-    /// Git repository URL to use as the eval fixture codebase.
+    /// Git repository URL to use as the eval codebase.
     ///
     /// Requires `--codebase-ref`. `init` records both values without contacting
     /// the remote, so use a full commit SHA when the scaffold must be reproducible.
@@ -67,7 +67,7 @@ pub(crate) struct InitArgs {
         conflicts_with_all = ["codebase_path", "codebase_cwd"]
     )]
     pub codebase_ref: Option<String>,
-    /// Local directory to use as the eval fixture codebase.
+    /// Local directory to use as the eval codebase.
     ///
     /// A relative path resolves from the invocation directory and is written
     /// relative to the generated `evals/` directory. An absolute path remains
@@ -78,7 +78,7 @@ pub(crate) struct InitArgs {
         conflicts_with_all = ["codebase_url", "codebase_ref", "codebase_cwd"]
     )]
     pub codebase_path: Option<String>,
-    /// Use the invocation directory as the eval fixture codebase.
+    /// Use the invocation directory as the eval codebase.
     ///
     /// Writes a path relative to the generated `evals/` directory. Conflicts
     /// with `--codebase-url`, `--codebase-ref`, and `--codebase-path`.

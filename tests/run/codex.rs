@@ -424,8 +424,7 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
       { "id": "e1", "prompt": "p1", "expected_output": "o", "files": ["a.txt"] },
-      { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"],
-        "isolation": "isolated" }
+      { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"] }
     ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
     fs::write(skill_dir.join("mr-review/evals/a.txt"), "a").unwrap();

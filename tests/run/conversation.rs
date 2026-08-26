@@ -166,16 +166,22 @@ fn the_driver_runs_a_task_that_declares_no_scripted_turns() {
     let conversation = read_json(Path::new(task["conversation_path"].as_str().unwrap()));
     assert_eq!(conversation["status"], "completed");
     assert_eq!(conversation["delivered_followups"], 0);
+    assert_eq!(
+        conversation["events"],
+        serde_json::json!([{
+            "type": "user_message",
+            "ordinal": 0,
+            "round": 1,
+            "text": "Fix the date."
+        }])
+    );
 
     let outputs = Path::new(task["outputs_dir"].as_str().unwrap());
     assert!(
         outputs.join("turn-1").join("codex-events.jsonl").is_file(),
         "a one-shot transcript belongs under turn-1 like every other round"
     );
-    assert_eq!(
-        fs::read_to_string(outputs.join("final-message.md")).unwrap(),
-        "Updated the date handling.\n"
-    );
+    assert!(!outputs.join("final-message.md").exists());
 }
 
 const ONE_SHOT_EVALS: &str = r#"{
@@ -249,8 +255,8 @@ fn stub_exec_template(cwd: &Path, template: &str) {
     .unwrap();
 }
 
-/// A one-shot harness stub: emits a session id, one agent message, and a usage
-/// event, which is the minimum a transcript needs to parse. Written as a POSIX
+/// A one-shot harness stub: emits one agent message and a usage event without a
+/// resumable session id. Written as a POSIX
 /// script and invoked through `sh` for the same reason the scripted stub below
 /// is — that is the shape of a real `exec_template`, and it needs no executable
 /// bit on any host.
@@ -261,8 +267,7 @@ fn one_shot_stub(dir: &Path, message: &str) -> String {
         r#"#!/bin/sh
 outputs=$1
 message=$2
-printf '%s\n' '{"type":"thread.started","thread_id":"session-1"}' > "$outputs/codex-events.jsonl"
-printf '%s\n' "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"$message\"}}" >> "$outputs/codex-events.jsonl"
+printf '%s\n' "{\"type\":\"item.completed\",\"item\":{\"id\":\"m1\",\"type\":\"agent_message\",\"text\":\"$message\"}}" > "$outputs/codex-events.jsonl"
 printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens":3}}' >> "$outputs/codex-events.jsonl"
 "#,
     )
@@ -375,20 +380,33 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
     assert_eq!(conversation["delivered_followups"], 2);
     assert_eq!(conversation["stop_reason"], Value::Null);
     assert_eq!(
-        conversation["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|event| event["type"] == "user_message")
-            .count(),
-        3
+        conversation["events"],
+        serde_json::json!([
+            {
+                "type": "user_message",
+                "ordinal": 0,
+                "round": 1,
+                "text": "Fix the date."
+            },
+            {
+                "type": "user_message",
+                "ordinal": 1,
+                "round": 2,
+                "text": "Affected users are in US timezones."
+            },
+            {
+                "type": "user_message",
+                "ordinal": 2,
+                "round": 3,
+                "text": "It is a date-only field."
+            }
+        ])
     );
-    assert_eq!(
-        fs::read_to_string(
-            Path::new(task["outputs_dir"].as_str().unwrap()).join("final-message.md")
-        )
-        .unwrap(),
-        "Updated the date handling.\n"
+    assert!(
+        !Path::new(task["outputs_dir"].as_str().unwrap())
+            .join("final-message.md")
+            .exists(),
+        "the final assistant response comes from the last round transcript"
     );
 
     dispatch_one(&skill_dir, &cwd, "codex", 1, false)
@@ -446,11 +464,7 @@ fn multi_turn_eval_rejects_a_harness_without_native_resume_support() {
     fs::create_dir_all(&descriptor_dir).unwrap();
     fs::write(
         descriptor_dir.join("cool.toml"),
-        r#"label = "cool-custom-harness"
-
-[dispatch]
-exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/final-message.md"
-"#,
+        RUNNER_READY_NO_RESUME_DESCRIPTOR,
     )
     .unwrap();
 

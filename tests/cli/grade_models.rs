@@ -1,6 +1,6 @@
 //! Model-selection behavior for emitted judge tasks.
 
-use crate::helpers::{canonical_root, skill_eval};
+use crate::helpers::{canonical_root, skill_eval, with_default_codebase};
 use assert_cmd::Command;
 use std::fs;
 
@@ -9,7 +9,7 @@ fn write_skill(skill_sub: &std::path::Path, skill_md: &str, evals: &serde_json::
     fs::write(skill_sub.join("SKILL.md"), skill_md).unwrap();
     fs::write(
         skill_sub.join("evals").join("evals.json"),
-        serde_json::to_string_pretty(evals).unwrap(),
+        serde_json::to_string_pretty(&with_default_codebase(evals)).unwrap(),
     )
     .unwrap();
 }

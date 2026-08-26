@@ -87,10 +87,8 @@ preflight = "opencode-skills"
 # Headless permission asks are auto-rejected unless `--auto` is passed
 # (explicit deny rules are still enforced), and piped stdin is *appended* to
 # the message, so every recipe detaches stdin with </dev/null, same as codex.
-# There is no `--output-last-message`: transcript ingest recovers the final
-# message from the `text` events.
+# Transcript ingest recovers the final response from the `text` events.
 [dispatch]
-capture_prefix = "opencode"
 next_steps_template = '''
 
 Next: eval-magic dispatch{target_args} --iteration {iteration} --harness opencode

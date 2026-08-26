@@ -1,6 +1,6 @@
 //! The post-dispatch / post-judge pipeline command handlers: the `ingest` and
 //! `finalize` chains and each individual stage (`record-runs`,
-//! `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`).
+//! `detect-stray-writes`, `grade`, `aggregate`).
 
 use anyhow::bail;
 
@@ -44,7 +44,6 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
     };
     let result = match step.kind {
         StepKind::RecordRuns => run_record_runs(common),
-        StepKind::FillTranscripts => run_fill_transcripts(common),
         StepKind::DetectStrayWrites => run_detect_stray_writes(common),
         StepKind::Grade { finalize } => run_grade(GradeArgs { common, finalize }),
         StepKind::Aggregate => run_aggregate(common),
@@ -55,21 +54,11 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
     result
 }
 
-/// Run the post-dispatch chain (record-runs → fill-transcripts →
-/// detect-stray-writes → grade) and stop at the judge hand-off.
+/// Run the post-dispatch chain (record-runs → detect-stray-writes → grade) and
+/// stop at the judge hand-off.
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
-
-    let adapter = crate::adapters::adapter_for(ctx.harness);
-    if adapter.cli_events_filename().is_none() {
-        eprintln!(
-            "ℹ --harness {}: no transcript parser — records come from outputs/final-message.md \
-             only; steps/tokens/duration go unrecorded and transcript_check assertions grade \
-             as unverifiable (llm_judge carries the grading).",
-            adapter.label()
-        );
-    }
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
         skill_dir: args.skill_dir.as_deref(),
@@ -154,10 +143,10 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let result = pipeline::record_runs(&dir, iteration, ctx.harness, args.overwrite)?;
 
     println!(
-        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, skipped (incomplete conversation): {}, missing transcript: {}",
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final response): {}, skipped (prompt unread): {}, skipped (missing completion artifact): {}, missing transcript: {}",
         result.recorded,
         result.skipped_existing,
-        result.skipped_no_final_message,
+        result.skipped_no_final_response,
         result.skipped_prompt_unread,
         result.skipped_incomplete_conversation,
         result.missing_transcript
@@ -174,20 +163,6 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     if let Some(warning) = result.permission_denial_warning() {
         eprintln!("{warning}");
     }
-    Ok(())
-}
-
-/// Populate `tool_invocations` from persisted transcripts for every `run.json` in
-/// the iteration.
-pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
-    let ctx = run_context_from(&args)?;
-    let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::fill_transcripts(&dir, ctx.harness, args.overwrite)?;
-
-    println!(
-        "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
-        result.filled, result.skipped, result.missing
-    );
     Ok(())
 }
 

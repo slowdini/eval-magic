@@ -72,7 +72,6 @@ armed_message = '''
 preflight = "claude-plugins"
 
 [dispatch]
-capture_prefix = "claude"
 next_steps_template = '''
 
 Next: eval-magic dispatch{target_args} --iteration {iteration} --harness claude-code

@@ -92,7 +92,7 @@
     },
     "codebase": {
       "$ref": "#/definitions/codebase",
-      "description": "The codebase this run's environment was built from. Absent for a fixture-only run."
+      "description": "The codebase this run's environment was built from. Absent only in historical records that predate codebase provenance."
     },
     "skill_source": {
       "$ref": "#/definitions/skillSource",

@@ -21,14 +21,14 @@ eval-magic run --harness cool-custom-harness
 `harness init` writes two files:
 
 - `.eval-magic/harnesses/cool-custom-harness.toml` is a commented descriptor with only `label`
-  enabled.
+  enabled, ready for you to declare its runner contract.
 - `.eval-magic/harnesses/cool-custom-harness-notes.md` records the source and harness version for
   every value you enable.
 
-The label-only descriptor is usable. It falls back to `--no-stage`, inlines each `SKILL.md`, uses
-`llm_judge` and runner-owned assertions for grading, and audits writes after dispatch. Read the
-warnings from `run`; each warning names the lower-fidelity fallback carrying an undeclared
-capability.
+The label-only scaffold is not runner-ready until it declares `[dispatch]`, `[transcript]`, and
+`[tools]`. Once those are valid, optional omissions have narrower fallbacks: no `skills_dir` forces
+`--no-stage` and inlines each `SKILL.md`, while no built-in guard leaves the post-dispatch
+`detect-stray-writes` audit as the filesystem safety net. `run` names those tradeoffs.
 
 For a descriptor that should not live in the project, pass it directly:
 
@@ -50,15 +50,30 @@ label = "cool-custom-harness"
 exec_template = '''
 cool-cli run --cd <eval-root>{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly." \
-  > <outputs_dir>/final-message.md'''
+  > <outputs_dir>/cool-events.jsonl'''
+
+[tools]
+write = ["file_change"]
+patch = []
+shell = ["command_execution"]
+read = ["file_read"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+surfaces_skill_invocation = false
+
+[transcript.extract.final_text]
+where = { type = "agent_message" }
+field = "text"
 ```
 
-The command has two requirements:
+The runner-ready descriptor has two requirements:
 
 1. Run the agent from the supplied `<eval-root>`. Each condition and repetition owns a private task
    repository there.
-2. Recover the final reply at `<outputs_dir>/final-message.md`. Redirect stdout or copy the native
-   output there when the CLI cannot write the file itself.
+2. Capture the native event stream at `<outputs_dir>/<transcript.events_filename>` and declare a
+   transcript reader that normalizes a non-empty final response. Use `[transcript.extract]` for a
+   flat JSONL stream or a named parser for a supported non-flat shape.
 
 Prove both requirements before a real eval:
 
@@ -67,9 +82,9 @@ eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml --probe
 ```
 
 The probe renders the real command, asks for confirmation, invokes the harness CLI in a temporary
-directory, and checks that the final-message file is nonempty. It can spend tokens and use network
-services. Static lint runs first, and non-interactive use defaults to no; `--yes` explicitly accepts
-the dispatch and `--probe-timeout SECONDS` bounds it.
+directory, parses the configured event capture, and checks that the normalized final response is
+nonempty. It can spend tokens and use network services. Static lint runs first, and non-interactive
+use defaults to no; `--yes` explicitly accepts the dispatch and `--probe-timeout SECONDS` bounds it.
 
 ## Use the generated field reference
 

@@ -29,13 +29,13 @@ alias.
 - `--sandbox workspace-write` bounds writes to the env.
 - `--json` streams events to stdout — captured as `outputs/codex-events.jsonl`; stderr goes to
   `codex-stderr.log` so progress/status text (e.g. stdin notices) stays out of the JSONL.
-- `--output-last-message <outputs_dir>/final-message.md` writes the final-message file the
-  pipeline reads.
+- `--json` is the sole completion source; the configured transcript reader extracts the final
+  agent message from the captured events.
 - `</dev/null` matters when dispatching in parallel from a pipe (e.g. `xargs -P`): without it,
   Codex treats piped stdin as additional prompt context.
 - Scripted follow-ups run from `<eval-root>` through `codex exec resume <SESSION_ID> <PROMPT>`;
-  `thread.started.thread_id` supplies the id and each round keeps `--json` plus its own
-  `--output-last-message` capture. Verified against `codex exec resume --help` on 2026-07-24.
+  `thread.started.thread_id` supplies the id and each round keeps `--json` with its own event
+  capture. Verified against `codex exec resume --help` on 2026-07-24.
 
 ## Model flag
 

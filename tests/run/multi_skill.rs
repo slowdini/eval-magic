@@ -112,9 +112,7 @@ fn conditions_and_dispatch_record_the_ordered_treatment_roster() {
     );
 
     for task in dispatch["tasks"].as_array().unwrap() {
-        let outputs = Path::new(task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "done\n").unwrap();
+        write_default_task_result(&cwd, task, "done");
     }
     skill_eval()
         .current_dir(&cwd)
@@ -174,7 +172,7 @@ fn a_one_member_list_still_uses_list_artifacts_and_indexed_meta_files() {
                 "skill_path": task["skill_path"],
                 "skills": task["skills"],
                 "prompt": task["user_prompt"],
-                "files": task["fixtures"],
+                "files": task["files"],
                 "final_message": "done",
                 "tool_invocations": [],
                 "total_tokens": null,
@@ -388,7 +386,7 @@ fn deterministic_grading_reports_each_skill_and_suite_invocation_is_any_member()
                 "skill_path": task["skill_path"],
                 "skills": task["skills"],
                 "prompt": task["user_prompt"],
-                "files": task["fixtures"],
+                "files": task["files"],
                 "final_message": "done",
                 "tool_invocations": invocations,
                 "total_tokens": null,
@@ -479,7 +477,7 @@ fn provenance_names_the_source_and_revision_of_every_treatment_member() {
                 "--quiet",
                 "--no-gpg-sign",
                 "-m",
-                "fixture",
+                "test setup",
             ])
             .current_dir(&skill_dir)
             .status()
@@ -573,7 +571,7 @@ fn codex_fallback_emits_one_named_llm_meta_task_per_treatment_member() {
                 "skill_path": task["skill_path"],
                 "skills": task["skills"],
                 "prompt": task["user_prompt"],
-                "files": task["fixtures"],
+                "files": task["files"],
                 "final_message": "done",
                 "tool_invocations": [],
                 "total_tokens": null,
@@ -626,7 +624,7 @@ fn live_source_detection_checks_every_treatment_member() {
             "skill_path": task["skill_path"],
             "skills": task["skills"],
             "prompt": task["user_prompt"],
-            "files": task["fixtures"],
+            "files": task["files"],
             "final_message": "done",
             "tool_invocations": [{
                 "name": "Read",

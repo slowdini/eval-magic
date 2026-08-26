@@ -13,11 +13,11 @@
 pub mod conversation;
 pub mod dispatch;
 pub mod drive;
-pub mod fixtures;
 #[cfg(test)]
 mod golden_tests;
 pub mod grouping;
 pub mod orchestrate;
+pub mod overlays;
 pub mod runbook;
 mod scratch;
 pub mod staging;

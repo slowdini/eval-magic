@@ -35,10 +35,8 @@ Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest read
 
 After all dispatches:
 
-1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/turn-<n>/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ "total_tokens": <n>, "duration_ms": <n>, "source": "completion-event" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.
+1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json`, `conversation.json`, and the harness events under `outputs/turn-<n>/`, and backfills `timing.json`; never clobbers an existing record), detect-stray-writes, and grade.
 2. Run `eval-magic dispatch --judges --harness <harness>` to grade the judge tasks ingest listed, then `eval-magic finalize` for the benchmark.
-
-On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.
 
 ## Dispatches
 ### demo-eval / with_skill
@@ -75,17 +73,14 @@ Treat this as a real user request — do NOT optimize behavior for the eval.
 The `widget-skill` skill is registered under the identifier `slow-powers-eval-2-with-skill-widget-skill` and is discoverable as an OpenCode skill. If you invoke it, use that identifier.
 If it does not load as an OpenCode skill, read the skill from `/work/staged/widget-skill/SKILL.md` instead.
 
-Available fixture files:
-  - /work/fixtures/input.txt
+Codebase overlay files:
+  - /work/overlays/input.txt
 Task environment: /work/task
 Task-local scratch directory: /work/task/tmp
-Framework output directory: /work/outputs
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
 - Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
-- Use the framework output directory only for framework artifacts.
-- After completing the task, write your final user-facing response to /work/outputs/final-message.md.
 - Do not write outside the task environment.
 
 User request:
@@ -104,17 +99,14 @@ Treat this as a real user request — do NOT optimize behavior for the eval.
 
 No skill is loaded. Respond as you naturally would.
 
-Available fixture files:
-  - /work/fixtures/input.txt
+Codebase overlay files:
+  - /work/overlays/input.txt
 Task environment: /work/task-b
 Task-local scratch directory: /work/task-b/tmp
-Framework output directory: /work/outputs-b
 
 Instructions:
 - Work normally on the task: you may edit existing files and create new files inside the task environment.
 - Keep temporary and scratch files in the task-local scratch directory, not in a host temp directory.
-- Use the framework output directory only for framework artifacts.
-- After completing the task, write your final user-facing response to /work/outputs-b/final-message.md.
 - Do not write outside the task environment.
 
 User request:

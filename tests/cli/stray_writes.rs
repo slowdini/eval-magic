@@ -140,8 +140,8 @@ fn detect_stray_writes_flags_unverifiable_when_nothing_was_inspected() {
     )
     .unwrap();
 
-    // A recorded run whose transcript never linked: final message present,
-    // tool_invocations empty.
+    // A historical recorded run whose transcript never linked: normalized final
+    // response present, tool_invocations empty.
     fs::write(
         cond_dir.join("run.json"),
         serde_json::to_string(&json!({

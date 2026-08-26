@@ -355,11 +355,6 @@
           },
           "additionalProperties": { "type": "string" }
         },
-        "capture_prefix": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Prefix naming the judge recipe's per-task capture files ($response_base.<prefix>-events.jsonl)."
-        },
         "guard_args": {
           "type": "string",
           "description": "Extra args spliced into command templates at {guard_args} when the run is guarded (leading space included)."

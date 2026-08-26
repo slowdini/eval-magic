@@ -18,7 +18,7 @@ use crate::adapters::cli_command::shell_quote_arg;
 use crate::adapters::descriptor::subst;
 use crate::adapters::descriptor_adapter::DescriptorAdapter;
 use crate::adapters::harness::HarnessAdapter;
-use crate::adapters::transcript::{TranscriptEvent, TranscriptSummary};
+use crate::adapters::transcript::TranscriptSummary;
 use crate::core::{
     ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason,
     ResponderOutcome, ResponderStopCause, ShellOutcome, run_in_posix_shell,
@@ -219,8 +219,6 @@ pub fn run_task(
         text: task.user_prompt.clone(),
         origin: None,
     }];
-    let mut next_ordinal = 1_u32;
-
     let first_outputs = base_outputs.join("turn-1");
     let initial_command = render_command(
         &initial_template,
@@ -244,7 +242,6 @@ pub fn run_task(
         // session to resume. The seeded user message is the whole record.
         return write_conversation(
             &conversation_path,
-            base_outputs,
             ConversationRecord {
                 status: ConversationStatus::TimedOut,
                 delivered_followups: 0,
@@ -254,22 +251,23 @@ pub fn run_task(
                 events,
                 responder_outcome: None,
             },
-            None,
             plan.source(),
         );
     }
     let first_summary = parse_round(adapter, &first_outputs, &events_filename, 1)?;
-    let session_id = first_summary
-        .session_id
-        .clone()
-        .filter(|id| !id.trim().is_empty())
-        .ok_or_else(|| anyhow!("turn 1 transcript did not expose a native session id"))?;
-    let mut preceding_assistant =
-        append_summary_events(&mut events, &mut next_ordinal, 1, &first_summary)?;
-    let mut final_message = first_summary
-        .final_text
-        .clone()
-        .expect("append_summary_events requires final_text");
+    let session_id = if plan.delivers_followups() {
+        Some(
+            first_summary
+                .session_id
+                .clone()
+                .filter(|id| !id.trim().is_empty())
+                .ok_or_else(|| anyhow!("turn 1 transcript did not expose a native session id"))?,
+        )
+    } else {
+        None
+    };
+    let mut preceding_assistant = final_text_for_round(1, &first_summary)?;
+    let mut final_message = preceding_assistant.clone();
 
     let mut delivered_followups = 0_u32;
     let mut stop_reason = None;
@@ -313,12 +311,11 @@ pub fn run_task(
 
         let round = followup.saturating_add(1);
         events.push(ConversationEvent::UserMessage {
-            ordinal: next_ordinal,
+            ordinal: events.len() as u32,
             round,
             text: prompt.clone(),
             origin,
         });
-        next_ordinal = next_ordinal.saturating_add(1);
         delivered_followups = delivered_followups.saturating_add(1);
 
         let round_outputs = base_outputs.join(format!("turn-{round}"));
@@ -330,7 +327,11 @@ pub fn run_task(
             eval_root,
             &task.dispatch_prompt_path,
             &round_outputs,
-            Some(&session_id),
+            Some(
+                session_id
+                    .as_deref()
+                    .expect("a follow-up task resolved a session id above"),
+            ),
             Some(&prompt),
             round,
         );
@@ -348,16 +349,15 @@ pub fn run_task(
         }
         let summary = parse_round(adapter, &round_outputs, &events_filename, round)?;
         if let Some(observed) = summary.session_id.as_deref()
-            && observed != session_id
+            && Some(observed) != session_id.as_deref()
         {
-            bail!("turn {round} resumed session {observed:?}, expected {session_id:?}");
+            bail!(
+                "turn {round} resumed session {observed:?}, expected {:?}",
+                session_id.as_deref().unwrap_or_default()
+            );
         }
-        preceding_assistant =
-            append_summary_events(&mut events, &mut next_ordinal, round, &summary)?;
-        final_message = summary
-            .final_text
-            .clone()
-            .expect("append_summary_events requires final_text");
+        preceding_assistant = final_text_for_round(round, &summary)?;
+        final_message = preceding_assistant.clone();
     }
 
     // A timeout outranks a gate stop: the conversation was cut short, so what
@@ -369,7 +369,6 @@ pub fn run_task(
     };
     write_conversation(
         &conversation_path,
-        base_outputs,
         ConversationRecord {
             status,
             delivered_followups,
@@ -381,19 +380,14 @@ pub fn run_task(
             // outranks a gate stop: the round it judged never finished.
             responder_outcome: timed_out_in_round.map_or(responder_outcome, |_| None),
         },
-        Some(final_message),
         plan.source(),
     )
 }
 
-/// Validate, commit, and report one task's completion artifact. `final_message`
-/// is absent when no round produced one, which is only possible for a task that
-/// timed out before its first answer.
+/// Validate, commit, and report one task's completion artifact.
 fn write_conversation(
     conversation_path: &Path,
-    base_outputs: &Path,
     conversation: ConversationRecord,
-    final_message: Option<String>,
     source: TurnSource,
 ) -> anyhow::Result<TaskOutcome> {
     let _: ConversationRecord = validate_against_schema(
@@ -402,13 +396,6 @@ fn write_conversation(
         &conversation_path.to_string_lossy(),
     )?;
     write_json_atomic(conversation_path, &conversation)?;
-    fs::create_dir_all(base_outputs)?;
-    if let Some(final_message) = final_message {
-        fs::write(
-            base_outputs.join("final-message.md"),
-            format!("{}\n", final_message.trim_end()),
-        )?;
-    }
 
     Ok(match conversation.status {
         ConversationStatus::Completed => TaskOutcome::Completed {
@@ -441,56 +428,13 @@ fn parse_round(
         .with_context(|| format!("failed to parse turn {round} transcript {}", path.display()))
 }
 
-fn append_summary_events(
-    out: &mut Vec<ConversationEvent>,
-    next_ordinal: &mut u32,
-    round: u32,
-    summary: &TranscriptSummary,
-) -> anyhow::Result<String> {
-    let final_text = summary
+fn final_text_for_round(round: u32, summary: &TranscriptSummary) -> anyhow::Result<String> {
+    summary
         .final_text
         .as_deref()
         .filter(|text| !text.trim().is_empty())
-        .ok_or_else(|| {
-            anyhow!("turn {round} transcript did not contain a final assistant message")
-        })?;
-    let mut assistant_messages = Vec::new();
-    for event in &summary.events {
-        match event {
-            TranscriptEvent::AssistantMessage { text, .. } => {
-                assistant_messages.push(text.clone());
-                out.push(ConversationEvent::AssistantMessage {
-                    ordinal: *next_ordinal,
-                    round,
-                    text: text.clone(),
-                });
-            }
-            TranscriptEvent::ToolInvocation {
-                name, args, result, ..
-            } => out.push(ConversationEvent::ToolInvocation {
-                ordinal: *next_ordinal,
-                round,
-                name: name.clone(),
-                args: args.clone(),
-                result: result.clone(),
-            }),
-        }
-        *next_ordinal = next_ordinal.saturating_add(1);
-    }
-    let final_already_present = assistant_messages
-        .iter()
-        .enumerate()
-        .any(|(start, _)| assistant_messages[start..].join("\n") == final_text);
-    if !final_already_present {
-        assistant_messages.push(final_text.to_string());
-        out.push(ConversationEvent::AssistantMessage {
-            ordinal: *next_ordinal,
-            round,
-            text: final_text.to_string(),
-        });
-        *next_ordinal = next_ordinal.saturating_add(1);
-    }
-    Ok(assistant_messages.join("\n"))
+        .map(str::to_string)
+        .ok_or_else(|| anyhow!("turn {round} transcript did not contain a final assistant message"))
 }
 
 /// Render a one-shot dispatch command: the exec template with its task
@@ -598,10 +542,9 @@ fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> anyhow::Resu
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{append_summary_events, execute_round};
+    use super::{execute_round, final_text_for_round};
     use crate::adapters::TranscriptSummary;
     use crate::adapters::cli_command::shell_quote_arg;
-    use crate::adapters::transcript::TranscriptEvent;
 
     #[test]
     fn execute_round_creates_the_round_output_directory_before_shell_redirection() {
@@ -622,34 +565,17 @@ mod tests {
     }
 
     #[test]
-    fn joined_final_text_does_not_duplicate_assistant_text_blocks() {
+    fn final_text_for_round_returns_the_parser_result() {
         let summary = TranscriptSummary {
             tool_invocations: Vec::new(),
-            events: vec![
-                TranscriptEvent::AssistantMessage {
-                    ordinal: 0,
-                    text: "Which timezone?".into(),
-                },
-                TranscriptEvent::AssistantMessage {
-                    ordinal: 1,
-                    text: "Please include the locale.".into(),
-                },
-            ],
+            events: Vec::new(),
             session_id: Some("session-1".into()),
             total_tokens: None,
             duration_ms: None,
             final_text: Some("Which timezone?\nPlease include the locale.".into()),
         };
-        let mut events = Vec::new();
-        let mut next_ordinal = 0;
-
-        let assistant = append_summary_events(&mut events, &mut next_ordinal, 1, &summary).unwrap();
+        let assistant = final_text_for_round(1, &summary).unwrap();
 
         assert_eq!(assistant, "Which timezone?\nPlease include the locale.");
-        assert_eq!(
-            events.len(),
-            2,
-            "joined final text must not be appended again"
-        );
     }
 }

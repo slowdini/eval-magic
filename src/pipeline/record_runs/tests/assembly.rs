@@ -1,6 +1,6 @@
 //! Assembling `run.json` and `timing.json` from what each harness left on disk,
-//! including the per-harness final-message fallbacks and the `dispatch.json`
-//! input contract.
+//! including transcript-owned final responses and the `dispatch.json` input
+//! contract.
 
 use super::*;
 
@@ -14,17 +14,15 @@ fn assembles_run_and_timing_for_every_task_from_disk() {
             FixtureTask {
                 eval_id: "crash",
                 condition: "with_skill",
-                final_message: Some("Fixed it."),
             },
             FixtureTask {
                 eval_id: "crash",
                 condition: "without_skill",
-                final_message: Some("Done, I think."),
             },
         ],
     );
-    write_claude_events(&paths[0].outputs_dir, "unused");
-    write_claude_events(&paths[1].outputs_dir, "unused");
+    write_claude_events(&paths[0].outputs_dir, "Fixed it.");
+    write_claude_events(&paths[1].outputs_dir, "Done, I think.");
 
     let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
     assert_eq!(result.recorded, 2);
@@ -39,7 +37,7 @@ fn assembles_run_and_timing_for_every_task_from_disk() {
     assert_eq!(run.final_message, "Fixed it.");
     assert_eq!(run.tool_invocations.len(), 1);
     assert_eq!(run.tool_invocations[0].name, "Bash");
-    assert_eq!(run.tool_invocations[0].ordinal, 0);
+    assert_eq!(run.tool_invocations[0].ordinal, 1);
 
     assert!(
         read_run(&iter, "crash", "without_skill")
@@ -63,8 +61,9 @@ fn carries_the_codebase_from_dispatch_task_into_each_run_record() {
     let cond_dir = iter.join("eval-crash").join("with_skill");
     let outputs_dir = cond_dir.join("outputs");
     fs::create_dir_all(&outputs_dir).unwrap();
-    fs::write(outputs_dir.join("final-message.md"), "Fixed it.").unwrap();
-    write_codex_events(&outputs_dir, "unused");
+    let conversation_path = outputs_dir.join("conversation.json");
+    write_one_shot_completion(&conversation_path, "Do the crash task");
+    write_codex_events(&outputs_dir, "Fixed it.");
     let codebase = json!({
         "kind": "git",
         "source": "https://example.com/project.git",
@@ -82,8 +81,9 @@ fn carries_the_codebase_from_dispatch_task_into_each_run_record() {
                 "condition": "with_skill",
                 "skill_path": "/staged/skill/SKILL.md",
                 "user_prompt": "Do the crash task",
-                "fixtures": [],
+                "files": [],
                 "outputs_dir": outputs_dir.to_string_lossy(),
+                "conversation_path": conversation_path.to_string_lossy(),
                 "run_record_path": cond_dir.join("run.json").to_string_lossy(),
                 "timing_path": cond_dir.join("timing.json").to_string_lossy(),
                 "agent_description": "crash:with_skill:i1-nonce1",
@@ -110,8 +110,9 @@ fn carries_the_skill_source_from_dispatch_task_into_each_run_record() {
     let cond_dir = iter.join("eval-crash").join("with_skill");
     let outputs_dir = cond_dir.join("outputs");
     fs::create_dir_all(&outputs_dir).unwrap();
-    fs::write(outputs_dir.join("final-message.md"), "Fixed it.").unwrap();
-    write_codex_events(&outputs_dir, "unused");
+    let conversation_path = outputs_dir.join("conversation.json");
+    write_one_shot_completion(&conversation_path, "Do the crash task");
+    write_codex_events(&outputs_dir, "Fixed it.");
     let skill_source = json!({
         "kind": "path",
         "source": "/work/skills/mr-review",
@@ -131,8 +132,9 @@ fn carries_the_skill_source_from_dispatch_task_into_each_run_record() {
                 "condition": "with_skill",
                 "skill_path": "/staged/skill/SKILL.md",
                 "user_prompt": "Do the crash task",
-                "fixtures": [],
+                "files": [],
                 "outputs_dir": outputs_dir.to_string_lossy(),
+                "conversation_path": conversation_path.to_string_lossy(),
                 "run_record_path": cond_dir.join("run.json").to_string_lossy(),
                 "timing_path": cond_dir.join("timing.json").to_string_lossy(),
                 "agent_description": "crash:with_skill:i1-nonce1",
@@ -161,7 +163,6 @@ fn omits_the_codebase_key_when_a_task_declares_none() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: Some("Fixed it."),
         }],
     );
     write_claude_events(&paths[0].outputs_dir, "unused");
@@ -185,20 +186,18 @@ fn carries_run_index_from_dispatch_task_into_each_run_record() {
         let run_dir = cond_dir.join(format!("run-{k}"));
         let outputs_dir = run_dir.join("outputs");
         fs::create_dir_all(&outputs_dir).unwrap();
-        fs::write(
-            outputs_dir.join("final-message.md"),
-            format!("Fixed it in run {k}."),
-        )
-        .unwrap();
-        write_codex_events(&outputs_dir, "unused");
+        let conversation_path = outputs_dir.join("conversation.json");
+        write_one_shot_completion(&conversation_path, "Do the crash task");
+        write_codex_events(&outputs_dir, &format!("Fixed it in run {k}."));
         serialized.push(json!({
             "eval_id": "crash",
             "condition": "with_skill",
             "run_index": k,
             "skill_path": "/staged/skill/SKILL.md",
             "user_prompt": "Do the crash task",
-            "fixtures": [],
+            "files": [],
             "outputs_dir": outputs_dir.to_string_lossy(),
+            "conversation_path": conversation_path.to_string_lossy(),
             "run_record_path": run_dir.join("run.json").to_string_lossy(),
             "timing_path": run_dir.join("timing.json").to_string_lossy(),
             "agent_description": format!("crash:with_skill:r{k}:i1-nonce1"),
@@ -230,7 +229,6 @@ fn assembles_codex_records_from_each_tasks_events() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: Some("Fixed it."),
         }],
     );
     write_codex_events(&paths[0].outputs_dir, "Codex final.");
@@ -240,10 +238,10 @@ fn assembles_codex_records_from_each_tasks_events() {
     assert_eq!(result.missing_transcript, 0);
 
     let run = read_run(&iter, "crash", "with_skill");
-    assert_eq!(run.final_message, "Fixed it.");
+    assert_eq!(run.final_message, "Codex final.");
     assert_eq!(
         serde_json::to_value(&run.tool_invocations).unwrap(),
-        json!([{"name": "command_execution", "ordinal": 0, "args": {"command": "bun test"}, "result": "ok"}])
+        json!([{"name": "command_execution", "ordinal": 1, "args": {"command": "bun test"}, "result": "ok"}])
     );
 
     let timing = read_timing_value(&iter, "crash", "with_skill");
@@ -254,7 +252,7 @@ fn assembles_codex_records_from_each_tasks_events() {
 }
 
 #[test]
-fn falls_back_to_codex_final_agent_message_when_final_message_md_missing() {
+fn records_codex_final_agent_message_from_the_transcript() {
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     let paths = write_iteration(
@@ -262,7 +260,6 @@ fn falls_back_to_codex_final_agent_message_when_final_message_md_missing() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     write_codex_events(&paths[0].outputs_dir, "Closing summary from Codex.");
@@ -284,7 +281,6 @@ fn assembles_claude_records_from_each_tasks_events() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: Some("Fixed it."),
         }],
     );
     write_claude_events(&paths[0].outputs_dir, "Closing summary.");
@@ -294,11 +290,10 @@ fn assembles_claude_records_from_each_tasks_events() {
     assert_eq!(result.missing_transcript, 0);
 
     let run = read_run(&iter, "crash", "with_skill");
-    // final-message.md wins when present.
-    assert_eq!(run.final_message, "Fixed it.");
+    assert_eq!(run.final_message, "Closing summary.");
     assert_eq!(
         serde_json::to_value(&run.tool_invocations).unwrap(),
-        json!([{"name": "Bash", "ordinal": 0, "args": {"command": "bun test"}, "result": "ok"}])
+        json!([{"name": "Bash", "ordinal": 1, "args": {"command": "bun test"}, "result": "ok"}])
     );
     let timing = read_timing_value(&iter, "crash", "with_skill");
     assert_eq!(
@@ -308,9 +303,7 @@ fn assembles_claude_records_from_each_tasks_events() {
 }
 
 #[test]
-fn falls_back_to_claude_result_final_text_when_final_message_md_missing() {
-    // Claude `-p` has no --output-last-message, so the result event's text is
-    // the primary final-message source.
+fn records_claude_result_final_text_from_the_transcript() {
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     let paths = write_iteration(
@@ -318,7 +311,6 @@ fn falls_back_to_claude_result_final_text_when_final_message_md_missing() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     write_claude_events(&paths[0].outputs_dir, "Closing summary from claude -p.");

@@ -7,11 +7,11 @@
 > at a harness it doesn't know — user-supplied descriptor files, layering, `harness
 > list`/`show`/`lint` — is the user-facing [BYOH guide](guides/byoh.md).
 
-Harness compatibility is not a parity checklist to audit — it is **a minimal baseline every harness
-satisfies, plus optional enhancements** a harness's adapter opts into. Most missing enhancements
-have a documented lower-fidelity fallback. Native conversation resume is the deliberate exception:
-an eval that declares scripted `turns` or a `responder` is rejected when the harness cannot preserve
-one session.
+Harness compatibility is not a parity checklist to audit — it is **a runner-ready baseline every
+harness satisfies, plus optional enhancements** a harness's adapter opts into. Dispatch and
+transcript recovery are mandatory because the runner owns execution and run-record assembly.
+Native conversation resume remains optional; an eval that declares scripted `turns` or a
+`responder` is rejected when the harness cannot preserve one session.
 
 ## One dispatch mechanism
 
@@ -27,12 +27,12 @@ runner-owned `command_check` subprocesses remain separate.
 
 ## The baseline contract
 
-A harness qualifies at baseline with no harness-specific code beyond naming itself:
+A harness qualifies at baseline when its descriptor provides:
 
 1. **A headless exec command** — some way to invoke the harness with a prompt from a chosen cwd and
    let it run to completion.
-2. **A recoverable final message** — the agent writes `outputs/final-message.md` (the dispatch
-   prompt asks for this), or transcript ingest recovers it where it is wired.
+2. **A parseable transcript** — the command captures the harness's event stream under the task's
+   round output directory, and a named or declarative reader normalizes a non-empty final response.
 3. **`--no-stage` when native staging isn't wired** — each `SKILL.md` is inlined into its dispatch
    prompt instead of staged for native discovery.
 
@@ -41,18 +41,17 @@ runner-owned `command_check` assertions can inject held-out files and execute de
 runner-owned final-environment metrics land in `diff-scope.json` with the diff itself in
 `diff.patch`, `diff_scope` assertions gate files/lines deterministically, and the
 `detect-stray-writes` post-pass (folded into `ingest`) audits
-writes that leave the private task environment. Run records without transcript ingest are assembled
-from `outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
+writes that leave the private task environment. `record-runs` assembles every `run.json` from the
+runner-owned dispatch metadata, completion artifact, and per-round transcripts.
 
-In descriptor terms the baseline is one required field: `label`. Everything else in a harness
-descriptor is optional for one-shot evals — an absent field or table gets a working generic fallback, and the `run`
-preflight *warns* naming that fallback rather than rejecting (a harness without `skills_dir`
-forces `--no-stage`; without a declared guard the run continues unguarded behind the
-`detect-stray-writes` audit; requested models without a model flag are recorded as provenance
-only). Supported enhancements are provided automatically — the write guard auto-arms wherever a
-harness declares one and staging is active (`--no-guard` opts out). Only genuinely contradictory
-flag combinations stay errors. A selected eval with `turns` or a `responder` also requires
-`[conversation]`; no generic fresh-session fallback can preserve the meaning of a follow-up reply.
+In descriptor terms the baseline is `label`, `[dispatch].exec_template`, `[transcript]` with one
+primary reader, and `[tools]` beside that reader. `run` rejects a harness that cannot dispatch or
+recover transcripts. A harness without `skills_dir` forces `--no-stage`; without a declared guard
+the run continues unguarded behind the `detect-stray-writes` audit; requested models without a
+model flag are recorded as provenance only. Supported enhancements are provided automatically —
+the write guard auto-arms wherever a harness declares one and staging is active (`--no-guard` opts
+out). A selected eval with `turns` or a `responder` also requires `[conversation]`; no generic
+fresh-session fallback can preserve the meaning of a follow-up reply.
 
 ## Where this lives in code
 
@@ -83,21 +82,19 @@ flag combinations stay errors. A selected eval with `turns` or a `responder` als
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
   (`src/cli/run/util.rs`) — the `run` preflight: it resolves the guard tri-state (auto-arm when
   the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
-  and undeclared enhancements warn naming their fallback and adjust the options (guard forced
-  off, missing `skills_dir` forces `--no-stage`, the no-transcript-parser warning scoped to eval
-  configs that actually use `transcript_check`, missing dispatch commands noted); only
+  rejects descriptors without a dispatch command or transcript reader, and adjusts optional
+  capabilities (guard forced off, missing `skills_dir` forces `--no-stage`); only
   contradictory flag combinations (`--bootstrap`/`--stage-name` where the descriptor declares
   them incompatible with `--no-stage`) and an explicit `--guard` on a user-descriptor-only
   harness reject.
 
 ## Runner-owned environment checks are baseline
 
-Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging, and
-guard installation, `run` establishes a runner-owned Git repository at that root, commits the task
-state, marks it with `refs/eval-magic/baseline`, and runs shadow preflight at the resulting
-repository boundary. Git is therefore a runtime prerequisite; each task starts clean and has no
-remotes. Nothing writes into an environment after the ref is written, so it names exactly what the
-agent started from.
+Every canonical `(eval, condition, run)` gets a distinct `eval_root` provisioned from its effective
+codebase. After overlays, staging, and guard installation, `run` commits the task state, marks it
+with `refs/eval-magic/baseline`, and runs shadow preflight at the resulting repository boundary.
+Git is therefore a runtime prerequisite; each task starts clean and has no remotes. Nothing writes
+into an environment after the ref is written, so it names exactly what the agent started from.
 
 During `ingest`, before any held-out setup is injected, Git measures the final environment against
 that ref. The runner seeds a scratch index from the baseline, brings it up to the working tree with
@@ -112,7 +109,7 @@ may gate `max_files_touched`, `max_lines_changed` (added plus removed), or both.
 was built under: the codebase's own `.gitignore` holds, so a run that compiles does not report its
 build output as thousands of touched files, and the `.git/info/exclude` entry keeps framework
 artifacts under `.eval-magic-outputs/` out. Paths the runner force-added despite those rules — the
-harness config directories and the declared fixture overlay — are tracked in the baseline and stay
+harness config directories and the declared file overlay — are tracked in the baseline and stay
 measured. Git indexes no path with a `.git` component, so a nested repository's internals are
 invisible, not just the runner-owned root `.git`. Renames are switched off deliberately: a rename is
 two touched files, one created and one deleted, which is what the metric has always meant. A binary
@@ -126,16 +123,16 @@ that gap — it is what a judge reads to answer whether the work was any good.
 dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
 copies the assertion's held-out `setup_files` from the skill's `evals/` directory into that root and
 executes the trusted command through the platform shell. Root `.git` paths are reserved for both
-visible and held-out fixtures, while nested repositories remain valid. The runner clears inherited
-Git routing variables before optional `env` values override the environment; optional `matrix`
-values execute every Cartesian-product cell and persist per-cell results. The files are never staged
-or mentioned to the agent, and therefore never inflate scope metrics.
+visible overlays and held-out setup files, while nested repositories remain valid. The runner clears
+inherited Git routing variables before optional `env` values override the environment; optional
+`matrix` values execute every Cartesian-product cell and persist per-cell results. The files are
+never staged or mentioned to the agent, and therefore never inflate scope metrics.
 
-This path needs no transcript parser, tool vocabulary, or model flag, so it behaves
-the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed
-agent write guard can remain installed while the runner executes the command. `finalize` converts
-the schema-gated intermediate result into an ordinary grading result, leaving aggregation
-harness-agnostic.
+Beyond the runner-ready dispatch and transcript baseline, this path needs no additional parser
+signals, tool vocabulary, or model flag, so it behaves the same for built-ins and descriptor-only
+harnesses. It also does not use harness tools: an armed agent write guard can remain installed while
+the runner executes the command. `finalize` converts the schema-gated intermediate result into an
+ordinary grading result, leaving aggregation harness-agnostic.
 
 ## The enhancements
 
@@ -182,10 +179,10 @@ write guard denies through the same permission mechanism, so its blocks land in 
 they are attributed by the `eval guard: ` reason prefix and excluded from the warning so one denial
 is not reported twice.
 
-*Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
-`command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
-unrecorded, records are assembled from `outputs/final-message.md` or by hand, and the meta-check
-uses the LLM-judge fallback.
+There is no no-transcript fallback for a runner-ready harness. A descriptor without a primary
+transcript reader is rejected before the workspace is built. A valid reader may still omit optional
+token, duration, denial, or skill-invocation evidence; those individual signals remain unavailable
+or use their documented grading fallback.
 
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
 ingest pipeline never reads a transcript), one primary summary reader, and
@@ -433,12 +430,11 @@ descriptor surface; a harness with a real native plan mode would grow one.
 *What it unlocks:* `eval-magic dispatch` itself. Without an `exec_template` there is nothing for the
 runner to run, and `dispatch` fails for that harness.
 
-*Fallback:* none — this is the one enhancement dispatch cannot work around. The `run` preflight
-warns at prep time when the descriptor declares no `exec_template` (`has_dispatch_recipes()`), so
-the gap surfaces before a workspace is built.
+*Fallback:* none. The `run` preflight rejects a descriptor without `exec_template`, so the gap
+surfaces before a workspace is built.
 
 *Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `next_steps_template`,
-`manifest_template`, `capture_prefix`, `guard_args`, `model_note`. Templates carry
+`manifest_template`, `guard_args`, `model_note`. Templates carry
 `{model_arg}`/`{guard_args}` slots the renderer fills for eval-agent dispatches; a judge dispatch
 reuses `exec_template` with `guard_args` deliberately empty, because judges run from the iteration
 directory outside every guarded task env. `env` contains non-secret eval-agent defaults, applied

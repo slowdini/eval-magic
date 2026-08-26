@@ -48,15 +48,12 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   - Headless permission asks are auto-**rejected** unless `--auto` is passed; explicit `deny`
     rules are still enforced under `--auto`.
   - `--format json` streams raw JSON events (`tool_use` / `text` / `step_finish` / `error`) to
-    stdout; there is no `--output-last-message`, so the final message comes from the `text`
-    events via transcript ingest (the dispatch prompt still asks for `outputs/final-message.md`,
-    which wins when the agent writes it).
+    stdout; the final message comes from the `text` events via transcript ingest.
   - `-m` takes models in `provider/model` format; the value passes through verbatim.
   - Live-verified on v1.18.3 (one `opencode run` per the recipe + `ingest`, #153): the staged
     skill is discovered and invoked under its slug via the `skill` tool, and the events file
-    ingests to a full run record. An operator config with an explicit `edit: deny` rule blocks
-    the `final-message.md` write even under `--auto` (deny rules stay enforced) — record-runs
-    then falls back to the transcript's last `text` part, so the run still records cleanly.
+    ingests to a full run record. An operator config with an explicit `edit: deny` rule remains
+    enforced under `--auto`; transcript-owned completion does not require an agent-authored file.
 - **Shadow preflight:** the `opencode-skills` capability scans every root OpenCode discovers
   skills from and warns at build time when a staged logical skill is also live there — see
   "Isolating from live skills" below.

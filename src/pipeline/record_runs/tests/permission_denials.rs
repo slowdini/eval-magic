@@ -13,19 +13,19 @@ fn write_claude_events_with_denial(outputs_dir: &Path, reason: &str) {
         json!({"type": "result", "subtype": "success", "is_error": false, "result": "Verified by reasoning.", "duration_ms": 30_000, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5},
             "permission_denials": [{"tool_name": "Bash", "tool_use_id": "toolu_1", "tool_input": {"command": "bun run repro.ts"}}]}),
     ];
-    fs::write(outputs_dir.join("claude-events.jsonl"), jsonl(&lines)).unwrap();
+    write_transcript_file(outputs_dir, "claude-events.jsonl", jsonl(&lines));
 }
 
 fn write_codex_stderr_with_denial(outputs_dir: &Path, reason: &str) {
     write_codex_events(outputs_dir, "Verified by reasoning.");
-    fs::write(
-        outputs_dir.join("codex-stderr.log"),
+    write_transcript_file(
+        outputs_dir,
+        "codex-stderr.log",
         format!(
             "2026-07-30T06:09:01Z ERROR codex_core::tools::router: \
              error=Command blocked by PreToolUse hook: {reason}. Command: pwd\n"
         ),
-    )
-    .unwrap();
+    );
 }
 
 /// OpenCode records a refusal as a `tool_use` event whose `state.error` carries
@@ -49,7 +49,7 @@ fn write_opencode_events_with_denial(
             }
         }),
     ];
-    fs::write(outputs_dir.join("opencode-events.jsonl"), jsonl(&lines)).unwrap();
+    write_transcript_file(outputs_dir, "opencode-events.jsonl", jsonl(&lines));
 }
 
 /// The fixed prefix OpenCode's `PermissionDeniedError` emits before its ruleset
@@ -71,7 +71,6 @@ fn collects_codex_permission_denials_from_the_sibling_stderr_capture() {
         &[FixtureTask {
             eval_id: "tz-bug",
             condition: "with_skill",
-            final_message: Some("Verified by reasoning."),
         }],
     );
     write_codex_stderr_with_denial(&paths[0].outputs_dir, "permission-denial probe");
@@ -105,12 +104,10 @@ fn collects_permission_denials_from_each_tasks_transcript() {
             FixtureTask {
                 eval_id: "tz-bug",
                 condition: "with_skill",
-                final_message: Some("Verified by reasoning."),
             },
             FixtureTask {
                 eval_id: "tz-bug",
                 condition: "without_skill",
-                final_message: Some("Fixed it."),
             },
         ],
     );
@@ -152,7 +149,6 @@ fn guard_blocked_calls_are_attributed_and_not_counted_as_harness_refusals() {
         &[FixtureTask {
             eval_id: "tz-bug",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     write_claude_events_with_denial(
@@ -179,7 +175,6 @@ fn codex_guard_blocks_are_attributed_and_not_counted_as_harness_refusals() {
         &[FixtureTask {
             eval_id: "tz-bug",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     write_codex_stderr_with_denial(
@@ -209,7 +204,6 @@ fn opencode_writes_a_zero_denial_report_when_nothing_was_refused() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: Some("Fixed it."),
         }],
     );
     write_opencode_events(&paths[0].outputs_dir, "Fixed it.");
@@ -230,7 +224,6 @@ fn collects_opencode_permission_denials_from_the_event_stream() {
         &[FixtureTask {
             eval_id: "tz-bug",
             condition: "with_skill",
-            final_message: Some("Verified by reasoning."),
         }],
     );
     write_opencode_events_with_denial(
@@ -273,7 +266,6 @@ fn opencode_guard_blocks_are_attributed_and_not_counted_as_harness_refusals() {
         &[FixtureTask {
             eval_id: "tz-bug",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     write_opencode_events_with_denial(
@@ -309,7 +301,6 @@ fn permission_denials_survive_a_dispatch_skipped_as_prompt_unread() {
         &[FixtureTask {
             eval_id: "e1",
             condition: "with_skill",
-            final_message: Some("I could not read the prompt file."),
         }],
     );
     let prompt_path = iter
@@ -327,11 +318,7 @@ fn permission_denials_survive_a_dispatch_skipped_as_prompt_unread() {
         json!({"type": "result", "subtype": "success", "is_error": false, "result": "I could not read the prompt file.", "duration_ms": 10,
             "permission_denials": [{"tool_name": "Read", "tool_use_id": "toolu_1", "tool_input": {"file_path": prompt_path.to_string_lossy()}}]}),
     ];
-    fs::write(
-        paths[0].outputs_dir.join("claude-events.jsonl"),
-        jsonl(&lines),
-    )
-    .unwrap();
+    write_transcript_file(&paths[0].outputs_dir, "claude-events.jsonl", jsonl(&lines));
 
     let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
     assert_eq!(result.skipped_prompt_unread, 1);
@@ -364,7 +351,6 @@ fn permission_denials_accumulate_across_every_scripted_round() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter
@@ -421,7 +407,6 @@ fn codex_permission_denials_accumulate_across_every_scripted_round() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter
@@ -480,7 +465,6 @@ fn opencode_permission_denials_accumulate_across_every_scripted_round() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter

@@ -281,7 +281,6 @@ fn every_guide_reference_in_shipped_help_resolves() {
         "ingest --help",
         "finalize --help",
         "record-runs --help",
-        "fill-transcripts --help",
         "detect-stray-writes --help",
         "grade --help",
         "aggregate --help",

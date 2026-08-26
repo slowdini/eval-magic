@@ -5,6 +5,7 @@ use super::evals::validate_evals_config;
 fn base() -> Value {
     json!({
         "skill_name": "demo",
+        "codebase": { "path": "." },
         "evals": [{
             "id": "e1",
             "prompt": "do the thing",

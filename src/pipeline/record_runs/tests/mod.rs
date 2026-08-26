@@ -23,6 +23,42 @@ fn jsonl(lines: &[Value]) -> String {
     format!("{body}\n")
 }
 
+fn transcript_dir(outputs_dir: &Path) -> PathBuf {
+    let is_round_dir = outputs_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with("turn-"));
+    let dir = if is_round_dir {
+        outputs_dir.to_path_buf()
+    } else {
+        outputs_dir.join("turn-1")
+    };
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write_transcript_file(outputs_dir: &Path, filename: &str, contents: impl AsRef<[u8]>) {
+    fs::write(transcript_dir(outputs_dir).join(filename), contents).unwrap();
+}
+
+fn write_one_shot_completion(path: &Path, prompt: &str) {
+    fs::write(
+        path,
+        serde_json::to_string_pretty(&json!({
+            "status": "completed",
+            "delivered_followups": 0,
+            "events": [{
+                "type": "user_message",
+                "ordinal": 0,
+                "round": 1,
+                "text": prompt
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 fn write_codex_events(outputs_dir: &Path, final_text: &str) {
     let lines = vec![
         json!({"type": "thread.started", "timestamp": "2026-06-04T10:00:00.000Z"}),
@@ -30,7 +66,7 @@ fn write_codex_events(outputs_dir: &Path, final_text: &str) {
         json!({"type": "item.completed", "timestamp": "2026-06-04T10:00:20.000Z", "item": {"id": "item_2", "type": "agent_message", "text": final_text}}),
         json!({"type": "turn.completed", "timestamp": "2026-06-04T10:00:30.000Z", "usage": {"input_tokens": 100, "cached_input_tokens": 80, "output_tokens": 20, "reasoning_output_tokens": 5}}),
     ];
-    fs::write(outputs_dir.join("codex-events.jsonl"), jsonl(&lines)).unwrap();
+    write_transcript_file(outputs_dir, "codex-events.jsonl", jsonl(&lines));
 }
 
 /// A `claude -p --output-format stream-json` events fixture: a `system/init`
@@ -44,7 +80,7 @@ fn write_claude_events(outputs_dir: &Path, final_text: &str) {
         json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "ok"}]}}),
         json!({"type": "result", "subtype": "success", "is_error": false, "result": final_text, "duration_ms": 30_000, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5}}),
     ];
-    fs::write(outputs_dir.join("claude-events.jsonl"), jsonl(&lines)).unwrap();
+    write_transcript_file(outputs_dir, "claude-events.jsonl", jsonl(&lines));
 }
 
 /// An `opencode run --format json` events fixture: a final `text` part and a
@@ -55,7 +91,7 @@ fn write_opencode_events(outputs_dir: &Path, final_text: &str) {
         json!({"type": "text", "timestamp": 1_000, "sessionID": "ses_1", "part": {"id": "p1", "type": "text", "text": final_text}}),
         json!({"type": "step_finish", "timestamp": 2_000, "sessionID": "ses_1", "part": {"id": "p2", "type": "step-finish", "reason": "stop", "tokens": {"input": 1, "output": 1, "reasoning": 0, "cache": {"read": 0, "write": 0}}}}),
     ];
-    fs::write(outputs_dir.join("opencode-events.jsonl"), jsonl(&lines)).unwrap();
+    write_transcript_file(outputs_dir, "opencode-events.jsonl", jsonl(&lines));
 }
 
 /// A `claude -p` events fixture where the agent reads its dispatch prompt:
@@ -74,7 +110,7 @@ fn write_claude_events_prompt_read(
         json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": read_result}]}}),
         json!({"type": "result", "subtype": "success", "is_error": false, "result": final_text, "duration_ms": 30_000, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5}}),
     ];
-    fs::write(outputs_dir.join("claude-events.jsonl"), jsonl(&lines)).unwrap();
+    write_transcript_file(outputs_dir, "claude-events.jsonl", jsonl(&lines));
 }
 
 const PROMPT_SENTINEL: &str =
@@ -83,8 +119,6 @@ const PROMPT_SENTINEL: &str =
 struct FixtureTask {
     eval_id: &'static str,
     condition: &'static str,
-    /// Written to `outputs/final-message.md` when `Some`.
-    final_message: Option<&'static str>,
 }
 
 /// Paths the tests reach into after building the iteration.
@@ -104,9 +138,8 @@ fn write_iteration(iteration_dir: &Path, tasks: &[FixtureTask]) -> Vec<TaskPaths
             .join(t.condition);
         let outputs_dir = cond_dir.join("outputs");
         fs::create_dir_all(&outputs_dir).unwrap();
-        if let Some(msg) = t.final_message {
-            fs::write(outputs_dir.join("final-message.md"), msg).unwrap();
-        }
+        let conversation_path = outputs_dir.join("conversation.json");
+        write_one_shot_completion(&conversation_path, &format!("Do the {} task", t.eval_id));
         let run_record_path = cond_dir.join("run.json");
         let timing_path = cond_dir.join("timing.json");
         let without = t.condition == "without_skill";
@@ -116,8 +149,9 @@ fn write_iteration(iteration_dir: &Path, tasks: &[FixtureTask]) -> Vec<TaskPaths
             "skill_path": if without { Value::Null } else { json!("/staged/skill/SKILL.md") },
             "staged_skill_slug": if without { Value::Null } else { json!("test-slug") },
             "user_prompt": format!("Do the {} task", t.eval_id),
-            "fixtures": [cond_dir.join("inputs").join("fixture.txt").to_string_lossy()],
+            "files": [cond_dir.join("inputs").join("fixture.txt").to_string_lossy()],
             "outputs_dir": outputs_dir.to_string_lossy(),
+            "conversation_path": conversation_path.to_string_lossy(),
             "run_record_path": run_record_path.to_string_lossy(),
             "timing_path": timing_path.to_string_lossy(),
             "agent_description": format!("{}:{}:i1-nonce1", t.eval_id, t.condition),

@@ -66,13 +66,14 @@ fn cline_record_runs_reports_permission_denials_from_the_event_stream() {
     assert_eq!(tasks.len(), 2, "{tasks:?}");
     for task in &tasks {
         let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Reviewed.\n").unwrap();
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
         if task["condition"] == "with_skill" {
-            write_cline_events_with_denial(&outputs);
+            write_cline_events_with_denial(&turn);
         } else {
-            write_cline_events_without_denials(&outputs, "Reviewed.");
+            write_cline_events_without_denials(&turn, "Reviewed.");
         }
+        write_task_completion(&cwd, task);
     }
 
     skill_eval()

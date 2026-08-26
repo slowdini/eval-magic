@@ -4,10 +4,10 @@ use crate::helpers::skill_eval;
 use predicates::str::contains;
 
 /// The parts a config author cannot infer have to survive an edit: init's
-/// source modes and fixture choices, the required git ref, overlay semantics,
+/// source modes and project choices, the required git ref, overlay semantics,
 /// local-path portability, cache provisioning, and the measured baseline.
 #[test]
-fn keeps_declaration_rules_fixture_choices_caveat_and_provisioning_contract() {
+fn keeps_declaration_rules_project_choices_caveat_and_provisioning_contract() {
     skill_eval()
         .args(["docs", "codebase"])
         .assert()
@@ -19,7 +19,7 @@ fn keeps_declaration_rules_fixture_choices_caveat_and_provisioning_contract() {
         .stdout(contains("--codebase-path"))
         .stdout(contains("--codebase-cwd"))
         .stdout(contains("Weeknight"))
-        .stdout(contains("eval-magic as a complex fixture"))
+        .stdout(contains("eval-magic as a complex project"))
         .stdout(contains("\"ref\""))
         .stdout(contains("`ref` is required"))
         .stdout(contains("overlay"))

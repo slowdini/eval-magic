@@ -17,7 +17,7 @@ use super::super::RunError;
 use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, get_skill_description,
 };
-use super::super::fixtures::fixture_pairs;
+use super::super::overlays::overlay_file_pairs;
 use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
@@ -156,16 +156,15 @@ pub(super) fn write_dispatch(
         skills
     };
 
-    // Each eval's env-relative fixture dests (for the task's `fixtures` field and
-    // the prompt's fixtures block). The copies themselves are made per env by
+    // Each eval's task-relative overlay destinations. The copies are made per env by
     // `stage_conditions`; resolution here is read-only (and re-validated in resolve).
-    let mut fixtures_by_eval: HashMap<&str, Vec<String>> = HashMap::new();
+    let mut overlay_files_by_eval: HashMap<&str, Vec<String>> = HashMap::new();
     for ev in &r.selected_evals {
-        let dests = fixture_pairs(ev, &ctx.skill_subdir)?
+        let dests = overlay_file_pairs(ev, &ctx.skill_subdir)?
             .into_iter()
             .map(|(dest, _source)| dest)
             .collect();
-        fixtures_by_eval.insert(ev.id.as_str(), dests);
+        overlay_files_by_eval.insert(ev.id.as_str(), dests);
     }
 
     // A single group keeps the `group` key off each task (>1 group tags them);
@@ -200,9 +199,7 @@ pub(super) fn write_dispatch(
                     .iteration_dir
                     .join(format!("eval-{}", ev.id))
                     .join(cond_name);
-                let codebase_record = r
-                    .codebase_for(std::slice::from_ref(&ev.id))?
-                    .map(super::RunCodebase::record);
+                let codebase_record = Some(r.codebase_for(std::slice::from_ref(&ev.id))?.record());
                 let runs = ev.runs.unwrap_or(opts.runs);
 
                 for run_idx in 1..=runs {
@@ -213,10 +210,7 @@ pub(super) fn write_dispatch(
                     } else {
                         (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
                     };
-                    let env_run_index = group
-                        .task_runs
-                        .is_some_and(|task_runs| task_runs > 1)
-                        .then_some(run_idx);
+                    let env_run_index = (group.runs > 1).then_some(run_idx);
                     let env_root = task_env_root_for_run(
                         &r.iteration_dir,
                         &group.id,
@@ -245,7 +239,7 @@ pub(super) fn write_dispatch(
                     let outputs_dir = env_root.join(".eval-magic-outputs").join(outputs_rel);
                     fs::create_dir_all(&outputs_dir)?;
 
-                    let fixtures = fixtures_by_eval
+                    let files = overlay_files_by_eval
                         .get(ev.id.as_str())
                         .cloned()
                         .unwrap_or_default();
@@ -261,7 +255,7 @@ pub(super) fn write_dispatch(
                         skills: multi_skill.then_some(condition_roster),
                         treatment_names: multi_skill.then_some(treatment_names.as_slice()),
                         user_prompt: &ev.prompt,
-                        fixtures,
+                        files,
                         turns: ev.turns.as_deref(),
                         responder: ev.responder.as_ref(),
                         outputs_dir: &outputs_dir_str,

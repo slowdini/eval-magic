@@ -68,10 +68,10 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
     // Simulate dispatches that emit the harness's own flat stream.
     for task in dispatch_tasks(&cwd) {
         let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Done.\n").unwrap();
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
         fs::write(
-            outputs.join("cool-events.jsonl"),
+            turn.join("cool-events.jsonl"),
             concat!(
                 r#"{"kind":"roster","surface":{"skills":["cool:review"],"plugins":[{"label":"cool","id":"cool@vendor","release":"1.2.3"}]}}"#,
                 "\n",
@@ -86,6 +86,7 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
             ),
         )
         .unwrap();
+        write_completion(&cwd, &task);
     }
 
     skill_eval()

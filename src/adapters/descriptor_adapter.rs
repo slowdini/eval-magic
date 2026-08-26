@@ -420,9 +420,9 @@ impl HarnessAdapter for DescriptorAdapter {
             ctx.target_args, ctx.iteration, self.descriptor.label
         );
         let Some(template) = &self.descriptor.dispatch.next_steps_template else {
-            // Generic fallbacks: a descriptor with just an exec template still
-            // earns a copy-pasteable recipe; a baseline descriptor gets the
-            // harness-agnostic handoff.
+            // Generic fallbacks: a runner-ready descriptor with an exec
+            // template still earns a copy-pasteable recipe. The no-template
+            // branch is diagnostic only because run preflight rejects it.
             return match &self.descriptor.dispatch.exec_template {
                 Some(_) => format!(
                     "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task \
@@ -430,9 +430,8 @@ impl HarnessAdapter for DescriptorAdapter {
                     self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env)
                 ),
                 None => format!(
-                    "\nNext: read dispatch-manifest.md and dispatch each task through your \
-                     harness's one-shot CLI from the task's eval_root, saving the agent's \
-                     final reply to outputs/final-message.md.\nThen run `{ingest_line}`."
+                    "\nThis descriptor is not runner-ready: add `[dispatch].exec_template` and \
+                     a `[transcript]` parser before running evals.\nThen run `{ingest_line}`."
                 ),
             };
         };
@@ -464,9 +463,8 @@ impl HarnessAdapter for DescriptorAdapter {
             return Some(
                 format!(
                     "## Dispatch recipe\n\nFrom each task's `eval_root`, dispatch with:\n\
-                     {exec_command}\n\nEnsure the agent's final reply lands in the task's \
-                     `outputs/final-message.md` (capture it yourself if the command does not \
-                     write it).\n"
+                     {exec_command}\n\nThe command must capture the configured transcript under \
+                     `outputs/turn-<n>/`; ingest recovers the final response from that stream.\n"
                 )
                 .split('\n')
                 .map(String::from)
@@ -540,7 +538,7 @@ mod tests {
             .expect("an exec template earns a generic manifest recipe")
             .join("\n");
         assert!(manifest.contains("cool-cli run"), "{manifest}");
-        assert!(manifest.contains("final-message.md"), "{manifest}");
+        assert!(manifest.contains("configured transcript"), "{manifest}");
     }
 
     #[test]
@@ -639,8 +637,8 @@ mod tests {
             agent_model: None,
             agent_env: empty_env(),
         });
-        assert!(next.contains("one-shot CLI"), "{next}");
-        assert!(next.contains("outputs/final-message.md"), "{next}");
+        assert!(next.contains("not runner-ready"), "{next}");
+        assert!(next.contains("[transcript]"), "{next}");
         assert!(
             next.contains("ingest --skill x --iteration 1 --harness cool-custom-harness"),
             "{next}"

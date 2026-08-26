@@ -72,7 +72,7 @@ eval-magic init
 
 `init` creates `evals/evals.json` with one valid seed case and the pinned Weeknight example
 codebase. Use `eval-magic init --help` to select another URL, local path, or the current directory,
-and use `eval-magic docs codebase` for fixture selection and provenance details. Edit the prompt
+and use `eval-magic docs codebase` for project selection and provenance details. Edit the prompt
 and expected behavior to describe a realistic task, add concrete assertions as the eval matures,
 then check the file:
 
@@ -114,14 +114,14 @@ eval-magic run --mode revision
 The command help and generated runbook describe baseline selection and the rest of the workflow.
 
 An eval can treat coordinated skills as one treatment by setting `skill_name` to an ordered list.
-Pass one listed member with `--skill`; it remains the eval owner and supplies fixtures. See
+Pass one listed member with `--skill`; it remains the eval owner and supplies overlay files. See
 `eval-magic docs isolation` for the complete configuration, Mode A/B behavior, and provenance.
 
 ## How it works
 
 Each eval case runs once per condition and repetition in its own clean Git repository. The two arms
-receive the same task and fixtures; only the condition under test changes. Assertions can combine
-LLM judgment with runner-owned command checks, transcript checks, and final diff limits. Scripted
+receive the same codebase, task, and overlays; only the condition under test changes. Assertions can
+combine LLM judgment with runner-owned command checks, transcript checks, and final diff limits.
 Multi-turn evals resume one native harness session so follow-up answers remain part of the same
 conversation, whether the turns are scripted or derived by a responder (`eval-magic docs
 conversations`).

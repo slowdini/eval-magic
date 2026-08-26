@@ -2,13 +2,15 @@
 //!
 //! The environments a run builds are asserted here rather than in unit tests
 //! because the property under test spans resolution, provisioning, staging, and
-//! the fixture overlay — it is only true of a whole prepared workspace.
+//! the file overlay — it is only true of a whole prepared workspace.
 
 use crate::codebase_support::{
     an_object_file, codebase_repo, commit, evals_with_codebase, git, link_count,
 };
 use crate::helpers::*;
 use std::fs;
+
+mod revision;
 
 #[test]
 fn a_git_codebase_arrives_in_every_env_with_history_and_no_remote() {
@@ -49,7 +51,7 @@ fn a_git_codebase_arrives_in_every_env_with_history_and_no_remote() {
             "",
             "{condition}: no env may retain a remote"
         );
-        // The overlay: a declared fixture lands on top, at its declared path.
+        // The declared file lands on top of the codebase at its declared path.
         assert_eq!(
             fs::read_to_string(env.join("TASK.md")).unwrap(),
             "Add a `two()` function.\n",
@@ -125,7 +127,7 @@ fn the_baseline_respects_codebase_gitignore_but_still_tracks_runner_files() {
     );
     assert!(
         tracked.lines().any(|path| path == "TASK.md"),
-        "the fixture overlay must be tracked:\n{tracked}"
+        "the file overlay must be tracked:\n{tracked}"
     );
     assert!(
         !tracked
@@ -217,6 +219,27 @@ fn the_resolved_codebase_reaches_conditions_and_every_dispatch_task() {
             task["codebase"]["revision"], revision,
             "each task records the tree it ran against"
         );
+        write_default_task_result(&cwd, task, "Done.");
+    }
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["record-runs", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--iteration",
+            "1",
+            "--harness",
+            "claude-code",
+        ])
+        .assert()
+        .success();
+    for task in tasks {
+        let run = read_json(&resolve_task_path(&cwd, &task["run_record_path"]));
+        assert_eq!(run["codebase"]["source"], wire_path(&origin));
+        assert_eq!(run["codebase"]["revision"], revision);
     }
 }
 
@@ -410,85 +433,4 @@ fn the_run_plan_names_the_codebase_and_its_resolved_commit() {
         .stdout(predicates::str::contains("codebase: "))
         .stdout(predicates::str::contains(&revision[..7]))
         .stdout(predicates::str::contains("materialized once"));
-}
-
-/// Mode B parity: a revision-mode run provisions both arms of the comparison
-/// from the same cached codebase, so a skill edit is measured against the same
-/// tree the previous skill ran on.
-#[test]
-fn revision_mode_provisions_both_arms_from_the_cached_codebase() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let origin = codebase_repo(tmp.path(), "origin", "main");
-    let source = format!(r#"{{ "url": "{}", "ref": "main" }}"#, wire_path(&origin));
-    let (skill_dir, cwd) = setup(tmp.path(), &evals_with_codebase(&source));
-    fs::write(
-        skill_dir.join("mr-review/evals/TASK.md"),
-        "task
-",
-    )
-    .unwrap();
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["snapshot", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--label", "baseline"])
-        .assert()
-        .success();
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "revision",
-            "--judge-samples",
-            "3",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    let iteration = iteration_dir(&cwd);
-    let conditions = read_json(&iteration.join("conditions.json"));
-    assert_eq!(conditions["mode"], "revision");
-    assert_eq!(conditions["judge_samples"], 3);
-    assert_eq!(conditions["codebases"][0]["source"], wire_path(&origin));
-    assert!(conditions["codebases"][0]["revision"].is_string());
-    let cached: Vec<_> = fs::read_dir(iteration.join(".codebase")).unwrap().collect();
-    assert_eq!(
-        cached.len(),
-        1,
-        "both arms of the comparison share one cached materialization"
-    );
-
-    for condition in ["old_skill", "new_skill"] {
-        let env = iteration.join(format!("env-g1-{condition}"));
-        assert_eq!(
-            fs::read_to_string(env.join("src/main.rs")).unwrap(),
-            "fn main() {}
-",
-            "{condition}: the codebase's files must be present"
-        );
-        assert!(
-            git(&env, &["rev-list", "--count", "HEAD"])
-                .parse::<u32>()
-                .unwrap()
-                >= 2,
-            "{condition}: the history must survive provisioning"
-        );
-        assert_eq!(
-            git(&env, &["remote"]),
-            "",
-            "{condition}: no env may retain a remote"
-        );
-        assert_eq!(
-            git(&env, &["rev-parse", "refs/eval-magic/baseline"]),
-            git(&env, &["rev-parse", "HEAD"]),
-            "{condition}: the baseline still names the start state"
-        );
-    }
 }

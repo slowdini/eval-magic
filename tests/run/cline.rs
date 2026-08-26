@@ -255,10 +255,7 @@ fn cline_ingest_extracts_summary_from_events_stream() {
 
     // Simulate dispatches that emit the harness's own stream.
     for task in dispatch_tasks(&cwd) {
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Done.\n").unwrap();
-        fs::write(outputs.join("cline-events.jsonl"), CLINE_EVENTS).unwrap();
+        write_task_transcript(&cwd, &task, "cline-events.jsonl", CLINE_EVENTS);
     }
 
     skill_eval()

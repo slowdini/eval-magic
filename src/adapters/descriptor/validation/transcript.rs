@@ -109,6 +109,17 @@ pub(super) fn check_tiers(d: &HarnessDescriptor) -> Result<(), String> {
                     .into(),
             );
         }
+        if transcript.parser.is_none()
+            && extract.final_text.is_none()
+            && extract.assistant_messages.is_none()
+        {
+            return Err(
+                "[transcript.extract] cannot recover the agent's final response; declare \
+                 final_text or assistant_messages so record-runs has transcript-owned text to \
+                 grade"
+                    .into(),
+            );
+        }
     }
     Ok(())
 }
