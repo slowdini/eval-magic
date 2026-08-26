@@ -12,8 +12,8 @@ focused internal notes instead of duplicating their details.
 ## How an evaluation moves through the system
 
 1. `eval-magic init` scaffolds an eval workspace next to a skill. Eval definitions describe the
-   task, fixtures, assertions, conditions, run count, and — for a multi-turn eval — either scripted
-   follow-up turns or a responder policy that derives them.
+   codebase, task, overlay files, assertions, conditions, run count, and — for a multi-turn eval —
+   either scripted follow-up turns or a responder policy that derives them.
 2. `eval-magic run` validates the configuration, resolves and copies the skill under test into the
    iteration, creates isolated task roots, stages the requested skill condition from that copy,
    snapshots the starting state, and writes `RUNBOOK.md`, `dispatch.json`, and related campaign

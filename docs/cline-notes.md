@@ -19,7 +19,8 @@
   (676-line NDJSON capture exercising `read_files`, `run_commands`, and two `skills`
   invocations), `cline history --json`, several `--id` resume attempts, and
   `eval-magic harness lint harnesses/cline.toml --as-builtin --probe --yes` (the live probe
-  rendered the exec template, dispatched it, and recovered a non-empty `final-message.md`).
+  rendered the exec template, dispatched it, parsed the event capture, and recovered a non-empty
+  final response).
   Against 3.0.53: a second dispatch exercising `editor`, `run_commands`, `read_files`, and
   `skills` (arg/result shapes below), and a guard spike — a hand-staged `.cline/plugins/` project
   plugin whose `beforeTool` hook blocked calls, proving headless plugin auto-load, the
@@ -67,8 +68,7 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
 | `guard.armed_message` | see descriptor | prose authored for eval-magic output (same structure as the other built-ins) |
 | Plugin hook contract | `beforeTool({snapshot, tool, toolCall, input})`; block with `{skip: true, reason}`; 3000ms default hook budget (plugin spawns with a 2s timeout so a hung arbiter fails open); `spawnSync` works from the plugin sandbox | 3.0.53 spike capture + the binary's runtime hook loop; the docs' `tool_call_before`/`fail_closed` vocabulary lags the binary |
 | `shadow.preflight` | `cline-skills` | 3.0.53 root probe (one uniquely-named skill per candidate root): dispatch cwd's `.cline/skills` read, ancestor's NOT (no project walk), `~/.agents/skills` IS read (and receives `cline skill install` global installs); `$CLINE_DIR` overrides the `~/.cline` default (3.0.53 binary) |
-| `dispatch.capture_prefix` | `cline` | chosen name (judge capture files `$response_base.cline-events.jsonl`) |
-| `dispatch.exec_template` | see descriptor | flags from `cline --help` (`--act` from the 3.0.52 binary’s hidden option registration + behavioral write test); `--json` NDJSON stdout and `</dev/null` stdin detach from the docs CLI overview (piped stdin becomes prompt context); final-message jq recovery verified by the live probe. `eval-magic dispatch --judges` reuses this same template, bound to the iteration directory and the judge prompt |
+| `dispatch.exec_template` | see descriptor | flags from `cline --help` (`--act` from the 3.0.52 binary’s hidden option registration + behavioral write test); `--json` NDJSON stdout and `</dev/null` stdin detach from the docs CLI overview (piped stdin becomes prompt context); final-text extraction verified by the live probe. `eval-magic dispatch --judges` reuses this same template, bound to the iteration directory and the judge prompt |
 | `dispatch.next_steps_template` / `manifest_template` | see descriptor | prose authored for eval-magic artifacts (same structure as the other built-ins) |
 
 ## Dispatch quirks
@@ -89,10 +89,9 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
   silent-degradation trap as Claude Code's `acceptEdits`, so the flag stays explicit.
 - Piped stdin is appended to the prompt context (docs CLI overview), so every recipe detaches
   with `</dev/null>`, same as codex.
-- There is no `--output-last-message`: the terminal `run_result` NDJSON event carries the final
-  text, and the exec template's trailing jq step writes `final-message.md` from the captured
-  events (the harness probe's final-message contract checks that file; ingest recovers the text
-  from the events file via `extract.final_text`).
+- The terminal `run_result` NDJSON event carries the final text. The harness probe and ingest both
+  recover it from the event file through the configured transcript parser; no separate completion
+  file or jq post-pass is needed.
 - Stream shape (3.0.52): `agent_event` wrappers (`content_start` per streaming chunk for
   text/reasoning — 634 in the probe — but once per tool call; `content_end` with complete
   blocks; `usage`; `iteration_start`/`iteration_end`; `done`), plus `hook_event` lifecycle
@@ -145,8 +144,8 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
   write/shell classification works. Known blind spot: `read_files`' `files:[{path}]` stays
   nested, so the live-source-read path branch doesn't fire for it (shell-based read detection
   still covers `cat`-style reads).
-- **Riding documented fallbacks** (the `run` preflight names each): no `[conversation]`
-  (scripted `turns` evals are rejected).
+- **No native conversation resume**: no `[conversation]`, so scripted `turns` and responder evals
+  are rejected.
 - **Write guard** (`cline-plugin` engine): `run` auto-arms a staged project plugin at
   `.cline/plugins/slow-powers-eval-guard/index.js` whose `beforeTool` hook forwards every tool
   call to `eval-magic guard-hook --harness cline` (`run_commands`' `commands` array joined into

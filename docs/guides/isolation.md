@@ -163,9 +163,9 @@ non-empty list:
 ```
 
 With a list, `--skill` selects the eval owner: the member whose `evals/` directory supplies the
-definitions and fixtures, and whose name owns the workspace and promotion destination. The owner
-must appear in the list. `--stage-name` is unavailable because one override cannot name several
-staged skills.
+definitions and overlay files, and whose name owns the workspace and promotion destination. The
+owner must appear in the list. `--stage-name` is unavailable because one override cannot name
+several staged skills.
 
 Every treatment member is copied into the eval home before any dispatch runs, and each condition
 stages from those copies. Mode A stages all treatment members in `with_skill` and none in
@@ -207,8 +207,8 @@ copy is carried there: the arm may not be comparing what it claims to.
 Skill-source isolation is about what a dispatch can *load*. The task repository is about what it can
 *reach*: every dispatch runs in its own private environment, a Git repository with no remotes and
 hooks disabled, marked with `refs/eval-magic/baseline` at the state the agent started from. That
-holds whether the environment was built from fixture files or from a sourced codebase — see
-`eval-magic docs codebase`.
+codebase-backed boundary holds for every eval; task-specific `files` are overlays on the sourced
+tree. See `eval-magic docs codebase`.
 
 The two are independent. An environment can be a faithfully isolated repository while the dispatch
 still loads a live skill source, and a shadowed skill is not made safe by the repository boundary.

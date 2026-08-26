@@ -2,16 +2,16 @@
 
 > **Audience:** Eval authors choosing, pinning, and verifying a project for coding tasks.
 
-An eval's environment can be a real project rather than a handful of fixture files. Declare a
-`codebase` in `evals.json` and every `(eval, condition, run)` environment is built from a checkout
-of it — with history, on a branch, ready for the agent under test to work in.
+Every eval runs against a project codebase. Declare a `codebase` in `evals.json` and every
+`(eval, condition, run)` environment is built from a checkout of it — with history, on a branch,
+ready for the agent under test to work in.
 
 This matters for anything you cannot judge from a toy problem. Whether a skill makes an agent's
 code *better* is not answerable when the task is small enough that any model succeeds.
 
 ## Choose a source during `init`
 
-With no codebase option, `eval-magic init` uses the Weeknight example fixture at its pinned
+With no codebase option, `eval-magic init` uses the Weeknight example project at its pinned
 baseline:
 
 ```sh
@@ -51,9 +51,9 @@ inputs and `--codebase-cwd` are written relative to the generated `evals/` direc
 portability limits described under "A `path` source is not reproducible elsewhere."
 
 The URL/ref, local path, and current-directory modes are mutually exclusive. The chosen source is
-written into the eval file, so the committed configuration records which fixture the suite uses.
+written into the eval file, so the committed configuration records which project the suite uses.
 
-## Choose the fixture scale
+## Choose the project scale
 
 ### Start with Weeknight
 
@@ -64,14 +64,14 @@ tasks where a compact project makes the agent's decisions easy to inspect.
 
 Suitable tasks include changing planner validation, extending the recipe filters, migrating stored
 state, fixing shopping-list aggregation, or improving an interaction with focused tests. Pin the
-fixture commit in the eval file even when a later fixture revision exists; change the ref as a
+project commit in the eval file even when a later revision exists; change the ref as a
 deliberate eval-suite revision.
 
-### Use eval-magic as a complex fixture
+### Use eval-magic as a complex project
 
 Use [eval-magic](https://github.com/slowdini/eval-magic) when the skill needs a larger codebase with
 cross-module Rust behavior, schemas, generated artifacts, integration tests, and repository-level
-contributor instructions. This fixture is appropriate when navigating and preserving those
+contributor instructions. This project is appropriate when navigating and preserving those
 contracts is part of what the eval should measure.
 
 This command scaffolds a pinned eval-magic source:
@@ -84,7 +84,7 @@ eval-magic init \
 
 The larger repository increases preparation, dispatch, and review work. Prefer Weeknight unless the
 task genuinely needs the extra architectural surface. Project instructions and project-local skill
-sources remain part of either fixture unless the eval opts out as described below.
+sources remain part of either project unless the eval opts out as described below.
 
 ## Declare one
 
@@ -103,7 +103,7 @@ A git repository, with an explicit ref:
 Or a directory on this machine:
 
 ```json
-{ "codebase": { "path": "../../fixtures/legacy-service" } }
+{ "codebase": { "path": "../../projects/legacy-service" } }
 ```
 
 A relative `path` resolves against the directory holding `evals.json`, so a committed config means
@@ -183,8 +183,8 @@ Each dispatch gets its own private environment holding:
   branch when the ref is a tag or a SHA
 - `refs/eval-magic/baseline`, marking the state the agent started from
 
-An eval that declares no `codebase` still gets a Git repository, initialized on `work`, exactly as
-it always has.
+Every selected eval must resolve an effective codebase, either from the top-level default or an
+eval-level override. Validation rejects a configuration that supplies neither.
 
 ## The baseline ref is what the run is measured against
 
@@ -207,8 +207,8 @@ What counts is what Git counts, under the same rules the baseline commit was bui
 
 - The codebase's own `.gitignore` holds, so a run that compiles does not report its build output as
   thousands of touched files.
-- Fixtures and staged skills count even when the codebase ignores their paths — they are committed
-  into the baseline regardless, so a change to one is always visible.
+- Overlay files and staged skills count even when the codebase ignores their paths — they are
+  committed into the baseline regardless, so a change to one is always visible.
 - Framework artifacts under `.eval-magic-outputs/` never count.
 - A nested repository's internals never count: Git tracks no path with a `.git` component.
 - A rename counts as two touched files, one created and one deleted.
@@ -249,15 +249,15 @@ paths. Seeding a task-specific file into a real project is the common case:
 }
 ```
 
-A fixture overwrites a codebase file of the same path.
+An overlay file replaces a codebase file at the same path.
 
 The baseline the runner commits respects the codebase's `.gitignore`, so ignored build output stays
-out of it. Fixtures and staged skills are committed regardless of what the codebase ignores — which
-is also what keeps them inside every later measurement.
+out of it. Overlay files and staged skills are committed regardless of what the codebase ignores —
+which is also what keeps them inside every later measurement.
 
 ## A `path` source is not reproducible elsewhere
 
-Someone reading your published results cannot resolve `../../fixtures/legacy-service`. Their machine
+Someone reading your published results cannot resolve `../../projects/legacy-service`. Their machine
 has that directory somewhere else, or not at all. Nothing can fix that, so the artifacts label it:
 the record carries `host_local: true`, the run prints a warning, and the `BASELINE.md` row says so.
 
