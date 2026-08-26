@@ -121,7 +121,7 @@ mod tests {
     use tempfile::TempDir;
 
     /// A minimal valid `evals.json` body.
-    const VALID: &str = r#"{ "skill_name": "demo", "evals": [
+    const VALID: &str = r#"{ "skill_name": "demo", "codebase": { "path": "." }, "evals": [
         { "id": "e1", "prompt": "p", "expected_output": "o" } ] }"#;
 
     /// Write `<root>/<skill>/evals/evals.json` with the given contents.

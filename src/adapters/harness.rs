@@ -1,20 +1,15 @@
 //! The harness adapter API — the single seam between generic dispatch code and
 //! harness-specific behavior.
 //!
-//! The trait is tiered into a **baseline** every harness must implement and
-//! **enhancements** that raise fidelity when a harness has the native support:
+//! The trait is tiered into a **runner requirement** every selected harness must
+//! satisfy and **enhancements** that raise fidelity when native support exists:
 //!
-//! - **Baseline (required):** [`label`](HarnessAdapter::label) and
-//!   [`skills_dir`](HarnessAdapter::skills_dir). A new harness compiles with
-//!   just these two methods; dispatched through its one-shot CLI (with
-//!   `--no-stage` inlining the skill when native staging isn't wired), it
-//!   already supports `llm_judge` grading and the `detect-stray-writes`
-//!   post-pass.
-//! - **Enhancements (defaulted):** every other method has a default — either a
-//!   working generic fallback (e.g. the plain available-skills block) or an
-//!   `Unsupported` error naming the enhancement it belongs to (e.g. transcript
-//!   ingest, the write guard). Override the methods of an enhancement to wire
-//!   it for a harness.
+//! - **Runner requirement:** the adapter identifies itself and exposes a
+//!   dispatch command plus a transcript event filename/reader. `run` rejects a
+//!   selected harness missing either execution or transcript recovery.
+//! - **Enhancements (defaulted):** native staging, guards, model flags,
+//!   conversations, shadow scans, and richer transcript signals may fall back
+//!   or reject only the evals/options that require them.
 //!
 //! Generic code resolves an adapter with [`adapter_for`](super::registry::adapter_for)
 //! and then calls the trait — so the [`registry`](super::registry) is the one
@@ -197,16 +192,13 @@ pub trait HarnessAdapter {
         "If the staged skill cannot be resolved".to_string()
     }
 
-    // ── Enhancement: transcript ingest (defaulted) ───────────────────────────
-    // Fallback without it: `transcript_check` assertions grade as
-    // unverifiable, `llm_judge` carries the grading, token/cost/duration go
-    // unrecorded, and run records are assembled by hand (or from
-    // `outputs/final-message.md`) instead of auto-ingested.
+    // ── Runner requirement: transcript ingest (defaulted) ───────────────────
+    // Run preflight rejects a harness without this capability. The default
+    // remains unwired so a partial descriptor can still be linted and shown.
 
-    /// **Enhancement: transcript ingest.** The filename (under a task's
-    /// `outputs/` dir) this harness's one-shot CLI writes the captured
-    /// transcript to. `None` when no transcript ingest is wired — the ingest
-    /// pipeline then never calls the readers below.
+    /// **Runner requirement: transcript ingest.** The filename (under a task's
+    /// `outputs/turn-N/` dir) this harness's CLI writes the captured transcript
+    /// to. `None` means the descriptor is not runner-ready.
     fn cli_events_filename(&self) -> Option<String> {
         None
     }
@@ -406,14 +398,14 @@ pub trait HarnessAdapter {
         format!("<system-reminder>\n{trimmed}\n</system-reminder>")
     }
 
-    // ── Enhancement: dispatch commands (defaulted) ───────────────────────────
+    // ── Runner requirement: dispatch commands (defaulted) ────────────────────
     // There is no fallback: without an exec template the runner has nothing to
-    // spawn, so `dispatch` fails for that harness and `run` warns at prep time.
+    // spawn, so `run` rejects that harness during preflight.
 
-    /// **Enhancement: dispatch commands.** Whether a per-task exec command is
+    /// **Runner requirement: dispatch commands.** Whether a per-task exec command is
     /// wired (the descriptor's `[dispatch] exec_template`). `false` means
     /// `eval-magic dispatch` has nothing to run for this harness, and the `run`
-    /// preflight warns naming that.
+    /// preflight rejects it.
     fn has_dispatch_recipes(&self) -> bool {
         false
     }

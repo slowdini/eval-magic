@@ -20,7 +20,6 @@ use crate::core::Harness;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StepKind {
     RecordRuns,
-    FillTranscripts,
     DetectStrayWrites,
     Grade { finalize: bool },
     Aggregate,
@@ -64,13 +63,11 @@ impl StepParams<'_> {
     }
 }
 
-/// The ingest chain: record-runs → fill-transcripts → detect-stray-writes →
-/// grade. Each stage reads its transcript from each task's `outputs/` events
-/// file.
+/// The ingest chain: record-runs → detect-stray-writes → grade. Each stage
+/// reads the artifacts written by its predecessor.
 pub fn build_ingest_commands(p: &StepParams) -> Vec<StepCommand> {
     vec![
         p.step("record-runs", StepKind::RecordRuns),
-        p.step("fill-transcripts", StepKind::FillTranscripts),
         p.step("detect-stray-writes", StepKind::DetectStrayWrites),
         p.step("grade", StepKind::Grade { finalize: false }),
     ]
@@ -116,22 +113,16 @@ mod tests {
     }
 
     #[test]
-    fn ingest_runs_record_fill_stray_grade_in_order() {
+    fn ingest_runs_record_stray_grade_in_order() {
         let steps = build_ingest_commands(&params());
         assert_eq!(
             steps.iter().map(|s| s.label).collect::<Vec<_>>(),
-            vec![
-                "record-runs",
-                "fill-transcripts",
-                "detect-stray-writes",
-                "grade"
-            ]
+            vec!["record-runs", "detect-stray-writes", "grade"]
         );
         assert_eq!(
             steps.iter().map(|s| s.kind).collect::<Vec<_>>(),
             vec![
                 StepKind::RecordRuns,
-                StepKind::FillTranscripts,
                 StepKind::DetectStrayWrites,
                 StepKind::Grade { finalize: false },
             ]
@@ -155,12 +146,7 @@ mod tests {
         });
         assert_eq!(
             steps.iter().map(|s| s.label).collect::<Vec<_>>(),
-            vec![
-                "record-runs",
-                "fill-transcripts",
-                "detect-stray-writes",
-                "grade"
-            ]
+            vec!["record-runs", "detect-stray-writes", "grade"]
         );
         assert!(
             steps

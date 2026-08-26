@@ -101,7 +101,7 @@ fn measurement_counts_all_task_changes_except_framework_outputs() {
     fs::remove_file(eval_root.join("src/deleted.txt")).unwrap();
     fs::write(eval_root.join("framework.txt"), "after\n").unwrap();
     fs::write(eval_root.join("notes.txt"), "one\ntwo\n").unwrap();
-    fs::write(outputs_dir.join("final-message.md"), "ignored\n").unwrap();
+    fs::write(outputs_dir.join("harness-events.jsonl"), "ignored\n").unwrap();
     fs::write(
         eval_root.join(".eval-magic-outputs/agent-created.txt"),
         "also ignored\n",

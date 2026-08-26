@@ -17,8 +17,6 @@ use std::path::Path;
 use crate::core::IsolatedGit;
 
 /// Branch a source that carries no Git history of its own is initialized on.
-/// Matches the branch a fixture-only task repository has always used, so a run
-/// without a codebase looks the same as it always did.
 pub const INITIALIZED_BRANCH: &str = "work";
 
 /// A declared source, independent of what it is being sourced *for*.

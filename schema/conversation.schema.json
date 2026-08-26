@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/conversation.schema.json",
   "title": "Task Conversation Completion",
-  "description": "Runner-owned completion artifact for one dispatched eval task.",
+  "description": "Runner-owned completion artifact for one dispatched eval task. Canonical artifacts record the delivered user turns; assistant and tool events remain accepted for compatibility with historical artifacts.",
   "type": "object",
   "required": ["status", "delivered_followups", "events"],
   "additionalProperties": false,
@@ -31,6 +31,7 @@
     "events": {
       "type": "array",
       "minItems": 1,
+      "description": "Delivered conversation turns. Canonical runner output contains user_message events only; historical artifacts may also contain assistant_message and tool_invocation events.",
       "items": {
         "oneOf": [
           { "$ref": "#/definitions/userMessage" },
@@ -81,13 +82,6 @@
           ]
         }
       }
-    },
-    {
-      "if": {
-        "properties": { "status": { "enum": ["completed", "stopped"] } },
-        "required": ["status"]
-      },
-      "then": { "properties": { "events": { "minItems": 2 } } }
     }
   ],
   "definitions": {

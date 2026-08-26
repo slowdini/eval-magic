@@ -99,7 +99,6 @@ armed_message = '''
 preflight = "codex-skills"
 
 [dispatch]
-capture_prefix = "codex"
 guard_args = " --dangerously-bypass-hook-trust"
 next_steps_template = '''
 
@@ -109,8 +108,7 @@ Then run `eval-magic ingest{target_args} --iteration {iteration} --harness codex
 # prompt context.
 exec_template = '''
 codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write{guard_args}{model_arg} --json \
-  --output-last-message <outputs_dir>/final-message.md \
-  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/codex-events.jsonl \
   2> <outputs_dir>/codex-stderr.log'''
@@ -130,7 +128,6 @@ Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each
 token_usage_aggregation = "last"
 resume_exec_template = '''
 cd <eval-root> && codex --ask-for-approval never exec resume{guard_args}{model_arg} --json \
-  --output-last-message <outputs_dir>/final-message.md \
   {session_arg} {prompt_arg} \
   </dev/null \
   > <outputs_dir>/codex-events.jsonl \

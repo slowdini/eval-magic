@@ -17,7 +17,9 @@ use crate::validation::schema::{SchemaName, validate_against_schema};
 /// supplemental duplicate-`id`, command environment, and held-out path guards,
 /// returning the typed config on success.
 pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig, ValidationError> {
+    validate_retired_fields(config, source)?;
     validate_codebase_declarations(config, source)?;
+    validate_effective_codebases(config, source)?;
     validate_turn_source_declarations(config, source)?;
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
@@ -123,16 +125,16 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
                         ),
                     }
                 })?;
-                for fixture in visible {
-                    let Ok(fixture_path) = normalize_relative(fixture) else {
+                for overlay in visible {
+                    let Ok(overlay_path) = normalize_relative(overlay) else {
                         continue;
                     };
-                    if paths_overlap(&fixture_path, &setup_path) {
+                    if paths_overlap(&overlay_path, &setup_path) {
                         return Err(ValidationError::InvalidConfig {
                             path: source.to_string(),
                             message: format!(
-                                "eval '{}', command_check '{}': visible fixture '{}' and setup_files path '{}' overlap; held-out setup paths must be disjoint from agent-visible files",
-                                ev.id, check.id, fixture, setup
+                                "eval '{}', command_check '{}': visible overlay '{}' and setup_files path '{}' overlap; held-out setup paths must be disjoint from agent-visible files",
+                                ev.id, check.id, overlay, setup
                             ),
                         });
                     }
@@ -142,6 +144,54 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     }
 
     Ok(validated)
+}
+
+/// Name retired fields before the structural schema can reduce them to an
+/// `additionalProperties` error. These are authored configuration, not a
+/// generated artifact compatibility surface.
+fn validate_retired_fields(config: &Value, source: &str) -> Result<(), ValidationError> {
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        if eval.get("isolation").is_none() {
+            continue;
+        }
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{id}': field 'isolation' is no longer supported or needed; every eval run already uses a private environment"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Every eval runs against a codebase. A config-level declaration supplies the
+/// default; without one, each eval must carry its own declaration.
+fn validate_effective_codebases(config: &Value, source: &str) -> Result<(), ValidationError> {
+    if config.get("codebase").is_some() {
+        return Ok(());
+    }
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        if eval.get("codebase").is_some() {
+            continue;
+        }
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{id}': no effective codebase; set top-level 'codebase' or this eval's 'codebase'"
+            ),
+        });
+    }
+    Ok(())
 }
 
 fn validate_guard_policy(
@@ -305,13 +355,14 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::validate_evals_config;
-    use crate::core::{Assertion, CodebaseSource};
+    use crate::core::Assertion;
     use serde_json::{Value, json};
 
     /// The minimal valid config the cases below mutate.
     fn base() -> Value {
         json!({
             "skill_name": "demo",
+            "codebase": { "path": "." },
             "evals": [
                 {
                     "id": "e1",
@@ -391,45 +442,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("skill_should_trigger"), "error was: {err}");
-    }
-
-    #[test]
-    fn accepts_isolation_isolated() {
-        let mut config = base();
-        config["evals"][0]["isolation"] = json!("isolated");
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        assert_eq!(
-            parsed.evals[0].isolation,
-            Some(crate::core::Isolation::Isolated)
-        );
-    }
-
-    #[test]
-    fn accepts_isolation_shared() {
-        let mut config = base();
-        config["evals"][0]["isolation"] = json!("shared");
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        assert_eq!(
-            parsed.evals[0].isolation,
-            Some(crate::core::Isolation::Shared)
-        );
-    }
-
-    #[test]
-    fn defaults_isolation_to_none_when_absent() {
-        let config = base();
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        assert_eq!(parsed.evals[0].isolation, None);
-    }
-
-    #[test]
-    fn rejects_an_unknown_isolation_value() {
-        let mut config = base();
-        config["evals"][0]["isolation"] = json!("sometimes");
-        let err = validate_evals_config(&config, "evals.json")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("isolation"), "error was: {err}");
     }
 
     #[test]
@@ -839,130 +851,10 @@ mod tests {
         let config = with_command_check(&["src/main.rs"], &["holdout/test.txt"]);
         validate_evals_config(&config, "evals.json").unwrap();
     }
-
-    #[test]
-    fn accepts_a_top_level_git_codebase_as_the_default() {
-        let mut config = base();
-        config["codebase"] = json!({ "url": "https://example.com/project.git", "ref": "main" });
-
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-
-        assert_eq!(
-            parsed.codebase,
-            Some(CodebaseSource::Git {
-                url: "https://example.com/project.git".to_string(),
-                reference: "main".to_string(),
-                exclude_skill_sources: false,
-            })
-        );
-    }
-
-    #[test]
-    fn accepts_a_per_eval_path_codebase_overriding_the_default() {
-        let mut config = base();
-        config["codebase"] = json!({ "url": "https://example.com/project.git", "ref": "main" });
-        config["evals"][0]["codebase"] = json!({ "path": "../fixtures/legacy-service" });
-
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-
-        assert_eq!(
-            parsed.evals[0].codebase,
-            Some(CodebaseSource::Path {
-                path: "../fixtures/legacy-service".to_string(),
-                exclude_skill_sources: false,
-            })
-        );
-    }
-
-    #[test]
-    fn accepts_a_top_level_path_codebase() {
-        let mut config = base();
-        config["codebase"] = json!({ "path": "/srv/projects/legacy-service" });
-
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-
-        assert_eq!(
-            parsed.codebase,
-            Some(CodebaseSource::Path {
-                path: "/srv/projects/legacy-service".to_string(),
-                exclude_skill_sources: false,
-            })
-        );
-    }
-
-    #[test]
-    fn accepts_codebase_skill_source_exclusion() {
-        let mut config = base();
-        config["codebase"] = json!({
-            "path": "/srv/projects/legacy-service",
-            "exclude_skill_sources": true
-        });
-
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        let declared = serde_json::to_value(parsed.codebase.unwrap()).unwrap();
-
-        assert_eq!(declared["exclude_skill_sources"], true);
-    }
-
-    /// `minLength: 1` admits `" "`, so the schema cannot carry this on its own.
-    #[test]
-    fn rejects_whitespace_only_codebase_values() {
-        for (field, codebase) in [
-            ("url", json!({ "url": "   ", "ref": "main" })),
-            (
-                "ref",
-                json!({ "url": "https://example.com/p.git", "ref": "\t" }),
-            ),
-            ("path", json!({ "path": " " })),
-        ] {
-            let mut config = base();
-            config["codebase"] = codebase.clone();
-            let error = validate_evals_config(&config, "evals.json")
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("codebase"), "{field}: error was: {error}");
-            assert!(error.contains(field), "{field}: error was: {error}");
-
-            // The per-eval override runs through the same guard, and names the eval.
-            let mut config = base();
-            config["evals"][0]["codebase"] = codebase;
-            let error = validate_evals_config(&config, "evals.json")
-                .unwrap_err()
-                .to_string();
-            assert!(error.contains("e1"), "{field}: error was: {error}");
-            assert!(error.contains(field), "{field}: error was: {error}");
-        }
-    }
-
-    /// A source is one thing or the other. The schema's `oneOf` plus
-    /// `additionalProperties: false` on each branch is what rejects the hybrid;
-    /// this pins that so a later schema edit cannot quietly admit it.
-    #[test]
-    fn rejects_a_codebase_that_is_both_git_and_path() {
-        let mut config = base();
-        config["codebase"] = json!({
-            "url": "https://example.com/p.git",
-            "ref": "main",
-            "path": "/srv/p"
-        });
-
-        assert!(validate_evals_config(&config, "evals.json").is_err());
-    }
-
-    /// #244 decision 5: the runner records the resolved SHA, so a git source
-    /// without an explicit ref could not be re-run against what it measured.
-    #[test]
-    fn rejects_a_git_codebase_without_a_ref() {
-        let mut config = base();
-        config["codebase"] = json!({ "url": "https://example.com/p.git" });
-
-        let error = validate_evals_config(&config, "evals.json")
-            .unwrap_err()
-            .to_string();
-
-        assert!(error.contains("ref"), "error was: {error}");
-    }
 }
+
+#[cfg(test)]
+mod codebase_tests;
 
 #[cfg(test)]
 mod multi_skill_tests;

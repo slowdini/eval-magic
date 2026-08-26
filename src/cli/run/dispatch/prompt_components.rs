@@ -93,15 +93,15 @@ pub(super) fn render_skill_block(
     }
 }
 
-pub(super) fn render_fixtures_block(fixtures: &[String]) -> String {
-    if fixtures.is_empty() {
-        "Available fixture files: none".to_string()
+pub(super) fn render_overlay_files_block(files: &[String]) -> String {
+    if files.is_empty() {
+        "Codebase overlay files: none".to_string()
     } else {
         format!(
-            "Available fixture files:\n{}",
-            fixtures
+            "Codebase overlay files:\n{}",
+            files
                 .iter()
-                .map(|fixture| format!("  - {fixture}"))
+                .map(|file| format!("  - {file}"))
                 .collect::<Vec<_>>()
                 .join("\n")
         )

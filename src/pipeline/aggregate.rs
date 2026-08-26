@@ -138,8 +138,8 @@ pub struct Benchmark {
     pub assertions: Value,
     /// Codebases the compared conditions ran against, echoed from
     /// `conditions.json` so a published benchmark names the trees it measured
-    /// without a reader having to hold two artifacts side by side. Empty for a
-    /// fixture-only iteration, which keeps its benchmark unchanged.
+    /// without a reader having to hold two artifacts side by side. Empty only
+    /// when reading a historical iteration that predates codebase provenance.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub codebases: Vec<CodebaseUse>,
     /// The skill under test, echoed from `conditions.json` for the same reason

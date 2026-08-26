@@ -214,8 +214,8 @@ pub(crate) enum HarnessCommands {
     /// With `--probe`, and only after every static check passes, also exercises
     /// the descriptor end-to-end: renders `dispatch.exec_template` with a
     /// trivial prompt in a throwaway temp dir, runs it via `sh -c` from
-    /// the temp `eval_root`, and verifies `outputs/final-message.md` is
-    /// recovered (non-empty).
+    /// the temp `eval_root`, parses the configured transcript capture, and
+    /// verifies it contains a non-empty final response.
     ///
     /// `--probe` invokes the real harness CLI (network, tokens, usage
     /// limits), so it is opt-in and never runs as part of standard CI checks
@@ -239,7 +239,7 @@ pub(crate) enum HarnessCommands {
         #[arg(long, requires = "target")]
         as_builtin: bool,
         /// Execute the dispatch exec template with a trivial prompt and verify
-        /// final-message recovery (opt-in; costs real CLI usage). See the
+        /// transcript-owned final-response recovery (opt-in; costs real CLI usage). See the
         /// subcommand description above for the full contract.
         #[arg(long)]
         probe: bool,
@@ -642,8 +642,8 @@ pub(crate) enum Commands {
     TeardownGuard(CommonArgs),
     /// Ingest recorded transcripts into run records.
     ///
-    /// Fixed-order chain: record-runs → fill-transcripts → detect-stray-writes →
-    /// grade. Assembles each task's `run.json` + `timing.json`, scans for stray
+    /// Fixed-order chain: record-runs → detect-stray-writes → grade. Assembles
+    /// each task's `run.json` + `timing.json`, scans for stray
     /// writes, and maps raw per-env guard logs through `dispatch.json` into
     /// `guard-denials.json` (including tasks without `run.json`). Malformed raw
     /// records fail with their source path and line number. It measures the
@@ -684,14 +684,15 @@ pub(crate) enum Commands {
     /// Assemble run records from a dispatch and its transcripts.
     ///
     /// Assembles a schema-valid `run.json` and backfills `timing.json` for every
-    /// task in a runner-built iteration, from `dispatch.json` +
-    /// `outputs/final-message.md` + each task's `outputs/<harness>-events.jsonl`.
+    /// task in a runner-built iteration, from `dispatch.json`,
+    /// `conversation.json`, and each task's
+    /// `outputs/turn-<n>/<harness>-events.jsonl`.
     /// Never clobbers existing records without `--overwrite`; transcript-derived
     /// timing carries `"source": "transcript"`. Use `--overwrite` to regenerate
     /// records and timing after extractor accounting changes. Folded into `ingest`.
     ///
-    /// For harnesses whose captures identify a refused tool call (Claude Code
-    /// and Codex today), it also writes `permission-denials.json` and warns on
+    /// For harnesses whose captures identify a refused tool call, it also writes
+    /// `permission-denials.json` and warns on
     /// stderr: the dispatch can exit 0 either way, so a run the harness refused
     /// — and which therefore fell back to static reasoning — is otherwise
     /// invisible. `aggregate` lifts one validity warning per affected task from
@@ -699,7 +700,7 @@ pub(crate) enum Commands {
     /// so its absence never reads as "nothing was refused".
     ///
     /// For harnesses whose captures report the session's discoverable skills and
-    /// plugins (Claude Code today), it also writes `session-surface.json` — one
+    /// plugins, it also writes `session-surface.json` — one
     /// entry per dispatch and per resumed turn — and uses it to resolve the
     /// build-time shadow preflight's findings, writing `resolved_severity` back
     /// into `plugin-shadow.json`. A finding refuted in every expected cell
@@ -709,13 +710,6 @@ pub(crate) enum Commands {
     /// surface, so its absence never reads as "nothing loaded". See
     /// `eval-magic docs isolation`.
     RecordRuns(CommonArgs),
-    /// Populate tool invocations from persisted transcripts.
-    ///
-    /// Reads each task's `outputs/<harness>-events.jsonl` and populates
-    /// `tool_invocations` in `run.json`. Subsumed by `record-runs` for
-    /// runner-built iterations; still the tool for filling a pre-existing (hand- or
-    /// agent-written) `run.json`.
-    FillTranscripts(CommonArgs),
     /// Detect writes outside each private task environment.
     ///
     /// Scans each run's `tool_invocations` and writes `stray-writes.json`: write
@@ -813,8 +807,9 @@ pub(crate) enum Commands {
     ///
     /// Extend the seed in `evals/evals.json`: `turns` scripts same-session
     /// follow-ups and `responder` derives them instead (see
-    /// `eval-magic docs conversations`), `files_root` mounts fixture sources at
-    /// the task root, and a per-eval `runs` value overrides `run --runs`. Add
+    /// `eval-magic docs conversations`), `files_root` resolves overlay sources
+    /// applied at the codebase root, and a per-eval `runs` value overrides
+    /// `run --runs`. Add
     /// assertions after the first iteration, then check the file with
     /// `eval-magic validate`.
     Init(InitArgs),

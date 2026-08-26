@@ -608,11 +608,7 @@ mod tests {
     #[test]
     fn a_relative_redirection_resolves_from_the_task_environment() {
         let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": "printf done > final-message.md"}),
-                0,
-            )],
+            &[inv("Bash", json!({"command": "printf done > notes.md"}), 0)],
             ALLOWED_ROOT,
             Path::new(ALLOWED_ROOT),
         );

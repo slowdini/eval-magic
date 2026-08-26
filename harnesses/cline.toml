@@ -114,16 +114,10 @@ preflight = "cline-skills"
 # (a hidden flag) pins act mode: the global `planActMode` setting otherwise
 # applies to headless dispatches and converts them to read-only plan sessions
 # that refuse writes. Piped stdin is treated as extra prompt context, so
-# every recipe detaches it with </dev/null, same as codex. There is no
-# --output-last-message: the terminal
-# `run_result` event carries the final text, and the trailing jq step writes
-# `final-message.md` from the captured events (the probe's final-message
-# contract checks that file; ingest recovers final text from the events file
-# via the extract mapping above). The parallel block runs nested inside the
-# shared scaffold's `sh -c '...'`, where a single quote would terminate the
-# body, so its jq program uses escaped double quotes.
+# every recipe detaches it with </dev/null, same as codex. The terminal
+# `run_result` event carries the final text, which the transcript parser reads
+# directly.
 [dispatch]
-capture_prefix = "cline"
 next_steps_template = '''
 
 Next: eval-magic dispatch{target_args} --iteration {iteration} --harness cline
@@ -133,13 +127,11 @@ cline --cwd <eval-root> --act --json --auto-approve true{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/cline-events.jsonl \
-  2> <outputs_dir>/cline-stderr.log; \
-  jq -rj 'select(.type == "run_result") | .text' <outputs_dir>/cline-events.jsonl \
-  > <outputs_dir>/final-message.md'''
+  2> <outputs_dir>/cline-stderr.log'''
 manifest_template = '''
 Harness dispatch (Cline):
 
-`eval-magic dispatch` runs one fresh `cline --cwd <eval-root> --act --json --auto-approve true` per task. Detach stdin with `</dev/null>` so piped task data cannot become extra prompt context; capture stdout as `outputs/turn-<n>/cline-events.jsonl` and stderr as `outputs/turn-<n>/cline-stderr.log`. `eval-magic dispatch` writes `outputs/final-message.md` itself from the parsed transcript; the template's trailing jq step is a belt-and-braces copy of the terminal `run_result` event.
+`eval-magic dispatch` runs one fresh `cline --cwd <eval-root> --act --json --auto-approve true` per task. Detach stdin with `</dev/null>` so piped task data cannot become extra prompt context; capture stdout as `outputs/turn-<n>/cline-events.jsonl` and stderr as `outputs/turn-<n>/cline-stderr.log`. Ingest recovers the final response directly from the terminal `run_result` event.
 
 ```bash
 {exec_command}

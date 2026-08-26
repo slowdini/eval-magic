@@ -191,7 +191,7 @@ fn codex_relative_redirection_inside_hook_cwd_allows() {
         "hook_event_name": "PreToolUse",
         "cwd": "/work/.eval-magic/eval-root",
         "tool_name": "Bash",
-        "tool_input": { "command": "printf '%s\n' done > final-message.md" }
+        "tool_input": { "command": "printf '%s\n' done > notes.md" }
     }"#;
     assert_eq!(verdict("codex", payload, Some(marker())), None);
 }
@@ -221,14 +221,14 @@ fn codex_redirection_scanner_allows_literal_targets_inside_hook_cwd() {
         "printf done > /work/.eval-magic/absolute.txt",
         "printf done > fixtures/output.txt",
         "printf done > ./fixtures/output.txt",
-        "printf done > .eval-magic-outputs/final-message.md",
-        "printf done > final-message.md",
+        "printf done > .eval-magic-outputs/harness-events.jsonl",
+        "printf done > notes.md",
         "printf done 2>>\"quoted path.log\"",
         "printf done >| overwritten.txt",
         "printf done > stdout.txt 2>> stderr.txt",
         "printf done | tee \"quoted path.log\"",
         "printf done | tee -a one.txt two.txt",
-        "printf done | sudo tee final-message.md",
+        "printf done | sudo tee notes.md",
     ] {
         assert_eq!(
             codex_bash_verdict(command),
@@ -247,8 +247,8 @@ fn codex_redirection_scanner_allows_file_descriptor_duplication() {
         "printf done >&2",
         "printf done 1>&2",
         "printf done >&-",
-        "printf done > final-message.md 2>&1",
-        "printf done | tee final-message.md 2>&1",
+        "printf done > notes.md 2>&1",
+        "printf done | tee notes.md 2>&1",
     ] {
         assert_eq!(
             codex_bash_verdict(command),
@@ -351,7 +351,7 @@ fn guard_denials_append_privacy_safe_sorted_metadata_and_allows_do_not_log() {
         "hook_event_name": "PreToolUse",
         "cwd": eval_root,
         "tool_name": "Bash",
-        "tool_input": { "command": "printf done > final-message.md" },
+        "tool_input": { "command": "printf done > notes.md" },
     });
     assert_eq!(
         verdict("codex", &allowed.to_string(), Some(marker.clone())),

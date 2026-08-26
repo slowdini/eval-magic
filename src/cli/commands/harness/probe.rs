@@ -1,7 +1,8 @@
 //! The `harness lint --probe` live dispatch check: render
 //! `dispatch.exec_template` with a trivial prompt in a throwaway temp dir,
-//! execute it, and verify `outputs/final-message.md` is recovered. Invokes the
-//! real harness CLI, so it is opt-in and never part of standard CI checks.
+//! execute it, and verify its configured transcript parser recovers a final
+//! response. Invokes the real harness CLI, so it is opt-in and never part of
+//! standard CI checks.
 
 use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
@@ -48,19 +49,21 @@ pub(crate) enum ProbeError {
     ExecFailed(ExitStatus),
     #[error("exec template timed out after {0:?}")]
     Timeout(Duration),
-    #[error("outputs/final-message.md is missing")]
-    FinalMessageMissing,
-    #[error("outputs/final-message.md is empty")]
-    FinalMessageEmpty,
+    #[error("the descriptor declares no transcript parser")]
+    TranscriptUnavailable,
+    #[error("{0} is missing")]
+    TranscriptMissing(String),
+    #[error("{path} could not be parsed: {message}")]
+    TranscriptUnreadable { path: String, message: String },
+    #[error("{0} contains no non-empty final response")]
+    FinalResponseMissing(String),
 }
 
 /// Render the exec template with the angle placeholders (`<eval-root>`,
 /// `<dispatch_prompt_path>`, `<outputs_dir>`, `<round>`) shell-quoted and the
 /// machine placeholders (`{model_arg}`, `{guard_args}`) filled. Mirrors the
-/// conversation driver at `src/cli/run/conversation.rs:317` — single
-/// left-to-right pass, unknown braces pass through verbatim. `<round>` is
-/// intentionally not substituted: the probe is single-shot (turn 1 only), so
-/// the exec template never sees rounds and any `<round>` survives verbatim.
+/// conversation driver's single left-to-right pass; unknown braces pass
+/// through verbatim. The probe is a single turn, so `<round>` resolves to `1`.
 #[allow(clippy::needless_pass_by_value)]
 fn render_probe_exec(
     template: &str,
@@ -77,21 +80,37 @@ fn render_probe_exec(
         &template
             .replace("<eval-root>", &quoted_eval_root)
             .replace("<dispatch_prompt_path>", &quoted_prompt_path)
-            .replace("<outputs_dir>", &quoted_outputs_dir),
+            .replace("<outputs_dir>", &quoted_outputs_dir)
+            .replace("<round>", "1"),
         &[("model_arg", model_arg), ("guard_args", guard_args)],
     )
 }
 
-/// Verify the final-message recovery contract: `outputs_dir/final-message.md`
-/// exists and is non-empty after trimming.
-fn verify_final_message(outputs_dir: &Path) -> Result<(), ProbeError> {
-    let path = outputs_dir.join("final-message.md");
+/// Verify the runner-readiness contract: the configured events file exists,
+/// parses successfully, and yields a non-empty final response.
+fn verify_transcript(descriptor: &HarnessDescriptor, outputs_dir: &Path) -> Result<(), ProbeError> {
+    let transcript = descriptor
+        .transcript
+        .as_ref()
+        .ok_or(ProbeError::TranscriptUnavailable)?;
+    let path = outputs_dir.join(&transcript.events_filename);
+    let display = path.display().to_string();
     if !path.exists() {
-        return Err(ProbeError::FinalMessageMissing);
+        return Err(ProbeError::TranscriptMissing(display));
     }
-    let contents = std::fs::read_to_string(&path).map_err(|_| ProbeError::FinalMessageMissing)?;
-    if contents.trim().is_empty() {
-        return Err(ProbeError::FinalMessageEmpty);
+    let summary =
+        transcript
+            .parse_full(&path)
+            .map_err(|error| ProbeError::TranscriptUnreadable {
+                path: display.clone(),
+                message: error.to_string(),
+            })?;
+    if summary
+        .final_text
+        .as_deref()
+        .is_none_or(|text| text.trim().is_empty())
+    {
+        return Err(ProbeError::FinalResponseMissing(display));
     }
     Ok(())
 }
@@ -170,8 +189,10 @@ pub(crate) fn run_probe(
         .map_err(ProbeError::SpawnFailed);
     match probed {
         Ok(ShellOutcome::Exited(status)) if status.success() => {
-            match verify_final_message(&outputs_dir) {
-                Ok(()) => println!("✓ live exec template: final-message recovered"),
+            match verify_transcript(&descriptor, &outputs_dir) {
+                Ok(()) => {
+                    println!("✓ live exec template: transcript final response recovered")
+                }
                 Err(e) => {
                     eprintln!("✗ {e}");
                     failed += 1;
@@ -201,7 +222,6 @@ pub(crate) fn run_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
     use std::path::PathBuf;
 
     fn dir(p: &str) -> PathBuf {
@@ -224,9 +244,7 @@ mod tests {
         assert!(rendered.contains("--root '/path with space/eval'"));
         assert!(rendered.contains("--prompt '/path with space/probe-prompt.md'"));
         assert!(rendered.contains("--out /var/tmp/out"));
-        // The probe is single-shot — `<round>` is not a probe placeholder and
-        // must survive verbatim (the exec template never sees rounds).
-        assert!(rendered.contains("--round <round>"));
+        assert!(rendered.contains("--round 1"));
         // Machine placeholders substituted in place.
         assert!(rendered.contains("--model-X gpt-x"));
         assert!(rendered.contains("--guard on"));
@@ -244,30 +262,5 @@ mod tests {
         // closing `'` immediately after (no trailing space supplied).
         assert!(rendered.contains("'echo ${JOBS:-4} m'"));
         assert!(!rendered.contains("{model_arg}"));
-    }
-
-    #[test]
-    fn verify_final_message_accepts_a_non_empty_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join("final-message.md"), "ok\n").unwrap();
-        verify_final_message(tmp.path()).expect("non-empty file should pass");
-    }
-
-    #[test]
-    fn verify_final_message_rejects_a_missing_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let err = verify_final_message(tmp.path()).expect_err("missing should fail");
-        assert!(
-            matches!(err, ProbeError::FinalMessageMissing),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn verify_final_message_rejects_a_blank_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join("final-message.md"), "   \n\t \n").unwrap();
-        let err = verify_final_message(tmp.path()).expect_err("blank should fail");
-        assert!(matches!(err, ProbeError::FinalMessageEmpty), "got {err:?}");
     }
 }

@@ -102,7 +102,7 @@ pub struct Eval {
     pub expected_output: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
-    /// Optional source base under `<skill>/evals/`. Fixture destinations remain
+    /// Optional source base under `<skill>/evals/`. Overlay destinations remain
     /// the task-relative paths declared in [`Self::files`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_root: Option<String>,
@@ -116,11 +116,6 @@ pub struct Eval {
     /// to the flag's value (1 unless raised).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u32>,
-    /// Legacy isolation hint retained for config compatibility. Canonical runs
-    /// already give every dispatch a private environment for diff-scope capture,
-    /// so `shared` and `isolated` currently have the same effective isolation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub isolation: Option<Isolation>,
     /// Ordered scripted user follow-ups. Absence preserves one-shot dispatch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turns: Option<Vec<ScriptedTurn>>,
@@ -192,14 +187,6 @@ impl ResponderPolicy {
     pub fn max_turns(&self) -> u32 {
         self.max_turns.unwrap_or(DEFAULT_RESPONDER_MAX_TURNS)
     }
-}
-
-/// Legacy per-eval isolation hint. Every new run is task-scoped regardless.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Isolation {
-    Shared,
-    Isolated,
 }
 
 /// Where a task environment's contents come from: a Git repository at an
@@ -489,8 +476,8 @@ pub struct ConditionsRecord {
     /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
-    /// Codebases the iteration's environments were built from. Empty for a
-    /// fixture-only iteration, which keeps its `conditions.json` unchanged.
+    /// Codebases the iteration's environments were built from. Empty only when
+    /// reading a historical iteration that predates codebase provenance.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub codebases: Vec<CodebaseUse>,
     /// The skill under test, as the run resolved and copied it. Appended last,
@@ -547,7 +534,7 @@ pub struct RunRecord {
     /// The codebase this run's environment was built from. Grading reads
     /// `run.json` and nothing else, so a result can only be tied to a tree if
     /// the record names one. Appended last, and omitted when absent, so a
-    /// fixture-only record serializes as it always did.
+    /// historical records that predate codebase provenance still deserialize.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codebase: Option<CodebaseRecord>,
     /// The skill under test this run staged. Grading reads `run.json` and nothing
@@ -801,7 +788,6 @@ mod tests {
             assertions: None,
             skill_should_trigger: None,
             runs: None,
-            isolation: None,
             turns: None,
             codebase: None,
             responder: None,
@@ -814,32 +800,6 @@ mod tests {
         assert!(out.get("skill_should_trigger").is_none());
         assert!(out.get("runs").is_none());
         assert!(out.get("isolation").is_none());
-    }
-
-    #[test]
-    fn isolation_round_trips_snake_case() {
-        let eval = Eval {
-            id: "e1".into(),
-            prompt: "p".into(),
-            expected_output: "o".into(),
-            files: None,
-            files_root: None,
-            assertions: None,
-            skill_should_trigger: None,
-            runs: None,
-            isolation: Some(Isolation::Isolated),
-            turns: None,
-            codebase: None,
-            responder: None,
-            guard: None,
-        };
-        let out = serde_json::to_value(&eval).unwrap();
-        assert_eq!(
-            out.get("isolation"),
-            Some(&Value::String("isolated".into()))
-        );
-        let back: Eval = serde_json::from_value(out).unwrap();
-        assert_eq!(back.isolation, Some(Isolation::Isolated));
     }
 
     #[test]
@@ -948,7 +908,7 @@ mod tests {
     fn codebase_use_records_effective_skill_source_exclusion() {
         let value = serde_json::json!({
             "kind": "path",
-            "source": "../fixture",
+            "source": "../project",
             "branch": "work",
             "exclude_skill_sources": true,
             "evals": ["e1"]

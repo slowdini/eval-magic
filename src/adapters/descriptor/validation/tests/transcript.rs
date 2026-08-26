@@ -133,6 +133,16 @@ fn rejects_empty_extract_block() {
 }
 
 #[test]
+fn rejects_declarative_transcript_without_assistant_or_final_text() {
+    let err = err_of(&format!(
+        "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\n\
+         [transcript.extract.tools]\nname_field = \"name\"\n"
+    ));
+    assert!(err.contains("final response"), "{err}");
+    assert!(err.contains("final_text"), "{err}");
+}
+
+#[test]
 fn rejects_duration_with_both_variants_or_neither() {
     for duration_block in [
         "field = \"elapsed_ms\"\ntimestamp_spread = \"timestamp\"\n",

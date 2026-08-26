@@ -10,7 +10,6 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter
@@ -24,30 +23,16 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
             "delivered_followups": 1,
             "events": [
                 {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
-                {"type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which timezone?"},
-                {"type": "user_message", "ordinal": 2, "round": 2, "text": "US timezones."},
-                {
-                    "type": "tool_invocation",
-                    "ordinal": 3,
-                    "round": 2,
-                    "name": "file_change",
-                    "args": {"path": "src/date.rs"}
-                },
-                {
-                    "type": "assistant_message",
-                    "ordinal": 4,
-                    "round": 2,
-                    "text": "Updated the date handling."
-                }
+                {"type": "user_message", "ordinal": 1, "round": 2, "text": "US timezones."}
             ]
         }))
         .unwrap(),
     )
     .unwrap();
-    for round in [1, 2] {
+    for (round, final_text) in [(1, "Which timezone?"), (2, "Updated the date handling.")] {
         let round_dir = paths[0].outputs_dir.join(format!("turn-{round}"));
         fs::create_dir_all(&round_dir).unwrap();
-        write_codex_events(&round_dir, "unused");
+        write_codex_events(&round_dir, final_text);
     }
     let dispatch_path = iter.join("dispatch.json");
     let mut dispatch: Value =
@@ -70,18 +55,79 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
     assert_eq!(run.final_message, "Updated the date handling.");
     assert_eq!(
         serde_json::to_value(&run.tool_invocations).unwrap(),
-        json!([{
-            "name": "file_change",
-            "args": {"path": "src/date.rs"},
-            "ordinal": 3
-        }])
+        json!([
+            {
+                "name": "command_execution",
+                "args": {"command": "bun test"},
+                "ordinal": 1,
+                "result": "ok"
+            },
+            {
+                "name": "command_execution",
+                "args": {"command": "bun test"},
+                "ordinal": 4,
+                "result": "ok"
+            }
+        ])
     );
-    assert_eq!(run.conversation.unwrap().delivered_followups, 1);
+    assert_eq!(
+        serde_json::to_value(run.conversation.unwrap()).unwrap()["events"],
+        json!([
+            {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
+            {"type": "tool_invocation", "ordinal": 1, "round": 1, "name": "command_execution", "args": {"command": "bun test"}, "result": "ok"},
+            {"type": "assistant_message", "ordinal": 2, "round": 1, "text": "Which timezone?"},
+            {"type": "user_message", "ordinal": 3, "round": 2, "text": "US timezones."},
+            {"type": "tool_invocation", "ordinal": 4, "round": 2, "name": "command_execution", "args": {"command": "bun test"}, "result": "ok"},
+            {"type": "assistant_message", "ordinal": 5, "round": 2, "text": "Updated the date handling."}
+        ])
+    );
 
     let timing = read_timing_value(&iter, "clarify", "with_skill");
     assert_eq!(timing["total_tokens"], 40);
     assert_eq!(timing["duration_ms"], 60_000);
     assert_eq!(timing["source"], "transcript");
+}
+
+#[test]
+fn one_shot_task_without_its_completion_artifact_is_skipped_as_incomplete() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "one-shot",
+            condition: "with_skill",
+        }],
+    );
+    let round_dir = paths[0].outputs_dir.join("turn-1");
+    fs::create_dir_all(&round_dir).unwrap();
+    write_claude_events(&round_dir, "Done.");
+
+    let dispatch_path = iter.join("dispatch.json");
+    let mut dispatch: Value =
+        serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
+    dispatch["tasks"][0]["conversation_path"] = json!(
+        iter.join("eval-one-shot")
+            .join("with_skill")
+            .join("conversation.json")
+            .to_string_lossy()
+    );
+    fs::write(
+        &dispatch_path,
+        serde_json::to_string_pretty(&dispatch).unwrap(),
+    )
+    .unwrap();
+
+    let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
+
+    assert_eq!(result.skipped_incomplete_conversation, 1);
+    assert_eq!(result.recorded, 0);
+    let warning = result
+        .incomplete_conversation_warning()
+        .expect("missing completion artifact is reported");
+    assert!(warning.contains("1 task skipped"), "{warning}");
+    assert!(!warning.contains("multi-turn"), "{warning}");
+    assert!(!paths[0].run_record_path.exists());
 }
 
 #[test]
@@ -93,7 +139,6 @@ fn assembles_multi_turn_run_by_summing_independent_claude_round_timing() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter
@@ -150,7 +195,6 @@ fn skips_multi_turn_run_when_conversation_shows_failed_prompt_read() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let prompt_path = iter
@@ -172,21 +216,7 @@ fn skips_multi_turn_run_when_conversation_shows_failed_prompt_read() {
             "status": "completed",
             "delivered_followups": 0,
             "events": [
-                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
-                {
-                    "type": "tool_invocation",
-                    "ordinal": 1,
-                    "round": 1,
-                    "name": "Read",
-                    "args": {"file_path": prompt_path.to_string_lossy()},
-                    "result": "<tool_use_error>File is outside the allowed working directory.</tool_use_error>"
-                },
-                {
-                    "type": "assistant_message",
-                    "ordinal": 2,
-                    "round": 1,
-                    "text": "I could not read the prompt file."
-                }
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."}
             ]
         }))
         .unwrap(),
@@ -194,7 +224,12 @@ fn skips_multi_turn_run_when_conversation_shows_failed_prompt_read() {
     .unwrap();
     let round_dir = paths[0].outputs_dir.join("turn-1");
     fs::create_dir_all(&round_dir).unwrap();
-    write_claude_events(&round_dir, "unused");
+    write_claude_events_prompt_read(
+        &round_dir,
+        &prompt_path.to_string_lossy(),
+        "<tool_use_error>File is outside the allowed working directory.</tool_use_error>",
+        "I could not read the prompt file.",
+    );
 
     let dispatch_path = iter.join("dispatch.json");
     let mut dispatch: Value =
@@ -225,7 +260,6 @@ fn does_not_record_partial_timing_when_a_conversation_round_transcript_is_missin
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter
@@ -283,7 +317,6 @@ fn a_responder_task_without_its_completion_artifact_is_skipped_as_incomplete() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: Some("Which cache?"),
         }],
     );
     let round_dir = paths[0].outputs_dir.join("turn-1");
@@ -326,7 +359,6 @@ fn records_a_run_whose_conversation_timed_out_in_a_later_round() {
         &[FixtureTask {
             eval_id: "clarify",
             condition: "with_skill",
-            final_message: None,
         }],
     );
     let conversation_path = iter

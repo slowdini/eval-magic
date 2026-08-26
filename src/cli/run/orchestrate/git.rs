@@ -3,15 +3,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::adapters::registry::all_config_dir_names;
-use crate::core::{BASELINE_REF, GitOutput, IsolatedGit, run_git};
-use crate::source::INITIALIZED_BRANCH;
-
 use super::super::RunError;
-use super::super::fixtures::fixture_pairs;
+use super::super::overlays::overlay_file_pairs;
 use super::Resolved;
 use super::envs::{EnvLayoutInput, env_targets};
+use crate::adapters::registry::all_config_dir_names;
 use crate::core::RunContext;
+use crate::core::{BASELINE_REF, GitOutput, IsolatedGit, run_git};
 
 const BASELINE_MESSAGE: &str = "eval-magic task baseline";
 const BASELINE_NAME: &str = "eval-magic";
@@ -42,16 +40,9 @@ pub(super) fn initialize_task_repositories(
         skill_path_b: resolved.skill_path_b.as_deref(),
     });
     for target in targets {
-        let codebase = resolved.codebase_for(&target.eval_ids)?;
+        resolved.codebase_for(&target.eval_ids)?;
         let plan = TaskRepository {
             root: target.root.clone(),
-            // A sourced environment already *is* a repository, carrying the
-            // history the clone brought with it.
-            sourced: codebase.is_some(),
-            branch: codebase.map_or_else(
-                || INITIALIZED_BRANCH.to_string(),
-                |codebase| codebase.source.branch.clone(),
-            ),
             forced_paths: runner_placed_paths(ctx, resolved, &target)?,
         };
         initialize_task_repository(&plan).map_err(|error| {
@@ -70,7 +61,7 @@ pub(super) fn initialize_task_repositories(
 /// A real repository ignores its build output, and a blanket forced add would
 /// sweep `target/` or `node_modules/` into the baseline. So the baseline add
 /// respects `.gitignore` and these paths — the harness config directories, and
-/// the declared fixture overlay — are forced on top of it.
+/// the declared file overlay — are forced on top of it.
 fn runner_placed_paths(
     ctx: &RunContext,
     resolved: &Resolved,
@@ -88,7 +79,7 @@ fn runner_placed_paths(
         else {
             continue;
         };
-        for (dest, _source) in fixture_pairs(eval, &ctx.skill_subdir)? {
+        for (dest, _source) in overlay_file_pairs(eval, &ctx.skill_subdir)? {
             if target.root.join(&dest).exists() {
                 paths.push(dest);
             }
@@ -102,10 +93,6 @@ fn runner_placed_paths(
 /// One task repository to establish.
 struct TaskRepository {
     root: PathBuf,
-    /// Whether a codebase already put a repository here. A sourced environment
-    /// keeps its `.git`; a fixture-only one is initialized from nothing.
-    sourced: bool,
-    branch: String,
     forced_paths: Vec<String>,
 }
 
@@ -113,28 +100,9 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     let root = plan.root.as_path();
     let git = IsolatedGit::new()?;
 
-    if plan.sourced {
-        // The clone's history is the point of sourcing a codebase, so this is
-        // the one case that must not reset `.git`.
-        strip_remotes(root, &git)?;
-    } else {
-        remove_existing_git_dir(root)?;
-        let template = git.template_dir().to_string_lossy().into_owned();
-        run_checked(
-            &git,
-            root,
-            &[
-                "init",
-                "--quiet",
-                "--initial-branch",
-                &plan.branch,
-                "--template",
-                &template,
-                ".",
-            ],
-            &[],
-        )?;
-    }
+    // Materialization wraps even a historyless directory in a repository.
+    // Preserve that source history while severing every route back to it.
+    strip_remotes(root, &git)?;
 
     let hooks_dir = root.join(".git/eval-magic-disabled-hooks");
     fs::create_dir_all(root.join(".git/info"))
@@ -218,26 +186,6 @@ fn strip_remotes(root: &Path, git: &IsolatedGit) -> Result<(), String> {
         run_checked(git, root, &["remote", "remove", remote], &[])?;
     }
     Ok(())
-}
-
-fn remove_existing_git_dir(root: &Path) -> Result<(), String> {
-    let git_dir = root.join(".git");
-    let metadata = match fs::symlink_metadata(&git_dir) {
-        Ok(metadata) => metadata,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(error) => return Err(format!("could not inspect {}: {error}", git_dir.display())),
-    };
-    if metadata.is_dir() && !metadata.file_type().is_symlink() {
-        fs::remove_dir_all(&git_dir)
-    } else {
-        fs::remove_file(&git_dir)
-    }
-    .map_err(|error| {
-        format!(
-            "could not reset runner-owned {}: {error}",
-            git_dir.display()
-        )
-    })
 }
 
 fn verify_task_repository(root: &Path, git: &IsolatedGit) -> Result<(), String> {

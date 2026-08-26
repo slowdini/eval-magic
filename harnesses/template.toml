@@ -45,17 +45,12 @@ label = "{label}"
 ##   <eval-root>, <dispatch_prompt_path>, <outputs_dir> are prose placeholders whoever
 ##   dispatches fills per task (the runbook explains each).
 ## Two hard requirements: the command runs from the task's <eval-root> (the env dir is the
-## subprocess cwd), and the agent's final reply must land in <outputs_dir>/final-message.md —
-## if the CLI cannot write it directly, capture it like the redirect below.
-## VERIFY: run the command once by hand with a trivial prompt and confirm the final message
-## actually lands in the redirect before declaring this. Multi-line templates are fine in TOML
+## subprocess cwd), and it captures the native event stream at the [transcript].events_filename
+## path under <outputs_dir>. VERIFY with `eval-magic harness lint --probe`; the probe parses that
+## capture and requires a non-empty final response. Multi-line templates are fine in TOML
 ## '''...''' strings — see `eval-magic harness show claude-code`.
 # [dispatch]
-# exec_template = '{label} run --cd <eval-root>{model_arg} "Read the file at <dispatch_prompt_path> and follow its instructions exactly." > <outputs_dir>/final-message.md'
-
-## capture_prefix names this harness's transcript file (<prefix>-events.jsonl), which
-## `eval-magic dispatch` reads back after each round.
-# capture_prefix = "{label}"
+# exec_template = '{label} run --cd <eval-root>{model_arg} "Read the file at <dispatch_prompt_path> and follow its instructions exactly." > <outputs_dir>/{label}-events.jsonl'
 
 ## next_steps_template is the post-run handoff text ({exec_command}, {target_args}, {iteration},
 ## {model_note} placeholders; referencing {model_note} requires the model_note field).
@@ -242,10 +237,11 @@ label = "{label}"
 ## Before opening a PR (`eval-magic docs byoh` "Upstreaming your descriptor"):
 ##   1. eval-magic harness lint .eval-magic/harnesses/{label}.toml — all checks pass.
 ##   2. A real smoke eval: eval-magic run --harness {label}, dispatch the tasks, then ingest and
-##      finalize — the preflight warnings name the fallback carrying anything not declared.
+##      finalize — the preflight warnings name optional capabilities using a fallback.
 ##      For the exec template specifically, `eval-magic harness lint .eval-magic/harnesses/{label}.toml
-##      --probe --yes` renders it with a trivial prompt and verifies final-message recovery — opt-in,
-##      invokes the real harness CLI, never part of standard CI. See `harness lint --help`.
+##      --probe --yes` renders it with a trivial prompt, parses the captured transcript, and verifies
+##      final-response recovery — opt-in, invokes the real harness CLI, never part of standard CI.
+##      See `harness lint --help`.
 ##   3. .eval-magic/harnesses/{label}-notes.md records every verified value, its source, and the
 ##      harness version.
 ##   4. Open the PR with .github/PULL_REQUEST_TEMPLATE/harness-descriptor.md — a data-only PR:

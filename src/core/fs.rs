@@ -8,7 +8,7 @@
 //!
 //! [`copy_entry_materialized`] is the one way to copy here, and it resolves
 //! symlinks into their target's content rather than mirroring them. Every
-//! destination in this tree wants that: staging and fixtures copy *into* an
+//! destination in this tree wants that: staging and overlays copy *into* an
 //! isolated task env, where a preserved link would point back out of the
 //! sandbox, and a snapshot must freeze content so a later run compares against
 //! what was captured rather than whatever the link now points at.

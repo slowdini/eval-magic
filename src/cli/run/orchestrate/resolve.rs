@@ -13,8 +13,8 @@ use crate::validation::validate_evals_config;
 
 use super::super::RunError;
 use super::super::dispatch::select_evals;
-use super::super::fixtures::{fixture_pairs, setup_file_pairs};
 use super::super::grouping::{GroupInput, compute_groups};
+use super::super::overlays::{overlay_file_pairs, setup_file_pairs};
 use super::super::util::{condition_names_for, make_run_nonce, next_iteration};
 use super::{Resolved, RunCodebase, RunOptions, RunSkill, skills_copy_root};
 
@@ -36,9 +36,11 @@ fn resolve_codebases(
     let mut codebases: Vec<RunCodebase> = Vec::new();
 
     for eval in selected {
-        let Some(declared) = eval.codebase.as_ref().or(config.codebase.as_ref()) else {
-            continue;
-        };
+        let declared = eval
+            .codebase
+            .as_ref()
+            .or(config.codebase.as_ref())
+            .expect("validated eval has an effective codebase");
         if let Some(existing) = codebases
             .iter_mut()
             .find(|candidate| &candidate.declared == declared)
@@ -207,23 +209,15 @@ pub(super) fn resolve_request(ctx: &RunContext, opts: &RunOptions) -> Result<Res
         }
     }
 
-    // Compute isolation groups up front (fixture-conflict + explicit hint), before
-    // any env is staged: staging and dispatch both consume this plan. `fixture_pairs`
-    // also fails fast here if a declared fixture is missing.
-    let fixture_pairs_by_eval = selected_evals
-        .iter()
-        .map(|ev| fixture_pairs(ev, &ctx.skill_subdir))
-        .collect::<Result<Vec<_>, _>>()?;
+    // Resolve overlay sources before any environment is staged, so a missing
+    // declared file fails without leaving a partial iteration behind.
+    for eval in &selected_evals {
+        overlay_file_pairs(eval, &ctx.skill_subdir)?;
+    }
     let group_inputs: Vec<GroupInput> = selected_evals
         .iter()
-        .zip(&fixture_pairs_by_eval)
-        .map(|(ev, fixtures)| GroupInput {
+        .map(|ev| GroupInput {
             eval_id: &ev.id,
-            isolation: ev.isolation,
-            fixtures,
-            // Every canonical run publishes final-environment diff metrics, so
-            // each eval/run needs a private environment.
-            task_scoped: true,
             runs: ev.runs.unwrap_or(opts.runs),
         })
         .collect();

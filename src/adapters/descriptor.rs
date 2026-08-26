@@ -270,8 +270,6 @@ pub struct DispatchSection {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub capture_prefix: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub guard_args: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_note: Option<String>,
@@ -304,7 +302,6 @@ impl DispatchSection {
     /// True when no dispatch field is set.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
-            && self.capture_prefix.is_none()
             && self.guard_args.is_none()
             && self.model_note.is_none()
             && self.next_steps_template.is_none()
@@ -843,6 +840,15 @@ timestamp_spread = "timestamp"
     }
 
     #[test]
+    fn rejects_the_retired_capture_prefix_field() {
+        let err = err_of(&format!(
+            "{MINIMAL}\n[dispatch]\ncapture_prefix = \"demo\"\n"
+        ));
+        assert!(err.contains("capture_prefix"), "{err}");
+        assert!(err.contains("harness-descriptor schema"), "{err}");
+    }
+
+    #[test]
     fn merge_deep_merges_tables_and_replaces_scalars_and_arrays() {
         let mut base: serde_json::Value = toml::from_str(
             r#"
@@ -853,7 +859,7 @@ config_dirs = [".demo"]
 flag = "--model"
 
 [dispatch]
-capture_prefix = "demo"
+exec_template = "demo run"
 
 [dispatch.env]
 KEEP = "base"
@@ -879,7 +885,7 @@ TZ = "America/Los_Angeles"
         // Nested-table scalar replaced; sibling table untouched; array replaced
         // wholesale (no element-wise merge).
         assert_eq!(base["model"]["flag"], "--model-x");
-        assert_eq!(base["dispatch"]["capture_prefix"], "demo");
+        assert_eq!(base["dispatch"]["exec_template"], "demo run");
         assert_eq!(base["dispatch"]["env"]["KEEP"], "base");
         assert_eq!(base["dispatch"]["env"]["ADDED"], "overlay");
         assert_eq!(

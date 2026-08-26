@@ -55,7 +55,7 @@
     },
     "codebases": {
       "type": "array",
-      "description": "Codebases the compared conditions ran against, echoed from conditions.json. Absent for fixture-only iterations.",
+      "description": "Codebases the compared conditions ran against, echoed from conditions.json. Absent only in historical benchmarks that predate codebase provenance.",
       "items": { "$ref": "#/definitions/codebaseUse" }
     },
     "skill_source": {

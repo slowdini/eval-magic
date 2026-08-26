@@ -85,8 +85,7 @@ impl RunOptions<'_> {
 struct Resolved {
     mode: Mode,
     baseline: Option<String>,
-    /// Distinct codebases the selection declares, already resolved to a commit.
-    /// Empty for a fixture-only run, which is what keeps that path unchanged.
+    /// Distinct codebases backing the selection, already resolved.
     codebases: Vec<RunCodebase>,
     /// The skill under test, resolved but not yet copied.
     skill: RunSkill,
@@ -164,32 +163,18 @@ impl RunCodebase {
 }
 
 impl Resolved {
-    /// The codebase backing an environment, given the evals sharing it.
-    ///
-    /// Production always task-scopes, so an environment carries exactly one
-    /// eval and the question is trivial. The error covers the planner's older
-    /// multi-eval grouping, where two evals with different codebases could not
-    /// share one working tree even in principle.
-    fn codebase_for(&self, eval_ids: &[String]) -> Result<Option<&RunCodebase>, RunError> {
-        let mut found: Option<&RunCodebase> = None;
-        for eval_id in eval_ids {
-            let codebase = self
-                .codebases
-                .iter()
-                .find(|candidate| candidate.eval_ids.contains(eval_id));
-            match (found, codebase) {
-                (None, next) => found = next,
-                (Some(previous), Some(next)) if !std::ptr::eq(previous, next) => {
-                    return Err(RunError::msg(format!(
-                        "evals {} share an environment but declare different codebases; \
-                         give them distinct environments",
-                        eval_ids.join(", ")
-                    )));
-                }
-                _ => {}
-            }
-        }
-        Ok(found)
+    /// The codebase backing a private eval environment.
+    fn codebase_for(&self, eval_ids: &[String]) -> Result<&RunCodebase, RunError> {
+        let [eval_id] = eval_ids else {
+            return Err(RunError::msg(format!(
+                "private task environment must contain exactly one eval, found: {}",
+                eval_ids.join(", ")
+            )));
+        };
+        self.codebases
+            .iter()
+            .find(|candidate| candidate.eval_ids.contains(eval_id))
+            .ok_or_else(|| RunError::msg(format!("eval '{eval_id}' has no resolved codebase")))
     }
 }
 
@@ -263,15 +248,10 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
         }
     }
 
-    // The harness preflight provides supported enhancements automatically (the
-    // write guard auto-arms), warns about undeclared ones (naming each
-    // fallback), and adjusts the options — it only rejects genuinely
-    // contradictory flag combinations.
-    let preflight = super::util::harness_run_preflight(
-        opts,
-        ctx,
-        super::util::evals_use_transcript_check(&resolved.selected_evals),
-    )?;
+    // The harness preflight enforces the runner-ready dispatch/transcript
+    // contract, provides supported enhancements automatically (the write guard
+    // auto-arms), and adjusts optional capabilities such as native staging.
+    let preflight = super::util::harness_run_preflight(opts, ctx)?;
     for warning in &preflight.warnings {
         eprintln!("⚠ {warning}");
     }

@@ -120,7 +120,6 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         Commands::GuardHook { harness, marker } => run_guard_hook(&harness, marker),
         Commands::Fixture(args) => run_fixture(args),
         Commands::RecordRuns(args) => run_record_runs(args),
-        Commands::FillTranscripts(args) => run_fill_transcripts(args),
         Commands::DetectStrayWrites(args) => run_detect_stray_writes(args),
         Commands::Grade(args) => run_grade(args),
         Commands::Aggregate(args) => run_aggregate(args),
