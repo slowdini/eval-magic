@@ -23,6 +23,7 @@ use crate::validation::{SchemaName, validate_against_schema};
 
 use super::GradeContext;
 use super::evidence::{EvidenceBundleRef, JUDGE_PROMPT_BYTE_LIMIT, build_evidence_bundle};
+use super::stale_verdicts;
 
 /// One judge task. `dispatch_prompt` carries the full prompt in memory but is
 /// stripped from the serialized `judge-tasks.json` (the orchestrator reads it
@@ -247,6 +248,9 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
     let code_check_available = ctx.conditions.harness.is_none() || skill_signature.is_some();
     let default_judge_model = ctx.conditions.judge_model.clone();
 
+    let tasks_path = ctx.iteration_dir.join("judge-tasks.json");
+    let previous = stale_verdicts::emitted_definitions(&tasks_path);
+
     let mut tasks: Vec<JudgeTask> = Vec::new();
     let mut summary = EmitSummary::default();
     let mut unverifiable = 0usize;
@@ -455,10 +459,13 @@ pub fn emit_judge_tasks(ctx: &GradeContext) -> Result<EmitSummary, PipelineError
         }
     }
 
+    summary
+        .warnings
+        .extend(stale_verdicts::warning(&previous, &tasks));
+
     summary.total_tasks = tasks.len();
     summary.skipped_transcript_checks = unverifiable;
 
-    let tasks_path = ctx.iteration_dir.join("judge-tasks.json");
     let file = JudgeTasksFile {
         generated: now_iso8601(),
         total_tasks: tasks.len(),

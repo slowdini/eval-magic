@@ -2,9 +2,11 @@
 
 use crate::helpers::{canonical_root, skill_eval, with_default_codebase};
 use assert_cmd::Command;
+use predicates::prelude::*;
 use predicates::str::contains;
 use std::fs;
 
+mod assertion_source;
 mod sampling;
 
 /// Write `<skill_sub>/SKILL.md` and `<skill_sub>/evals/evals.json`.

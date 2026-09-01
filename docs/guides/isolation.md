@@ -193,6 +193,11 @@ jq '.skill_source' conditions.json
 `dirty: true` means the recorded revision alone does not identify what ran. Commit the treatment
 skills before a run whose result you intend to publish.
 
+The copy freezes the treatment, not the assertions. `grade` reads `assertions` and
+`skill_should_trigger` from the live `evals/evals.json` and everything else from the copy, because
+the judging loop authors assertions from the run's own evidence, after the dispatch they grade.
+Each `grading.json` records which file supplied its assertions. See `eval-magic docs judging`.
+
 Ambient skills staged by `--skill-dir` are copied the same way, and the roster is captured once
 when the run resolves. For a multi-skill treatment, `skill_source.eval_owner` names the owner and
 `skill_source.skills` records every treatment member's resolved source and revision. The

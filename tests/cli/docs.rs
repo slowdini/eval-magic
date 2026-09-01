@@ -223,6 +223,34 @@ fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
         .stdout(contains("not a grade"))
         .stdout(contains("evals/baseline/evidence"));
 
+    // The explore-first loop is only usable if it names the file to edit and
+    // what re-reads it (#295).
+    skill_eval()
+        .args(["docs", "judging"])
+        .assert()
+        .success()
+        .stdout(contains("Which evals.json grade reads"))
+        .stdout(contains("evals/evals.json"))
+        .stdout(contains("skill_should_trigger"))
+        .stdout(contains("assertion_source"))
+        .stdout(contains("eval-magic grade --overwrite"))
+        .stdout(contains("eval-magic dispatch --judges --overwrite"));
+
+    // The isolation guide explains why the copy exists, so it has to carry the
+    // one exception rather than contradict the judging guide.
+    skill_eval()
+        .args(["docs", "isolation"])
+        .assert()
+        .success()
+        .stdout(contains("freezes the treatment, not the assertions"))
+        .stdout(contains("eval-magic docs judging"));
+
+    skill_eval()
+        .args(["grade", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("assertion_source"));
+
     skill_eval()
         .args(["run", "--help"])
         .assert()

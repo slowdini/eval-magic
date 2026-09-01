@@ -9,8 +9,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::core::fs::{copy_entry_materialized, write_json};
-use crate::core::{Assertion, AssertionCommandCheck, EvalsConfig, clear_git_environment};
+use crate::core::{Assertion, AssertionCommandCheck, clear_git_environment};
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::grade::instrument::GradingInstrument;
 use crate::validation::{SchemaName, validate_against_schema};
 
 const DIAGNOSTIC_LIMIT: usize = 2 * 1024;
@@ -28,6 +29,12 @@ pub struct CommandCheckResult {
     pub stderr: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cells: Option<Vec<CommandCheckCellResult>>,
+    /// Digest of the `command_check` this result came from. Reuse is keyed by
+    /// assertion id, so this is what tells a later grade that the check under
+    /// that id has been edited since. Absent in results that predate the record,
+    /// which make no claim either way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_digest: Option<String>,
 }
 
 /// The result of one environment-matrix cell.
@@ -41,11 +48,14 @@ pub struct CommandCheckCellResult {
     pub stderr: String,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CommandCheckSummary {
     pub executed: usize,
     pub reused: usize,
     pub failed: usize,
+    /// Reused results whose check has since been edited. Returned rather than
+    /// printed: the CLI handler owns how a warning reads.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -66,10 +76,10 @@ struct DispatchTask {
 /// order for every matching dispatch task.
 pub fn grade_command_checks(
     iteration_dir: &Path,
-    evals: &EvalsConfig,
-    skill_dir: &Path,
+    instrument: &GradingInstrument,
     overwrite: bool,
 ) -> Result<CommandCheckSummary, PipelineError> {
+    let evals = &instrument.evals;
     let has_command_checks = evals.evals.iter().any(|eval| {
         eval.assertions
             .as_deref()
@@ -138,19 +148,29 @@ pub fn grade_command_checks(
 
         for check in checks {
             validate_assertion_id(&check.id)?;
+            let digest = definition_digest(check);
             let result_path = results_dir.join(format!("{}.json", check.id));
             if result_path.exists() && !overwrite {
                 let value = serde_json::from_str(&fs::read_to_string(&result_path)?)?;
-                validate_against_schema::<CommandCheckResult>(
+                let reused = validate_against_schema::<CommandCheckResult>(
                     SchemaName::CommandCheck,
                     &value,
                     &result_path.to_string_lossy(),
                 )?;
+                if reused
+                    .definition_digest
+                    .is_some_and(|recorded| recorded != digest)
+                {
+                    summary.warnings.push(format!(
+                        "command_check '{}' for {}/{} changed since its cached result was produced; that result is reused as-is. Re-run grade with --overwrite to execute the edited check.",
+                        check.id, task.eval_id, task.condition
+                    ));
+                }
                 summary.reused += 1;
                 continue;
             }
 
-            inject_setup_files(check, skill_dir, eval_root)?;
+            inject_setup_files(check, instrument.setup_root_for(&task.eval_id), eval_root)?;
             let result = execute_command_check(check, eval_root)?;
             if !result.passed {
                 summary.failed += 1;
@@ -167,6 +187,16 @@ pub fn grade_command_checks(
     }
 
     Ok(summary)
+}
+
+/// Digest of a check's authored definition, so reuse can tell an edited check
+/// from the one that produced the cached result.
+fn definition_digest(check: &AssertionCommandCheck) -> String {
+    crate::core::fs::fnv1a_hex(
+        serde_json::to_string(check)
+            .expect("an authored command_check serializes")
+            .as_bytes(),
+    )
 }
 
 fn isolation_error(task: &DispatchTask, detail: &str) -> PipelineError {
@@ -243,6 +273,7 @@ pub(super) fn execute_command_check(
             stdout: cell.stdout,
             stderr: cell.stderr,
             cells: None,
+            definition_digest: Some(definition_digest(assertion)),
         });
     };
 
@@ -280,6 +311,7 @@ pub(super) fn execute_command_check(
         stdout: String::new(),
         stderr: String::new(),
         cells: Some(cells),
+        definition_digest: Some(definition_digest(assertion)),
     })
 }
 

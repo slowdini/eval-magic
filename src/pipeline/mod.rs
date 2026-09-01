@@ -31,6 +31,9 @@ pub use diff_scope::{
     DiffScopeMetrics, DiffScopeRecord, DiffScopeSummary, PatchRecord, measure_iteration_diff_scopes,
 };
 pub use error::PipelineError;
-pub use grade::{GradeContext, emit_judge_tasks, finalize, grade_command_checks};
+pub use grade::{
+    GradeContext, GradingInstrument, emit_judge_tasks, finalize, grade_command_checks,
+    resolve_grading_instrument,
+};
 pub use record_runs::{RecordRunsResult, record_runs};
 pub use slots::{RunSlot, run_slots};
