@@ -14,7 +14,6 @@ use crate::cli::{
 use crate::core::RunContext;
 use crate::pipeline;
 use crate::sandbox;
-use crate::validation;
 use std::path::{Path, PathBuf};
 
 /// The command that dispatches the judge tasks `ingest` emitted. Harness-
@@ -251,10 +250,12 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
 /// iteration holds, falling back to the live tree for iterations prepared before
 /// skills were sourced.
 ///
-/// Eval definitions and held-out command-check setup files are inputs to what the
-/// run measured, so they have to come from what the run captured. Live-source
-/// detection is the deliberate exception — it needs the live path precisely
-/// because that is what it is looking for.
+/// The eval definitions that describe what ran — prompt, files, turns, codebase —
+/// have to come from what the run captured, so this is where they are read from.
+/// Assertions are the exception, resolved against the live tree by
+/// [`crate::pipeline::resolve_grading_instrument`]: they are the measuring
+/// instrument, not the treatment. Live-source detection is the other exception —
+/// it needs the live path precisely because that is what it is looking for.
 fn graded_skill_subdir(ctx: &RunContext, iteration_dir: &Path) -> PathBuf {
     let copied = iteration_dir.join(".skills").join(&ctx.skill_name);
     if copied.is_dir() {
@@ -262,6 +263,22 @@ fn graded_skill_subdir(ctx: &RunContext, iteration_dir: &Path) -> PathBuf {
     } else {
         ctx.skill_subdir.clone()
     }
+}
+
+/// The line that keeps a grading summary from being ambiguous about which
+/// `evals.json` produced it. `Judge tasks: 0` reads as "my assertions did not
+/// match" unless the file measured against is named beside it.
+fn assertion_source_summary(instrument: &pipeline::GradingInstrument) -> String {
+    let path = &instrument.source.path;
+    if !instrument.source.refreshed {
+        return format!("Assertions: {path} (unchanged since the run)");
+    }
+    let ids: Vec<&str> = instrument.refreshed_eval_ids().collect();
+    format!(
+        "Assertions: {path}\n  refreshed — differs from the run-time copy for {} eval(s): {}",
+        ids.len(),
+        ids.join(", ")
+    )
 }
 
 /// Grade run records. Default mode emits LLM judge tasks (+ the skill-invocation
@@ -279,19 +296,22 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
     let conditions: crate::core::ConditionsRecord =
         serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
 
-    // Grade the run against the skill the run copied, not against the live tree.
-    // An edit between `run` and `grade` would otherwise change what a finished
-    // run is measured by, without anything recording that it had.
+    // The treatment comes from the copy the run froze; the assertions come from
+    // the live file. The documented workflow authors assertions from the run's
+    // own paired evidence, after the dispatch they grade, so the frozen copy
+    // does not hold them yet (#295).
     let skill_subdir = graded_skill_subdir(&ctx, &dir);
-    let evals_path = skill_subdir.join("evals").join("evals.json");
-    let evals_value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&evals_path)?)?;
-    let evals = validation::validate_evals_config(&evals_value, &evals_path.to_string_lossy())?;
+    let instrument = pipeline::resolve_grading_instrument(&skill_subdir, &ctx.skill_subdir)?;
+    for warning in &instrument.warnings {
+        eprintln!("⚠ {warning}");
+    }
+    println!("{}", assertion_source_summary(&instrument));
 
     let gctx = pipeline::GradeContext {
         iteration_dir: &dir,
         conditions: &conditions,
-        evals: &evals,
+        evals: &instrument.evals,
+        assertion_source: &instrument.source,
     };
 
     if args.finalize {
@@ -320,13 +340,15 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             "Diff scope: {} measured, {} reused, {} missing baseline, {} shared environment",
             diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
         );
-        let commands =
-            pipeline::grade_command_checks(&dir, &evals, &skill_subdir, common.overwrite)?;
+        let commands = pipeline::grade_command_checks(&dir, &instrument, common.overwrite)?;
         if commands.executed + commands.reused > 0 {
             println!(
                 "Command checks: {} executed, {} reused, {} failed",
                 commands.executed, commands.reused, commands.failed
             );
+        }
+        for w in &commands.warnings {
+            eprintln!("⚠ {w}");
         }
         let s = pipeline::emit_judge_tasks(&gctx)?;
         for w in &s.warnings {

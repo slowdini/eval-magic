@@ -1,7 +1,10 @@
 use super::*;
 use crate::core::EvalsConfig;
+use crate::pipeline::grade::instrument::GradingInstrument;
 use serde_json::json;
 use std::fs;
+
+mod staleness;
 
 fn check(command: &str) -> AssertionCommandCheck {
     AssertionCommandCheck {
@@ -80,6 +83,22 @@ fn evals(command: &str) -> EvalsConfig {
             }]
         }]
     }))
+    .unwrap()
+}
+
+/// Run every command check in `config` against the iteration, resolving
+/// held-out setup files from `skill_dir`. No live tree, so nothing refreshes.
+fn grade_frozen(
+    iteration_dir: &Path,
+    config: EvalsConfig,
+    skill_dir: &Path,
+    overwrite: bool,
+) -> CommandCheckSummary {
+    grade_command_checks(
+        iteration_dir,
+        &GradingInstrument::frozen(config, skill_dir),
+        overwrite,
+    )
     .unwrap()
 }
 
@@ -435,8 +454,7 @@ fn persisted_results_are_reused_and_overwrite_reruns_in_declaration_order() {
     write_dispatch(&iteration_dir, &eval_root, false);
     assert!(!eval_root.join("holdout/secret.txt").exists());
 
-    let first =
-        grade_command_checks(&iteration_dir, &evals(&append_command()), &skill_dir, false).unwrap();
+    let first = grade_frozen(&iteration_dir, evals(&append_command()), &skill_dir, false);
     assert_eq!(first.executed, 1);
     assert_eq!(first.reused, 0);
     assert_eq!(
@@ -450,8 +468,7 @@ fn persisted_results_are_reused_and_overwrite_reruns_in_declaration_order() {
     let result_path = iteration_dir.join("eval-e1/with_skill/command-checks/check.json");
     assert!(result_path.exists());
 
-    let reused =
-        grade_command_checks(&iteration_dir, &evals(&append_command()), &skill_dir, false).unwrap();
+    let reused = grade_frozen(&iteration_dir, evals(&append_command()), &skill_dir, false);
     assert_eq!(reused.executed, 0);
     assert_eq!(reused.reused, 1);
     assert_eq!(
@@ -459,8 +476,7 @@ fn persisted_results_are_reused_and_overwrite_reruns_in_declaration_order() {
         "x"
     );
 
-    let overwritten =
-        grade_command_checks(&iteration_dir, &evals(&append_command()), &skill_dir, true).unwrap();
+    let overwritten = grade_frozen(&iteration_dir, evals(&append_command()), &skill_dir, true);
     assert_eq!(overwritten.executed, 1);
     assert_eq!(overwritten.reused, 0);
     assert_eq!(
@@ -495,7 +511,7 @@ fn persisted_matrix_results_are_schema_gated_and_reused() {
         vec!["UTC".into(), "Europe/Berlin".into()],
     )]));
 
-    let first = grade_command_checks(&iteration_dir, &config, &skill_dir, false).unwrap();
+    let first = grade_frozen(&iteration_dir, config.clone(), &skill_dir, false);
     assert_eq!(first.executed, 1);
     assert_eq!(
         fs::read_to_string(eval_root.join("command-runs.txt")).unwrap(),
@@ -506,7 +522,7 @@ fn persisted_matrix_results_are_schema_gated_and_reused() {
         serde_json::from_str(&fs::read_to_string(&result_path).unwrap()).unwrap();
     assert_eq!(result.cells.as_ref().unwrap().len(), 2);
 
-    let reused = grade_command_checks(&iteration_dir, &config, &skill_dir, false).unwrap();
+    let reused = grade_frozen(&iteration_dir, config.clone(), &skill_dir, false);
     assert_eq!(reused.executed, 0);
     assert_eq!(reused.reused, 1);
     assert_eq!(
@@ -514,7 +530,7 @@ fn persisted_matrix_results_are_schema_gated_and_reused() {
         "xx"
     );
 
-    let overwritten = grade_command_checks(&iteration_dir, &config, &skill_dir, true).unwrap();
+    let overwritten = grade_frozen(&iteration_dir, config.clone(), &skill_dir, true);
     assert_eq!(overwritten.executed, 1);
     assert_eq!(overwritten.reused, 0);
     assert_eq!(
@@ -534,9 +550,13 @@ fn shared_eval_root_is_rejected_with_fresh_iteration_guidance() {
     fs::write(skill_dir.join("evals/holdout/secret.txt"), "held out").unwrap();
     write_dispatch(&iteration_dir, &eval_root, true);
 
-    let error = grade_command_checks(&iteration_dir, &evals(&exit_command(0)), &skill_dir, false)
-        .unwrap_err()
-        .to_string();
+    let error = grade_command_checks(
+        &iteration_dir,
+        &GradingInstrument::frozen(evals(&exit_command(0)), &skill_dir),
+        false,
+    )
+    .unwrap_err()
+    .to_string();
     assert!(error.contains("shares eval_root"), "{error}");
     assert!(error.contains("fresh iteration"), "{error}");
 }
@@ -572,7 +592,7 @@ fn multiple_checks_execute_in_declaration_order_against_one_env() {
     }))
     .unwrap();
 
-    let summary = grade_command_checks(&iteration_dir, &evals, &skill_dir, false).unwrap();
+    let summary = grade_frozen(&iteration_dir, evals, &skill_dir, false);
     assert_eq!(summary.executed, 2);
     for id in ["first", "second"] {
         let result: CommandCheckResult = serde_json::from_str(

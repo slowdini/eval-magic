@@ -247,13 +247,14 @@ fn an_uncommitted_skill_warns_that_the_run_measures_it() {
     assert_eq!(conditions["skill_source"]["dirty"], Value::from(true));
 }
 
-/// Grading reads the iteration's own copy, not the live tree. Editing the eval
-/// definitions between `run` and `grade` would otherwise silently change what a
-/// finished run is measured against — the provenance hole this ticket closes,
-/// one phase later.
+/// Grading reads the iteration's own copy for everything that defined what ran.
+/// Editing the eval definitions between `run` and `grade` must not silently
+/// change what a finished run is measured against.
 ///
-/// The live copy is made *unreadable* rather than merely different: that is the
-/// difference an assertion can see, since `grade` does not echo eval ids.
+/// Assertions are the deliberate exception (#295) — they are the measuring
+/// instrument, authored from the run's own evidence — and are covered by the
+/// `grade` tests. Here the live file drops the eval the run was built from
+/// entirely: the iteration still grades `e1` from its own copy, and says so.
 #[test]
 fn grading_reads_the_eval_definitions_the_run_copied() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -261,9 +262,13 @@ fn grading_reads_the_eval_definitions_the_run_copied() {
 
     let iteration = prepare(&cwd, &skill_dir, &["--mode", "new-skill"]);
 
+    // Rename the eval in the live file, keeping the codebase the run resolved.
+    let live_evals = skill_dir.join("mr-review").join("evals").join("evals.json");
+    let mut authored: Value = read_json(&live_evals);
+    authored["evals"][0]["id"] = Value::from("renamed");
     fs::write(
-        skill_dir.join("mr-review").join("evals").join("evals.json"),
-        "{ not valid json at all",
+        &live_evals,
+        serde_json::to_string_pretty(&authored).unwrap(),
     )
     .unwrap();
 
@@ -279,13 +284,29 @@ fn grading_reads_the_eval_definitions_the_run_copied() {
         "the copy should still hold what the run was built from"
     );
 
-    skill_eval()
+    let output = skill_eval()
         .current_dir(&cwd)
         .args(["grade", "--skill-dir"])
         .arg(&skill_dir)
         .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success();
+    let output = output.get_output();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        stdout.contains("Assertions:") && stdout.contains("unchanged since the run"),
+        "grading still measures with what the run captured: {stdout}"
+    );
+    assert!(
+        stderr.contains("eval 'e1' is no longer defined"),
+        "the operator is told which eval kept its run-time definitions: {stderr}"
+    );
+    assert!(
+        stderr.contains("'renamed'") && stderr.contains("never dispatched"),
+        "and which live eval this iteration cannot grade: {stderr}"
+    );
 }
 
 /// Mode B parity. The `old_skill` arm stages a snapshot the workspace already

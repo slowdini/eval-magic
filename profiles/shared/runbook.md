@@ -51,6 +51,11 @@ comparison is exploratory evidence, not a grade or a statistically reliable resu
 The commands cover every eval selected for this iteration. They require no authored assertions,
 judge dispatches, or finalized benchmark.
 
+Turn what you find into assertions in the skill's own `evals/evals.json` — the live file, not the
+copy this iteration froze — then re-run the `ingest` command above to grade them. `grade` reads
+assertions from that file and prints the path it read them from; everything the run was defined by
+still comes from the copy. See `eval-magic docs judging`.
+
 ## 3. Dispatch the judge agents, then finalize
 
 ```

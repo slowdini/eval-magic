@@ -767,6 +767,18 @@ pub(crate) enum Commands {
     /// member. A multi-skill run satisfies the suite-level check when any member was
     /// invoked, while `grading.json` and `benchmark.json` retain each member's result.
     /// The meta-check does not count toward the substantive `pass_rate`.
+    ///
+    /// Assertions come from the live `evals.json`, not the copy the iteration froze:
+    /// `assertions` and `skill_should_trigger` are read from `<skill>/evals/evals.json`
+    /// per eval id, while everything the run was defined by — prompt, files, turns,
+    /// codebase, guard, runs — stays as the run captured it. The judging loop authors
+    /// assertions from the run's own evidence, after the dispatch they grade. Every
+    /// invocation prints the file it read them from, and each `grading.json` records it
+    /// under `assertion_source`. An unreadable live file leaves the run-time copy in
+    /// place with a warning; an invalid one stops grading. Cached judge verdicts and
+    /// command-check results are keyed by assertion id, so an assertion edited in place
+    /// is reported rather than silently reused: `--overwrite` re-executes command
+    /// checks; `dispatch --judges --overwrite` re-judges. See `eval-magic docs judging`.
     Grade(GradeArgs),
     /// Aggregate before/after benchmark deltas.
     ///

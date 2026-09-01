@@ -19,6 +19,17 @@
       "description": "Framework-injected meta-assertions (e.g. skill-invocation check). Reserved id prefix: __ (double underscore). Tracked separately from substantive assertion_results so they do not pollute the skill effectiveness pass_rate.",
       "items": { "$ref": "#/definitions/metaResult" }
     },
+    "assertion_source": {
+      "type": "object",
+      "description": "Which evals.json supplied the assertions above. The treatment is frozen at what ran, but assertions are the measuring instrument and are authored after the dispatch they grade, so the file they came from is recorded rather than assumed. Absent in gradings written before the source was recorded.",
+      "required": ["path", "digest"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "description": "Absolute path to the evals.json the graded assertions came from: the live skill file when it differs from the run-time copy, otherwise the copy the iteration froze." },
+        "digest": { "type": "string", "description": "Digest over every graded eval's id, assertions, and skill_should_trigger, so two gradings can be compared without diffing the file." },
+        "refreshed": { "type": "boolean", "description": "True when the live file replaced the assertions the run froze." }
+      }
+    },
     "meta_summary": {
       "type": "object",
       "additionalProperties": false,

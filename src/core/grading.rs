@@ -119,6 +119,23 @@ pub enum Grader {
     DiffScope,
 }
 
+/// Which `evals.json` supplied the assertions a grading measured against.
+///
+/// The treatment stays frozen at what ran, but assertions are the measuring
+/// instrument and are authored after the dispatch they grade, so the file they
+/// came from is recorded rather than assumed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssertionSource {
+    /// The `evals.json` the graded assertions came from.
+    pub path: String,
+    /// Digest over every graded eval's grading fields, so two gradings can be
+    /// compared without diffing the file they were read from.
+    pub digest: String,
+    /// True when the live file replaced the assertions the run froze.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub refreshed: bool,
+}
+
 /// The full grading output for one run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GradingResult {
@@ -130,6 +147,10 @@ pub struct GradingResult {
     pub meta_results: Option<Vec<MetaResult>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta_summary: Option<MetaSummary>,
+    /// Which `evals.json` supplied the assertions above. Absent in gradings
+    /// written before the source was recorded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assertion_source: Option<AssertionSource>,
 }
 
 /// Legacy pass/fail tallies for an entirely binary grading.

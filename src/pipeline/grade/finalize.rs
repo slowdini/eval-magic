@@ -396,6 +396,7 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                         total: meta_len,
                         skill_invoked,
                     }),
+                    assertion_source: Some(ctx.assertion_source.clone()),
                 };
 
                 validate_against_schema::<serde_json::Value>(
