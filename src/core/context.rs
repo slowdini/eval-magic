@@ -55,6 +55,11 @@ pub struct RunContext {
     pub stage_root: PathBuf,
     pub bootstrap_path: Option<PathBuf>,
     pub harness: Harness,
+    /// The absolutized `--harness-file` descriptor this invocation loaded, if
+    /// any. Carried so generated follow-up commands can re-emit the flag
+    /// (#294) and the iteration can record which descriptor it was prepared
+    /// with.
+    pub harness_file: Option<PathBuf>,
     /// Things the operator should know about how this context resolved. `core`
     /// never prints; `cli::run_context_with_bootstrap` owns the `⚠ ` prefix.
     pub warnings: Vec<String>,
@@ -71,6 +76,9 @@ pub struct DetectInput {
     pub bootstrap: Option<String>,
     pub workspace_dir: Option<String>,
     pub harness: Option<Harness>,
+    /// The `--harness-file` this invocation loaded, already absolutized by the
+    /// registry init layer; passed through to [`RunContext`] untouched.
+    pub harness_file: Option<PathBuf>,
     pub cwd: Option<PathBuf>,
 }
 
@@ -196,12 +204,7 @@ fn workspace_slug(skill_dir: &Path) -> String {
 /// that every generated command embeds; a toolchain upgrade silently relocating
 /// someone's workspace is the one failure it must not have.
 fn path_digest(path: &Path) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in path.to_string_lossy().as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")[..8].to_string()
+    crate::core::fs::fnv1a_hex(path.to_string_lossy().as_bytes())[..8].to_string()
 }
 
 /// Resolve the eval home from explicit/environment inputs: `$EVAL_MAGIC_WORKSPACE_DIR`
@@ -361,6 +364,7 @@ pub fn detect_run_context(input: DetectInput) -> Result<RunContext, ContextError
         stage_root,
         bootstrap_path,
         harness,
+        harness_file: input.harness_file,
         warnings,
     })
 }

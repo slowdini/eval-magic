@@ -138,10 +138,18 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
 
     // Run from inside the skill dir with no args: the auto-derived target selector
     // (`command_target_args`) is threaded into the RUNBOOK's pipeline commands. The
-    // RUNBOOK lives in the iteration dir (Cli dispatch has no single env/).
+    // RUNBOOK lives in the iteration dir (Cli dispatch has no single env/). The
+    // invocation used no --skill-dir, so the selector must not invent one:
+    // --skill-dir stages sibling skills, changing the experiment (#294).
     let runbook = read_str(&direct_iteration_dir(&skill_sub).join("RUNBOOK.md"));
-    assert!(runbook.contains("ingest --skill-dir"));
-    assert!(runbook.contains("--skill mr-review --workspace-dir"));
+    assert!(
+        !runbook.contains("--skill-dir"),
+        "the selector must not add --skill-dir the invocation never used: {runbook}"
+    );
+    assert!(
+        runbook.contains(&format!("ingest --skill {}", wire_path(&skill_sub))),
+        "the selector names --skill as an absolute path: {runbook}"
+    );
     assert!(runbook.contains("--iteration 1"));
 
     let dispatch = read_json(&direct_iteration_dir(&skill_sub).join("dispatch.json"));

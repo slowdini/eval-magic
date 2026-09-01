@@ -83,6 +83,11 @@ pub(super) fn write_dispatch(
         label: opts.label.map(str::to_owned),
         codebases: r.codebases.iter().map(super::RunCodebase::usage).collect(),
         skill_source: Some(r.skill.record()),
+        // Prep-time descriptor provenance (#294): the digest lets a later
+        // stage detect that it resolved a different descriptor than this run
+        // was prepared with; the path makes the remedy copy-pasteable.
+        harness_file: ctx.harness_file.as_deref().map(artifact_path),
+        harness_descriptor_digest: Some(crate::adapters::registry::descriptor_digest(ctx.harness)),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
     // One record, cloned into every task: grading reads `run.json` alone, so a

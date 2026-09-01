@@ -94,6 +94,13 @@ intrinsic severity as provenance. `run` presents operator-environment findings a
 and `aggregate` omits those warnings only while no transcript evidence contradicts the declaration.
 Codebase-sourced findings remain warnings regardless of this descriptor setting.
 
+The declaration is written from the descriptor resolved at prep time, so the remedy must ride along
+with every follow-up. When the descriptor arrives via `--harness-file`, the generated RUNBOOK.md
+and Next: commands re-emit the flag — follow them verbatim. Dropping it silently reverts to the
+un-overlaid descriptor while the declaration stands, the comparison-invalid state this guide exists
+to prevent; `dispatch` and `ingest` compare the resolved descriptor's digest against the prep-time
+one in `conditions.json` and warn when they differ.
+
 Do not set it when:
 
 - Any reported source remains discoverable.

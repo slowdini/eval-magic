@@ -249,12 +249,14 @@ fn init_rejects_a_missing_or_non_directory_codebase_before_prompting() {
 }
 
 /// Even when `init` runs from inside the skill dir, the printed "Next:" commands
-/// must be copy-pasteable: each carries `--skill-dir`/`--skill` so it resolves
-/// from any cwd.
+/// must be copy-pasteable AND behavior-preserving (#294): `--skill` names the
+/// absolute skill subdir so the command resolves from any cwd, and no
+/// `--skill-dir` is invented (it would stage sibling skills ambiently).
 #[test]
 fn init_from_skill_dir_prints_copy_pasteable_next_steps() {
     let (_tmp, root) = canonical_root();
     let (_skill_dir, skill_sub) = write_skill(&root);
+    let skill_flag = format!("--skill {}", skill_sub.display());
 
     skill_eval()
         .current_dir(&skill_sub)
@@ -269,13 +271,14 @@ fn init_from_skill_dir_prints_copy_pasteable_next_steps() {
         ])
         .assert()
         .success()
-        .stdout(contains("  eval-magic run --skill-dir"))
-        .stdout(contains("--skill mr-review --workspace-dir"))
+        .stdout(contains(format!("  eval-magic run {skill_flag}")))
+        .stdout(contains("--workspace-dir"))
+        .stdout(contains("--skill-dir").not())
         .stdout(contains("--guard").not())
         .stdout(contains("follow the generated RUNBOOK.md"))
-        .stdout(contains("  eval-magic ingest --skill-dir").not())
-        .stdout(contains("  eval-magic finalize --skill-dir").not())
-        .stdout(contains("  eval-magic promote-baseline --skill-dir").not());
+        .stdout(contains("  eval-magic ingest").not())
+        .stdout(contains("  eval-magic finalize").not())
+        .stdout(contains("  eval-magic promote-baseline").not());
 }
 
 #[test]

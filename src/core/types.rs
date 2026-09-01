@@ -485,6 +485,17 @@ pub struct ConditionsRecord {
     /// still round-trips.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skill_source: Option<SkillSource>,
+    /// The `--harness-file` descriptor the iteration was prepared with
+    /// (absolute, wire-format path). With `harness_descriptor_digest`, this
+    /// lets a later stage detect a follow-up invocation that resolves a
+    /// different descriptor than the run was prepared with (#294).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_file: Option<String>,
+    /// FNV-1a hex of the fully-resolved harness descriptor's canonical JSON at
+    /// prep time. Absent in records written before descriptor provenance
+    /// existed, which read as "nothing to compare against".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_descriptor_digest: Option<String>,
 }
 
 /// Comparison mode for a run.
@@ -892,6 +903,8 @@ mod tests {
             label: None,
             codebases: Vec::new(),
             skill_source: None,
+            harness_file: None,
+            harness_descriptor_digest: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));

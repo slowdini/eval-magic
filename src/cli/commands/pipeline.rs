@@ -7,7 +7,10 @@ use anyhow::bail;
 use crate::cli::args::{CommonArgs, GradeArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
-use crate::cli::{iteration_dir, resolve_iteration, run_context_from, staged_env_roots};
+use crate::cli::{
+    harness_descriptor_drift_warning, iteration_dir, resolve_iteration, run_context_from,
+    staged_env_roots,
+};
 use crate::core::RunContext;
 use crate::pipeline;
 use crate::sandbox;
@@ -59,6 +62,13 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
+    let dir = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"));
+    if let Some(warning) = harness_descriptor_drift_warning(&ctx, &dir) {
+        eprintln!("⚠ {warning}");
+    }
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
         skill_dir: args.skill_dir.as_deref(),
@@ -73,11 +83,7 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         );
     }
 
-    let judge_path = ctx
-        .workspace_root
-        .join(&ctx.skill_name)
-        .join(format!("iteration-{iteration}"))
-        .join("judge-tasks.json");
+    let judge_path = dir.join("judge-tasks.json");
     let total_tasks = std::fs::read_to_string(&judge_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())

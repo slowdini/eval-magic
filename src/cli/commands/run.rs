@@ -64,6 +64,9 @@ pub(crate) fn run_run(args: RunArgs) -> anyhow::Result<()> {
 pub(crate) fn run_dispatch(args: DispatchArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
     let iteration_dir = iteration_dir(&ctx, args.common.iteration)?;
+    if let Some(warning) = crate::cli::harness_descriptor_drift_warning(&ctx, &iteration_dir) {
+        eprintln!("⚠ {warning}");
+    }
     // `--timeout 0` means "no deadline", which is the only way to say it with a
     // plain seconds flag.
     let timeout = (args.timeout > 0).then(|| std::time::Duration::from_secs(args.timeout));
