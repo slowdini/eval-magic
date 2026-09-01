@@ -132,6 +132,36 @@ mod tests {
         assert!(!expanded.allow_commands.contains(&"npm test".to_string()));
     }
 
+    /// Issue #297: a plain package.json project (the pinned Weeknight fixture
+    /// is Vite + React) must be able to start its own dev server. `dev` and
+    /// `start` are generic lifecycle script names, not Next.js-specific, so
+    /// they belong to the language profile.
+    #[test]
+    fn language_javascript_allows_dev_and_start_scripts() {
+        let policy = GuardPolicyConfig {
+            profiles: vec!["language/javascript".to_string()],
+            ..GuardPolicyConfig::default()
+        };
+
+        let expanded = expand_policy(&policy).unwrap();
+
+        for command in [
+            "npm run dev",
+            "npm run start",
+            "pnpm run dev",
+            "pnpm run start",
+            "yarn run dev",
+            "yarn run start",
+            "bun run dev",
+            "bun run start",
+        ] {
+            assert!(
+                expanded.allow_commands.contains(&command.to_string()),
+                "{command}"
+            );
+        }
+    }
+
     #[test]
     fn detection_joins_language_and_framework_profiles_recursively() {
         let root = tempdir().unwrap();

@@ -105,3 +105,50 @@ fn per_eval_guard_replaces_the_default_and_disables_detection() {
         &serde_json::json!({ "allow_commands": ["npm run dev"] })
     );
 }
+
+/// Issue #297: the pinned default fixture (Vite + React, no `next` dependency)
+/// must detect `language/javascript` alone, and the frozen policy must allow
+/// the lifecycle scripts a browser check needs.
+#[test]
+fn a_plain_package_json_detects_language_javascript_with_dev_and_start() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = r#"{
+      "skill_name": "mr-review",
+      "evals": [{
+        "id": "e1",
+        "prompt": "build the app",
+        "expected_output": "built",
+        "files": ["package.json"]
+      }]
+    }"#;
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    fs::write(
+        skill_dir.join("mr-review/evals/package.json"),
+        r#"{"dependencies":{"vite":"5.0.0","react":"18.0.0"}}"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--guard"])
+        .assert()
+        .success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let policy = &dispatch["tasks"][0]["guard_policy"];
+    assert_eq!(
+        policy["profiles"],
+        serde_json::json!(["language/javascript"])
+    );
+    let commands: Vec<&str> = policy["allow_commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|command| command.as_str())
+        .collect();
+    assert!(commands.contains(&"npm run dev"), "{commands:?}");
+    assert!(commands.contains(&"npm run start"), "{commands:?}");
+    assert!(!commands.contains(&"npx next dev"), "{commands:?}");
+}
