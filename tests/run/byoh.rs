@@ -428,3 +428,121 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
         assert_eq!(invocations[0]["name"], "command_execution");
     }
 }
+
+/// Issue #294: a run prepared with `--harness-file` must re-emit the flag in
+/// every generated follow-up command — the printed `Next:` block and every
+/// `eval-magic …` line in RUNBOOK.md — or follow-ups silently resolve a
+/// different descriptor than the run was prepared with, while the iteration's
+/// artifacts keep the prep-time declarations.
+#[test]
+fn harness_file_is_reemitted_in_every_generated_command() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let file = tmp.path().join("cool.toml");
+    fs::write(&file, COOL_DESCRIPTOR).unwrap();
+
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .arg("--harness-file")
+        .arg(&file)
+        .assert()
+        .success();
+
+    let flag = format!("--harness-file {}", wire_path(&file));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains(&flag),
+        "the printed Next: block re-emits the flag: {stdout}"
+    );
+
+    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    let commands: Vec<&str> = runbook
+        .lines()
+        .filter(|line| line.starts_with("eval-magic "))
+        .collect();
+    assert!(!commands.is_empty(), "the runbook carries commands");
+    for command in commands {
+        assert!(
+            command.contains(&flag),
+            "every runbook command re-emits --harness-file: {command}"
+        );
+    }
+
+    // Prep-time provenance for the drift backstop: the descriptor the run was
+    // prepared with is recorded next to the conditions it produced.
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert_eq!(conditions["harness_file"], wire_path(&file));
+    let digest = conditions["harness_descriptor_digest"]
+        .as_str()
+        .expect("conditions record the resolved descriptor digest");
+    assert_eq!(digest.len(), 16, "FNV-1a hex digest: {digest}");
+}
+
+/// Issue #294 backstop: a follow-up stage that resolves a descriptor different
+/// from the prep-time one warns loudly instead of silently switching. The
+/// overlay keeps the built-in label so the flag-less follow-up *resolves*
+/// (against the un-overlaid built-in) instead of failing on an unknown label.
+#[test]
+fn dispatch_and_ingest_warn_when_the_resolved_descriptor_drifted_from_prep() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // Overlay the claude-code label, retuning dispatch onto a missing binary so
+    // nothing real is ever spawned; every other field merges from the built-in.
+    let file = tmp.path().join("iso.toml");
+    fs::write(
+        &file,
+        r#"label = "claude-code"
+
+[dispatch]
+exec_template = "definitely-missing-cli <dispatch_prompt_path>"
+"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .arg("--harness-file")
+        .arg(&file)
+        .assert()
+        .success();
+
+    // The flag-less follow-up resolves the un-overlaid built-in descriptor:
+    // the digest no longer matches the prep-time one.
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["dispatch", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .stderr(
+            contains("harness descriptor drift")
+                .and(contains("--harness-file"))
+                .and(contains(wire_path(&file))),
+        );
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["ingest", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .stderr(contains("harness descriptor drift"));
+
+    // Re-emitting the flag resolves the same descriptor the run was prepared
+    // with: digests match, no drift warning. (Dispatch still fails: the
+    // overlaid exec template names a missing binary.)
+    skill_eval()
+        .current_dir(&cwd)
+        .arg("--harness-file")
+        .arg(&file)
+        .args(["dispatch", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .stderr(contains("harness descriptor drift").not());
+}

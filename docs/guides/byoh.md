@@ -36,7 +36,12 @@ For a descriptor that should not live in the project, pass it directly:
 eval-magic run --harness-file ./cool-custom-harness.toml
 ```
 
-Its `label` becomes the default harness for that invocation.
+Its `label` becomes the default harness for that invocation. Every follow-up command `run`
+generates — the printed Next: steps and each `eval-magic …` line in RUNBOOK.md — re-emits
+`--harness-file`, because the descriptor can decide whether a comparison is valid (dispatch
+templates, shadow isolation). Follow the generated commands verbatim: dropping the flag resolves a
+different descriptor, and `dispatch`/`ingest` compare the resolved descriptor against the digest
+`run` records in `conditions.json` and warn when the two differ.
 
 ## Add a dispatch command first
 

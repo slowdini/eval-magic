@@ -44,6 +44,13 @@ pub(crate) struct Cli {
     /// label becomes the invocation's default harness. Unlike discovered
     /// descriptor files (skipped with a warning when broken), errors in this
     /// explicitly named file are fatal.
+    ///
+    /// Every command `run` generates — the printed Next: steps and the
+    /// RUNBOOK.md — re-emits this flag, because the descriptor it loads can
+    /// decide whether a comparison is valid (dispatch templates, shadow
+    /// isolation). Follow those commands verbatim: `run` records the resolved
+    /// descriptor's digest in conditions.json, and `dispatch`/`ingest` warn
+    /// when a follow-up resolves a different one.
     #[arg(long, global = true, value_name = "PATH")]
     pub harness_file: Option<String>,
     #[command(subcommand)]

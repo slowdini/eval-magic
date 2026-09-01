@@ -37,6 +37,21 @@ pub fn artifact_path(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// FNV-1a over `bytes`, as 16 hex characters.
+///
+/// Hand-rolled rather than `DefaultHasher`, which carries no stability
+/// guarantee across Rust releases: digests that outlive a process (workspace
+/// slugs, prep-time descriptor provenance) must not shift under a toolchain
+/// upgrade.
+pub fn fnv1a_hex(bytes: &[u8]) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
 /// The one spelling of `path` that every participant in a run agrees on.
 ///
 /// `getcwd` and `canonicalize` resolve symlink aliases, so resolving once at the

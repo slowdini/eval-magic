@@ -7,7 +7,7 @@
 //! behind the artifact `Deserialize`), [`Harness::known`] enumerates the
 //! entries, and [`adapter_for`] serves each handle's [`HarnessAdapter`].
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, OnceLock};
 
 use crate::core::Harness;
@@ -79,6 +79,11 @@ pub enum RegistryInitError {
 /// via `--harness`.
 static SESSION_DEFAULT_HARNESS: OnceLock<&'static str> = OnceLock::new();
 
+/// When `--harness-file` is in play, its absolutized path — consulted by the
+/// CLI when it renders generated follow-up commands, which must re-emit the
+/// flag or they silently resolve a different descriptor (#294).
+static SESSION_HARNESS_FILE: OnceLock<PathBuf> = OnceLock::new();
+
 /// Initialize the registry from every descriptor layer: embedded built-ins →
 /// user-global (`<config-root>/harnesses/*.toml`) → project-local
 /// (`<cwd>/.eval-magic/harnesses/*.toml`) → the optional one-off
@@ -99,6 +104,12 @@ pub fn init_registry(harness_file: Option<&Path>) -> Result<(), RegistryInitErro
     let built = build_registry(sources)?;
     for warning in io_warnings.iter().chain(&built.warnings) {
         eprintln!("⚠ {warning}");
+    }
+    if let Some(file) = harness_file {
+        // The file was read during discovery, so it exists; fall back to the
+        // passed spelling only if resolution itself fails.
+        let resolved = crate::core::fs::real_path(file).unwrap_or_else(|_| file.to_path_buf());
+        let _ = SESSION_HARNESS_FILE.set(resolved);
     }
     if harness_file.is_some()
         && let Some(entry) = built
@@ -335,6 +346,21 @@ pub fn descriptor_value_for(harness: Harness) -> &'static serde_json::Value {
         .find(|entry| entry.label == harness.name())
         .expect("Harness handles originate from the registry")
         .value
+}
+
+/// The absolutized `--harness-file` path this session loaded, if any.
+pub fn session_harness_file() -> Option<&'static Path> {
+    SESSION_HARNESS_FILE.get().map(PathBuf::as_path)
+}
+
+/// A stable digest of the fully-resolved (layer-merged) descriptor behind
+/// `harness`, over its canonical JSON form. A run records it at prep time so
+/// a later invocation can tell whether it resolved the same descriptor the
+/// run was prepared with (#294).
+pub fn descriptor_digest(harness: Harness) -> String {
+    let canonical = serde_json::to_string(descriptor_value_for(harness))
+        .expect("a descriptor value serializes");
+    crate::core::fs::fnv1a_hex(canonical.as_bytes())
 }
 
 /// True when `harness` has an embedded built-in descriptor among its sources
