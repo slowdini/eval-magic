@@ -98,8 +98,8 @@ The declaration is written from the descriptor resolved at prep time, so the rem
 with every follow-up. When the descriptor arrives via `--harness-file`, the generated RUNBOOK.md
 and Next: commands re-emit the flag — follow them verbatim. Dropping it silently reverts to the
 un-overlaid descriptor while the declaration stands, the comparison-invalid state this guide exists
-to prevent; `dispatch` and `ingest` compare the resolved descriptor's digest against the prep-time
-one in `conditions.json` and warn when they differ.
+to prevent. `dispatch` and `ingest` compare the resolved descriptor against the digest `run`
+records in `conditions.json` and warn when the two differ.
 
 Do not set it when:
 

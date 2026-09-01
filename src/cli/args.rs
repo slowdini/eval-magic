@@ -48,9 +48,9 @@ pub(crate) struct Cli {
     /// Every command `run` generates — the printed Next: steps and the
     /// RUNBOOK.md — re-emits this flag, because the descriptor it loads can
     /// decide whether a comparison is valid (dispatch templates, shadow
-    /// isolation). Follow those commands verbatim: `run` records the
-    /// prep-time descriptor digest in conditions.json, and `dispatch`/`ingest`
-    /// warn when a follow-up resolves a different one.
+    /// isolation). Follow those commands verbatim: `run` records the resolved
+    /// descriptor's digest in conditions.json, and `dispatch`/`ingest` warn
+    /// when a follow-up resolves a different one.
     #[arg(long, global = true, value_name = "PATH")]
     pub harness_file: Option<String>,
     #[command(subcommand)]
