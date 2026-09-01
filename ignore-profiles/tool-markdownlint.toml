@@ -1,0 +1,15 @@
+# markdownlint-cli reads .markdownlintignore; markdownlint-cli2 does not (it
+# takes globs in its own config), so its markers are deliberately absent — a
+# file that tool never reads would be noise, not protection.
+id = "tool/markdownlint"
+ignore_file = ".markdownlintignore"
+create_if_missing = true
+markers = [
+  ".markdownlintignore",
+  ".markdownlint.json",
+  ".markdownlint.jsonc",
+  ".markdownlint.yaml",
+  ".markdownlint.yml",
+]
+marker_patterns = [".markdownlintrc*"]
+package_json_dependencies = ["markdownlint-cli"]

@@ -126,6 +126,19 @@ impl HarnessAdapter for DescriptorAdapter {
         })
     }
 
+    fn framework_ignore_paths(&self) -> Vec<String> {
+        let mut paths = vec![format!("/{}/", crate::sandbox::GUARD_DENIALS_DIR)];
+        if let Some(skills_dir) = &self.descriptor.skills_dir {
+            paths.push(format!("/{skills_dir}/"));
+        }
+        if let Some(guard) = &self.descriptor.guard
+            && let Some(staged) = crate::adapters::guard::guard_staged_file(guard)
+        {
+            paths.push(format!("/{staged}"));
+        }
+        paths
+    }
+
     fn project_skill_dirs(&self, repo_root: &Path) -> Vec<PathBuf> {
         self.descriptor
             .skills_dir

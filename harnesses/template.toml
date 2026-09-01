@@ -27,6 +27,9 @@ label = "{label}"
 ## additional_project_skill_dirs. They participate in sourced-codebase shadow detection and
 ## codebase.exclude_skill_sources but never receive staged skills. Each first path segment must
 ## also appear in config_dirs.
+## skills_dir and the [guard] staged file are also what `run` writes into a sourced codebase's own
+## ignore files (.prettierignore and friends), so the project's linters never report eval-magic's
+## staged skills — see `eval-magic docs codebase`.
 ## VERIFY: which directory does the harness actually scan for skills? Quote the doc or the
 ## observed behavior in the notes file.
 # skills_dir = ".{label}/skills"

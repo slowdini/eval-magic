@@ -81,6 +81,19 @@ pub trait HarnessAdapter {
         self.skills_dir(repo_root).into_iter().collect()
     }
 
+    /// Env-relative paths the runner itself places in every task environment,
+    /// as gitignore-style patterns.
+    ///
+    /// Staged skills sit *inside* the task repository, so a codebase whose lint
+    /// or format step globs the whole tree reports the framework's artifacts as
+    /// project failures — and only in the arm that stages a skill. `run` writes
+    /// these patterns into the project's own ignore files
+    /// ([`crate::workspace::tool_ignore`]) to keep that from happening. The
+    /// baseline is the framework outputs dir every harness produces.
+    fn framework_ignore_paths(&self) -> Vec<String> {
+        vec![format!("/{}/", crate::sandbox::GUARD_DENIALS_DIR)]
+    }
+
     // ── Run-option capabilities (defaulted) ──────────────────────────────────
 
     /// The run options the generic `run` preflight may accept for this
@@ -547,6 +560,49 @@ mod tests {
                 root.join(".claude/skills"),
                 root.join(".agents/skills"),
             ]
+        );
+    }
+
+    #[test]
+    fn framework_ignore_paths_cover_the_staged_skills_the_guard_file_and_the_outputs_dir() {
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).framework_ignore_paths(),
+            vec![
+                "/.eval-magic-outputs/".to_string(),
+                "/.claude/skills/".to_string(),
+                "/.claude/settings.local.json".to_string(),
+            ]
+        );
+        // A plugin-engine harness contributes its plugin file, not a hooks file.
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).framework_ignore_paths(),
+            vec![
+                "/.eval-magic-outputs/".to_string(),
+                "/.opencode/skills/".to_string(),
+                "/.opencode/plugins/slow-powers-eval-guard.js".to_string(),
+            ]
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).framework_ignore_paths(),
+            vec![
+                "/.eval-magic-outputs/".to_string(),
+                "/.agents/skills/".to_string(),
+                "/.codex/hooks.json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn framework_ignore_paths_omit_what_a_bare_descriptor_never_stages() {
+        let descriptor =
+            crate::adapters::descriptor::load_descriptor("label = \"bare\"\n", "test.toml")
+                .unwrap();
+        let adapter =
+            crate::adapters::descriptor_adapter::DescriptorAdapter::from_descriptor(descriptor);
+
+        assert_eq!(
+            adapter.framework_ignore_paths(),
+            vec!["/.eval-magic-outputs/".to_string()]
         );
     }
 

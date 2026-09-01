@@ -296,7 +296,36 @@ fn validate_codebase(source: &str, label: &str, value: &Value) -> Result<(), Val
             )));
         }
     }
+    // `run` writes these paths inside a task environment, so one that leaves it
+    // would reach the operator's own tree. The schema can state "non-empty
+    // string" and no more; containment is a semantic rule.
+    for entry in fields
+        .get("ignore_files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if entry.trim().is_empty() {
+            return Err(invalid(format!(
+                "{label}: 'ignore_files' entries must contain non-whitespace text"
+            )));
+        }
+        if !is_contained_relative_path(entry) {
+            return Err(invalid(format!(
+                "{label}: 'ignore_files' entry {entry:?} must be a relative path inside the task \
+                 environment (no leading '/', no '..' segment)"
+            )));
+        }
+    }
     Ok(())
+}
+
+/// True when `path` names something inside the directory it is resolved
+/// against: relative, and with no `..` hop out of it. Split on `/` alone,
+/// because that is what the writer splits on.
+fn is_contained_relative_path(path: &str) -> bool {
+    !path.starts_with('/') && path.split('/').all(|segment| segment != "..")
 }
 
 fn validate_environment_name(

@@ -16,6 +16,7 @@ pub mod fs;
 pub mod git;
 pub mod grading;
 pub mod runtime;
+pub mod tree_profiles;
 pub mod types;
 
 pub use capabilities::HarnessRunCapabilities;

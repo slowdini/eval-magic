@@ -172,6 +172,73 @@ cleanup. An explicit `--stage-name` remains stricter and refuses to clobber an o
 The effective `exclude_skill_sources` value is recorded with each codebase in `conditions.json`,
 every task in `dispatch.json`, every `run.json`, `benchmark.json`, and promoted `BASELINE.md`.
 
+## Framework files stay out of the project's own tooling
+
+Staged skills live *inside* the task repository, under the harness's skills dir. A project whose
+lint or format step globs the whole tree would otherwise report eval-magic's own artifacts as
+project failures — and only in the arm that stages a skill, because the control arm has no staged
+skills to find. That biases every `command_check` running the project's checks, and it hands the
+agent under test a red check listing files it did not create and must not touch.
+
+So `run` writes a delimited block into the project's own ignore files, naming the paths the runner
+placed:
+
+```
+# >>> eval-magic framework files >>>
+# Staged by `eval-magic run` so this project's own tooling does not report them.
+# See `eval-magic docs codebase`.
+/.eval-magic-outputs/
+/.claude/skills/
+/.claude/settings.local.json
+# <<< eval-magic framework files <<<
+```
+
+The paths come from the selected harness descriptor — its `skills_dir` and the file its write guard
+stages — plus the framework outputs directory, so a BYOH harness gets its own paths without
+configuring anything. The block is written into **every** environment: both arms, every repetition,
+revision mode, `--no-stage`, and `--dry-run`. An entry present in one arm only would trade one
+asymmetry for another.
+
+Which ignore files get the block is detected from the codebase's own tooling:
+
+| Detected | Ignore file | Created when the project has none |
+| --- | --- | --- |
+| Prettier | `.prettierignore` | yes |
+| ESLint | `.eslintignore` | no — ESLint 9's flat config no longer reads it |
+| Stylelint | `.stylelintignore` | yes |
+| markdownlint | `.markdownlintignore` | yes |
+| Docker | `.dockerignore` | yes |
+
+Detection reads config-file markers and `package.json` dependencies anywhere in the tree. The list
+is short because the ignore-file convention is: Python, Rust, and Go formatters have no ignore file
+and already skip dot-directories, so they never see the staged skills in the first place.
+
+Name the ignore files yourself when the project's are somewhere detection will not look, or when
+you want none at all:
+
+```json
+{
+  "codebase": {
+    "url": "https://github.com/slowdini/example-project",
+    "ref": "v1.4.0",
+    "ignore_files": ["tooling/.prettierignore"]
+  }
+}
+```
+
+A declared list replaces detection rather than extending it, and each path is created if missing.
+Paths are relative to the environment root and may not escape it. `"ignore_files": []` opts out
+entirely, leaving every ignore file exactly as the codebase wrote it.
+
+`.gitignore` is never a target. The baseline commit force-adds harness config dirs, so an entry
+there would hide nothing from Git — but it *would* hide the staged skills from every
+`.gitignore`-aware tool the agent uses, such as `rg`, which would damage the treatment arm instead
+of protecting it.
+
+Unlike `exclude_skill_sources`, no artifact records this: the written file is committed into each
+environment's baseline, so `git show refs/eval-magic/baseline:.prettierignore` inside any task
+environment is the evidence, per arm and per run. `run` also prints the files it wrote.
+
 ## What the environment contains
 
 Each dispatch gets its own private environment holding:

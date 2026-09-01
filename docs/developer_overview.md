@@ -54,6 +54,10 @@ preconditions, handoffs, and recovery commands.
 - `schema/` contains the JSON schemas for user input and generated artifacts.
 - `harnesses/` contains built-in descriptors, descriptor scaffolding, and embedded harness assets.
 - `guard-profiles/` contains packaged command-policy defaults discovered and embedded by `build.rs`.
+- `ignore-profiles/` contains packaged tool-ignore targets, discovered and embedded the same way:
+  which ignore file a detected formatter or linter reads, so `run` can hide the framework's own
+  staged files from a sourced codebase's tooling. Both families detect through
+  `src/core/tree_profiles.rs`.
 - `profiles/` contains shared prompt profiles.
 - `tests/cli/` covers CLI and packaging contracts; `tests/run/` covers campaign behavior across
   the run boundary. Focused unit tests normally live beside the implementation.

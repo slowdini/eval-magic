@@ -1,0 +1,9 @@
+# ESLint 9's flat config dropped .eslintignore entirely, so creating one would
+# be inert noise in a modern project. A legacy project that already has the
+# file still gets the framework entries appended to it.
+id = "tool/eslint"
+ignore_file = ".eslintignore"
+create_if_missing = false
+markers = [".eslintignore"]
+marker_patterns = [".eslintrc*"]
+package_json_dependencies = ["eslint"]

@@ -1,7 +1,8 @@
 //! Phases 3 & 4 — build every `(eval, condition)` dispatch task and write
 //! `conditions.json` / `dispatch-manifest.md` / per-task prompts / `dispatch.json`
 //! ([`write_dispatch`]), then arm the write guard (auto-armed; `--no-guard`
-//! opts out) and run the harness's shadow preflight ([`post_build`]).
+//! opts out), hide the framework's own staged files from the codebase's tooling
+//! ([`ignore`]), and run the harness's shadow preflight ([`post_build`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -26,6 +27,7 @@ use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
 use crate::core::fs::{artifact_path, write_json};
 
+mod ignore;
 mod roster;
 
 use roster::condition_roster;
@@ -480,6 +482,20 @@ pub(super) fn post_build(
         && let Some(notice) = unguarded_notice(opts.no_stage)
     {
         eprintln!("{notice}");
+    }
+
+    // Staged skills, guard files, and framework outputs sit inside the task
+    // repository, so the project's own linters and formatters are taught to
+    // skip them before the baseline commit freezes the environment.
+    let (ignore_files, ignore_warnings) = ignore::hide_framework_files(ctx, r, &targets)?;
+    for warning in &ignore_warnings {
+        eprintln!("⚠ {warning}");
+    }
+    if !ignore_files.is_empty() {
+        println!(
+            "  ignore files: {} — framework files hidden from the project's own tooling",
+            ignore_files.join(", ")
+        );
     }
 
     // Establish the repository boundary after all task-visible framework files

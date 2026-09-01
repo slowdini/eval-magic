@@ -1,0 +1,16 @@
+# Prettier reads .prettierignore (and .gitignore) but ignores nothing by
+# default, so `prettier --check .` walks straight into the staged skills dir.
+id = "tool/prettier"
+ignore_file = ".prettierignore"
+create_if_missing = true
+markers = [
+  ".prettierrc",
+  ".prettierrc.json",
+  ".prettierrc.json5",
+  ".prettierrc.yaml",
+  ".prettierrc.yml",
+  ".prettierrc.toml",
+  ".prettierignore",
+]
+marker_patterns = ["prettier.config.*"]
+package_json_dependencies = ["prettier"]
