@@ -207,11 +207,15 @@ pub enum CodebaseSource {
         reference: String,
         #[serde(default)]
         exclude_skill_sources: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ignore_files: Option<Vec<String>>,
     },
     Path {
         path: String,
         #[serde(default)]
         exclude_skill_sources: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ignore_files: Option<Vec<String>>,
     },
 }
 
@@ -226,6 +230,18 @@ impl CodebaseSource {
                 exclude_skill_sources,
                 ..
             } => *exclude_skill_sources,
+        }
+    }
+
+    /// The ignore files `run` writes its framework block into, as declared.
+    ///
+    /// `None` leaves detection in charge; `Some` replaces it outright, and an
+    /// empty slice is the opt-out. See [`crate::workspace::tool_ignore`].
+    pub fn ignore_files(&self) -> Option<&[String]> {
+        match self {
+            Self::Git { ignore_files, .. } | Self::Path { ignore_files, .. } => {
+                ignore_files.as_deref()
+            }
         }
     }
 }

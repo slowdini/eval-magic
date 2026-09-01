@@ -28,6 +28,7 @@ mod env_layout;
 mod git_isolation;
 mod grouping;
 mod guard_policy;
+mod ignore_files;
 mod judges;
 mod lifecycle;
 mod multi_skill;

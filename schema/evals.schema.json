@@ -64,6 +64,11 @@
           "type": "boolean",
           "default": false,
           "description": "Move project-local skill roots discoverable by the selected harness out of every comparison environment before staging. Root instruction files and other harness configuration remain visible."
+        },
+        "ignore_files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Ignore files, relative to the task environment root, that run writes its framework-file block into, so the project's own linters and formatters never report eval-magic's staged skills, guard files, or outputs. Omit it to detect the project's tooling automatically (Prettier, ESLint, Stylelint, markdownlint, Docker); an empty array opts out entirely. Paths may not be absolute or escape the environment."
         }
       }
     },
@@ -86,6 +91,11 @@
           "type": "boolean",
           "default": false,
           "description": "Move project-local skill roots discoverable by the selected harness out of every comparison environment before staging. Root instruction files and other harness configuration remain visible."
+        },
+        "ignore_files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Ignore files, relative to the task environment root, that run writes its framework-file block into, so the project's own linters and formatters never report eval-magic's staged skills, guard files, or outputs. Omit it to detect the project's tooling automatically (Prettier, ESLint, Stylelint, markdownlint, Docker); an empty array opts out entirely. Paths may not be absolute or escape the environment."
         }
       }
     },

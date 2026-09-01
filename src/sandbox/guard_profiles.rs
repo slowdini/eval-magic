@@ -1,7 +1,6 @@
 //! Packaged command-policy profiles and task-tree auto-detection.
 
-use std::collections::{BTreeSet, HashMap};
-use std::fs;
+use std::collections::HashMap;
 use std::io;
 use std::path::Path;
 use std::sync::LazyLock;
@@ -9,6 +8,7 @@ use std::sync::LazyLock;
 use serde::Deserialize;
 
 use crate::core::GuardPolicyConfig;
+use crate::core::tree_profiles::{TreeProfile, detect};
 
 include!(concat!(env!("OUT_DIR"), "/guard_profiles.rs"));
 
@@ -23,6 +23,21 @@ struct GuardProfile {
     package_json_dependencies: Vec<String>,
     #[serde(default)]
     allow_commands: Vec<String>,
+}
+
+impl TreeProfile for GuardProfile {
+    fn id(&self) -> &str {
+        &self.id
+    }
+    fn markers(&self) -> &[String] {
+        &self.markers
+    }
+    fn marker_patterns(&self) -> &[String] {
+        &self.marker_patterns
+    }
+    fn package_json_dependencies(&self) -> &[String] {
+        &self.package_json_dependencies
+    }
 }
 
 static PROFILES: LazyLock<HashMap<String, GuardProfile>> = LazyLock::new(|| {
@@ -76,93 +91,10 @@ pub(crate) fn expand_policy(policy: &GuardPolicyConfig) -> Result<GuardPolicyCon
 
 /// Detect every applicable packaged profile in a staged task tree.
 pub(crate) fn detect_profiles(root: &Path) -> io::Result<Vec<String>> {
-    let mut detected = BTreeSet::new();
-    visit(root, &mut detected)?;
-    Ok(detected.into_iter().collect())
-}
-
-fn visit(path: &Path, detected: &mut BTreeSet<String>) -> io::Result<()> {
-    for entry in fs::read_dir(path)? {
-        let entry = entry?;
-        let file_type = entry.file_type()?;
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if file_type.is_dir() {
-            if !excluded_directory(&name) {
-                visit(&entry.path(), detected)?;
-            }
-            continue;
-        }
-        if !file_type.is_file() {
-            continue;
-        }
-
-        for profile in PROFILES.values() {
-            if profile.markers.iter().any(|marker| marker == &name)
-                || profile
-                    .marker_patterns
-                    .iter()
-                    .any(|pattern| marker_matches(pattern, &name))
-            {
-                detected.insert(profile.id.clone());
-            }
-        }
-        if name == "package.json" {
-            detect_package_json_profiles(&entry.path(), detected);
-        }
-    }
-    Ok(())
-}
-
-fn marker_matches(pattern: &str, name: &str) -> bool {
-    let Some((prefix, suffix)) = pattern.split_once('*') else {
-        return pattern == name;
-    };
-    !suffix.contains('*') && name.starts_with(prefix) && name.ends_with(suffix)
-}
-
-fn excluded_directory(name: &str) -> bool {
-    matches!(
-        name,
-        ".git"
-            | ".eval-magic-outputs"
-            | ".claude"
-            | ".codex"
-            | ".agents"
-            | ".opencode"
-            | ".cline"
-            | "target"
-            | "node_modules"
-            | ".venv"
+    detect(
+        root,
+        PROFILES.values().map(|profile| profile as &dyn TreeProfile),
     )
-}
-
-fn detect_package_json_profiles(path: &Path, detected: &mut BTreeSet<String>) {
-    let Ok(body) = fs::read_to_string(path) else {
-        return;
-    };
-    let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) else {
-        return;
-    };
-    for profile in PROFILES.values() {
-        if profile.package_json_dependencies.iter().any(|dependency| {
-            [
-                "dependencies",
-                "devDependencies",
-                "peerDependencies",
-                "optionalDependencies",
-            ]
-            .iter()
-            .any(|field| {
-                value
-                    .get(field)
-                    .and_then(|deps| deps.get(dependency))
-                    .is_some()
-            })
-        }) {
-            detected.insert(profile.id.clone());
-        }
-    }
 }
 
 #[cfg(test)]

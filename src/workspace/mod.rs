@@ -6,12 +6,14 @@
 pub mod promote;
 pub mod snapshot;
 pub mod teardown;
+pub mod tool_ignore;
 
 pub use promote::{NotesStatus, PromoteOptions, PromoteResult, promote_baseline};
 pub use snapshot::{snapshot, snapshot_set};
 pub use teardown::{
     KeptIteration, PROMOTED_MARKER, SNAPSHOT_META, WorkspaceCleanupSummary, cleanup_workspace,
 };
+pub use tool_ignore::{IgnoreOutcome, IgnorePlan, apply_framework_ignore_entries};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

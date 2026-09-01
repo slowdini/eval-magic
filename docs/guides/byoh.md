@@ -128,6 +128,11 @@ path must be normalized, `/`-separated, and relative to the task repository. Its
 also appear in `config_dirs`, keeping discovery, sibling filtering, and task-repository baselining
 on one descriptor surface.
 
+`skills_dir` and the file your `[guard]` section stages (`hooks_file`, or `plugin_file` for a
+plugin engine) are also what `run` hides from a sourced codebase's own linters and formatters, by
+writing them into the project's ignore files. Declaring them correctly is all a descriptor has to
+do; see `eval-magic docs codebase`.
+
 ## Layer descriptors by field
 
 Descriptors load in this order:

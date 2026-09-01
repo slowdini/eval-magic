@@ -1,0 +1,8 @@
+# Not a linter: .dockerignore keeps the staged skills and the framework's own
+# outputs out of the build context a `docker build` command_check sends.
+id = "tool/docker"
+ignore_file = ".dockerignore"
+create_if_missing = true
+markers = ["Dockerfile", ".dockerignore"]
+marker_patterns = ["Dockerfile.*"]
+package_json_dependencies = []

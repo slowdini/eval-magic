@@ -602,6 +602,14 @@ pub(crate) enum Commands {
     /// selected harness's project skill roots symmetrically before staging. See
     /// `eval-magic docs codebase` for configuration and provenance, and
     /// `eval-magic docs isolation` for operator-source remedies and verification.
+    ///
+    /// Staged skills, guard files, and framework outputs sit inside the task
+    /// repository, so every environment also gets the project's own ignore files
+    /// (`.prettierignore` and friends, detected from the codebase's tooling)
+    /// taught to skip them — identically in both arms, so a project lint step
+    /// cannot fail in the treatment arm alone. Set the codebase's `ignore_files`
+    /// to name those files yourself, or to `[]` to opt out. See
+    /// `eval-magic docs codebase`.
     Run(RunArgs),
     /// Run every task in a prepared iteration through its harness CLI.
     ///

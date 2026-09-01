@@ -99,6 +99,7 @@ fn accepts_a_top_level_git_codebase_as_the_default() {
             url: "https://example.com/project.git".to_string(),
             reference: "main".to_string(),
             exclude_skill_sources: false,
+            ignore_files: None,
         })
     );
 }
@@ -116,6 +117,7 @@ fn accepts_a_per_eval_path_codebase_overriding_the_default() {
         Some(CodebaseSource::Path {
             path: "../projects/legacy-service".to_string(),
             exclude_skill_sources: false,
+            ignore_files: None,
         })
     );
 }
@@ -132,6 +134,7 @@ fn accepts_a_top_level_path_codebase() {
         Some(CodebaseSource::Path {
             path: "/srv/projects/legacy-service".to_string(),
             exclude_skill_sources: false,
+            ignore_files: None,
         })
     );
 }
@@ -148,6 +151,70 @@ fn accepts_codebase_skill_source_exclusion() {
     let declared = serde_json::to_value(parsed.codebase.unwrap()).unwrap();
 
     assert_eq!(declared["exclude_skill_sources"], true);
+}
+
+#[test]
+fn accepts_declared_ignore_files() {
+    let mut config = base();
+    config["codebase"] = json!({
+        "path": "/srv/projects/legacy-service",
+        "ignore_files": ["config/.prettierignore", ".stylelintignore"]
+    });
+
+    let parsed = validate_evals_config(&config, "evals.json").unwrap();
+
+    assert_eq!(
+        parsed.codebase.unwrap().ignore_files(),
+        Some(
+            [
+                "config/.prettierignore".to_string(),
+                ".stylelintignore".to_string()
+            ]
+            .as_slice()
+        )
+    );
+}
+
+#[test]
+fn an_empty_ignore_files_list_is_the_opt_out_not_the_default() {
+    let mut config = base();
+    config["codebase"] = json!({ "path": ".", "ignore_files": [] });
+
+    let parsed = validate_evals_config(&config, "evals.json").unwrap();
+
+    assert_eq!(parsed.codebase.unwrap().ignore_files(), Some([].as_slice()));
+}
+
+#[test]
+fn an_absent_ignore_files_list_leaves_detection_in_charge() {
+    let parsed = validate_evals_config(&base(), "evals.json").unwrap();
+
+    assert_eq!(parsed.codebase.unwrap().ignore_files(), None);
+}
+
+/// The runner writes these paths inside a task environment, so anything that
+/// leaves it — an absolute path, a `..` hop, a blank entry — is refused before
+/// a run can touch the host.
+#[test]
+fn rejects_ignore_file_paths_that_leave_the_task_environment() {
+    for path in [
+        "/etc/.prettierignore",
+        "../.prettierignore",
+        "a/../../b",
+        "  ",
+    ] {
+        let mut config = base();
+        config["codebase"] = json!({ "path": ".", "ignore_files": [path] });
+
+        let err = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            err.contains("ignore_files"),
+            "path {path:?} was accepted or reported oddly: {err}"
+        );
+    }
 }
 
 /// `minLength: 1` admits `" "`, so the schema cannot carry this on its own.

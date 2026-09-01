@@ -336,6 +336,16 @@ fn append_guard_denial(path: &Path, record: &GuardDenialRecord) -> io::Result<()
     file.write_all(&line)
 }
 
+/// The env-relative file this guard engine stages: the merged hook config for
+/// `json-hooks`, the project plugin for the plugin engines. One place decides
+/// it, so a new engine cannot teach half the codebase where its file lives.
+pub(crate) fn guard_staged_file(guard: &GuardSection) -> Option<&str> {
+    match guard.engine {
+        GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
+        GuardEngine::OpencodePlugin | GuardEngine::ClinePlugin => guard.plugin_file.as_deref(),
+    }
+}
+
 /// The hook-surface dir the install created outside the skills dir, which
 /// teardown prunes when restoring the original file leaves it empty. Derived
 /// from the data: the engine's staged file's parent dir (`hooks_file` for
@@ -347,10 +357,7 @@ pub(crate) fn hook_cleanup_dir(
     skills_dir_rel: Option<&str>,
     stage_root: &Path,
 ) -> Option<PathBuf> {
-    let hook_file = match guard.engine {
-        GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
-        GuardEngine::OpencodePlugin | GuardEngine::ClinePlugin => guard.plugin_file.as_deref(),
-    }?;
+    let hook_file = guard_staged_file(guard)?;
     let (parent, _) = hook_file.rsplit_once('/')?;
     if let Some(skills) = skills_dir_rel {
         // Component-wise ancestry: `.a` owns `.a/b/skills` but not `.ab/skills`.
