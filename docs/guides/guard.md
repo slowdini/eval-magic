@@ -9,7 +9,9 @@ Without an explicit `guard` field, eval-magic detects packaged profiles from the
 
 ## Understand the two policy layers
 
-Containment checks run before command allowances. A command policy cannot override these checks:
+Containment checks run before command allowances. A command policy cannot override these checks.
+A command that violates both layers is denied once, with a verdict that names each blocking reason,
+so the denial never points at a fix that cannot unblock the command:
 
 - Direct write and patch tools must target the task environment.
 - Shell redirects and `tee` targets must resolve inside the task environment.

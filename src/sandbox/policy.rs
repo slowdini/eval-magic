@@ -198,18 +198,43 @@ pub(crate) fn classify_bash_with_cwd(
     )
 }
 
-/// Classify one shell tool call under its resolved eval command policy.
+/// Classify one shell tool call under its resolved eval command policy,
+/// returning the first applicable denial.
 pub(crate) fn classify_bash_with_policy(
     command: &str,
     allowed_roots: &[String],
     invocation_cwd: &Path,
     policy: &crate::core::GuardPolicyConfig,
 ) -> Option<BashClassification> {
+    classify_bash_denials(command, allowed_roots, invocation_cwd, policy)
+        .into_iter()
+        .next()
+}
+
+/// Every layer that denies one shell tool call, containment checks first and
+/// the eval command policy second (at most one denial each).
+///
+/// The stray-write audit wants only the first denial, but the live guard owes
+/// the agent all of them in one verdict: a verdict that names just the
+/// redirect it found sends the agent to fix a problem that cannot unblock the
+/// command when the command policy was already denying it.
+pub(crate) fn classify_bash_denials(
+    command: &str,
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+    policy: &crate::core::GuardPolicyConfig,
+) -> Vec<BashClassification> {
     if command.is_empty() {
-        return None;
+        return Vec::new();
     }
-    classify_fixed_containment(command, allowed_roots, invocation_cwd)
-        .or_else(|| super::command_policy::classify_command_policy(command, policy))
+    let mut denials = Vec::new();
+    if let Some(denial) = classify_fixed_containment(command, allowed_roots, invocation_cwd) {
+        denials.push(denial);
+    }
+    if let Some(denial) = super::command_policy::classify_command_policy(command, policy) {
+        denials.push(denial);
+    }
+    denials
 }
 
 fn classify_fixed_containment(

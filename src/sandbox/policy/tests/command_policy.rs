@@ -154,3 +154,78 @@ fn shell_wrapper_allowance_cannot_bypass_fixed_containment() {
         Some("cargo build/test output")
     );
 }
+
+#[test]
+fn denials_reports_every_denying_layer_containment_first() {
+    let roots = vec!["/work/env".to_string()];
+    let policy = crate::core::GuardPolicyConfig {
+        allow_commands: vec!["cargo build".to_string()],
+        ..crate::core::GuardPolicyConfig::default()
+    };
+
+    let denials = classify_bash_denials(
+        "npm run dev > /tmp/dev-server.log",
+        &roots,
+        Path::new("/work/env"),
+        &policy,
+    );
+
+    let reasons: Vec<&str> = denials.iter().map(|denial| denial.reason).collect();
+    assert_eq!(
+        reasons,
+        [
+            "output redirection to a file",
+            "command not allowed by eval guard policy"
+        ]
+    );
+    assert_eq!(
+        denials[0].resolved_targets,
+        vec!["/tmp/dev-server.log".to_string()]
+    );
+}
+
+#[test]
+fn denials_reports_a_single_layer_when_only_one_applies() {
+    let roots = vec!["/work/env".to_string()];
+
+    // Containment only: echo is unrecognized by the command policy.
+    let denials = classify_bash_denials(
+        "echo hi > /tmp/out.log",
+        &roots,
+        Path::new("/work/env"),
+        &crate::core::GuardPolicyConfig::default(),
+    );
+    assert_eq!(denials.len(), 1);
+    assert_eq!(denials[0].reason, "output redirection to a file");
+
+    // Policy only: the redirect target is in bounds, but npm is claimed and
+    // not allowed.
+    let policy = crate::core::GuardPolicyConfig {
+        allow_commands: vec!["cargo build".to_string()],
+        ..crate::core::GuardPolicyConfig::default()
+    };
+    let denials = classify_bash_denials(
+        "npm run dev > /work/env/dev-server.log",
+        &roots,
+        Path::new("/work/env"),
+        &policy,
+    );
+    assert_eq!(denials.len(), 1);
+    assert_eq!(
+        denials[0].reason,
+        "command not allowed by eval guard policy"
+    );
+}
+
+#[test]
+fn denials_is_empty_for_an_allowed_command() {
+    let roots = vec!["/work/env".to_string()];
+    let policy = crate::core::GuardPolicyConfig {
+        allow_commands: vec!["cargo build".to_string()],
+        ..crate::core::GuardPolicyConfig::default()
+    };
+
+    assert!(
+        classify_bash_denials("cargo build", &roots, Path::new("/work/env"), &policy).is_empty()
+    );
+}

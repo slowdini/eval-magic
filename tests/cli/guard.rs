@@ -204,7 +204,7 @@ fn guard_codex_block_verdict_bytes_are_stable() {
         .success()
         .stdout(
             "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
-             (package install/add) — runs outside the eval sandbox\"}",
+             (package install/add — runs outside the eval sandbox; command not allowed by eval guard policy)\"}",
         );
 }
 
