@@ -3,7 +3,6 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
 
 use crate::adapters::adapter_for;
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
@@ -11,6 +10,7 @@ use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
 };
 use crate::core::SkillNames;
+use crate::core::fs::artifact_path;
 use crate::sandbox;
 use crate::workspace;
 
@@ -183,7 +183,7 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
         eprintln!(
             "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     eval-magic promote-baseline{target_args} --iteration <N>\n   or delete {}/ manually to discard.",
             ws.kept_iterations.len(),
-            Path::new(".eval-magic").join(&ctx.skill_name).display()
+            artifact_path(&ctx.workspace_root.join(&ctx.skill_name))
         );
     }
     Ok(())

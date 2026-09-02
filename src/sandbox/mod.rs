@@ -43,6 +43,21 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// guard denials for temporary and scratch work.
 pub(crate) const TASK_SCRATCH_DIR: &str = "tmp";
 
+/// The paths the framework itself owns inside every task environment, as
+/// gitignore-style patterns anchored at the env root.
+///
+/// One definition, because the same set has to hold on three surfaces that
+/// would otherwise drift: the env's `.git/info/exclude` (so a measurement never
+/// reports these as the agent's change), each harness's
+/// `framework_ignore_paths` (so the codebase's own linters never report them as
+/// project failures), and what `eval-magic docs codebase` promises about both.
+pub(crate) fn framework_owned_entries() -> [String; 2] {
+    [
+        format!("/{GUARD_DENIALS_DIR}/"),
+        format!("/{TASK_SCRATCH_DIR}/"),
+    ]
+}
+
 /// Current wall clock in epoch milliseconds. chrono ships without its `clock`
 /// feature (it parses timestamps but never reads the clock), so the time comes
 /// from `std::time`. Shared by the guard's expiry check and marker stamping.

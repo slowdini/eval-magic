@@ -56,19 +56,32 @@ fn guard_installs_pretooluse_hook_under_env() {
     // Nothing is armed at the invocation cwd anymore.
     assert!(!cwd.join(".claude/settings.local.json").exists());
 
-    // `teardown-guard` operates at the invocation cwd, so it does not reach the
-    // env-scoped guard: this is a transitional no-op, reconciled when the loop runs
-    // inside the env session / teardown is reworked. The env is disposable
-    // and the guard auto-expires (6h TTL); full `teardown` reclaims it (see
-    // `teardown_reclaims_workspace_and_env_guard`).
+    // `teardown-guard` reaches the per-(group, condition) env guards when the shared
+    // target flags point it at the run — the mid-run "disarm before I hand-edit"
+    // path the command exists for. It stays guard-only: the staged skill set and
+    // the workspace survive, which is what separates it from full `teardown`.
     skill_eval()
         .current_dir(&cwd)
         .args(["teardown-guard", "--skill-dir"])
         .arg(&skill_dir)
         .args(["--skill", "mr-review"])
         .assert()
-        .success();
-    assert!(settings.exists(), "env guard survives a cwd teardown-guard");
+        .success()
+        .stdout(contains("Write guard removed"))
+        .stdout(contains("task env"));
+    assert!(!settings.exists(), "env guard survived teardown-guard");
+    assert!(
+        !cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".claude/skills/.slow-powers-eval-guard.json")
+            .exists(),
+        "env guard marker survived teardown-guard"
+    );
+    assert!(
+        cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".claude/skills")
+            .exists(),
+        "teardown-guard removed the staged skill set — that is `teardown`'s job"
+    );
 }
 
 #[test]

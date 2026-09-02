@@ -479,3 +479,20 @@ fn guard_hook_skips_descriptor_discovery() {
         .stdout(contains(r#""permissionDecision":"deny""#))
         .stderr(contains("skipping harness descriptor").not());
 }
+
+/// A `teardown-guard` that cannot resolve a run must not imply it checked the
+/// per-`(group, condition)` env guards. The false all-clear it used to print is
+/// most costly exactly here — mid-run, before hand-editing files (#298).
+#[test]
+fn teardown_guard_says_when_it_could_not_check_the_env_guards() {
+    let tmp = TempDir::new().unwrap();
+
+    skill_eval()
+        .arg("teardown-guard")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(contains("invocation cwd"))
+        .stderr(contains("Task env guards were not checked"))
+        .stderr(contains("eval-magic teardown"));
+}

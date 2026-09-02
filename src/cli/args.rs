@@ -386,7 +386,11 @@ pub struct RunArgs {
     /// while dispatches run. The task env is its sole allowed write root; host temp
     /// directories are out of bounds. Dispatch prompts name `<eval-root>/tmp` as
     /// the task-local scratch directory (create it when needed); eval-magic does
-    /// not rewrite `TMPDIR`, `TMP`, or `TEMP`.
+    /// not rewrite `TMPDIR`, `TMP`, or `TEMP`. Because the framework designates
+    /// that directory, what an agent puts there is excluded from diff scope and
+    /// from the project's own ignore files — so a `diff_scope` budget covers the
+    /// change, not the scratch work, and judges never read scratch notes as the
+    /// deliverable.
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover and acting as a backstop when the isolated session
@@ -652,8 +656,14 @@ pub(crate) enum Commands {
     /// Disarm the write guard.
     ///
     /// Removes only the write guard (e.g. mid-run, before hand-editing files the
-    /// guard would block). The full `teardown` removes the guard AND the staged
-    /// skill set.
+    /// guard would block) — at the invocation cwd, and in every
+    /// per-`(group, condition)` env of the iteration the shared target flags
+    /// select (`--skill-dir`/`--skill`, `--workspace-dir`, `--iteration`;
+    /// `--iteration` defaults to the latest). Running it from inside a task env
+    /// needs no flags: that env is the cwd. Where those flags resolve no run, it
+    /// sweeps the cwd alone and says which guards it could not check, rather
+    /// than reporting an all-clear for them. The full `teardown` removes the
+    /// guard AND the staged skill set, and reclaims the workspace.
     TeardownGuard(CommonArgs),
     /// Ingest recorded transcripts into run records.
     ///

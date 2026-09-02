@@ -81,17 +81,18 @@ pub trait HarnessAdapter {
         self.skills_dir(repo_root).into_iter().collect()
     }
 
-    /// Env-relative paths the runner itself places in every task environment,
-    /// as gitignore-style patterns.
+    /// Env-relative paths the framework owns in every task environment, as
+    /// gitignore-style patterns.
     ///
     /// Staged skills sit *inside* the task repository, so a codebase whose lint
     /// or format step globs the whole tree reports the framework's artifacts as
     /// project failures — and only in the arm that stages a skill. `run` writes
     /// these patterns into the project's own ignore files
     /// ([`crate::workspace::tool_ignore`]) to keep that from happening. The
-    /// baseline is the framework outputs dir every harness produces.
+    /// baseline is [`crate::sandbox::framework_owned_entries`], which every
+    /// harness contributes; what a harness adds on top is what it stages.
     fn framework_ignore_paths(&self) -> Vec<String> {
-        vec![format!("/{}/", crate::sandbox::GUARD_DENIALS_DIR)]
+        crate::sandbox::framework_owned_entries().to_vec()
     }
 
     // ── Run-option capabilities (defaulted) ──────────────────────────────────
@@ -564,11 +565,12 @@ mod tests {
     }
 
     #[test]
-    fn framework_ignore_paths_cover_the_staged_skills_the_guard_file_and_the_outputs_dir() {
+    fn framework_ignore_paths_cover_the_staged_skills_the_guard_file_and_what_the_framework_owns() {
         assert_eq!(
             adapter_for(Harness::resolve("claude-code").unwrap()).framework_ignore_paths(),
             vec![
                 "/.eval-magic-outputs/".to_string(),
+                "/tmp/".to_string(),
                 "/.claude/skills/".to_string(),
                 "/.claude/settings.local.json".to_string(),
             ]
@@ -578,6 +580,7 @@ mod tests {
             adapter_for(Harness::resolve("opencode").unwrap()).framework_ignore_paths(),
             vec![
                 "/.eval-magic-outputs/".to_string(),
+                "/tmp/".to_string(),
                 "/.opencode/skills/".to_string(),
                 "/.opencode/plugins/slow-powers-eval-guard.js".to_string(),
             ]
@@ -586,6 +589,7 @@ mod tests {
             adapter_for(Harness::resolve("codex").unwrap()).framework_ignore_paths(),
             vec![
                 "/.eval-magic-outputs/".to_string(),
+                "/tmp/".to_string(),
                 "/.agents/skills/".to_string(),
                 "/.codex/hooks.json".to_string(),
             ]
@@ -602,7 +606,7 @@ mod tests {
 
         assert_eq!(
             adapter.framework_ignore_paths(),
-            vec!["/.eval-magic-outputs/".to_string()]
+            vec!["/.eval-magic-outputs/".to_string(), "/tmp/".to_string()]
         );
     }
 

@@ -61,6 +61,7 @@ fn both_arms_get_the_same_ignore_file_hiding_the_staged_skills() {
     );
     for entry in [
         "/.eval-magic-outputs/",
+        "/tmp/",
         "/.claude/skills/",
         "/.claude/settings.local.json",
     ] {

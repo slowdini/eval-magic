@@ -114,7 +114,7 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         Commands::Finalize(args) => run_finalize(args),
         Commands::Init(args) => run_init(args),
         Commands::Validate(args) => run_validate(args),
-        Commands::TeardownGuard(_) => run_teardown_guard(),
+        Commands::TeardownGuard(args) => run_teardown_guard(args),
         Commands::Guard { marker } => run_guard(marker),
         Commands::GuardCodex { marker } => run_guard_codex(marker),
         Commands::GuardHook { harness, marker } => run_guard_hook(&harness, marker),
