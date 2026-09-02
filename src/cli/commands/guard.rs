@@ -93,8 +93,10 @@ pub(crate) fn run_teardown_guard(args: CommonArgs) -> anyhow::Result<()> {
         Err(error) => unchecked = Some(error.to_string()),
     }
 
-    let envs_phrase = |count: usize| {
-        let iteration = checked.map(|(iteration, _)| iteration).unwrap_or_default();
+    // Takes the iteration rather than reading `checked`: naming a count of envs
+    // without the iteration they belong to is meaningless, and there is no such
+    // thing as a sensible default for it.
+    let envs_phrase = |iteration: u32, count: usize| {
         format!(
             "{count} task env{} in iteration {iteration}",
             if count == 1 { "" } else { "s" }
@@ -104,13 +106,15 @@ pub(crate) fn run_teardown_guard(args: CommonArgs) -> anyhow::Result<()> {
     if cwd_torn {
         removed.push("the invocation cwd".to_string());
     }
-    if envs_torn > 0 {
-        removed.push(envs_phrase(envs_torn));
+    if let Some((iteration, _)) = checked
+        && envs_torn > 0
+    {
+        removed.push(envs_phrase(iteration, envs_torn));
     }
     if removed.is_empty() {
         let mut scopes = vec!["the invocation cwd".to_string()];
-        if let Some((_, count)) = checked {
-            scopes.push(envs_phrase(count));
+        if let Some((iteration, count)) = checked {
+            scopes.push(envs_phrase(iteration, count));
         }
         println!(
             "No write guard was installed — nothing to remove (checked {}).",

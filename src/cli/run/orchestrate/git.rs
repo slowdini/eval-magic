@@ -112,7 +112,7 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     let mut exclude = crate::sandbox::framework_owned_entries().join("\n");
     exclude.push('\n');
     fs::write(root.join(".git/info/exclude"), exclude)
-        .map_err(|error| format!("could not configure framework output exclusion: {error}"))?;
+        .map_err(|error| format!("could not configure framework path exclusion: {error}"))?;
 
     let hooks_path = hooks_dir.to_string_lossy().into_owned();
     for (name, value) in [
