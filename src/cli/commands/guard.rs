@@ -11,6 +11,8 @@ use std::io;
 use std::path::PathBuf;
 
 use crate::adapters::{HarnessAdapter, adapter_for};
+use crate::cli::args::CommonArgs;
+use crate::cli::{iteration_dir, resolve_iteration, run_context_from, staged_env_roots};
 use crate::core::Harness;
 use crate::sandbox;
 
@@ -53,19 +55,79 @@ pub(crate) fn run_guard_hook(harness_name: &str, marker: Option<String>) -> anyh
     Ok(())
 }
 
-/// Disarm the write guard for the current directory. Cwd-only by design: the
-/// guard lives under harness-local config in the current repo, so this needs no
-/// `--skill-dir`/`--skill` flags.
-pub(crate) fn run_teardown_guard() -> anyhow::Result<()> {
-    let torn = sandbox::teardown_guard(&std::env::current_dir()?);
-    println!(
-        "{}",
-        if torn {
-            "🛡 Write guard removed."
-        } else {
-            "No write guard was installed — nothing to remove."
+/// Disarm the write guard: at the invocation cwd, and — when the shared target
+/// flags resolve a run — in every per-`(group, condition)` env of the selected
+/// iteration.
+///
+/// The cwd sweep needs no flags, so disarming from inside a task env still works
+/// bare. The env walk is best-effort, because the guard is only *usually*
+/// reachable from where the operator stands: a cwd that resolves no skill, or a
+/// skill with no such iteration, leaves those guards armed. That case reports
+/// what it could not check rather than the all-clear it never established — this
+/// command exists for mid-run hand-editing, which is exactly when a false
+/// "nothing to remove" costs the most (#298).
+///
+/// Guard-only by design: the staged skill set and the workspace are what full
+/// `teardown` additionally removes.
+pub(crate) fn run_teardown_guard(args: CommonArgs) -> anyhow::Result<()> {
+    // Cwd first. When the cwd *is* a task env, its guard is already gone by the
+    // time the walk below reaches it, so no guard is counted in both scopes.
+    let cwd_torn = sandbox::teardown_guard(&std::env::current_dir()?);
+
+    let mut envs_torn = 0usize;
+    let mut checked: Option<(u32, usize)> = None;
+    let mut unchecked: Option<String> = None;
+    match run_context_from(&args).and_then(|ctx| {
+        let iteration = resolve_iteration(&ctx, args.iteration)?;
+        let dir = iteration_dir(&ctx, Some(iteration))?;
+        Ok((iteration, staged_env_roots(&dir)))
+    }) {
+        Ok((iteration, envs)) => {
+            for env in &envs {
+                if sandbox::teardown_guard(env) {
+                    envs_torn += 1;
+                }
+            }
+            checked = Some((iteration, envs.len()));
         }
-    );
+        Err(error) => unchecked = Some(error.to_string()),
+    }
+
+    let envs_phrase = |count: usize| {
+        let iteration = checked.map(|(iteration, _)| iteration).unwrap_or_default();
+        format!(
+            "{count} task env{} in iteration {iteration}",
+            if count == 1 { "" } else { "s" }
+        )
+    };
+    let mut removed = Vec::new();
+    if cwd_torn {
+        removed.push("the invocation cwd".to_string());
+    }
+    if envs_torn > 0 {
+        removed.push(envs_phrase(envs_torn));
+    }
+    if removed.is_empty() {
+        let mut scopes = vec!["the invocation cwd".to_string()];
+        if let Some((_, count)) = checked {
+            scopes.push(envs_phrase(count));
+        }
+        println!(
+            "No write guard was installed — nothing to remove (checked {}).",
+            scopes.join(" and ")
+        );
+    } else {
+        println!("🛡 Write guard removed: {}.", removed.join(", "));
+    }
+    if let Some(reason) = unchecked {
+        // The resolution error already names the flags that would have resolved
+        // a run, so this adds only what it cannot know: that guards may survive,
+        // and that full `teardown` is the other way to reach them.
+        eprintln!(
+            "⚠ Task env guards were not checked, so any that were armed still are: \
+             {reason}.\n   Add the run's target flags, or run `eval-magic teardown`."
+        );
+    }
     Ok(())
 }
 

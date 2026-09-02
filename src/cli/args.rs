@@ -652,8 +652,14 @@ pub(crate) enum Commands {
     /// Disarm the write guard.
     ///
     /// Removes only the write guard (e.g. mid-run, before hand-editing files the
-    /// guard would block). The full `teardown` removes the guard AND the staged
-    /// skill set.
+    /// guard would block) — at the invocation cwd, and in every
+    /// per-`(group, condition)` env of the iteration the shared target flags
+    /// select (`--skill-dir`/`--skill`, `--workspace-dir`, `--iteration`;
+    /// `--iteration` defaults to the latest). Running it from inside a task env
+    /// needs no flags: that env is the cwd. Where those flags resolve no run, it
+    /// sweeps the cwd alone and says which guards it could not check, rather
+    /// than reporting an all-clear for them. The full `teardown` removes the
+    /// guard AND the staged skill set, and reclaims the workspace.
     TeardownGuard(CommonArgs),
     /// Ingest recorded transcripts into run records.
     ///

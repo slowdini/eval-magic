@@ -123,8 +123,9 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
         "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown{target_args}"
     );
     // Warn if a guard is still armed. There is one env per (group, condition), so
-    // walk each per-env marker as well as the cwd. `teardown` (not the cwd-only
-    // `teardown-guard`) is what disarms them all.
+    // walk each per-env marker as well as the cwd. The reminder names `teardown`
+    // rather than `teardown-guard`: both disarm every one of these, but at end of
+    // run the staged skill set and the workspace want reclaiming too.
     let mut armed = sandbox::guard_is_armed(&ctx.stage_root);
     if !armed && let Ok(dir) = iteration_dir(&ctx, Some(iteration)) {
         armed = staged_env_roots(&dir)
