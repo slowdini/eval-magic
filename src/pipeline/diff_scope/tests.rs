@@ -42,7 +42,9 @@ fn baselined_repo(root: &Path) {
         ],
     );
     fs::create_dir_all(root.join(".git/info")).unwrap();
-    fs::write(root.join(".git/info/exclude"), "/.eval-magic-outputs/\n").unwrap();
+    let mut exclude = crate::sandbox::framework_owned_entries().join("\n");
+    exclude.push('\n');
+    fs::write(root.join(".git/info/exclude"), exclude).unwrap();
     for (name, value) in [
         ("user.name", "eval-magic"),
         ("user.email", "eval-magic@localhost"),
@@ -83,7 +85,7 @@ fn lines_changed_saturates_untrusted_artifact_totals() {
 }
 
 #[test]
-fn measurement_counts_all_task_changes_except_framework_outputs() {
+fn measurement_counts_all_task_changes_except_framework_outputs_and_scratch() {
     let temp = tempfile::TempDir::new().unwrap();
     let eval_root = temp.path().join("env");
     let run_dir = temp.path().join("run");
@@ -105,6 +107,15 @@ fn measurement_counts_all_task_changes_except_framework_outputs() {
     fs::write(
         eval_root.join(".eval-magic-outputs/agent-created.txt"),
         "also ignored\n",
+    )
+    .unwrap();
+    // The task-local scratch directory dispatch prompts designate. The framework
+    // told the agent to put throwaway work here, so it is not the agent's change
+    // (#298) — and an agent that obeyed must not score worse for it.
+    fs::create_dir_all(eval_root.join("tmp")).unwrap();
+    fs::write(
+        eval_root.join("tmp/IMPLEMENTATION_SUMMARY.md"),
+        "scratch\nnotes\n",
     )
     .unwrap();
 

@@ -277,6 +277,11 @@ What counts is what Git counts, under the same rules the baseline commit was bui
 - Overlay files and staged skills count even when the codebase ignores their paths — they are
   committed into the baseline regardless, so a change to one is always visible.
 - Framework artifacts under `.eval-magic-outputs/` never count.
+- The task-local scratch directory never counts. Dispatch prompts designate `<eval-root>/tmp/` for
+  temporary work and tell the agent to use it, so what lands there is the framework's instruction
+  being followed, not the change under measurement. It is excluded from the project's own ignore
+  files for the same reason, and it never reaches `diff.patch`, so a judge never reads scratch notes
+  as the deliverable.
 - A nested repository's internals never count: Git tracks no path with a `.git` component.
 - A rename counts as two touched files, one created and one deleted.
 - A binary file counts as one touched file, contributing no lines.

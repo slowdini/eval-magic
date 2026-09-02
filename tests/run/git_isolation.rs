@@ -77,13 +77,15 @@ fn every_task_is_a_clean_local_git_repo_inside_a_dirty_ignored_parent_repo() {
         assert_eq!(git(eval_root, &["symbolic-ref", "--short", "HEAD"]), "work");
         assert_eq!(git(eval_root, &["status", "--porcelain"]), "");
         assert_eq!(git(eval_root, &["remote"]), "");
-        assert_eq!(
-            git(
-                eval_root,
-                &["check-ignore", ".eval-magic-outputs/probe.txt"]
-            ),
-            ".eval-magic-outputs/probe.txt"
-        );
+        // Both framework-owned directories: the outputs dir, and the task-local
+        // scratch directory dispatch prompts designate (#298). Neither is the
+        // agent's change, so neither may reach a measurement.
+        for framework_owned in [".eval-magic-outputs/probe.txt", "tmp/probe.txt"] {
+            assert_eq!(
+                git(eval_root, &["check-ignore", framework_owned]),
+                framework_owned
+            );
+        }
         // Git spells a zero UTC offset either `+00:00` (2.43) or `Z` (newer).
         // Both name the same instant, so normalize rather than pin a version.
         let log = git(

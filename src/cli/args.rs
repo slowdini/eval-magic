@@ -386,7 +386,11 @@ pub struct RunArgs {
     /// while dispatches run. The task env is its sole allowed write root; host temp
     /// directories are out of bounds. Dispatch prompts name `<eval-root>/tmp` as
     /// the task-local scratch directory (create it when needed); eval-magic does
-    /// not rewrite `TMPDIR`, `TMP`, or `TEMP`.
+    /// not rewrite `TMPDIR`, `TMP`, or `TEMP`. Because the framework designates
+    /// that directory, what an agent puts there is excluded from diff scope and
+    /// from the project's own ignore files — so a `diff_scope` budget covers the
+    /// change, not the scratch work, and judges never read scratch notes as the
+    /// deliverable.
     /// Because the harness already cwd-bounds the agent's direct file tools to the
     /// env, the guard's main remaining value is blocking Bash-subprocess escapes the
     /// cwd boundary doesn't cover and acting as a backstop when the isolated session

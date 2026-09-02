@@ -4,8 +4,9 @@
 //! the state the agent started from, so the difference between that ref and the
 //! finished working tree *is* the measurement. Nothing is copied and nothing is
 //! walked: Git already knows what changed, and it knows it while honoring the
-//! codebase's own `.gitignore` and the `.eval-magic-outputs` exclusion the
-//! runner writes.
+//! codebase's own `.gitignore` and the runner's exclusion of what the framework
+//! itself owns (its outputs dir and the task-local scratch directory dispatch
+//! prompts designate — see [`crate::sandbox::framework_owned_entries`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -246,9 +247,9 @@ fn measure_task_diff(eval_root: &Path, run_dir: &Path) -> Result<DiffScopeRecord
 
     git_checked(&git, eval_root, &["read-tree", BASELINE_REF], &env)?;
     // Unforced, so the codebase's own `.gitignore` and the `.git/info/exclude`
-    // entry for `.eval-magic-outputs/` both hold — the same rules the baseline
-    // commit was built under. A path the runner force-added despite those rules
-    // is already tracked by `read-tree`, and stays measured.
+    // entries for the framework-owned paths all hold — the same rules the
+    // baseline commit was built under. A path the runner force-added despite
+    // those rules is already tracked by `read-tree`, and stays measured.
     git_checked(&git, eval_root, &["add", "--all", "--", "."], &env)?;
     let measured = git_checked(&git, eval_root, &["write-tree"], &env)?;
     let measured = String::from_utf8_lossy(&measured).trim().to_string();

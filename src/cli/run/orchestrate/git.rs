@@ -109,7 +109,9 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
         .map_err(|error| format!("could not create Git info directory: {error}"))?;
     fs::create_dir_all(&hooks_dir)
         .map_err(|error| format!("could not create empty Git hooks directory: {error}"))?;
-    fs::write(root.join(".git/info/exclude"), "/.eval-magic-outputs/\n")
+    let mut exclude = crate::sandbox::framework_owned_entries().join("\n");
+    exclude.push('\n');
+    fs::write(root.join(".git/info/exclude"), exclude)
         .map_err(|error| format!("could not configure framework output exclusion: {error}"))?;
 
     let hooks_path = hooks_dir.to_string_lossy().into_owned();
@@ -127,9 +129,9 @@ fn initialize_task_repository(plan: &TaskRepository) -> Result<(), String> {
     // its build output, and a forced add here would commit `target/` or
     // `node_modules/` into the baseline every environment starts from.
     //
-    // No exclude pathspec for `.eval-magic-outputs`: `.git/info/exclude` above
-    // already ignores it, and an unforced add honors that. The pathspecs this
-    // replaces existed only to carve it back out of a forced add.
+    // No exclude pathspec for the framework-owned paths: `.git/info/exclude`
+    // above already ignores them, and an unforced add honors that. The pathspecs
+    // this replaces existed only to carve them back out of a forced add.
     run_checked(&git, root, &["add", "--all", "--", "."], &[])?;
     // What the runner itself placed is forced in on top, so a codebase that
     // ignores `.claude/` cannot hide the staged skill from the baseline — which
