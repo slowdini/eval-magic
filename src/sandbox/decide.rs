@@ -17,7 +17,7 @@ use crate::core::fs::artifact_path;
 
 use super::command_policy::COMMAND_POLICY_REASON;
 use super::policy::{
-    OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_with_policy, is_patch_tool,
+    OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_denials, is_patch_tool,
     is_shell_tool, is_under_any, is_write_tool, path_arg, resolve_path,
 };
 
@@ -220,25 +220,49 @@ pub(crate) fn decide_with_cwd(
             .get("command")
             .and_then(Value::as_str)
             .unwrap_or("");
-        if let Some(classification) =
-            classify_bash_with_policy(command, &roots, invocation_cwd, guard_policy)
-        {
-            let hint = if classification.reason == OUTPUT_REDIRECTION_REASON {
+        let denials = classify_bash_denials(command, &roots, invocation_cwd, guard_policy);
+        if !denials.is_empty() {
+            // A containment denial stays a self-contained clause when the
+            // command policy also denies, so one verdict can name every
+            // blocking layer instead of sending the agent to fix a problem
+            // that cannot unblock the command.
+            let clause = |reason: &str| {
+                if reason == COMMAND_POLICY_REASON {
+                    reason.to_string()
+                } else {
+                    format!("{reason} — runs outside the eval sandbox")
+                }
+            };
+            let verdict = if let [only] = denials.as_slice() {
+                let boundary = if only.reason == COMMAND_POLICY_REASON {
+                    ""
+                } else {
+                    " — runs outside the eval sandbox"
+                };
+                format!("({}){boundary}", only.reason)
+            } else {
+                let clauses = denials
+                    .iter()
+                    .map(|denial| clause(denial.reason))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                format!("({clauses})")
+            };
+            let hint = if denials
+                .iter()
+                .any(|denial| denial.reason == OUTPUT_REDIRECTION_REASON)
+            {
                 scratch_hint(&roots)
             } else {
                 String::new()
             };
-            let boundary = if classification.reason == COMMAND_POLICY_REASON {
-                ""
-            } else {
-                " — runs outside the eval sandbox"
-            };
+            let resolved_targets = denials
+                .into_iter()
+                .flat_map(|denial| denial.resolved_targets)
+                .collect();
             return GuardEvaluation::deny(
-                format!(
-                    "{GUARD_REASON_PREFIX}blocked {tool_name} ({}){boundary}{hint}",
-                    classification.reason,
-                ),
-                classification.resolved_targets,
+                format!("{GUARD_REASON_PREFIX}blocked {tool_name} {verdict}{hint}"),
+                resolved_targets,
             );
         }
     }
@@ -404,6 +428,62 @@ mod tests {
         assert_eq!(
             denied.reason.as_deref(),
             Some("eval guard: blocked Bash (command not allowed by eval guard policy)")
+        );
+    }
+
+    /// Issue #297: a command both layers would deny must get one verdict that
+    /// names both reasons. Naming only the redirect (with its actionable
+    /// scratch hint) sends the agent to fix a problem that cannot unblock the
+    /// command, because the command policy was already denying it.
+    #[test]
+    fn a_bash_denial_names_every_blocking_layer_in_one_verdict() {
+        let marker: GuardMarker = serde_json::from_value(json!({
+            "active": true,
+            "allowedRoots": ["/work/.eval-magic/task"],
+            "guardPolicy": { "allow_tools": ["cargo"] }
+        }))
+        .unwrap();
+
+        let denied = decide_with_cwd(
+            "Bash",
+            &json!({ "command": "npm run dev > /tmp/dev-server.log 2>&1 &" }),
+            Some(&marker),
+            now_ms(),
+            Path::new("/work/.eval-magic/task"),
+        );
+
+        assert!(!denied.decision.allow);
+        let reason = denied.decision.reason.unwrap();
+        assert!(reason.contains("output redirection to a file"), "{reason}");
+        assert!(
+            reason.contains("command not allowed by eval guard policy"),
+            "{reason}"
+        );
+        assert!(
+            reason.ends_with("For temporary or scratch files, use /work/.eval-magic/task/tmp."),
+            "{reason}"
+        );
+        assert_eq!(
+            denied.resolved_targets,
+            vec!["/tmp/dev-server.log".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_bash_denial_from_containment_alone_keeps_the_single_reason_verdict() {
+        let d = decide_now(
+            "Bash",
+            json!({ "command": "echo hi > /tmp/out.log" }),
+            Some(&marker()),
+        );
+
+        assert_eq!(
+            d.reason.as_deref(),
+            Some(
+                "eval guard: blocked Bash (output redirection to a file) \
+                 — runs outside the eval sandbox. For temporary or scratch files, use \
+                 /work/.eval-magic/tmp."
+            )
         );
     }
 

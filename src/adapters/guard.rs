@@ -650,7 +650,7 @@ mod tests {
         assert_eq!(
             verdict("codex", payload, Some(marker())).expect("should block"),
             "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
-             (package install/add) — runs outside the eval sandbox\"}"
+             (package install/add — runs outside the eval sandbox; command not allowed by eval guard policy)\"}"
         );
     }
 

@@ -9,7 +9,9 @@ Without an explicit `guard` field, eval-magic detects packaged profiles from the
 
 ## Understand the two policy layers
 
-Containment checks run before command allowances. A command policy cannot override these checks:
+Containment checks run before command allowances. A command policy cannot override these checks.
+A command that violates both layers is denied once, with a verdict that names each blocking reason,
+so the denial never points at a fix that cannot unblock the command:
 
 - Direct write and patch tools must target the task environment.
 - Shell redirects and `tee` targets must resolve inside the task environment.
@@ -113,8 +115,8 @@ The packaged profiles are:
 - `language/rust` is detected from `Cargo.toml`. It allows `cargo build`, `check`, `test`, `run`,
   `fmt`, and `clippy`.
 - `language/javascript` is detected from `package.json`. It allows npm install, CI, test, build,
-  lint, and typecheck commands, plus corresponding pnpm, Yarn, and Bun install, add, test, build,
-  lint, and typecheck commands.
+  dev, start, lint, and typecheck commands, plus corresponding pnpm, Yarn, and Bun install, add,
+  test, build, dev, start, lint, and typecheck commands.
 - `framework/nextjs` is detected when `package.json` declares a `next` dependency. It allows npm,
   pnpm, Yarn, and Bun dev, build, and start scripts, plus direct `next` invocations through `npx`,
   `pnpm exec`, `yarn`, and `bunx`.
