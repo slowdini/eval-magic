@@ -498,3 +498,37 @@ fn teardown_reclaims_promoted_and_keeps_uncommitted() {
     assert!(!promoted.exists());
     assert!(kept.exists());
 }
+
+/// `teardown`: the discard hint names the workspace the run actually used.
+///
+/// The eval home moved out of the skill repo, but the hint kept naming the old
+/// `.eval-magic/<skill>/` default — a path that no longer exists, printed beside
+/// a `promote-baseline` command carrying the correct absolute `--workspace-dir`
+/// (#298). Only a workspace away from the legacy default can catch it.
+#[test]
+fn teardown_discard_hint_names_the_workspace_the_run_used() {
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, _skill_sub) = write_skill_md(&root, "---\nname: mr-review\n---\nbody\n");
+
+    let cwd = root.join("work");
+    let workspace = root.join("eval-home");
+    let kept = workspace.join("mr-review").join("iteration-1");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::create_dir_all(&kept).unwrap();
+    fs::write(kept.join("benchmark.json"), "{}").unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["teardown", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--workspace-dir"])
+        .arg(&workspace)
+        .assert()
+        .success()
+        .stderr(contains(format!(
+            "delete {}/ manually",
+            workspace.join("mr-review").display()
+        )));
+
+    assert!(kept.exists());
+}
