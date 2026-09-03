@@ -37,6 +37,7 @@ const CHECKS: &[Check] = &[
     check_guard_engine_fields,
     check_guard_verdict_template,
     transcript::check_tool_vocabulary,
+    transcript::check_skill_evidence,
     transcript::check_tiers,
     conversation::validate,
     check_tool_roles_disjoint,

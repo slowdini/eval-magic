@@ -9,6 +9,16 @@ use serde::{Deserialize, Serialize};
 
 use super::{default_true, is_true};
 
+/// A deterministic staged-skill access encoded in a successful native command
+/// item rather than a dedicated skill tool event.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SkillAccessSection {
+    pub tool: String,
+    pub command_arg: String,
+    pub exit_code_arg: String,
+    pub read_commands: Vec<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TranscriptSection {
     pub events_filename: String,
@@ -27,15 +37,19 @@ pub struct TranscriptSection {
     pub extract: Option<ExtractSpec>,
     #[serde(default = "default_true", skip_serializing_if = "is_true")]
     pub surfaces_skill_invocation: bool,
-    /// Tool name of the deterministic skill-invocation event the
-    /// `__skill_invoked` meta-check matches (default `"Skill"` — Claude
-    /// Code's Skill tool).
+    /// Tool name of a deterministic native skill-invocation event (default
+    /// `"Skill"` — Claude Code's Skill tool). Mutually exclusive with
+    /// [`Self::skill_access`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_tool: Option<String>,
     /// Argument of the skill-invocation tool that carries the staged slug
     /// (default `"skill"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_arg: Option<String>,
+    /// Successful shell-command signature whose literal argument must equal
+    /// the task's exact staged `SKILL.md` path.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_access: Option<SkillAccessSection>,
 }
 
 impl TranscriptSection {

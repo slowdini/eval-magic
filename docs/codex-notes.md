@@ -112,9 +112,16 @@ tool invocations: `command_execution`, `file_change`, `web_search`, and MCP item
 `agent_message` is preserved in event order for conversation gating. `transcript_check` matches
 these parsed items, and because the `[tools]` vocabulary declares `command_execution` and
 `file_change` beside their Claude-style spellings, a pattern authored against another harness's
-tool names grades here through role aliasing. The JSONL exposes **no deterministic skill-tool
-event**, so `transcript_surfaces_skill_invocation()` is false and the `__skill_invoked` meta-check
-uses the LLM-judge fallback.
+tool names grades here through role aliasing.
+
+The JSONL exposes no dedicated skill-tool event. A bounded Codex CLI 0.152.1 probe instead emitted
+a successful `item.completed` `command_execution` whose `command` contained the exact staged
+`SKILL.md` path as a literal argument to `sed`; the small synthetic event shape is preserved in
+`tests/fixtures/codex/skill-access-0.152.1.jsonl`. The descriptor's
+`[transcript.skill_access]` table therefore names `command_execution`, its command and exit-code
+arguments, and the accepted read-command basenames. `__skill_invoked` passes locally only when one
+of those commands exits zero with the task's exact staged path. A live source, another treatment
+member's path, dynamic or partial path text, and response wording do not count.
 
 Codex token totals use its blended workload metric:
 

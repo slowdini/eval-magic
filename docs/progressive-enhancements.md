@@ -190,7 +190,10 @@ or use their documented grading fallback.
 
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
 ingest pipeline never reads a transcript), one primary summary reader, and
-`surfaces_skill_invocation`. The primary reader is either `parser` or the summary outputs under
+`surfaces_skill_invocation`. A deterministic native skill event uses `skill_tool` / `skill_arg`;
+a successful exact-path shell read uses the mutually exclusive `skill_access` table with its tool,
+command argument, exit-code argument, and declared read-command basenames. The primary reader is
+either `parser` or the summary outputs under
 `extract`; validation rejects both, neither, and a surface-only extract. The `extract` sub-table is
 the declarative tier: equality `where` filters, final and ordered assistant-text picks, a session-id
 pick, flat tool-item mapping, token sum/subtract reduction, duration rule, and the auxiliary

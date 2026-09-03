@@ -34,16 +34,23 @@ unresolved_phrase = "If it does not load as a Codex skill"
 header = "## Skills\n"
 item = "\n- {name}: {description} (file: {path})"
 
-# Codex's JSONL exposes no deterministic skill-tool event, so the
-# `__skill_invoked` meta-check uses the LLM-judge fallback.
+# Codex's JSONL exposes no deterministic skill-tool event. It does preserve a
+# completed command's literal arguments and exit code, so the meta-check uses
+# an exact staged-SKILL.md access signature instead.
 #
 # The JSONL stream is flat (every tool event self-contained), so its summary is
 # declarative. Permission denials are independent: the named reader correlates
 # the sibling stderr capture where Codex reports structural router rejections.
 [transcript]
 events_filename = "codex-events.jsonl"
-surfaces_skill_invocation = false
+surfaces_skill_invocation = true
 permission_denials_parser = "codex-items"
+
+[transcript.skill_access]
+tool = "command_execution"
+command_arg = "command"
+exit_code_arg = "exit_code"
+read_commands = ["cat", "head", "sed", "tail"]
 
 [transcript.extract.tools]
 where = { type = "item.completed" }

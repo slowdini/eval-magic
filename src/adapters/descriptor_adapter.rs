@@ -303,6 +303,7 @@ impl HarnessAdapter for DescriptorAdapter {
     fn transcript_skill_invocation(&self) -> Option<(String, String)> {
         match &self.descriptor.transcript {
             Some(t) if !t.surfaces_skill_invocation => None,
+            Some(t) if t.skill_access.is_some() => None,
             Some(t) => Some((
                 t.skill_tool.clone().unwrap_or_else(|| "Skill".to_string()),
                 t.skill_arg.clone().unwrap_or_else(|| "skill".to_string()),
@@ -311,6 +312,33 @@ impl HarnessAdapter for DescriptorAdapter {
             // fires when a run record carries invocations anyway).
             None => Some(("Skill".to_string(), "skill".to_string())),
         }
+    }
+
+    fn transcript_skill_evidence(&self) -> Option<crate::adapters::SkillEvidenceSignature> {
+        use crate::adapters::SkillEvidenceSignature;
+
+        let transcript = self.descriptor.transcript.as_ref()?;
+        if !transcript.surfaces_skill_invocation {
+            return None;
+        }
+        if let Some(access) = &transcript.skill_access {
+            return Some(SkillEvidenceSignature::StagedPathAccess {
+                tool: access.tool.clone(),
+                command_arg: access.command_arg.clone(),
+                exit_code_arg: access.exit_code_arg.clone(),
+                read_commands: access.read_commands.clone(),
+            });
+        }
+        Some(SkillEvidenceSignature::Invocation {
+            tool: transcript
+                .skill_tool
+                .clone()
+                .unwrap_or_else(|| "Skill".to_string()),
+            arg: transcript
+                .skill_arg
+                .clone()
+                .unwrap_or_else(|| "skill".to_string()),
+        })
     }
 
     fn cli_model_flag(&self) -> Option<String> {

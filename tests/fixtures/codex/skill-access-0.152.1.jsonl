@@ -1,0 +1,2 @@
+{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"/usr/bin/zsh -lc \"sed -n '1,240p' __STAGED_SKILL_PATH__\"","aggregated_output":"---\nname: synthetic-access\ndescription: synthetic Codex skill-access fixture\n---\n\n# Synthetic access probe\n","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"item_1","type":"agent_message","text":"I used mr-review; the requested result is ready."}}

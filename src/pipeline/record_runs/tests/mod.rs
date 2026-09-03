@@ -148,6 +148,7 @@ fn write_iteration(iteration_dir: &Path, tasks: &[FixtureTask]) -> Vec<TaskPaths
             "condition": t.condition,
             "skill_path": if without { Value::Null } else { json!("/staged/skill/SKILL.md") },
             "staged_skill_slug": if without { Value::Null } else { json!("test-slug") },
+            "staged_skill_path": if without { Value::Null } else { json!("/task/.agents/skills/test-slug/SKILL.md") },
             "user_prompt": format!("Do the {} task", t.eval_id),
             "files": [cond_dir.join("inputs").join("fixture.txt").to_string_lossy()],
             "outputs_dir": outputs_dir.to_string_lossy(),
