@@ -129,6 +129,8 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
   messages from `content_end` text blocks, token totals from `run_result.usage` (cache reads
   subtracted), duration from `run_result.durationMs`. `transcript_check` patterns match the
   `"<name> <compact-json-args>"` rendering of the *flattened* args (e.g. `run_commands.*"command"`).
+  `run_commands`, `editor`, and the read tools also answer to every other harness's spelling of
+  their role, so a pattern written as `Bash` or `Read` grades here too.
 - **Deterministic `__skill_invoked`**: `surfaces_skill_invocation = true` with
   `skill_tool = "skills"` / `skill_arg = "skill"` — the parser hoists the slug to top level, so
   the meta-check grades from the transcript instead of the LLM-judge fallback.

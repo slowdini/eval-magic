@@ -75,7 +75,10 @@ label = "{label}"
 
 ## -------------------------------------------------------------------------------------------
 ## [tools] — the harness's tool-name vocabulary by role, spelled exactly as its transcripts and
-## hook payloads spell them (the stray-writes audit classifies invocations by these names).
+## hook payloads spell them (the stray-writes audit classifies invocations by these names, and
+## `transcript_check` treats every name declared for a role as a portable spelling of it, so an
+## authored tool pattern grades the same here as on any other harness). Declare only this
+## harness's own names — cross-listing another harness's spellings is neither needed nor wanted.
 ## Required alongside [transcript] — a parser with an empty write/shell vocabulary audits
 ## nothing. Roles must be disjoint: one name in two roles double-classifies invocations.
 ## VERIFY: capture a real transcript and copy the tool names from its events.
