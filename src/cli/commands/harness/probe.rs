@@ -61,9 +61,10 @@ pub(crate) enum ProbeError {
 
 /// Render the exec template with the angle placeholders (`<eval-root>`,
 /// `<dispatch_prompt_path>`, `<outputs_dir>`, `<round>`) shell-quoted and the
-/// machine placeholders (`{model_arg}`, `{guard_args}`) filled. Mirrors the
-/// conversation driver's single left-to-right pass; unknown braces pass
-/// through verbatim. The probe is a single turn, so `<round>` resolves to `1`.
+/// machine placeholders (`{model_arg}`, `{guard_args}`, `{mode_args}`) filled.
+/// Mirrors the conversation driver's single left-to-right pass; unknown braces
+/// pass through verbatim. The probe is a single turn, so `<round>` resolves to
+/// `1`.
 #[allow(clippy::needless_pass_by_value)]
 fn render_probe_exec(
     template: &str,
@@ -72,6 +73,7 @@ fn render_probe_exec(
     outputs_dir: &Path,
     model_arg: &str,
     guard_args: &str,
+    mode_args: &str,
 ) -> String {
     let quoted_eval_root = shell_quote_arg(eval_root);
     let quoted_prompt_path = shell_quote_arg(dispatch_prompt_path);
@@ -82,7 +84,11 @@ fn render_probe_exec(
             .replace("<dispatch_prompt_path>", &quoted_prompt_path)
             .replace("<outputs_dir>", &quoted_outputs_dir)
             .replace("<round>", "1"),
-        &[("model_arg", model_arg), ("guard_args", guard_args)],
+        &[
+            ("model_arg", model_arg),
+            ("guard_args", guard_args),
+            ("mode_args", mode_args),
+        ],
     )
 }
 
@@ -137,6 +143,11 @@ pub(crate) fn run_probe(
     let agent_env = descriptor.dispatch.env.clone();
     let model_arg = render_cli_model_arg(model_flag, None);
     let guard_args = "";
+    // The probe is a one-shot act-mode dispatch, like a judge's.
+    let mode_args = descriptor
+        .plan_mode
+        .as_ref()
+        .map_or("", |plan_mode| plan_mode.act_args.as_str());
 
     // Throwaway eval_root: the subprocess runs from here, framework artifacts
     // land under <eval_root>/outputs. TempDir cleans up on drop.
@@ -159,6 +170,7 @@ pub(crate) fn run_probe(
             &outputs_dir,
             &model_arg,
             guard_args,
+            mode_args,
         ),
         &agent_env,
     );
@@ -239,6 +251,7 @@ mod tests {
             &dir("/var/tmp/out"),
             "--model-X gpt-x",
             "--guard on",
+            "",
         );
         // Angle placeholders are shell-quoted because the values contain spaces.
         assert!(rendered.contains("--root '/path with space/eval'"));
@@ -255,7 +268,7 @@ mod tests {
     #[test]
     fn render_probe_exec_passes_shell_braces_through_verbatim() {
         let template = "xargs -I{} sh -c 'echo ${JOBS:-4} {model_arg}'";
-        let rendered = render_probe_exec(template, "/e", "/p", &dir("/o"), "m", "g");
+        let rendered = render_probe_exec(template, "/e", "/p", &dir("/o"), "m", "g", "");
         assert!(rendered.contains("-I{}"));
         assert!(rendered.contains("${JOBS:-4}"));
         // The {model_arg} token inside the quoted echo becomes "m" with the

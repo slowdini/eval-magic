@@ -181,8 +181,8 @@ pub(crate) enum HarnessCommands {
     /// user, project, file — a merged descriptor shows all of them, e.g.
     /// `built-in + project`) and the enhancements the resolved descriptor
     /// declares (staging, skills-block, transcript, model-flag, guard,
-    /// shadow-preflight, dispatch-recipes, conversation-resume; `baseline` when
-    /// none). The session's
+    /// shadow-preflight, dispatch-recipes, conversation-resume, plan-mode;
+    /// `baseline` when none). The session's
     /// default harness — `claude-code`, or the `--harness-file` descriptor when
     /// one is loaded — is marked `(default)`.
     List,
@@ -376,7 +376,10 @@ pub(crate) enum Commands {
     /// per condition and repetition. Scripted follow-ups add up to `2R × F` model
     /// turns for `F` declared follow-ups. A `responder` case instead adds one
     /// agent turn and one small responder dispatch per round, up to its
-    /// `max_turns` bound. Each `llm_judge` assertion creates its effective sample
+    /// `max_turns` bound. A `plan_mode` case starts each session in the
+    /// harness's native plan mode and adds one runner-authored approval turn
+    /// before implementation; it needs the `plan-mode` capability
+    /// (`eval-magic harness list`). Each `llm_judge` assertion creates its effective sample
     /// count of judge tasks per condition and repetition. Review the printed run
     /// summary and obtain confirmation before spending model usage.
     ///
@@ -429,6 +432,13 @@ pub(crate) enum Commands {
     /// reply, or that hit its `max_turns` bound, is recorded and warned about by
     /// cause: the run ended mid-task, so read its last assistant message before
     /// trusting it. See `eval-magic docs conversations`.
+    ///
+    /// A `plan_mode` task runs its opening round in the harness's plan mode,
+    /// approves the presented plan with one fixed message, and continues the
+    /// same session in act mode; the approved plan is saved as `outputs/plan.md`.
+    /// A planning phase that ends with no plan to approve is recorded as
+    /// `plan_not_presented` and warned about: that run never reached
+    /// implementation.
     Dispatch(DispatchArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -644,7 +654,8 @@ pub(crate) enum Commands {
     /// `eval-magic docs codebase` for source and reproducibility details.
     ///
     /// Extend the seed in `evals/evals.json`: `turns` scripts same-session
-    /// follow-ups and `responder` derives them instead (see
+    /// follow-ups and `responder` derives them instead, `plan_mode` starts the
+    /// session in the harness's plan mode (see
     /// `eval-magic docs conversations`), `files_root` resolves overlay sources
     /// applied at the codebase root, and a per-eval `runs` value overrides
     /// `run --runs`. Add

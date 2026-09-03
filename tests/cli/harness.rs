@@ -142,7 +142,8 @@ fn harness_list_names_layers_and_enhancements() {
                 .and(contains("cool-custom-harness"))
                 .and(contains("project"))
                 .and(contains("baseline"))
-                .and(contains("transcript")),
+                .and(contains("transcript"))
+                .and(contains("plan-mode")),
         );
 }
 

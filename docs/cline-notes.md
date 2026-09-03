@@ -73,6 +73,10 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
 
 ## Dispatch quirks
 
+- Cline's own plan mode is not declared as `[plan_mode]`: without session resume a plan could never
+  be approved and implemented in one session, so `run` rejects plan-mode evals on Cline as it does
+  every multi-turn eval.
+
 - One-shot `cline "prompt"` runs a single turn and exits; headless mode activates on `--json`,
   piped stdin, or redirected stdout (docs CLI overview; confirmed by the probe).
 - `-c/--cwd <dir>` sets the dispatch cwd (no shell `cd` needed, unlike Claude Code); staged

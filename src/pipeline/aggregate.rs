@@ -22,8 +22,8 @@ use self::assertions::AssertionRollup;
 use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::core::fs::write_json;
 use crate::core::{
-    CodebaseUse, ConditionsRecord, ConversationRecord, GradingResult, Mode, ResponderEnding,
-    ResponderStopCause, SkillSource, TimingRecord, TimingSource,
+    CodebaseUse, ConditionsRecord, ConversationEvent, ConversationRecord, GradingResult, Mode,
+    ResponderEnding, ResponderStopCause, SessionMode, SkillSource, TimingRecord, TimingSource,
 };
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
@@ -255,6 +255,9 @@ pub fn aggregate(
     // Tallied per condition on purpose: one arm being truncated more than the
     // other is the threat to the comparison, not the raw total.
     let mut responder_stops: HashMap<String, Vec<&'static str>> = HashMap::new();
+    // Per condition, plan-mode runs whose session never left the planning
+    // phase — whatever stopped it — since those never attempted the task.
+    let mut plans_never_implemented: HashMap<String, usize> = HashMap::new();
 
     for eval_dir in &eval_dirs {
         for cond in &condition_names {
@@ -290,6 +293,9 @@ pub fn aggregate(
 
                 if let Some(cause) = responder_stop_cause(&slot.dir) {
                     responder_stops.entry(cond.clone()).or_default().push(cause);
+                }
+                if plan_never_implemented(&slot.dir) {
+                    *plans_never_implemented.entry(cond.clone()).or_default() += 1;
                 }
 
                 if !grading_path.exists() {
@@ -493,6 +499,20 @@ pub fn aggregate(
         ));
     }
 
+    for cond in &condition_names {
+        let Some(count) = plans_never_implemented
+            .get(cond)
+            .filter(|count| **count > 0)
+        else {
+            continue;
+        };
+        validity_warnings.push(format!(
+            "condition '{cond}' had {count} plan-mode run(s) that never reached implementation — \
+             the session ended while still planning, so their gradings are not comparable with \
+             a completed run's."
+        ));
+    }
+
     git_isolation::collect_warnings(iteration_dir, &mut validity_warnings);
     collect_stray_warnings(iteration_dir, &mut validity_warnings);
     collect_guard_denial_warnings(iteration_dir, &mut validity_warnings);
@@ -589,6 +609,27 @@ fn timing_source_label(source: Option<TimingSource>) -> String {
         Some(TimingSource::CompletionEvent) | None => "completion-event",
     }
     .to_string()
+}
+
+/// Whether a plan-mode run ended before its plan was approved: its opening
+/// round ran in plan mode and no approval was recorded, whatever stopped it —
+/// a missing plan, an exhausted responder bound, a refusal, or a timeout.
+/// Read leniently, like [`responder_stop_cause`].
+fn plan_never_implemented(run_dir: &Path) -> bool {
+    let Ok(raw) = fs::read_to_string(run_dir.join("conversation.json")) else {
+        return false;
+    };
+    let Ok(record) = serde_json::from_str::<ConversationRecord>(&raw) else {
+        return false;
+    };
+    let started_planning = matches!(
+        record.events.first(),
+        Some(ConversationEvent::UserMessage {
+            mode: Some(SessionMode::Plan),
+            ..
+        })
+    );
+    started_planning && record.plan.is_none()
 }
 
 /// Why one run's responder ended it early, if it did. A conversation the

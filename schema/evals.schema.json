@@ -124,6 +124,11 @@
           "$ref": "#/definitions/responder",
           "description": "Derives each follow-up turn from what the agent just said, instead of scripting them. Mutually exclusive with turns; declaring neither preserves one-shot dispatch. Requires a harness with native conversation resume, exactly as turns does."
         },
+        "plan_mode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the session in the harness's native plan mode. The agent explores read-only and presents a plan; eval-magic approves it in the same session with one fixed message and continues in act mode, where turns or a responder proceed as usual. Requires a harness whose descriptor declares [plan_mode] (`eval-magic harness list` shows plan-mode). A harness without a [plan_mode.plan_file] also requires a responder, which decides when the plan is ready. See `eval-magic docs conversations`."
+        },
         "expected_output": {
           "type": "string",
           "minLength": 1,

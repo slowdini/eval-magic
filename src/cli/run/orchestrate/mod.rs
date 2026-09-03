@@ -55,7 +55,6 @@ pub struct RunOptions<'a> {
     /// active), `Some` = explicit `--guard` / `--no-guard`.
     pub guard: Option<bool>,
     pub stage_name: Option<&'a str>,
-    pub plan_mode: bool,
     /// Runs per condition cell; per-eval `runs` overrides take precedence.
     pub runs: u32,
     /// Operator-declared models + label, persisted into `conditions.json` for
@@ -189,7 +188,6 @@ struct Staged {
     /// the on-disk path for each private task environment.
     sibling_meta: Vec<(String, String)>,
     bootstrap_content: Option<String>,
-    plan_mode_content: Option<String>,
     guard_policies: std::collections::HashMap<PathBuf, GuardPolicyConfig>,
     /// Matching project skill sources inventoried from each sourced codebase
     /// before exclusion or staging changes its discovery roots.
@@ -245,6 +243,46 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
                 "--harness {label} cannot run evals with a responder: its descriptor declares no \
                  [conversation] native resume capability"
             )));
+        }
+    }
+
+    // Plan mode is a native capability with no fallback, and the approved plan
+    // is implemented by resuming the session, so it is gated here too. A
+    // harness that writes no plan file has no signal of its own for "the plan
+    // is ready", so those evals have to bring a responder to decide it.
+    let plan_mode_evals: Vec<&str> = resolved
+        .selected_evals
+        .iter()
+        .filter(|eval| eval.plan_mode)
+        .map(|eval| eval.id.as_str())
+        .collect();
+    if !plan_mode_evals.is_empty() {
+        let adapter = adapter_for(ctx.harness);
+        let label = adapter.label();
+        if !adapter.has_plan_mode() {
+            return Err(RunError::msg(format!(
+                "--harness {label} cannot run plan-mode evals ({}): its descriptor declares no \
+                 [plan_mode] table, so eval-magic cannot start their sessions in a native plan \
+                 mode (`eval-magic harness list` names the harnesses with the plan-mode \
+                 capability)",
+                plan_mode_evals.join(", ")
+            )));
+        }
+        if adapter.plan_file().is_none() {
+            let without_responder: Vec<&str> = resolved
+                .selected_evals
+                .iter()
+                .filter(|eval| eval.plan_mode && eval.responder.is_none())
+                .map(|eval| eval.id.as_str())
+                .collect();
+            if !without_responder.is_empty() {
+                return Err(RunError::msg(format!(
+                    "--harness {label} needs a responder on plan-mode evals ({}): its descriptor \
+                     declares no [plan_mode.plan_file], so only a responder can tell when the plan \
+                     is ready for approval (`eval-magic docs conversations`)",
+                    without_responder.join(", ")
+                )));
+            }
         }
     }
 
@@ -320,6 +358,17 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
         println!(
             "  codebase: {}{revision} — materialized once per iteration",
             source.resolved_path.as_deref().unwrap_or(&source.source)
+        );
+    }
+    let plan_mode_evals = r
+        .selected_evals
+        .iter()
+        .filter(|eval| eval.plan_mode)
+        .count();
+    if plan_mode_evals > 0 {
+        println!(
+            "  plan mode: {plan_mode_evals} eval(s) start in the harness's native plan mode and \
+             continue in act mode once the plan is approved"
         );
     }
     if r.selected_evals.len() != r.total_evals {

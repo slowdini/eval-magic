@@ -97,7 +97,6 @@ fn dispatch(command: Option<Commands>, harness_file: Option<&str>) -> anyhow::Re
         guard: false,
         no_guard: false,
         stage_name: None,
-        plan_mode: false,
         runs: 1,
         agent_model: None,
         agent_env: Vec::new(),

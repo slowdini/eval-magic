@@ -94,7 +94,7 @@ next_steps_template = '''
 Next: eval-magic dispatch{target_args} --iteration {iteration} --harness opencode
 Then run `eval-magic ingest{target_args} --iteration {iteration} --harness opencode`.'''
 exec_template = '''
-opencode run --dir <eval-root> --format json --auto{model_arg} \
+opencode run --dir <eval-root> --format json{mode_args}{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/opencode-events.jsonl \
@@ -102,7 +102,7 @@ opencode run --dir <eval-root> --format json --auto{model_arg} \
 manifest_template = '''
 Harness dispatch (OpenCode):
 
-`eval-magic dispatch` runs one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/turn-<n>/opencode-events.jsonl` and stderr as `outputs/turn-<n>/opencode-stderr.log`.
+`eval-magic dispatch` runs one fresh `opencode run --format json --agent build --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/turn-<n>/opencode-events.jsonl` and stderr as `outputs/turn-<n>/opencode-stderr.log`.
 
 ```bash
 {exec_command}
@@ -113,8 +113,17 @@ Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest read
 
 [conversation]
 resume_exec_template = '''
-opencode run --dir <eval-root> --session {session_arg} --format json --auto{model_arg} \
+opencode run --dir <eval-root> --session {session_arg} --format json{mode_args}{model_arg} \
   {prompt_arg} \
   </dev/null \
   > <outputs_dir>/opencode-events.jsonl \
   2> <outputs_dir>/opencode-stderr.log'''
+
+# Native plan mode. The built-in `plan` agent refuses edits by permission rule,
+# so the planning phase needs no `--auto` — it belongs to act_args, where the
+# `build` agent is named explicitly so a resumed session does not inherit the
+# plan agent. OpenCode writes no plan file; the responder decides when the plan
+# is ready (verified in docs/opencode-notes.md → "Plan mode").
+[plan_mode]
+plan_args = " --agent plan"
+act_args = " --agent build --auto"

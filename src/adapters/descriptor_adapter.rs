@@ -10,12 +10,13 @@ use std::time::Duration;
 
 use regex::Regex;
 
-use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, SessionMode, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
 use super::cli_command::{render_agent_dispatch_command, render_cli_model_arg};
 use super::descriptor::{
-    HarnessDescriptor, TranscriptSection, render_staged_slug, stage_name_error, subst,
+    HarnessDescriptor, PlanFileSection, TranscriptSection, render_staged_slug, stage_name_error,
+    subst,
 };
 use super::harness::{CliDispatchContext, CliManifestContext, HarnessAdapter, ToolVocabulary};
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
@@ -56,9 +57,11 @@ impl DescriptorAdapter {
     }
 
     /// The single-dispatch command: the exec template with `{model_arg}` /
-    /// `{guard_args}` filled for this run. Empty when no template is wired.
+    /// `{guard_args}` / `{mode_args}` filled for this run and session mode.
+    /// Empty when no template is wired.
     fn render_exec_command(
         &self,
+        mode: SessionMode,
         guard: bool,
         agent_model: Option<&str>,
         agent_env: &BTreeMap<String, String>,
@@ -73,6 +76,7 @@ impl DescriptorAdapter {
                 &[
                     ("model_arg", &model_arg),
                     ("guard_args", self.guard_args(guard)),
+                    ("mode_args", self.mode_args(mode)),
                 ],
             ),
             agent_env,
@@ -81,6 +85,7 @@ impl DescriptorAdapter {
 
     fn render_resume_command(
         &self,
+        mode: SessionMode,
         guard: bool,
         agent_model: Option<&str>,
         agent_env: &BTreeMap<String, String>,
@@ -93,10 +98,21 @@ impl DescriptorAdapter {
                 &[
                     ("model_arg", &model_arg),
                     ("guard_args", self.guard_args(guard)),
+                    ("mode_args", self.mode_args(mode)),
                 ],
             ),
             agent_env,
         ))
+    }
+
+    /// The `{mode_args}` value for a round: the descriptor's plan or act
+    /// fragment, or empty for a harness that declares no plan mode.
+    fn mode_args(&self, mode: SessionMode) -> &str {
+        match (&self.descriptor.plan_mode, mode) {
+            (Some(plan_mode), SessionMode::Plan) => &plan_mode.plan_args,
+            (Some(plan_mode), SessionMode::Act) => &plan_mode.act_args,
+            (None, _) => "",
+        }
     }
 
     /// The `{guard_args}` value for this run: the descriptor's fragment when
@@ -357,6 +373,15 @@ impl HarnessAdapter for DescriptorAdapter {
                 let skills_dir = self
                     .skills_dir(stage_root)
                     .expect("descriptor validation pairs [guard] with skills_dir");
+                // The plan file a plan-mode session writes lands outside the env
+                // (Claude Code: `~/.claude/plans`); denying it would change how
+                // the agent plans, so its root is allowed beside the env.
+                let extra_allowed_roots: Vec<PathBuf> = self
+                    .plan_file()
+                    .zip(std::env::home_dir())
+                    .map(|(plan_file, home)| plan_file.expanded_root(&home))
+                    .into_iter()
+                    .collect();
                 super::guard::install_guard(
                     guard,
                     &skills_dir,
@@ -364,6 +389,7 @@ impl HarnessAdapter for DescriptorAdapter {
                     guard_exe,
                     ttl,
                     guard_policy,
+                    &extra_allowed_roots,
                 )
             }
             None => Err(io::Error::new(
@@ -427,11 +453,32 @@ impl HarnessAdapter for DescriptorAdapter {
         agent_model: Option<&str>,
         agent_env: &BTreeMap<String, String>,
     ) -> Option<String> {
+        self.cli_exec_command_in_mode(SessionMode::Act, guard, agent_model, agent_env)
+    }
+
+    fn has_plan_mode(&self) -> bool {
+        self.descriptor.plan_mode.is_some()
+    }
+
+    fn plan_file(&self) -> Option<PlanFileSection> {
+        self.descriptor.plan_mode.as_ref()?.plan_file.clone()
+    }
+
+    fn cli_exec_command_in_mode(
+        &self,
+        mode: SessionMode,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        if mode == SessionMode::Plan && !self.has_plan_mode() {
+            return None;
+        }
         self.descriptor
             .dispatch
             .exec_template
             .as_ref()
-            .map(|_| self.render_exec_command(guard, agent_model, agent_env))
+            .map(|_| self.render_exec_command(mode, guard, agent_model, agent_env))
     }
 
     fn has_conversation_resume(&self) -> bool {
@@ -452,7 +499,20 @@ impl HarnessAdapter for DescriptorAdapter {
         agent_model: Option<&str>,
         agent_env: &BTreeMap<String, String>,
     ) -> Option<String> {
-        self.render_resume_command(guard, agent_model, agent_env)
+        self.cli_resume_command_in_mode(SessionMode::Act, guard, agent_model, agent_env)
+    }
+
+    fn cli_resume_command_in_mode(
+        &self,
+        mode: SessionMode,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        if mode == SessionMode::Plan && !self.has_plan_mode() {
+            return None;
+        }
+        self.render_resume_command(mode, guard, agent_model, agent_env)
     }
 
     fn cli_next_steps(&self, ctx: CliDispatchContext<'_>) -> String {
@@ -468,7 +528,12 @@ impl HarnessAdapter for DescriptorAdapter {
                 Some(_) => format!(
                     "\nNext: iterate the tasks[] array in dispatch.json and dispatch each task \
                      with:\n{}\nThen run `{ingest_line}`.",
-                    self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env)
+                    self.render_exec_command(
+                        SessionMode::Act,
+                        ctx.guard,
+                        ctx.agent_model,
+                        ctx.agent_env
+                    )
                 ),
                 None => format!(
                     "\nThis descriptor is not runner-ready: add `[dispatch].exec_template` and \
@@ -476,7 +541,8 @@ impl HarnessAdapter for DescriptorAdapter {
                 ),
             };
         };
-        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
+        let exec_command =
+            self.render_exec_command(SessionMode::Act, ctx.guard, ctx.agent_model, ctx.agent_env);
         let iteration = ctx.iteration.to_string();
         let model_note = if ctx.agent_model.is_some() {
             self.descriptor.dispatch.model_note.as_deref().unwrap_or("")
@@ -500,7 +566,12 @@ impl HarnessAdapter for DescriptorAdapter {
             // generic recipe section; without either, the manifest's shared
             // header text already covers the baseline handoff.
             self.descriptor.dispatch.exec_template.as_ref()?;
-            let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
+            let exec_command = self.render_exec_command(
+                SessionMode::Act,
+                ctx.guard,
+                ctx.agent_model,
+                ctx.agent_env,
+            );
             return Some(
                 format!(
                     "## Dispatch recipe\n\nFrom each task's `eval_root`, dispatch with:\n\
@@ -512,7 +583,8 @@ impl HarnessAdapter for DescriptorAdapter {
                 .collect(),
             );
         };
-        let exec_command = self.render_exec_command(ctx.guard, ctx.agent_model, ctx.agent_env);
+        let exec_command =
+            self.render_exec_command(SessionMode::Act, ctx.guard, ctx.agent_model, ctx.agent_env);
         Some(
             subst(template, &[("exec_command", &exec_command)])
                 .split('\n')
@@ -529,7 +601,7 @@ mod tests {
 
     use crate::adapters::harness::{CliDispatchContext, CliManifestContext, TokenUsageAggregation};
     use crate::adapters::registry::adapter_for;
-    use crate::core::{AvailableSkill, Harness};
+    use crate::core::{AvailableSkill, Harness, SessionMode};
 
     fn empty_env() -> &'static BTreeMap<String, String> {
         static EMPTY: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
@@ -619,6 +691,7 @@ mod tests {
             assert!(command.contains("{session_arg}"), "{command}");
             assert!(command.contains("{prompt_arg}"), "{command}");
             assert!(command.contains("test-model"), "{command}");
+            assert!(!command.contains("{mode_args}"), "{command}");
         }
     }
 
@@ -732,21 +805,123 @@ mod tests {
     }
 
     #[test]
-    fn opencode_exec_recipe_carries_dir_auto_and_the_model_flag() {
+    fn opencode_exec_recipe_carries_dir_build_agent_auto_and_the_model_flag() {
         let harness = Harness::resolve("opencode").unwrap();
         let with = exec_command(harness, false, Some("opencode/gpt-5-nano"));
         assert!(
             with.contains(
-                "opencode run --dir <eval-root> --format json --auto -m opencode/gpt-5-nano \\"
+                "opencode run --dir <eval-root> --format json --agent build --auto -m opencode/gpt-5-nano \\"
             ),
             "{with}"
         );
         let without = exec_command(harness, false, None);
         assert!(
-            without.contains("opencode run --dir <eval-root> --format json --auto \\"),
+            without
+                .contains("opencode run --dir <eval-root> --format json --agent build --auto \\"),
             "{without}"
         );
         assert!(!without.contains(" -m "), "{without}");
+    }
+
+    #[test]
+    fn claude_code_fills_mode_args_per_session_mode() {
+        let adapter = adapter_for(Harness::resolve("claude-code").unwrap());
+        let plan = adapter
+            .cli_exec_command_in_mode(SessionMode::Plan, false, None, empty_env())
+            .expect("claude-code declares plan mode");
+        assert!(
+            plan.contains("--verbose --permission-mode plan \\"),
+            "{plan}"
+        );
+        let act = adapter
+            .cli_exec_command_in_mode(SessionMode::Act, false, None, empty_env())
+            .unwrap();
+        assert!(
+            act.contains("--verbose --permission-mode bypassPermissions \\"),
+            "{act}"
+        );
+        assert_eq!(
+            adapter.cli_exec_command(false, None, empty_env()).unwrap(),
+            act,
+            "the mode-less command is the act command every judge and probe dispatch uses"
+        );
+        let resume_plan = adapter
+            .cli_resume_command_in_mode(SessionMode::Plan, false, None, empty_env())
+            .unwrap();
+        assert!(
+            resume_plan.contains("--permission-mode plan"),
+            "{resume_plan}"
+        );
+        let resume_act = adapter
+            .cli_resume_command_in_mode(SessionMode::Act, false, None, empty_env())
+            .unwrap();
+        assert!(
+            resume_act.contains("--permission-mode bypassPermissions"),
+            "{resume_act}"
+        );
+        assert_eq!(
+            adapter
+                .cli_resume_command(false, None, empty_env())
+                .unwrap(),
+            resume_act
+        );
+        for command in [&plan, &act, &resume_plan, &resume_act] {
+            assert!(!command.contains("{mode_args}"), "{command}");
+        }
+    }
+
+    /// The plan agent asks before edits and headless asks are auto-rejected,
+    /// which is the read-only phase; `--auto` would approve them, so it is an
+    /// act-only argument.
+    #[test]
+    fn opencode_plan_phase_selects_the_plan_agent_without_auto() {
+        let adapter = adapter_for(Harness::resolve("opencode").unwrap());
+        let plan = adapter
+            .cli_exec_command_in_mode(SessionMode::Plan, false, None, empty_env())
+            .expect("opencode declares plan mode");
+        assert!(plan.contains("--format json --agent plan \\"), "{plan}");
+        assert!(!plan.contains("--auto"), "{plan}");
+        let resume_plan = adapter
+            .cli_resume_command_in_mode(SessionMode::Plan, false, None, empty_env())
+            .unwrap();
+        assert!(resume_plan.contains("--agent plan"), "{resume_plan}");
+        assert!(!resume_plan.contains("--auto"), "{resume_plan}");
+        let resume_act = adapter
+            .cli_resume_command_in_mode(SessionMode::Act, false, None, empty_env())
+            .unwrap();
+        assert!(resume_act.contains("--agent build --auto"), "{resume_act}");
+    }
+
+    #[test]
+    fn plan_mode_capability_and_plan_file_follow_the_descriptor() {
+        let claude = adapter_for(Harness::resolve("claude-code").unwrap());
+        assert!(claude.has_plan_mode());
+        let plan_file = claude
+            .plan_file()
+            .expect("Claude Code writes the plan it presents to a file");
+        assert_eq!(plan_file.root, "~/.claude/plans");
+        assert_eq!(plan_file.content_field, "content");
+
+        let opencode = adapter_for(Harness::resolve("opencode").unwrap());
+        assert!(opencode.has_plan_mode());
+        assert!(opencode.plan_file().is_none());
+
+        for label in ["codex", "cline"] {
+            let adapter = adapter_for(Harness::resolve(label).unwrap());
+            assert!(!adapter.has_plan_mode(), "{label}");
+            assert!(adapter.plan_file().is_none(), "{label}");
+            assert!(
+                adapter
+                    .cli_exec_command_in_mode(SessionMode::Plan, false, None, empty_env())
+                    .is_none(),
+                "{label} has no plan-mode command to render"
+            );
+            assert_eq!(
+                adapter.cli_exec_command_in_mode(SessionMode::Act, false, None, empty_env()),
+                adapter.cli_exec_command(false, None, empty_env()),
+                "{label}: act mode is the only mode, so it is the plain command"
+            );
+        }
     }
 
     #[test]

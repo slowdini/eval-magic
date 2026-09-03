@@ -363,7 +363,7 @@
     "dispatch": {
       "type": "object",
       "additionalProperties": false,
-      "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args} slots) and the prose around them.",
+      "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args}/{mode_args} slots) and the prose around them.",
       "properties": {
         "env": {
           "type": "object",
@@ -408,7 +408,41 @@
         "resume_exec_template": {
           "type": "string",
           "minLength": 1,
-          "description": "One follow-up dispatch command. Must reference <eval-root>, <outputs_dir>, {session_arg}, and {prompt_arg}; {model_arg}/{guard_args} are filled like dispatch.exec_template."
+          "description": "One follow-up dispatch command. Must reference <eval-root>, <outputs_dir>, {session_arg}, and {prompt_arg}; {model_arg}/{guard_args}/{mode_args} are filled like dispatch.exec_template."
+        }
+      }
+    },
+    "plan_mode": {
+      "type": "object",
+      "required": ["plan_args", "act_args"],
+      "additionalProperties": false,
+      "description": "The harness's native plan mode, entered for the planning phase of a plan_mode eval. Requires [conversation] and a {mode_args} slot in both dispatch.exec_template and conversation.resume_exec_template.",
+      "properties": {
+        "plan_args": {
+          "type": "string",
+          "description": "Arguments spliced at {mode_args} for every plan-phase round, leading space included (Claude Code: \" --permission-mode plan\")."
+        },
+        "act_args": {
+          "type": "string",
+          "description": "Arguments spliced at {mode_args} for every other dispatch — act-mode rounds, judges, responder consultations, and the lint probe — leading space included (Claude Code: \" --permission-mode bypassPermissions\")."
+        },
+        "plan_file": {
+          "type": "object",
+          "required": ["root", "content_field"],
+          "additionalProperties": false,
+          "description": "The file the harness writes its plan to in plan mode. Writes under root are allowed by the write guard and the stray-write audit; a plan-phase round that wrote one has presented its plan, and that write's content_field is the plan artifact. Omit when the harness writes no plan file; the responder then decides when the plan is ready.",
+          "properties": {
+            "root": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Directory the plan file lands in; a leading ~ means the home directory (Claude Code: \"~/.claude/plans\")."
+            },
+            "content_field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The write tool's input field carrying the file contents (Claude Code: \"content\")."
+            }
+          }
         }
       }
     }

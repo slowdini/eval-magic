@@ -2,8 +2,8 @@
 //! [`DispatchTask`] the orchestrator records in `dispatch.json`, plus the
 //! human-readable `dispatch-manifest.md`.
 //!
-//! The prompt mirrors a real session: optional bootstrap and plan-mode context,
-//! the harness-native available-skills block, then the eval task framing.
+//! The prompt mirrors a real session: optional bootstrap context, the
+//! harness-native available-skills block, then the eval task framing.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -89,6 +89,10 @@ pub struct DispatchTask {
     /// Fully expanded command policy used by the live guard and post-run audit.
     #[serde(default)]
     pub guard_policy: GuardPolicyConfig,
+    /// Whether the session starts in the harness's native plan mode. Absent
+    /// unless the eval declares it, so other tasks serialize as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode: bool,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -112,11 +116,11 @@ pub struct DispatchTaskOpts<'a> {
     pub user_prompt: &'a str,
     pub files: Vec<String>,
     pub turns: Option<&'a [ScriptedTurn]>,
+    /// The eval's `plan_mode` declaration.
+    pub plan_mode: bool,
     pub outputs_dir: &'a str,
     pub cond_dir: &'a str,
     pub bootstrap_content: Option<&'a str>,
-    /// Verbatim plan-mode profile to inject as a `<system-reminder>`, or `None`.
-    pub plan_mode_content: Option<&'a str>,
     pub skill_name: &'a str,
     pub available_skills: Vec<AvailableSkill>,
     pub harness: Harness,
@@ -145,10 +149,6 @@ fn render_available_skills_block_for_harness(
     skills: &[AvailableSkill],
 ) -> String {
     adapter_for(harness).render_available_skills_block(skills)
-}
-
-fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) -> String {
-    adapter_for(harness).render_plan_mode_context(profile_text)
 }
 
 /// Construct one dispatch task and its full prompt.
@@ -201,15 +201,6 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     let available_skills_block = render_available_skills_block_for_harness(harness, &staged_skills);
     if !available_skills_block.is_empty() {
         sections.push(format!("{available_skills_block}\n\n"));
-    }
-    // Plan-mode operating context: its own block after the session-start surfaces
-    // and before the task framing. Skill-agnostic, so identical in both arms.
-    let plan_mode_block = match opts.plan_mode_content {
-        Some(p) if !p.is_empty() => render_plan_mode_context_for_harness(harness, p),
-        _ => String::new(),
-    };
-    if !plan_mode_block.is_empty() {
-        sections.push(format!("{plan_mode_block}\n\n"));
     }
 
     let mut task_lines = vec![
@@ -278,6 +269,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
             .responder
             .map(|_| artifact_path(&cond_dir.join("responder"))),
         guard_policy: GuardPolicyConfig::default(),
+        plan_mode: opts.plan_mode,
         dispatch_prompt: sections.join(""),
     })
 }
@@ -520,6 +512,7 @@ mod tests {
                 codebase: None,
                 responder: None,
                 guard: None,
+                plan_mode: false,
             })
             .collect()
     }
@@ -955,80 +948,5 @@ mod tests {
         })
         .unwrap();
         assert!(task.dispatch_prompt.contains("No skill is loaded"));
-    }
-
-    // ── build_dispatch_task: plan-mode injection ──────────────────────────
-
-    fn plan_base_opts<'a>() -> DispatchTaskOpts<'a> {
-        DispatchTaskOpts {
-            user_prompt: "BUILD-THE-TODO-APP",
-            available_skills: vec![skill("foo", "the foo skill")],
-            ..base_opts()
-        }
-    }
-
-    #[test]
-    fn omits_plan_mode_block_when_absent() {
-        let task = build_dispatch_task(&plan_base_opts()).unwrap();
-        assert!(!task.dispatch_prompt.contains("<system-reminder>"));
-        let with_null = build_dispatch_task(&DispatchTaskOpts {
-            plan_mode_content: None,
-            ..plan_base_opts()
-        })
-        .unwrap();
-        assert!(!with_null.dispatch_prompt.contains("<system-reminder>"));
-    }
-
-    #[test]
-    fn injects_plan_mode_block_when_provided() {
-        let task = build_dispatch_task(&DispatchTaskOpts {
-            plan_mode_content: Some("Plan mode is active. PLAN-RAIL-MARKER."),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        assert!(task.dispatch_prompt.contains("<system-reminder>"));
-        assert!(task.dispatch_prompt.contains("PLAN-RAIL-MARKER."));
-        assert!(task.dispatch_prompt.contains("</system-reminder>"));
-    }
-
-    #[test]
-    fn plan_mode_block_after_skills_before_user_request() {
-        let task = build_dispatch_task(&DispatchTaskOpts {
-            plan_mode_content: Some("PLAN-RAIL-MARKER"),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        let prompt = &task.dispatch_prompt;
-        let skills_idx = prompt
-            .find("The following skills are available for use with the Skill tool:")
-            .unwrap();
-        let plan_idx = prompt.find("<system-reminder>").unwrap();
-        let prompt_idx = prompt.find("BUILD-THE-TODO-APP").unwrap();
-        assert!(plan_idx > skills_idx);
-        assert!(prompt_idx > plan_idx);
-    }
-
-    #[test]
-    fn injects_identical_plan_mode_block_in_both_arms() {
-        let plan = "Plan mode is active. PLAN-RAIL-MARKER.";
-        let rendered =
-            "<system-reminder>\nPlan mode is active. PLAN-RAIL-MARKER.\n</system-reminder>";
-        let with_skill = build_dispatch_task(&DispatchTaskOpts {
-            condition: "with_skill",
-            staged_skill_slug: Some("slow-powers-eval-1-with_skill__foo"),
-            plan_mode_content: Some(plan),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        let without_skill = build_dispatch_task(&DispatchTaskOpts {
-            condition: "without_skill",
-            staged_skill_slug: None,
-            available_skills: vec![],
-            plan_mode_content: Some(plan),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        assert!(with_skill.dispatch_prompt.contains(rendered));
-        assert!(without_skill.dispatch_prompt.contains(rendered));
     }
 }

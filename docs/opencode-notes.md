@@ -37,7 +37,7 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   ids (`bash` = the shell tool id; `edit`/`write` take `filePath`; `apply_patch` takes
   `patchText` — the shared boundary policy reads all three spellings).
 - **Dispatch recipes + model flag:** the `[dispatch]` templates run `opencode run --dir
-  <eval-root> --format json --auto` (plus `[model] flag = "-m"`; they landed together because
+  <eval-root> --format json --agent build --auto` (plus `[model] flag = "-m"`; they landed together because
   descriptor validation ties the judge template's `$model_arg` to a declared model flag).
   Verified against opencode v1.18.3 (`opencode run --help` and
   `packages/opencode/src/cli/cmd/run.ts`):
@@ -62,6 +62,22 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   supplies and verifies the native id. Verified against `opencode run --help` on 2026-07-24.
 - **Write guard:** a project plugin staged at `.opencode/plugins/slow-powers-eval-guard.js` —
   see "Write guard" below.
+- **Plan mode:** `[plan_mode]` maps the planning phase to `--agent plan` and act mode to
+  `--agent build --auto` — see "Plan mode" below.
+
+## Plan mode
+
+Verified against opencode **1.18.10** on 2026-09-02, headless, against a scratch repository with one
+bug (free model `opencode/nemotron-3.5-lightning-free`):
+
+- `opencode run --agent plan` without `--auto` is the read-only phase: the built-in plan agent's
+  `edit` call failed with `The user has specified a rule which prevents you from using this
+  specific tool call`, and the working tree stayed clean. `--auto` would approve the asks the plan
+  agent makes, so it belongs to `act_args` only.
+- `opencode run --session <id> --agent build --auto` resumed the same session and edited the file.
+  `--agent build` is explicit so a resumed session does not inherit the plan agent.
+- OpenCode writes no plan file, so the descriptor declares no `[plan_mode.plan_file]`; a plan-mode
+  eval on OpenCode needs a `responder`, whose `done` verdict in the planning phase approves the plan.
 
 ## Write guard
 

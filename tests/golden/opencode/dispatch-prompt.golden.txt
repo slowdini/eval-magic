@@ -15,10 +15,6 @@ Session guidelines: be concise.
   </skill>
 </available_skills>
 
-<system-reminder>
-PLAN STEP
-</system-reminder>
-
 You are executing a single test case for a skill evaluation framework.
 Treat this as a real user request — do NOT optimize behavior for the eval.
 

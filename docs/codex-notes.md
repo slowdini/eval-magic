@@ -36,6 +36,12 @@ alias.
 - Scripted follow-ups run from `<eval-root>` through `codex exec resume <SESSION_ID> <PROMPT>`;
   `thread.started.thread_id` supplies the id and each round keeps `--json` with its own event
   capture. Verified against `codex exec resume --help` on 2026-07-24.
+- `codex exec` has **no plan-mode flag** (codex-cli 0.147.0: `codex exec --help` lists none; plan
+  mode is a TUI collaboration mode), so the descriptor declares no `[plan_mode]` and `run` rejects
+  plan-mode evals on Codex. The runtime analogue is `--sandbox read-only`: a descriptor that moved
+  the sandbox flag into a `{mode_args}` slot with `plan_args = " --sandbox read-only"` and
+  `act_args = " --sandbox workspace-write"` would opt in, at the cost of an agent that is never told
+  it is planning.
 
 ## Model flag
 

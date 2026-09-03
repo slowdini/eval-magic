@@ -26,14 +26,14 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::adapters::{PermissionDenial, TranscriptSummary, adapter_for};
+use crate::adapters::{TranscriptSummary, adapter_for};
 use crate::core::fs::write_json;
 use crate::core::{
-    CodebaseRecord, ConditionSkill, ConversationRecord, Harness, RunRecord, SkillSource,
-    TimingRecord, TimingSource,
+    CodebaseRecord, ConditionSkill, ConversationEvent, ConversationRecord, Harness, RunRecord,
+    SessionMode, SkillSource, TimingRecord, TimingSource,
 };
 use crate::pipeline::error::PipelineError;
-use crate::pipeline::permission_denials::{self, TaskPermissionDenials};
+use crate::pipeline::permission_denials::{self, CapturedDenial, TaskPermissionDenials};
 use crate::pipeline::session_surface::{self, RoundSurface, TaskSessionSurface};
 use crate::pipeline::shadow_verification;
 use crate::validation::{SchemaName, validate_against_schema};
@@ -373,27 +373,49 @@ fn session_surfaces_for_task(
 }
 
 /// The tool calls the harness refused across a task's transcript(s): the
-/// per-round events files. A missing or unparseable transcript
-/// contributes nothing — absence of evidence is not a denial.
+/// per-round events files, each denial paired with the phase of the round it
+/// came from. A missing or unparseable transcript contributes nothing — absence
+/// of evidence is not a denial.
 fn permission_denials_for_task(
     harness: Harness,
     task: &DispatchTask,
     conversation: &ConversationRecord,
-) -> Vec<PermissionDenial> {
+) -> Vec<CapturedDenial> {
     let adapter = adapter_for(harness);
     let Some(filename) = adapter.cli_events_filename() else {
         return Vec::new();
     };
     let outputs_dir = Path::new(&task.outputs_dir);
-    let paths: Vec<PathBuf> = (1..=conversation.delivered_followups.saturating_add(1))
-        .map(|round| outputs_dir.join(format!("turn-{round}")).join(&filename))
-        .collect();
-    paths
-        .iter()
-        .filter(|path| path.exists())
-        .filter_map(|path| adapter.parse_permission_denials(path).ok())
-        .flatten()
+    (1..=conversation.delivered_followups.saturating_add(1))
+        .map(|round| {
+            let path = outputs_dir.join(format!("turn-{round}")).join(&filename);
+            (round, path)
+        })
+        .filter(|(_, path)| path.exists())
+        .flat_map(|(round, path)| {
+            let plan_phase = round_ran_in_plan_mode(conversation, round);
+            adapter
+                .parse_permission_denials(&path)
+                .into_iter()
+                .flatten()
+                .map(move |denial| CapturedDenial { denial, plan_phase })
+        })
         .collect()
+}
+
+/// Whether `round` ran in the harness's plan mode, per the user message that
+/// opened it. Absent modes mean the whole run was act mode.
+fn round_ran_in_plan_mode(conversation: &ConversationRecord, round: u32) -> bool {
+    conversation.events.iter().any(|event| {
+        matches!(
+            event,
+            ConversationEvent::UserMessage {
+                round: event_round,
+                mode: Some(SessionMode::Plan),
+                ..
+            } if *event_round == round
+        )
+    })
 }
 
 #[cfg(test)]

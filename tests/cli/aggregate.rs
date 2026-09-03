@@ -521,6 +521,68 @@ fn aggregate_warns_when_the_responder_ended_runs_early() {
 
 /// A conversation the responder carried to completion is not a threat to the
 /// comparison, so it must not add noise to every responder-driven campaign.
+/// A plan-mode run whose session never left the planning phase measures a
+/// task that was never attempted, whatever stopped it; counting it beside a
+/// completed run biases the delta, so it is warned about per condition.
+#[test]
+fn aggregate_warns_when_a_plan_mode_run_never_reached_implementation() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+    }
+    write_conversation(
+        &iteration_dir,
+        "with_skill",
+        json!({
+            "status": "stopped",
+            "delivered_followups": 0,
+            "stop_reason": "plan_not_presented",
+            "stopped_before_followup": 1,
+            "events": [
+                { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan" }
+            ]
+        }),
+    );
+    write_conversation(
+        &iteration_dir,
+        "without_skill",
+        json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan" },
+                { "type": "user_message", "ordinal": 1, "round": 2,
+                  "text": "The plan is approved. Implement it now.",
+                  "origin": { "runner": "plan_approval" }, "mode": "act" }
+            ],
+            "plan": { "presented_in_round": 1, "approved_in_round": 2, "signal": "plan_file" }
+        }),
+    );
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    let warning = warns
+        .iter()
+        .find_map(|w| {
+            let s = w.as_str().unwrap();
+            s.contains("never reached implementation").then_some(s)
+        })
+        .unwrap_or_else(|| panic!("expected a plan-mode warning in {warns:?}"));
+    assert!(warning.contains("with_skill"), "{warning}");
+    assert!(
+        !warns.iter().any(|w| {
+            let s = w.as_str().unwrap();
+            s.contains("without_skill") && s.contains("never reached implementation")
+        }),
+        "the arm whose plan was approved is not warned about: {warns:?}"
+    );
+}
+
 #[test]
 fn aggregate_is_silent_when_the_responder_completed_every_run() {
     use serde_json::json;

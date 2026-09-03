@@ -134,43 +134,6 @@ fn codex_supports_stage_name_when_staging() {
 }
 
 #[test]
-fn codex_plan_mode_injects_profile_and_records_flag() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "codex",
-            "--plan-mode",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], true);
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        if task["condition"] == "with_skill" {
-            assert!(prompt.contains("## Skills"));
-        }
-        assert!(prompt.contains("<system-reminder>"));
-        // Shared, harness-agnostic profile: same text every harness sees, with no
-        // Codex-specific <proposed_plan> block or Claude-specific ExitPlanMode rail.
-        assert!(prompt.contains("Plan mode is active"));
-        assert!(!prompt.contains("<proposed_plan>"));
-        assert!(!prompt.contains("ExitPlanMode"));
-    }
-}
-
-#[test]
 fn codex_guard_installs_project_hook() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);

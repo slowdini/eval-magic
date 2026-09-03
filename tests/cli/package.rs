@@ -164,7 +164,6 @@ fn cargo_package_excludes_repo_local_authoring_files() {
         "assets/readme.png",
         "schema/evals.schema.json",
         "schema/harness-descriptor.schema.json",
-        "profiles/shared/plan-mode.md",
         "harnesses/claude-code.toml",
         "harnesses/cline.toml",
         "harnesses/codex.toml",

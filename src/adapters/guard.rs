@@ -41,7 +41,8 @@ use super::descriptor::{GuardEngine, GuardSection, subst};
 
 /// Arm the write guard: marker + manifest under `skills_dir` (absolute,
 /// resolved by the caller), then the engine-specific hook surface. Returns
-/// the staged marker path.
+/// the staged marker path. `extra_allowed_roots` are allowed beside the env
+/// itself — the plan file a harness writes in plan mode, when it declares one.
 ///
 /// Template parse failures panic (`expect`): descriptor validation proved the
 /// templates at load time, and arming runs in the orchestrator where a loud
@@ -53,11 +54,18 @@ pub(crate) fn install_guard(
     guard_exe: &Path,
     ttl: Option<Duration>,
     guard_policy: &crate::core::GuardPolicyConfig,
+    extra_allowed_roots: &[PathBuf],
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    write_marker(&marker_path, stage_root, ttl, guard_policy)?;
+    write_marker(
+        &marker_path,
+        stage_root,
+        ttl,
+        guard_policy,
+        extra_allowed_roots,
+    )?;
 
     match guard.engine {
         GuardEngine::JsonHooks => {
@@ -465,6 +473,7 @@ mod tests {
             Path::new("/g/eval-magic"),
             None,
             &Default::default(),
+            &[],
         )
         .unwrap()
     }
@@ -501,6 +510,35 @@ mod tests {
             allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
             ..Default::default()
         }
+    }
+
+    /// A harness whose plan mode writes its plan outside the env declares that
+    /// root; the marker allows it beside the env, and nothing else.
+    #[test]
+    fn marker_also_allows_the_extra_roots_the_caller_declares() {
+        let c = setup();
+        let d = descriptor("claude-code");
+        let skills = resolve_rel(&c.stage_root, d.skills_dir.as_deref().unwrap());
+        install_guard(
+            d.guard.as_ref().unwrap(),
+            &skills,
+            &c.stage_root,
+            Path::new("/g/eval-magic"),
+            None,
+            &Default::default(),
+            &[PathBuf::from("/Users/someone/.claude/plans")],
+        )
+        .unwrap();
+
+        let marker = read_json(&claude_skills_dir(&c.stage_root).join(GUARD_MARKER));
+        let roots: Vec<String> = marker["allowedRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap().to_string())
+            .collect();
+        let env = absolutize(&c.stage_root).display().to_string();
+        assert_eq!(roots, vec![env, "/Users/someone/.claude/plans".to_string()]);
     }
 
     #[test]

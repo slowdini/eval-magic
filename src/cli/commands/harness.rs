@@ -449,6 +449,9 @@ fn declared_enhancements(descriptor: &HarnessDescriptor) -> String {
     if descriptor.conversation.is_some() {
         list.push("conversation-resume");
     }
+    if descriptor.plan_mode.is_some() {
+        list.push("plan-mode");
+    }
     if descriptor.model.is_some() {
         list.push("model-flag");
     }

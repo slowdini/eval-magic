@@ -9,10 +9,6 @@ Session guidelines: be concise.
 - aux-helper: Assists with auxiliary chores. (file: /work/staged/aux-helper/SKILL.md)
 - widget-skill: Builds widgets the house way. (file: /work/staged/widget-skill/SKILL.md)
 
-<system-reminder>
-PLAN STEP
-</system-reminder>
-
 You are executing a single test case for a skill evaluation framework.
 Treat this as a real user request — do NOT optimize behavior for the eval.
 

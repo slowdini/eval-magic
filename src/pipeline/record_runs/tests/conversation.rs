@@ -404,3 +404,70 @@ fn records_a_run_whose_conversation_timed_out_in_a_later_round() {
     assert_eq!(conversation.status, ConversationStatus::TimedOut);
     assert_eq!(conversation.timed_out_in_round, Some(2));
 }
+
+/// The session mode each round ran in survives ingest, so a judge can tell the
+/// planning rounds from the implementation.
+#[test]
+fn plan_mode_rounds_keep_their_mode_through_ingest() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "plan-first",
+            condition: "with_skill",
+        }],
+    );
+    let conversation_path = iter
+        .join("eval-plan-first")
+        .join("with_skill")
+        .join("conversation.json");
+    fs::write(
+        &conversation_path,
+        serde_json::to_string_pretty(&json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan"},
+                {"type": "user_message", "ordinal": 1, "round": 2,
+                 "text": "The plan is approved. Implement it now.",
+                 "origin": {"runner": "plan_approval"}, "mode": "act"}
+            ],
+            "plan": {"presented_in_round": 1, "approved_in_round": 2, "signal": "plan_file"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for (round, final_text) in [(1, "Here is the plan."), (2, "Implemented.")] {
+        let round_dir = paths[0].outputs_dir.join(format!("turn-{round}"));
+        fs::create_dir_all(&round_dir).unwrap();
+        write_codex_events(&round_dir, final_text);
+    }
+    let dispatch_path = iter.join("dispatch.json");
+    let mut dispatch: Value =
+        serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
+    dispatch["tasks"][0]["conversation_path"] =
+        json!(conversation_path.to_string_lossy().to_string());
+    dispatch["tasks"][0]["plan_mode"] = json!(true);
+    fs::write(
+        &dispatch_path,
+        serde_json::to_string_pretty(&dispatch).unwrap(),
+    )
+    .unwrap();
+
+    let result = record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
+    assert_eq!(result.recorded, 1);
+
+    let run = read_run(&iter, "plan-first", "with_skill");
+    let conversation = serde_json::to_value(run.conversation.unwrap()).unwrap();
+    let user_turns: Vec<&Value> = conversation["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["type"] == "user_message")
+        .collect();
+    assert_eq!(user_turns[0]["mode"], "plan");
+    assert_eq!(user_turns[1]["mode"], "act");
+    assert_eq!(user_turns[1]["origin"], json!({"runner": "plan_approval"}));
+    assert_eq!(conversation["plan"]["signal"], "plan_file");
+}

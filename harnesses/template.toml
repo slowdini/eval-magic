@@ -42,9 +42,10 @@ label = "{label}"
 ## generic handoff guidance.
 ##
 ## Two placeholder families:
-##   {model_arg} / {guard_args} are machine slots eval-magic fills — {model_arg} renders the
-##   [model] flag + requested model (empty when absent); {guard_args} splices guard-only args
-##   (guarded built-ins only).
+##   {model_arg} / {guard_args} / {mode_args} are machine slots eval-magic fills — {model_arg}
+##   renders the [model] flag + requested model (empty when absent); {guard_args} splices
+##   guard-only args (guarded built-ins only); {mode_args} splices the [plan_mode] arguments
+##   for the round's session mode (only with a [plan_mode] table).
 ##   <eval-root>, <dispatch_prompt_path>, <outputs_dir> are prose placeholders whoever
 ##   dispatches fills per task (the runbook explains each).
 ## Two hard requirements: the command runs from the task's <eval-root> (the env dir is the
@@ -177,6 +178,21 @@ label = "{label}"
 # [conversation]
 # token_usage_aggregation = "sum"
 # resume_exec_template = '{label} run --cd <eval-root> --session {session_arg}{model_arg} {prompt_arg} > <outputs_dir>/{label}-events.jsonl'
+
+## -------------------------------------------------------------------------------------------
+## [plan_mode] — the harness's native read-only planning mode, for evals that declare
+## `plan_mode: true`. eval-magic starts such a session with plan_args spliced at the
+## {mode_args} slot, lets the agent present a plan, approves it with one fixed message, and
+## resumes the same session with act_args. Both [dispatch].exec_template and
+## [conversation].resume_exec_template must carry {mode_args}; every other dispatch (judges,
+## responder consultations, the lint probe) renders act_args. Requires [conversation].
+## [plan_mode.plan_file] names the file the harness writes its plan to: writes under root are
+## allowed by the write guard and the stray-write audit, a plan-phase round that wrote one has
+## presented its plan, and that write's content_field is the plan artifact. Omit plan_file when
+## the harness writes no plan file; the eval's responder then decides when the plan is ready.
+## VERIFY: run one headless turn in the planning mode and confirm edits are refused; resume it
+## with the act arguments and confirm that same session edits. See `eval-magic harness show
+## claude-code` for a plan_file example and `eval-magic docs conversations` for the eval side.
 
 ## -------------------------------------------------------------------------------------------
 ## [model] — the CLI flag that selects a model. Without it, --agent-model / --judge-model are

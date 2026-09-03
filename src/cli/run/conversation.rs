@@ -15,20 +15,25 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, anyhow, bail};
 
 use crate::adapters::cli_command::shell_quote_arg;
+use crate::adapters::descriptor::PlanFileSection;
 use crate::adapters::descriptor::subst;
 use crate::adapters::descriptor_adapter::DescriptorAdapter;
 use crate::adapters::harness::HarnessAdapter;
 use crate::adapters::transcript::TranscriptSummary;
+use crate::core::fs::artifact_path;
 use crate::core::{
-    ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason,
-    ResponderOutcome, ResponderStopCause, ShellOutcome, run_in_posix_shell,
+    ConversationEvent, ConversationRecord, ConversationStatus, ConversationStopReason, PlanRecord,
+    ResponderOutcome, ResponderStopCause, RunnerTurn, SessionMode, ShellOutcome, TurnOrigin,
+    run_in_posix_shell,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
 use super::dispatch::DispatchTask;
+use plan_phase::{PLAN_APPROVAL_PROMPT, PlanDecision, PresentedPlan};
 use responder::{Consultation, ResponderRuntime};
 use turn_plan::{NextTurn, TurnPlan};
 
+mod plan_phase;
 mod responder;
 mod turn_plan;
 
@@ -39,6 +44,8 @@ pub enum TaskOutcome {
     Completed {
         delivered_followups: u32,
         source: TurnSource,
+        /// The round the runner's plan approval opened, for a plan-mode task.
+        plan_approved_in_round: Option<u32>,
     },
     Stopped {
         before_followup: u32,
@@ -80,13 +87,30 @@ impl TaskOutcome {
     pub fn summary(&self) -> String {
         match self {
             Self::Completed {
+                delivered_followups,
+                plan_approved_in_round: Some(round),
+                ..
+            } => format!(
+                "completed with {delivered_followups} follow-up turn(s), plan approved in round \
+                 {round}"
+            ),
+            Self::Completed {
                 delivered_followups: 0,
                 ..
             } => "completed".to_string(),
             Self::Completed {
                 delivered_followups,
                 source,
+                ..
             } => format!("completed with {delivered_followups} {}", source.noun()),
+            Self::Stopped {
+                before_followup,
+                reason: Some(ConversationStopReason::PlanNotPresented),
+                ..
+            } => format!(
+                "stopped before turn {before_followup} — the planning phase ended without a plan \
+                 to approve"
+            ),
             Self::Stopped {
                 before_followup,
                 reason: Some(ConversationStopReason::ResponderCannotAnswer),
@@ -171,21 +195,47 @@ pub fn run_task(
     let events_filename = adapter
         .cli_events_filename()
         .ok_or_else(|| anyhow!("harness declares no transcript events filename"))?;
+    // Plan mode starts the session read-only and the approval resumes it, so
+    // a plan-mode task needs the resume template even when it is otherwise
+    // one-shot. Other one-shot tasks never resume, and a harness may support
+    // them without declaring `[conversation]` at all (cline does).
+    let plan_mode = task.plan_mode;
+    let mut mode = if plan_mode {
+        SessionMode::Plan
+    } else {
+        SessionMode::Act
+    };
     let initial_template = adapter
-        .cli_exec_command(guard, agent_model, agent_env)
-        .ok_or_else(|| anyhow!("harness declares no initial dispatch command"))?;
-    // Only a multi-turn task resumes a session, and a harness may support
-    // one-shot dispatch without declaring `[conversation]` at all (cline does).
-    // Requiring the template up front would make those harnesses undispatchable.
-    let resume_template = if plan.delivers_followups() {
-        Some(
-            adapter
-                .cli_resume_command(guard, agent_model, agent_env)
+        .cli_exec_command_in_mode(mode, guard, agent_model, agent_env)
+        .ok_or_else(|| match mode {
+            SessionMode::Plan => anyhow!("harness declares no plan-mode dispatch command"),
+            SessionMode::Act => anyhow!("harness declares no initial dispatch command"),
+        })?;
+    let needs_resume = plan.delivers_followups() || plan_mode;
+    let resume_templates = if needs_resume {
+        Some(ResumeTemplates {
+            act: adapter
+                .cli_resume_command_in_mode(SessionMode::Act, guard, agent_model, agent_env)
                 .ok_or_else(|| anyhow!("harness declares no native conversation resume command"))?,
-        )
+            plan: plan_mode
+                .then(|| {
+                    adapter
+                        .cli_resume_command_in_mode(
+                            SessionMode::Plan,
+                            guard,
+                            agent_model,
+                            agent_env,
+                        )
+                        .ok_or_else(|| anyhow!("harness declares no plan-mode resume command"))
+                })
+                .transpose()?,
+        })
     } else {
         None
     };
+    // The plan file only matters while planning; `home` resolves its `~`.
+    let plan_file = plan_mode.then(|| adapter.plan_file()).flatten();
+    let home = std::env::home_dir();
     if overwrite && conversation_path.exists() {
         fs::remove_file(&conversation_path).with_context(|| {
             format!(
@@ -218,6 +268,7 @@ pub fn run_task(
         round: 1,
         text: task.user_prompt.clone(),
         origin: None,
+        mode: plan_mode.then_some(mode),
     }];
     let first_outputs = base_outputs.join("turn-1");
     let initial_command = render_command(
@@ -250,12 +301,13 @@ pub fn run_task(
                 timed_out_in_round: Some(1),
                 events,
                 responder_outcome: None,
+                plan: None,
             },
             plan.source(),
         );
     }
     let first_summary = parse_round(adapter, &first_outputs, &events_filename, 1)?;
-    let session_id = if plan.delivers_followups() {
+    let session_id = if needs_resume {
         Some(
             first_summary
                 .session_id
@@ -266,10 +318,22 @@ pub fn run_task(
     } else {
         None
     };
-    let mut preceding_assistant = final_text_for_round(1, &first_summary)?;
+    let mut presented = plan_hit(
+        &first_summary,
+        mode,
+        plan_file.as_ref(),
+        home.as_deref(),
+        Path::new(eval_root),
+    );
+    let mut preceding_assistant = round_text(1, &first_summary, presented.as_ref())?;
     let mut final_message = preceding_assistant.clone();
+    let mut last_round = 1_u32;
 
     let mut delivered_followups = 0_u32;
+    // Follow-ups the planning phase consumed — responder answers and the
+    // approval — which a script must not count as its own deliveries.
+    let mut plan_phase_followups = 0_u32;
+    let mut plan_record: Option<PlanRecord> = None;
     let mut stop_reason = None;
     let mut stopped_before_followup = None;
     let mut timed_out_in_round = None;
@@ -284,30 +348,86 @@ pub fn run_task(
             task_prompt: &task.user_prompt,
             prior_replies: &responder_replies,
             final_message: &final_message,
+            planning: mode == SessionMode::Plan,
         };
-        let next = plan.next_turn(
-            delivered_followups,
-            &preceding_assistant,
-            &consultation,
-            responder_runtime.as_ref(),
-            responder_replies.last().map(String::as_str),
-        )?;
-        let (prompt, origin) = match next {
-            NextTurn::Done { responder } => {
-                responder_outcome = responder;
-                break;
+        let previous_reply = responder_replies.last().map(String::as_str);
+        let (prompt, origin, next_mode) = if mode == SessionMode::Plan {
+            let responder = match &plan {
+                TurnPlan::Responder(policy) => Some((
+                    *policy,
+                    responder_runtime
+                        .as_ref()
+                        .expect("a responder plan resolved its runtime alongside the plan itself"),
+                )),
+                TurnPlan::OneShot | TurnPlan::Scripted(_) => None,
+            };
+            match plan_phase::decide(
+                presented.take(),
+                responder,
+                followup,
+                &consultation,
+                previous_reply,
+            ) {
+                PlanDecision::Approve(approved) => {
+                    let plan_path = base_outputs.join("plan.md");
+                    write_atomic(&plan_path, approved.text.clone())?;
+                    plan_record = Some(PlanRecord {
+                        presented_in_round: last_round,
+                        approved_in_round: last_round.saturating_add(1),
+                        signal: approved.signal,
+                        artifact_path: Some(artifact_path(&plan_path)),
+                    });
+                    (
+                        PLAN_APPROVAL_PROMPT.to_string(),
+                        Some(TurnOrigin::Runner {
+                            runner: RunnerTurn::PlanApproval,
+                        }),
+                        SessionMode::Act,
+                    )
+                }
+                PlanDecision::Answer { text, origin } => {
+                    responder_replies.push(text.clone());
+                    (text, Some(origin), SessionMode::Plan)
+                }
+                PlanDecision::Stop { reason, responder } => {
+                    stop_reason = Some(reason);
+                    stopped_before_followup = Some(followup);
+                    responder_outcome = responder;
+                    break;
+                }
             }
-            NextTurn::Stop { reason, responder } => {
-                stop_reason = Some(reason);
-                stopped_before_followup = Some(followup);
-                responder_outcome = responder;
-                break;
+        } else {
+            let next = plan.next_turn(
+                delivered_followups.saturating_sub(plan_phase_followups),
+                followup,
+                &preceding_assistant,
+                &consultation,
+                responder_runtime.as_ref(),
+                previous_reply,
+            )?;
+            match next {
+                NextTurn::Done { responder } => {
+                    responder_outcome = responder;
+                    break;
+                }
+                NextTurn::Stop { reason, responder } => {
+                    stop_reason = Some(reason);
+                    stopped_before_followup = Some(followup);
+                    responder_outcome = responder;
+                    break;
+                }
+                NextTurn::Deliver { text, origin } => {
+                    if origin.is_some() {
+                        responder_replies.push(text.clone());
+                    }
+                    (text, origin, SessionMode::Act)
+                }
             }
-            NextTurn::Deliver { text, origin } => (text, origin),
         };
-        if origin.is_some() {
-            responder_replies.push(prompt.clone());
+        if mode == SessionMode::Plan {
+            plan_phase_followups = plan_phase_followups.saturating_add(1);
         }
+        mode = next_mode;
 
         let round = followup.saturating_add(1);
         events.push(ConversationEvent::UserMessage {
@@ -315,13 +435,21 @@ pub fn run_task(
             round,
             text: prompt.clone(),
             origin,
+            mode: plan_mode.then_some(mode),
         });
         delivered_followups = delivered_followups.saturating_add(1);
 
         let round_outputs = base_outputs.join(format!("turn-{round}"));
-        let resume_template = resume_template
-            .as_deref()
-            .expect("a task that delivers follow-ups resolved a resume template above");
+        let templates = resume_templates
+            .as_ref()
+            .expect("a task that delivers follow-ups resolved its resume templates above");
+        let resume_template = match mode {
+            SessionMode::Act => templates.act.as_str(),
+            SessionMode::Plan => templates
+                .plan
+                .as_deref()
+                .expect("a plan-mode task resolved its plan-mode resume template above"),
+        };
         let command = render_command(
             resume_template,
             eval_root,
@@ -356,8 +484,16 @@ pub fn run_task(
                 session_id.as_deref().unwrap_or_default()
             );
         }
-        preceding_assistant = final_text_for_round(round, &summary)?;
+        presented = plan_hit(
+            &summary,
+            mode,
+            plan_file.as_ref(),
+            home.as_deref(),
+            Path::new(eval_root),
+        );
+        preceding_assistant = round_text(round, &summary, presented.as_ref())?;
         final_message = preceding_assistant.clone();
+        last_round = round;
     }
 
     // A timeout outranks a gate stop: the conversation was cut short, so what
@@ -379,9 +515,47 @@ pub fn run_task(
             // A timeout outranks the responder's verdict for the same reason it
             // outranks a gate stop: the round it judged never finished.
             responder_outcome: timed_out_in_round.map_or(responder_outcome, |_| None),
+            // An approval that happened stays recorded even if a later round
+            // timed out: the plan was presented and approved as written.
+            plan: plan_record,
         },
         plan.source(),
     )
+}
+
+/// The resume commands a task may need: act mode for every task that resumes,
+/// plan mode only while a plan-mode task is still planning.
+struct ResumeTemplates {
+    act: String,
+    plan: Option<String>,
+}
+
+/// The plan a plan-mode round presented through the harness's plan file, when
+/// the round ran in plan mode and the harness declares such a file.
+fn plan_hit(
+    summary: &TranscriptSummary,
+    mode: SessionMode,
+    plan_file: Option<&PlanFileSection>,
+    home: Option<&Path>,
+    eval_root: &Path,
+) -> Option<PresentedPlan> {
+    if mode != SessionMode::Plan {
+        return None;
+    }
+    plan_phase::plan_file_written(summary, plan_file?, home?, eval_root)
+}
+
+/// The round's final assistant message. A plan-mode round that ended by writing
+/// its plan file may have no closing message; the plan then stands in for it.
+fn round_text(
+    round: u32,
+    summary: &TranscriptSummary,
+    presented: Option<&PresentedPlan>,
+) -> anyhow::Result<String> {
+    match final_text_for_round(round, summary) {
+        Ok(text) => Ok(text),
+        Err(error) => presented.map(|plan| plan.text.clone()).ok_or(error),
+    }
 }
 
 /// Validate, commit, and report one task's completion artifact.
@@ -401,6 +575,10 @@ fn write_conversation(
         ConversationStatus::Completed => TaskOutcome::Completed {
             delivered_followups: conversation.delivered_followups,
             source,
+            plan_approved_in_round: conversation
+                .plan
+                .as_ref()
+                .map(|plan| plan.approved_in_round),
         },
         ConversationStatus::Stopped => TaskOutcome::Stopped {
             before_followup: conversation.stopped_before_followup.unwrap_or_default(),
@@ -521,18 +699,24 @@ enum RoundOutcome {
 }
 
 fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {
+    let mut body = serde_json::to_string_pretty(value)?;
+    body.push('\n');
+    write_atomic(path, body)
+}
+
+/// Write `body` to `path` through a sibling temp file, so a reader never sees a
+/// half-written artifact.
+fn write_atomic(path: &Path, body: String) -> anyhow::Result<()> {
     let parent = path
         .parent()
-        .ok_or_else(|| anyhow!("conversation path has no parent: {}", path.display()))?;
+        .ok_or_else(|| anyhow!("artifact path has no parent: {}", path.display()))?;
     fs::create_dir_all(parent)?;
     let temp_path = parent.join(format!(
         ".{}.tmp",
         path.file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or("conversation.json")
+            .unwrap_or("artifact")
     ));
-    let mut body = serde_json::to_string_pretty(value)?;
-    body.push('\n');
     fs::write(&temp_path, body)?;
     fs::rename(&temp_path, path)?;
     Ok(())

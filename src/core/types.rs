@@ -134,6 +134,11 @@ pub struct Eval {
     /// config-level policy rather than extending it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard: Option<GuardPolicyConfig>,
+    /// Start the session in the harness's native plan mode and continue it in
+    /// act mode once the presented plan is approved. Appended last so an eval
+    /// that declares none serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode: bool,
 }
 
 /// Authored shell-command allowances for a guarded eval run.
@@ -584,6 +589,16 @@ pub struct RunRecord {
     pub skill_source: Option<SkillSource>,
 }
 
+/// Which of a harness's two session modes a round runs in: the read-only
+/// planning mode a `plan_mode` eval starts in, or the act mode every other
+/// round uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMode {
+    Plan,
+    Act,
+}
+
 /// The completed outcome of one dispatched task's conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
@@ -603,6 +618,33 @@ pub struct ConversationRecord {
     /// Appended last so a record written before it existed still round-trips.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub responder_outcome: Option<ResponderOutcome>,
+    /// How a plan-mode session moved from planning to implementation. Absent
+    /// unless the eval declared `plan_mode` and a plan was approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanRecord>,
+}
+
+/// How a plan-mode session moved from planning to implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanRecord {
+    /// The plan-phase round whose output was taken as the plan.
+    pub presented_in_round: u32,
+    /// The round the runner's fixed approval opened in act mode.
+    pub approved_in_round: u32,
+    pub signal: PlanSignal,
+    /// Where the plan text was saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+}
+
+/// What marked a plan as presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanSignal {
+    /// The harness wrote its plan file, as declared by `[plan_mode.plan_file]`.
+    PlanFile,
+    /// The responder judged the agent finished planning.
+    Responder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -630,6 +672,10 @@ pub enum ConversationStopReason {
     /// The agent was still asking when the responder's `max_turns` bound was
     /// reached. A bounded conversation, not a failed one.
     MaxTurnsReached,
+    /// A plan-mode session ended its planning phase without presenting a plan
+    /// the runner could approve: the harness's plan file was never written and
+    /// the eval declared no responder to decide otherwise.
+    PlanNotPresented,
 }
 
 /// One globally ordered event across every delivered conversation round.
@@ -646,6 +692,11 @@ pub enum ConversationEvent {
         /// conversation serializes exactly as it did before the field existed.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         origin: Option<TurnOrigin>,
+        /// The session mode of the round this message opens. Present on every
+        /// user message of a plan-mode eval; absent otherwise, since those runs
+        /// are entirely in act mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<SessionMode>,
     },
     AssistantMessage {
         ordinal: u32,
@@ -663,16 +714,31 @@ pub enum ConversationEvent {
     },
 }
 
-/// Where a synthesized user turn came from, recorded on the turn itself so a
-/// reader can audit whether the responder distorted the run. Absent on the
-/// seeded eval prompt and on scripted turns, which are authored, not derived.
+/// Who produced a user turn the eval did not author, recorded on the turn
+/// itself so a reader can audit whether the run was distorted. Absent on the
+/// seeded eval prompt and on scripted turns. Untagged, so the responder shape
+/// serializes exactly as it did before the runner shape existed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TurnOrigin {
-    pub responder: ResponderKind,
-    /// One line from the responder on why it answered this way. Absent when it
-    /// offered none; the tag above is what marks the turn derived.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rationale: Option<String>,
+#[serde(untagged)]
+pub enum TurnOrigin {
+    /// Derived by a responder from what the agent just said.
+    Responder {
+        responder: ResponderKind,
+        /// One line from the responder on why it answered this way. Absent
+        /// when it offered none; the tag is what marks the turn derived.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<String>,
+    },
+    /// Authored by the runner: a fixed turn every run receives the same way.
+    Runner { runner: RunnerTurn },
+}
+
+/// The fixed turns the runner itself sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunnerTurn {
+    /// The approval that moves a plan-mode session into act mode.
+    PlanApproval,
 }
 
 /// Which responder produced a turn. Named in the record even though there is
@@ -832,6 +898,7 @@ mod tests {
             codebase: None,
             responder: None,
             guard: None,
+            plan_mode: false,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -840,6 +907,109 @@ mod tests {
         assert!(out.get("skill_should_trigger").is_none());
         assert!(out.get("runs").is_none());
         assert!(out.get("isolation").is_none());
+        assert!(
+            out.get("plan_mode").is_none(),
+            "an eval outside plan mode serializes exactly as before the field existed"
+        );
+    }
+
+    /// A turn's provenance is one of two shapes: derived by a responder, or
+    /// authored by the runner (the fixed plan approval). Untagged, so the
+    /// responder shape serializes exactly as it did before the runner shape
+    /// existed.
+    #[test]
+    fn turn_origin_round_trips_both_shapes() {
+        let responder: TurnOrigin = serde_json::from_value(
+            json!({ "responder": "llm", "rationale": "the simplest option" }),
+        )
+        .unwrap();
+        assert_eq!(
+            responder,
+            TurnOrigin::Responder {
+                responder: ResponderKind::Llm,
+                rationale: Some("the simplest option".into()),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&responder).unwrap(),
+            json!({ "responder": "llm", "rationale": "the simplest option" })
+        );
+
+        let runner: TurnOrigin =
+            serde_json::from_value(json!({ "runner": "plan_approval" })).unwrap();
+        assert_eq!(
+            runner,
+            TurnOrigin::Runner {
+                runner: RunnerTurn::PlanApproval
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&runner).unwrap(),
+            json!({ "runner": "plan_approval" })
+        );
+    }
+
+    /// The plan-mode fields are appended and optional, so a record written for
+    /// an eval outside plan mode serializes exactly as it did before.
+    #[test]
+    fn conversation_record_omits_plan_fields_outside_plan_mode() {
+        let record = ConversationRecord {
+            status: ConversationStatus::Completed,
+            delivered_followups: 0,
+            stop_reason: None,
+            stopped_before_followup: None,
+            timed_out_in_round: None,
+            events: vec![ConversationEvent::UserMessage {
+                ordinal: 0,
+                round: 1,
+                text: "p".into(),
+                origin: None,
+                mode: None,
+            }],
+            responder_outcome: None,
+            plan: None,
+        };
+        let out = serde_json::to_value(&record).unwrap();
+        assert!(out.get("plan").is_none());
+        assert!(out["events"][0].get("mode").is_none());
+
+        let plan = PlanRecord {
+            presented_in_round: 1,
+            approved_in_round: 2,
+            signal: PlanSignal::PlanFile,
+            artifact_path: Some("outputs/plan.md".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&plan).unwrap(),
+            json!({
+                "presented_in_round": 1,
+                "approved_in_round": 2,
+                "signal": "plan_file",
+                "artifact_path": "outputs/plan.md"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ConversationStopReason::PlanNotPresented).unwrap(),
+            json!("plan_not_presented")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionMode::Plan).unwrap(),
+            json!("plan")
+        );
+    }
+
+    #[test]
+    fn plan_mode_true_round_trips() {
+        let eval: Eval = serde_json::from_value(json!({
+            "id": "e1",
+            "prompt": "p",
+            "expected_output": "o",
+            "plan_mode": true
+        }))
+        .unwrap();
+        assert!(eval.plan_mode);
+        let out = serde_json::to_value(&eval).unwrap();
+        assert_eq!(out["plan_mode"], Value::Bool(true));
     }
 
     #[test]

@@ -1,6 +1,5 @@
 //! Small, stateless helpers for the run orchestrator: run-option validation, the
-//! per-run nonce, condition naming, plan-mode profile resolution, and display
-//! formatting. Extracted from [`super::orchestrate`] so the coordinator stays
+//! per-run nonce, condition naming, and display formatting. Extracted from [`super::orchestrate`] so the coordinator stays
 //! focused on the build sequence.
 
 use std::fs;
@@ -55,13 +54,6 @@ pub(crate) fn unguarded_notice(no_stage: bool) -> Option<String> {
          only detected after the fact by detect-stray-writes (folded into `ingest`), never blocked."
             .to_string(),
     )
-}
-
-/// Resolve the shared, harness-agnostic plan-mode procedure profile injected by
-/// `--plan-mode`. A compile-time bundled asset, mirroring the schema embedding in
-/// `validation`.
-pub(crate) fn resolve_plan_mode_profile() -> &'static str {
-    include_str!("../../../profiles/shared/plan-mode.md")
 }
 
 /// The harness preflight verdict: possibly-adjusted run options plus the
@@ -490,16 +482,6 @@ mod tests {
     #[test]
     fn no_unguarded_notice_when_staging() {
         assert!(unguarded_notice(false).is_none());
-    }
-
-    #[test]
-    fn plan_mode_profile_is_shared_and_harness_agnostic() {
-        let profile = resolve_plan_mode_profile();
-        assert!(profile.contains("Plan mode is active"));
-        // Harness-agnostic content: no Claude-specific ExitPlanMode rail or
-        // Codex-specific <proposed_plan> block.
-        assert!(!profile.contains("ExitPlanMode"));
-        assert!(!profile.contains("<proposed_plan>"));
     }
 
     #[test]

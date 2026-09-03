@@ -419,16 +419,31 @@ obtained from a best-effort `opencode debug skill` probe only for duplicate runt
 scan does not enumerate bundled system skills (no stable listing exists), and OpenCode's does not
 scan config-declared `skills.paths`/`skills.urls` sources.
 
-### Plan-mode context
+### Native plan mode
 
-*Why harness-specific in principle:* a harness could inject a real native plan mode.
+*Why harness-specific:* the read-only planning mode is the harness's own — a permission mode for
+Claude Code, a built-in agent for OpenCode — and so is the way the agent presents its plan.
 
-*What the default does:* wraps the shared `profiles/shared/plan-mode.md` procedure in a
-`<system-reminder>` block — an approximation that is the same for every harness today, since plan
-modes can't be reproduced exactly in a one-shot dispatch anyway.
+*What it unlocks:* evals that declare `plan_mode: true`. The driver dispatches the opening round
+with the planning arguments, lets the agent present a plan, approves it with one fixed message, and
+resumes the same session with the act arguments; the eval's `turns` or `responder` then proceed as
+usual. The approved plan is saved as `outputs/plan.md` and rendered in the judge evidence bundle.
+`plan_file` is the deterministic signal that the plan was presented; without one the eval's
+responder decides, which is why `run` requires a responder on a harness without a plan file.
 
-*Descriptor fields:* none yet — this is the trait default (`render_plan_mode_context`) with no
-descriptor surface; a harness with a real native plan mode would grow one.
+*Fallback:* none. `run` rejects a plan-mode eval for a harness without `[plan_mode]`, before any
+environment is built, the way it rejects multi-turn evals for a harness without `[conversation]`.
+
+*Descriptor fields:* the `[plan_mode]` table — `plan_args` and `act_args` fill the `{mode_args}`
+slot that both `dispatch.exec_template` and `conversation.resume_exec_template` must carry (the act
+arguments also render for judge, responder, and probe dispatches); the optional `[plan_mode.plan_file]`
+table names the file the harness writes its plan to (`root`, `~`-expanded, and the write tool's
+`content_field`). Writes under that root are allowed by the write guard and the stray-write audit.
+Requires `[conversation]`. Validation rejects a table without the slot in both templates, and a
+slot with no table to fill it.
+
+*Capability:* `plan-mode` in `harness list`. Claude Code and OpenCode declare it; Codex `exec` has
+no plan-mode flag and Cline cannot resume a session, so neither does.
 
 ### Dispatch commands
 
@@ -442,7 +457,8 @@ surfaces before a workspace is built.
 
 *Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `next_steps_template`,
 `manifest_template`, `guard_args`, `model_note`. Templates carry
-`{model_arg}`/`{guard_args}` slots the renderer fills for eval-agent dispatches; a judge dispatch
+`{model_arg}`/`{guard_args}` slots the renderer fills for eval-agent dispatches, plus `{mode_args}`
+when a `[plan_mode]` table backs it; a judge dispatch
 reuses `exec_template` with `guard_args` deliberately empty, because judges run from the iteration
 directory outside every guarded task env. `env` contains non-secret eval-agent defaults, applied
 per task when the runner spawns the command; unset keys inherit the host environment and no

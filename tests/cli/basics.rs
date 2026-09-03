@@ -171,7 +171,21 @@ fn dispatch_help_documents_conversation_verification() {
         .success()
         .stdout(contains("delivered_followups"))
         .stdout(contains("same native session ID"))
-        .stdout(contains("interrupted"));
+        .stdout(contains("interrupted"))
+        .stdout(contains("plan_not_presented"));
+}
+
+/// Plan mode is a per-eval declaration that starts the harness's native mode;
+/// the run-level flag that injected a simulated one is gone.
+#[test]
+fn run_help_describes_plan_mode_evals_and_offers_no_simulated_flag() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("plan_mode"))
+        .stdout(contains("plan-mode"))
+        .stdout(contains("--plan-mode").not());
 }
 
 #[test]

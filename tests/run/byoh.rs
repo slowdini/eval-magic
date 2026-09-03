@@ -460,14 +460,16 @@ fn dispatch_and_ingest_warn_when_the_resolved_descriptor_drifted_from_prep() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     // Overlay the claude-code label, retuning dispatch onto a missing binary so
-    // nothing real is ever spawned; every other field merges from the built-in.
+    // nothing real is ever spawned; every other field merges from the built-in,
+    // including its [plan_mode] table, so the template keeps the {mode_args}
+    // slot that table fills.
     let file = tmp.path().join("iso.toml");
     fs::write(
         &file,
         r#"label = "claude-code"
 
 [dispatch]
-exec_template = "definitely-missing-cli <dispatch_prompt_path>"
+exec_template = "definitely-missing-cli{mode_args} <dispatch_prompt_path>"
 "#,
     )
     .unwrap();

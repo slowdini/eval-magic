@@ -143,7 +143,27 @@ fn docs_byoh_keeps_the_authoring_workflow() {
         .stdout(contains("harness lint"))
         .stdout(contains("--probe"))
         .stdout(contains("additional_project_skill_dirs"))
+        .stdout(contains("[plan_mode]"))
+        .stdout(contains("{mode_args}"))
         .stdout(contains("Upstreaming your descriptor"));
+}
+
+#[test]
+fn docs_conversations_keeps_the_plan_mode_contract() {
+    skill_eval()
+        .args(["docs", "conversations"])
+        .assert()
+        .success()
+        .stdout(contains("# Multi-turn conversations"))
+        .stdout(contains("Starting in plan mode"))
+        .stdout(contains("\"plan_mode\": true"))
+        .stdout(contains("plan-mode"))
+        .stdout(contains("The plan is approved. Implement it now."))
+        .stdout(contains("plan_file"))
+        .stdout(contains("plan_not_presented"))
+        .stdout(contains("plan_approval"))
+        .stdout(contains("plan_mode_attributed"))
+        .stdout(contains("plan.md"));
 }
 
 #[test]

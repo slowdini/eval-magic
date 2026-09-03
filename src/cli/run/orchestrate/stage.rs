@@ -19,7 +19,6 @@ use super::super::staging::{
     register_staged_skill_for_cleanup, skills_dir_for_harness, stage_sibling_skills,
     stage_sibling_skills_excluding, stage_skill_for_harness,
 };
-use super::super::util::{harness_label, resolve_plan_mode_profile};
 use super::envs::{EnvLayoutInput, env_targets};
 use super::{Resolved, RunOptions, Staged, skills_copy_root};
 
@@ -43,17 +42,6 @@ pub(super) fn stage_conditions(
     let bootstrap_content = match &ctx.bootstrap_path {
         Some(path) => Some(fs::read_to_string(path)?),
         None => None,
-    };
-
-    let plan_mode_content = if opts.plan_mode {
-        let profile = resolve_plan_mode_profile();
-        println!(
-            "  plan-mode: injecting the shared plan-mode profile as operating context for {} (issue #142; necessary-not-sufficient fidelity layer)",
-            harness_label(ctx.harness)
-        );
-        Some(profile.to_string())
-    } else {
-        None
     };
 
     // Sibling skill `(name, description)`, env-independent. `build` resolves each
@@ -268,7 +256,6 @@ pub(super) fn stage_conditions(
         cond_b_skills,
         sibling_meta,
         bootstrap_content,
-        plan_mode_content,
         guard_policies,
         codebase_shadow_sources,
     })

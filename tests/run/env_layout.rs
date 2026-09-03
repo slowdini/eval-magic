@@ -404,15 +404,17 @@ fn guard_marker_scopes_allowed_roots_to_private_env() {
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
         .current_dir(&cwd)
+        .env("HOME", tmp.path())
         .args(["run", "--skill-dir"])
         .arg(&skill_dir)
         .args(["--skill", "mr-review", "--mode", "new-skill", "--guard"])
         .assert()
         .success();
 
-    // The guard boundary is exactly the private task env. The iteration metadata
-    // tree above it and the host temp directory that contains this test are not
-    // independently writable roots.
+    // The guard boundary is the private task env plus the one root the harness
+    // declares for its own bookkeeping: the plan file Claude Code writes in plan
+    // mode. The iteration metadata tree above the env and the host temp
+    // directory that contains this test are not independently writable roots.
     let env = cli_env_dir(&cwd, "g1", "with_skill");
     let marker = read_json(&env.join(".claude/skills/.slow-powers-eval-guard.json"));
     let roots: Vec<String> = marker["allowedRoots"]
@@ -421,7 +423,17 @@ fn guard_marker_scopes_allowed_roots_to_private_env() {
         .iter()
         .map(|root| root.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(roots, vec![resolved(&env).to_string_lossy().into_owned()]);
+    assert_eq!(
+        roots,
+        vec![
+            resolved(&env).to_string_lossy().into_owned(),
+            tmp.path()
+                .join(".claude")
+                .join("plans")
+                .to_string_lossy()
+                .into_owned(),
+        ]
+    );
 
     let iter = resolved(&iteration_dir(&cwd));
     assert!(

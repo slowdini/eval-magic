@@ -82,7 +82,11 @@ Then run `eval-magic ingest{target_args} --iteration {iteration} --harness claud
 # `result` event. `</dev/null` detaches stdin so a permission prompt cannot
 # block on a TTY and piped task data cannot become extra prompt context.
 #
-# `--permission-mode bypassPermissions`, not `acceptEdits`: acceptEdits
+# The permission mode is the `{mode_args}` slot: [plan_mode].act_args for every
+# act-mode round and for judge, responder, and probe dispatches; plan_args for
+# the planning phase of a `plan_mode` eval.
+#
+# `bypassPermissions`, not `acceptEdits`, for act mode: acceptEdits
 # auto-approves file edits but NOT Bash, and with stdin detached there is
 # nobody to approve, so every non-trivial Bash call is auto-denied. That is
 # invisible — nothing fails and the run grades normally — while both arms are
@@ -90,7 +94,7 @@ Then run `eval-magic ingest{target_args} --iteration {iteration} --harness claud
 # running things. The write guard, not the permission mode, is the boundary
 # (see docs/claude-notes.md → "Permission mode").
 exec_template = '''
-cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions{model_arg} \
+cd <eval-root> && claude -p --output-format stream-json --verbose{mode_args}{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
@@ -109,8 +113,22 @@ Then run `eval-magic ingest --harness claude-code`; ingest reads each task's `ou
 
 [conversation]
 resume_exec_template = '''
-cd <eval-root> && claude -p --resume {session_arg} --output-format stream-json --verbose --permission-mode bypassPermissions{model_arg} \
+cd <eval-root> && claude -p --resume {session_arg} --output-format stream-json --verbose{mode_args}{model_arg} \
   {prompt_arg} \
   </dev/null \
   > <outputs_dir>/claude-events.jsonl \
   2> <outputs_dir>/claude-stderr.log'''
+
+# Native plan mode. `--permission-mode plan` starts the session read-only.
+# Headless `-p` runs expose no ExitPlanMode tool, so the agent presents its
+# plan the way plan mode tells it to: it writes the plan file under
+# ~/.claude/plans and ends the turn with the plan. A resume that passes an
+# explicit --permission-mode leaves plan mode (verified in docs/claude-notes.md
+# → "Plan mode").
+[plan_mode]
+plan_args = " --permission-mode plan"
+act_args = " --permission-mode bypassPermissions"
+
+[plan_mode.plan_file]
+root = "~/.claude/plans"
+content_field = "content"

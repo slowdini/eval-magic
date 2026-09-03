@@ -246,10 +246,12 @@ fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
     let origin = origin
         .as_ref()
         .expect("a synthesized turn names its origin");
-    assert_eq!(origin.responder, ResponderKind::Llm);
     assert_eq!(
-        origin.rationale.as_deref(),
-        Some("the simplest option that needs no new service")
+        origin,
+        &TurnOrigin::Responder {
+            responder: ResponderKind::Llm,
+            rationale: Some("the simplest option that needs no new service".into()),
+        }
     );
 
     // The seeded prompt is authored, not derived, so it carries no origin at
@@ -322,7 +324,13 @@ fn a_responder_completion_records_its_rationale_and_no_cause() {
     let ConversationEvent::UserMessage { origin, .. } = &parsed.events[2] else {
         panic!("event 2 is the synthesized turn");
     };
-    assert_eq!(origin.as_ref().unwrap().rationale, None);
+    assert_eq!(
+        origin.as_ref().unwrap(),
+        &TurnOrigin::Responder {
+            responder: ResponderKind::Llm,
+            rationale: None,
+        }
+    );
 }
 
 /// An operator reads a stop cause in a `dispatch` warning and greps for it in

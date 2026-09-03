@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::adapters::all_tool_vocabulary;
+use crate::adapters::descriptor::PlanFileSection;
 use crate::core::fs::{normalize_separators, write_json};
 use crate::core::{ConditionsRecord, GuardPolicyConfig, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
@@ -27,7 +28,9 @@ use crate::pipeline::guard_denials::collect_guard_denials;
 use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
 use crate::sandbox::policy::classify_bash_with_policy;
-use crate::sandbox::{is_shell_tool, is_under, is_write_tool, lexically_absolute, path_arg};
+use crate::sandbox::{
+    is_shell_tool, is_under, is_under_any, is_write_tool, lexically_absolute, path_arg,
+};
 use crate::validation::{SchemaName, validate_against_schema};
 
 /// A read-only tool carrying a target path argument, in any harness's
@@ -90,12 +93,30 @@ pub fn detect_stray_writes_with_policy(
     invocation_cwd: &Path,
     guard_policy: &GuardPolicyConfig,
 ) -> RunFindings {
+    detect_stray_writes_in(
+        invocations,
+        std::slice::from_ref(&eval_root.to_string()),
+        invocation_cwd,
+        guard_policy,
+    )
+}
+
+/// Classify invocations against every root a task may write under: its eval
+/// root first, then any root the harness declares beside it (the plan file a
+/// plan-mode session writes). Mirrors the guard's `allowedRoots`, so the audit
+/// and the live guard draw the same boundary.
+pub fn detect_stray_writes_in(
+    invocations: &[ToolInvocation],
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+    guard_policy: &GuardPolicyConfig,
+) -> RunFindings {
     let mut findings = RunFindings::default();
 
     for inv in invocations {
         if is_write_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
-                && !is_under(p, eval_root, invocation_cwd)
+                && !is_under_any(p, allowed_roots, invocation_cwd)
             {
                 findings.violations.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -110,12 +131,9 @@ pub fn detect_stray_writes_with_policy(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
-            if let Some(classification) = classify_bash_with_policy(
-                command,
-                std::slice::from_ref(&eval_root.to_string()),
-                invocation_cwd,
-                guard_policy,
-            ) {
+            if let Some(classification) =
+                classify_bash_with_policy(command, allowed_roots, invocation_cwd, guard_policy)
+            {
                 findings.warnings.push(StrayFinding {
                     tool: inv.name.clone(),
                     path: None,
@@ -229,10 +247,25 @@ pub struct StrayWritesReport {
     pub notices: Vec<String>,
 }
 
-/// `dispatch.json` fields the report builder reads (task-environment boundary).
+/// `dispatch.json` fields the report builder reads: the task-environment
+/// boundaries, and the frozen descriptor's plan-file root when it declares one.
 #[derive(Debug, Deserialize)]
 struct DispatchEnvelope {
     tasks: Option<Vec<DispatchRef>>,
+    #[serde(default)]
+    harness_descriptor: Option<FrozenDescriptorRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FrozenDescriptorRef {
+    #[serde(default)]
+    plan_mode: Option<FrozenPlanModeRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FrozenPlanModeRef {
+    #[serde(default)]
+    plan_file: Option<PlanFileSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -249,6 +282,8 @@ struct DispatchRef {
 
 struct TaskBoundary {
     eval_root: String,
+    /// The eval root, then the declared plan-file root when there is one.
+    allowed_roots: Vec<String>,
     guard_policy: GuardPolicyConfig,
 }
 
@@ -341,9 +376,9 @@ pub fn detect_stray_writes_report(
                 // classification rather than guess. Live-source-read detection is
                 // independent of this boundary and still runs.
                 let findings = match boundary {
-                    Some(boundary) => detect_stray_writes_with_policy(
+                    Some(boundary) => detect_stray_writes_in(
                         &run.tool_invocations,
-                        &boundary.eval_root,
+                        &boundary.allowed_roots,
                         Path::new(&boundary.eval_root),
                         &boundary.guard_policy,
                     ),
@@ -415,16 +450,36 @@ pub fn detect_stray_writes_report(
 /// Map `"<eval_id>:<condition>[:r<k>]"` to the task boundary and frozen guard
 /// policy from `dispatch.json`. Empty when the file is absent or malformed.
 fn task_boundaries_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, TaskBoundary> {
+    task_boundaries_by_key_with_home(iteration_dir, std::env::home_dir().as_deref())
+}
+
+/// [`task_boundaries_by_key`] with the home directory the frozen descriptor's
+/// plan-file root (`~/…`) expands against. Without one the plan-file root is
+/// left out, and a plan-file write is reported like any other.
+fn task_boundaries_by_key_with_home(
+    iteration_dir: &Path,
+    home: Option<&Path>,
+) -> std::collections::HashMap<String, TaskBoundary> {
     let mut out = std::collections::HashMap::new();
     if let Ok(raw) = std::fs::read_to_string(iteration_dir.join("dispatch.json"))
         && let Ok(env) = serde_json::from_str::<DispatchEnvelope>(&raw)
     {
+        let plan_file_root = env
+            .harness_descriptor
+            .and_then(|descriptor| descriptor.plan_mode)
+            .and_then(|plan_mode| plan_mode.plan_file)
+            .zip(home)
+            .map(|(plan_file, home)| plan_file.expanded_root(home).to_string_lossy().into_owned());
         for t in env.tasks.unwrap_or_default() {
             if let Some(eval_root) = t.eval_root {
+                let allowed_roots = std::iter::once(eval_root.clone())
+                    .chain(plan_file_root.clone())
+                    .collect();
                 out.insert(
                     run_key(&t.eval_id, &t.condition, t.run_index),
                     TaskBoundary {
                         eval_root,
+                        allowed_roots,
                         guard_policy: t.guard_policy,
                     },
                 );
@@ -760,5 +815,73 @@ mod tests {
             repo(),
         );
         assert!(f.is_empty());
+    }
+
+    // --- declared plan-file root ---
+
+    /// A harness that writes its plan to a file outside the env (Claude Code's
+    /// `~/.claude/plans`) declares that root; writes there are the plan, not a
+    /// stray write.
+    #[test]
+    fn a_write_under_a_declared_plan_file_root_is_clean() {
+        let roots = [
+            ALLOWED_ROOT.to_string(),
+            "/Users/someone/.claude/plans".to_string(),
+        ];
+        let f = detect_stray_writes_in(
+            &[
+                inv(
+                    "Write",
+                    json!({"file_path": "/Users/someone/.claude/plans/fix.md"}),
+                    0,
+                ),
+                inv(
+                    "Write",
+                    json!({"file_path": "/Users/someone/.claude/other.md"}),
+                    1,
+                ),
+            ],
+            &roots,
+            repo(),
+            &GuardPolicyConfig::default(),
+        );
+        assert_eq!(f.violations.len(), 1, "{:?}", f.violations);
+        assert_eq!(
+            f.violations[0].path.as_deref(),
+            Some("/Users/someone/.claude/other.md")
+        );
+    }
+
+    #[test]
+    fn task_boundaries_carry_the_frozen_plan_file_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        std::fs::write(
+            tmp.path().join("dispatch.json"),
+            serde_json::to_string(&json!({
+                "harness_descriptor": {
+                    "label": "claude-code",
+                    "plan_mode": {
+                        "plan_args": " --permission-mode plan",
+                        "act_args": " --permission-mode bypassPermissions",
+                        "plan_file": { "root": "~/.claude/plans", "content_field": "content" }
+                    }
+                },
+                "tasks": [
+                    { "eval_id": "e1", "condition": "with_skill", "eval_root": ALLOWED_ROOT }
+                ]
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let home = Path::new("/Users/someone");
+        let boundaries = task_boundaries_by_key_with_home(tmp.path(), Some(home));
+        let boundary = boundaries.get("e1:with_skill").expect("task boundary");
+        assert_eq!(
+            boundary.allowed_roots,
+            vec![
+                ALLOWED_ROOT.to_string(),
+                "/Users/someone/.claude/plans".to_string()
+            ]
+        );
     }
 }

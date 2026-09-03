@@ -1,4 +1,4 @@
-//! Staging, plan-mode injection, `--stage-name`, and dispatch-prompt rendering.
+//! Staging, `--stage-name`, and dispatch-prompt rendering.
 
 use crate::helpers::*;
 use predicates::str::contains;
@@ -187,7 +187,31 @@ fn run_with_skill_path_defaults_to_single_skill_mode() {
 }
 
 #[test]
-fn plan_mode_injects_profile_and_records_flag() {
+fn dispatch_carries_no_run_level_plan_flag_and_no_system_reminder_block() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    // Plan mode is a per-eval declaration that starts the harness's native
+    // plan mode (`eval-magic docs conversations`); nothing about it is a
+    // run-level flag or a prompt injection any more.
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert!(dispatch.get("plan_mode").is_none());
+    for task in dispatch["tasks"].as_array().unwrap() {
+        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+        assert!(!prompt.contains("<system-reminder>"));
+        assert!(!prompt.contains("Plan mode is active"));
+    }
+}
+
+#[test]
+fn the_simulated_plan_mode_flag_is_gone() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -203,38 +227,8 @@ fn plan_mode_injects_profile_and_records_flag() {
             "--dry-run",
         ])
         .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], Value::Bool(true));
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        assert!(prompt.contains("<system-reminder>"));
-        assert!(prompt.contains("Plan mode is active"));
-        // The shared profile is harness-agnostic: no Claude-specific ExitPlanMode rail.
-        assert!(prompt.contains("for the user's approval"));
-        assert!(!prompt.contains("ExitPlanMode"));
-    }
-}
-
-#[test]
-fn without_plan_mode_records_false_and_omits_block() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
-        .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], Value::Bool(false));
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        assert!(!prompt.contains("<system-reminder>"));
-    }
+        .failure()
+        .stderr(contains("--plan-mode"));
 }
 
 #[test]

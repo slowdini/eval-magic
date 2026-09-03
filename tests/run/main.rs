@@ -34,6 +34,7 @@ mod lifecycle;
 mod multi_skill;
 mod opencode;
 mod opencode_permission_denials;
+mod plan_mode;
 mod runbook;
 mod shadow_runtime_id;
 mod skill_source;

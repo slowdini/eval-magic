@@ -13,6 +13,7 @@
 //! same checks.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -82,6 +83,9 @@ pub struct HarnessDescriptor {
     pub dispatch: DispatchSection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<ConversationSection>,
+    /// Native plan mode: the per-round arguments the `{mode_args}` slot takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_mode: Option<PlanModeSection>,
 }
 
 /// Run-option capabilities. The `Default` mirrors the baseline every harness
@@ -292,6 +296,43 @@ pub struct ConversationSection {
     /// per-turn reports; `last` selects the final cumulative report.
     #[serde(default, skip_serializing_if = "token_usage_aggregation_is_sum")]
     pub token_usage_aggregation: TokenUsageAggregation,
+}
+
+/// The harness's native plan mode, entered for the planning phase of a
+/// `plan_mode` eval. `plan_args` and `act_args` fill the `{mode_args}` slot in
+/// `dispatch.exec_template` and `conversation.resume_exec_template`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlanModeSection {
+    /// Arguments spliced at `{mode_args}` for every plan-phase round.
+    pub plan_args: String,
+    /// Arguments spliced at `{mode_args}` for every other dispatch: act-mode
+    /// rounds, judges, responder consultations, and `harness lint --probe`.
+    pub act_args: String,
+    /// The file the harness writes its plan to, when it writes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file: Option<PlanFileSection>,
+}
+
+/// The plan file a harness writes in plan mode. Writes under `root` are allowed
+/// by the write guard and the stray-write audit; a plan-phase round that wrote
+/// one has presented its plan, and that write's `content_field` is the plan
+/// artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PlanFileSection {
+    /// Directory the plan file lands in. A leading `~` means the home directory.
+    pub root: String,
+    /// The write tool's input field carrying the file contents.
+    pub content_field: String,
+}
+
+impl PlanFileSection {
+    /// [`Self::root`] with a leading `~` replaced by `home`.
+    pub fn expanded_root(&self, home: &Path) -> PathBuf {
+        match self.root.strip_prefix('~') {
+            Some(rest) => home.join(rest.trim_start_matches('/')),
+            None => PathBuf::from(&self.root),
+        }
+    }
 }
 
 fn token_usage_aggregation_is_sum(value: &TokenUsageAggregation) -> bool {
