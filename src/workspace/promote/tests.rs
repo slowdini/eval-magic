@@ -2,6 +2,8 @@ use super::*;
 use serde_json::Value;
 use tempfile::TempDir;
 
+mod guard_provenance;
+
 /// Write `body` to `path`, creating parent dirs.
 fn write(path: &Path, body: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();

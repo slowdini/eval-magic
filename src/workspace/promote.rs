@@ -420,6 +420,9 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         condition_names.join(", ")
     };
     let harness = label(&opts.harness);
+    let guard_armed = conditions
+        .and_then(|c| c.guard_armed)
+        .map_or_else(|| "unknown".to_string(), |armed| armed.to_string());
 
     // Provenance precedence: explicit promote-baseline flag → value recorded in
     // the iteration's conditions.json (set via `run`) → placeholder.
@@ -460,6 +463,7 @@ fn provenance(opts: &PromoteOptions, conditions: Option<&ConditionsRecord>, head
         format!("| Mode | {mode} |"),
         format!("| Iteration | iteration-{} |", opts.iteration),
         format!("| Harness | {harness} |"),
+        format!("| Guard armed | {guard_armed} |"),
         format!("| Agent model | {agent_model} |"),
         format!("| Judge model | {judge_model} |"),
         format!("| Responder model | {responder_model} |"),

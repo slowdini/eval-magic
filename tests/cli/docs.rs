@@ -180,13 +180,16 @@ fn docs_guard_keeps_configuration_defaults_and_boundary_contracts() {
         .stdout(contains("framework/nextjs"))
         .stdout(contains("replaces"))
         .stdout(contains("dispatch.json"))
+        .stdout(contains("guard_armed"))
+        .stdout(contains("unknown"))
         .stdout(contains("cannot override"));
 
     skill_eval()
         .args(["run", "--help"])
         .assert()
         .success()
-        .stdout(contains("eval-magic docs guard"));
+        .stdout(contains("eval-magic docs guard"))
+        .stdout(contains("guard_armed"));
 }
 
 /// Judge evidence is the primary grading input, so the shipped reference must

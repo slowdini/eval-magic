@@ -36,6 +36,7 @@ mod compare_args;
 mod help;
 mod init_args;
 mod run;
+mod run_args;
 
 use args::{Cli, Commands, CommonArgs, RunArgs};
 use commands::*;
