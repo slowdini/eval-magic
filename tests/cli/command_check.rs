@@ -84,11 +84,10 @@ fn finalize_folds_command_check_result_into_normal_pass_rate() {
     assert_eq!(grading["assertion_results"][0]["confidence"], json!(1.0));
 }
 
-/// #295 follow-on: cached command-check results are keyed by assertion id, so
-/// an edited check under an unchanged id is reported from the old command. The
-/// operator has to be told, and told how to re-execute it.
+/// An incomplete task carrying an old result may already have received held-out
+/// setup or executed a command, so grade must tell the operator not to resume it.
 #[test]
-fn an_edited_command_check_reports_the_result_it_reuses() {
+fn an_incomplete_task_with_a_cached_command_check_warns_not_to_resume() {
     let (_tmp, root) = canonical_root();
     let skill_dir = root.join("skill-dir");
     let skill_sub = skill_dir.join("mr-review");
@@ -173,6 +172,9 @@ fn an_edited_command_check_reports_the_result_it_reuses() {
         .args(["--skill", "mr-review", "--iteration", "1"])
         .assert()
         .success()
-        .stderr(predicates::str::contains("held-out-tests"))
-        .stderr(predicates::str::contains("--overwrite"));
+        .stdout(predicates::str::contains("1 skipped (missing run.json)"))
+        .stderr(predicates::str::contains("pos-eval/with_skill"))
+        .stderr(predicates::str::contains("may already be contaminated"))
+        .stderr(predicates::str::contains("must not be resumed"))
+        .stderr(predicates::str::contains("fresh iteration"));
 }

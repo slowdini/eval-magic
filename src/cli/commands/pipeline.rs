@@ -342,10 +342,10 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
         );
         let commands = pipeline::grade_command_checks(&dir, &instrument, common.overwrite)?;
-        if commands.executed + commands.reused > 0 {
+        if commands.executed + commands.reused + commands.skipped_incomplete > 0 {
             println!(
-                "Command checks: {} executed, {} reused, {} failed",
-                commands.executed, commands.reused, commands.failed
+                "Command checks: {} executed, {} reused, {} failed, {} skipped (missing run.json)",
+                commands.executed, commands.reused, commands.failed, commands.skipped_incomplete
             );
         }
         for w in &commands.warnings {

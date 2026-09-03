@@ -459,3 +459,4 @@ fn ingests_without_transcripts_while_guard_is_armed_and_aggregates() {
 }
 
 mod matrix;
+mod partial_dispatch;

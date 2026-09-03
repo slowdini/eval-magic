@@ -39,7 +39,11 @@
     },
     "definition_digest": {
       "type": "string",
-      "description": "Digest of the authored command_check this result came from. Reuse is keyed by assertion id, so this is what lets a later grade report that the check under that id has been edited since. Absent in results written before it was recorded, which make no claim either way."
+      "description": "Digest of the authored command_check this result came from. A result is reusable only when this and run_record_digest match the current check and run record. Absent in legacy results, which are rerun."
+    },
+    "run_record_digest": {
+      "type": "string",
+      "description": "Digest of the exact runner-owned run.json bytes this result graded. A result is reusable only when this and definition_digest match the current run record and check. Absent in legacy results, which are rerun."
     },
     "cells": {
       "type": "array",

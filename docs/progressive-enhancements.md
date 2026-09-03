@@ -121,8 +121,9 @@ that gap — it is what a judge reads to answer whether the work was any good.
 
 `command_check` is intentionally not a harness enhancement. `run` detects the assertion before
 dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
-copies the assertion's held-out `setup_files` from the skill's `evals/` directory into that root and
-executes the trusted command through the platform shell. Root `.git` paths are reserved for both
+grades only tasks with a runner-owned `run.json`, copies the assertion's held-out `setup_files` from
+the skill's `evals/` directory into that root, and executes the trusted command through the platform
+shell. Root `.git` paths are reserved for both
 visible overlays and held-out setup files, while nested repositories remain valid. The runner clears
 inherited Git routing variables before optional `env` values override the environment; optional
 `matrix` values execute every Cartesian-product cell and persist per-cell results. The files are
