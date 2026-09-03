@@ -6,6 +6,7 @@ use std::fs;
 use std::process::Command as StdCommand;
 
 mod assertions;
+mod guard_provenance;
 mod shadow;
 mod shadow_verification;
 

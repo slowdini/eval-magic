@@ -62,6 +62,10 @@
       "$ref": "#/definitions/skillSource",
       "description": "The skill under test, echoed from conditions.json. Absent for a benchmark written before skills were sourced."
     },
+    "guard_armed": {
+      "type": "boolean",
+      "description": "Whether the compared runs used the eval write guard, echoed from conditions.json. Absent when historical conditions do not record the effective state."
+    },
     "diff_scope": {
       "type": "object",
       "description": "Raw final-environment diff metrics per condition, ordered by eval id and then run index. Omitted for iterations created before diff-scope capture.",

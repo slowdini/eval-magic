@@ -512,6 +512,10 @@ pub struct ConditionsRecord {
     /// existed, which read as "nothing to compare against".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub harness_descriptor_digest: Option<String>,
+    /// Whether the run preflight resolved the write guard to armed. Absent in
+    /// historical records, where the effective state is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_armed: Option<bool>,
 }
 
 /// Comparison mode for a run.
@@ -921,6 +925,7 @@ mod tests {
             skill_source: None,
             harness_file: None,
             harness_descriptor_digest: None,
+            guard_armed: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));

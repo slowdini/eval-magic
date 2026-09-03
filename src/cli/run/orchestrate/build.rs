@@ -90,8 +90,12 @@ pub(super) fn write_dispatch(
         // was prepared with; the path makes the remedy copy-pasteable.
         harness_file: ctx.harness_file.as_deref().map(artifact_path),
         harness_descriptor_digest: Some(crate::adapters::registry::descriptor_digest(ctx.harness)),
+        guard_armed: Some(opts.guard_armed()),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
+    let guard_armed = conditions
+        .guard_armed
+        .expect("run-created conditions record guard state");
     // One record, cloned into every task: grading reads `run.json` alone, so a
     // result can only be tied to a skill revision if each record names one.
     let skill_source_record = r.skill.record();
@@ -305,7 +309,7 @@ pub(super) fn write_dispatch(
             &tasks,
             ManifestContext {
                 harness: ctx.harness,
-                guard: opts.guard_armed(),
+                guard: guard_armed,
                 agent_model: opts.agent_model,
                 agent_env: &opts.agent_env,
             },
@@ -359,7 +363,7 @@ pub(super) fn write_dispatch(
         let envelope = dispatch_json
             .as_object_mut()
             .expect("dispatch envelope is an object");
-        envelope.insert("guard".to_string(), Value::Bool(opts.guard_armed()));
+        envelope.insert("guard".to_string(), Value::Bool(guard_armed));
         envelope.insert("harness_descriptor".to_string(), descriptor.clone());
     }
     // The isolation-batch plan the executing session/human follows: which evals

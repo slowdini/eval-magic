@@ -31,6 +31,8 @@ fn codex_no_stage_keeps_inline_fallback() {
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
     assert_eq!(dispatch["harness"], "codex");
     assert_eq!(conditions["harness"], "codex");
+    assert_eq!(conditions["guard_armed"], false);
+    assert_eq!(dispatch["guard"], conditions["guard_armed"]);
     assert!(!cwd.join(".claude/skills").exists());
     assert!(!cwd.join(".agents/skills").exists());
 }

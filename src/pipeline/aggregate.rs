@@ -147,6 +147,10 @@ pub struct Benchmark {
     /// both sides without a reader holding two artifacts side by side.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skill_source: Option<SkillSource>,
+    /// Effective write-guard state echoed from `conditions.json`. Absence
+    /// means the iteration predates guard provenance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard_armed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_scope: Option<Value>,
     delta: Delta,
@@ -528,6 +532,7 @@ pub fn aggregate(
         baseline: conditions.baseline.clone(),
         codebases: conditions.codebases.clone(),
         skill_source: conditions.skill_source.clone(),
+        guard_armed: conditions.guard_armed,
         conditions_compared: vec![a.clone(), b.clone()],
         missing_gradings,
         validity_warnings,

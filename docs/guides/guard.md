@@ -139,6 +139,12 @@ Explicit commands and expanded profile commands are deduplicated in the effectiv
 
 ## Audit the effective policy
 
+The run preflight resolves harness support, staging, `--guard`, and `--no-guard` into one effective
+state. `run` records that state as `guard_armed` in `conditions.json`, mirrors it as `guard` in
+`dispatch.json`, and carries it into `benchmark.json`. The `BASELINE.md` file written by
+`promote-baseline` renders the value as `true` or `false`; a historical conditions file without the
+field renders as `unknown`, not `false`.
+
 Each task in `dispatch.json` records its fully expanded `guard_policy`. The armed marker records the
 same policy as `guardPolicy`, so the live hook and the campaign plan cannot resolve defaults
 differently. `detect-stray-writes` reads the frozen task policy from `dispatch.json` and applies the

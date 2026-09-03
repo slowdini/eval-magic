@@ -15,5 +15,6 @@
   "timestamp": "2026-07-14T04:29:09.075Z",
   "harness": "opencode",
   "run_nonce": "mrk5j619-276678",
-  "runs": 1
+  "runs": 1,
+  "guard_armed": true
 }

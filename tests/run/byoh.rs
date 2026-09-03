@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod extract;
+mod guard_provenance;
 
 /// A runner-ready BYOH descriptor using the named Codex transcript capability.
 const COOL_DESCRIPTOR: &str = r#"label = "cool-custom-harness"
@@ -244,37 +245,6 @@ fn guard_with_a_user_only_harness_is_rejected_in_preflight() {
     assert!(
         !iteration_dir(&cwd).join("dispatch.json").exists(),
         "the run must stop in preflight, before building anything"
-    );
-}
-
-/// Auto-arm never turns the user-only-descriptor restriction into an error:
-/// without an explicit `--guard`, the run proceeds unguarded with a warning
-/// naming the fallback.
-#[test]
-fn auto_guard_stays_off_without_error_on_user_only_harness() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "cool-custom-harness",
-        ])
-        .assert()
-        .success()
-        .stderr(contains("declares no write guard").and(contains("detect-stray-writes")));
-
-    assert!(
-        iteration_dir(&cwd).join("dispatch.json").exists(),
-        "the run builds; only explicit --guard is rejected"
     );
 }
 
