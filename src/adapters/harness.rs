@@ -28,6 +28,35 @@ use crate::sandbox::GuardMarker;
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
+/// The role a tool name plays in a harness's vocabulary. A descriptor's roles
+/// are validated disjoint (`descriptor::validation::check_tool_roles_disjoint`),
+/// so one native name maps to at most one role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRole {
+    Write,
+    Patch,
+    Shell,
+    Read,
+}
+
+impl ToolRole {
+    /// Every role, in `[tools]` key order — the order role lookup and any
+    /// message listing several roles walk them, so both read the same way
+    /// every run.
+    pub const ALL: [Self; 4] = [Self::Write, Self::Patch, Self::Shell, Self::Read];
+
+    /// The role's descriptor spelling — the `[tools]` key, and how grading
+    /// evidence names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::Patch => "patch",
+            Self::Shell => "shell",
+            Self::Read => "read",
+        }
+    }
+}
+
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
 /// union across all harnesses ([`all_tool_vocabulary`](super::registry::all_tool_vocabulary)).
@@ -41,6 +70,36 @@ pub struct ToolVocabulary {
     pub shell_tools: Vec<String>,
     /// Read-only tools carrying a target path argument.
     pub read_tools: Vec<String>,
+}
+
+/// A vocabulary declaring nothing: every name is roleless, so a consumer
+/// holding it classifies and aliases nothing. Borrowable for `'static`, unlike
+/// a `ToolVocabulary::default()` temporary.
+pub static EMPTY_TOOL_VOCABULARY: ToolVocabulary = ToolVocabulary {
+    write_tools: Vec::new(),
+    patch_tools: Vec::new(),
+    shell_tools: Vec::new(),
+    read_tools: Vec::new(),
+};
+
+impl ToolVocabulary {
+    /// The role this vocabulary declares for `name`, or `None` when it declares
+    /// none — an undeclared name is never given an invented role.
+    pub fn role_of(&self, name: &str) -> Option<ToolRole> {
+        ToolRole::ALL
+            .into_iter()
+            .find(|role| self.names_in(*role).iter().any(|tool| tool == name))
+    }
+
+    /// Every name this vocabulary declares in `role`, in declaration order.
+    pub fn names_in(&self, role: ToolRole) -> &[String] {
+        match role {
+            ToolRole::Write => &self.write_tools,
+            ToolRole::Patch => &self.patch_tools,
+            ToolRole::Shell => &self.shell_tools,
+            ToolRole::Read => &self.read_tools,
+        }
+    }
 }
 
 /// How per-turn token totals combine for a native resumed conversation.
@@ -793,5 +852,51 @@ mod tests {
             ),
             "slow-powers-eval-2-with-skill-my-skill"
         );
+    }
+
+    fn vocabulary() -> ToolVocabulary {
+        ToolVocabulary {
+            write_tools: vec!["Edit".into(), "Write".into(), "file_change".into()],
+            patch_tools: vec!["apply_patch".into()],
+            shell_tools: vec!["Bash".into(), "command_execution".into()],
+            read_tools: vec![],
+        }
+    }
+
+    #[test]
+    fn role_of_finds_the_role_declaring_each_name() {
+        let vocabulary = vocabulary();
+        assert_eq!(vocabulary.role_of("file_change"), Some(ToolRole::Write));
+        assert_eq!(vocabulary.role_of("apply_patch"), Some(ToolRole::Patch));
+        assert_eq!(
+            vocabulary.role_of("command_execution"),
+            Some(ToolRole::Shell)
+        );
+    }
+
+    #[test]
+    fn role_of_is_none_for_a_name_the_vocabulary_does_not_declare() {
+        // Codex declares no read tools, so a read-role name is unknown to it —
+        // and an undeclared name must not be given an invented role.
+        assert_eq!(vocabulary().role_of("Read"), None);
+        assert_eq!(vocabulary().role_of("WebFetch"), None);
+    }
+
+    #[test]
+    fn names_in_lists_every_name_declared_for_the_role() {
+        let vocabulary = vocabulary();
+        assert_eq!(
+            vocabulary.names_in(ToolRole::Shell),
+            ["Bash", "command_execution"]
+        );
+        assert!(vocabulary.names_in(ToolRole::Read).is_empty());
+    }
+
+    #[test]
+    fn tool_role_renders_its_descriptor_spelling() {
+        assert_eq!(ToolRole::Write.as_str(), "write");
+        assert_eq!(ToolRole::Patch.as_str(), "patch");
+        assert_eq!(ToolRole::Shell.as_str(), "shell");
+        assert_eq!(ToolRole::Read.as_str(), "read");
     }
 }

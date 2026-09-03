@@ -268,7 +268,7 @@
         },
         "pattern": {
           "type": "string",
-          "description": "Rust regex matched against a rendered tool invocation or assistant message."
+          "description": "Rust regex matched against a rendered tool invocation or assistant message. For tool_invocation_matches, a miss on the native tool name is retried against the portable spellings the harness descriptors declare for that tool's role (write/patch/shell/read), so one pattern grades the same on every harness; arguments are preserved and a tool in no declared role matches by its native name only. See `eval-magic docs judging`."
         },
         "must_precede": {
           "type": "string",

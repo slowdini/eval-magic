@@ -464,7 +464,8 @@ pub(crate) enum Commands {
     /// finished environment against the `eval-magic/baseline` ref it was marked
     /// with, writing always-on files/lines/hunks and the changed-file list to
     /// `diff-scope.json` and the diff itself to `diff.patch`, grades
-    /// `transcript_check` assertions, prepares
+    /// `transcript_check` assertions (tool patterns match native names plus the
+    /// portable spellings the descriptors declare for that tool's role), prepares
     /// `diff_scope` grading for finalize, injects held-out
     /// `command_check.setup_files`, and executes each
     /// runner-owned command check in its task environment, applying its
@@ -548,7 +549,10 @@ pub(crate) enum Commands {
     /// and evaluates `transcript_check` assertions directly: regex against
     /// tool invocations or, for scripted evals, assistant messages across rounds.
     /// Checks can require a match before the final completion claim or before the
-    /// first write/patch tool call. A `diff_scope` assertion gates the captured file count
+    /// first write/patch tool call. Tool patterns are harness-portable: a miss on
+    /// the native tool name is retried against the other spellings the harness
+    /// descriptors declare for that tool's role (write/patch/shell/read), and the
+    /// evidence names the alias that matched. See `eval-magic docs judging`. A `diff_scope` assertion gates the captured file count
     /// and/or added-plus-removed line count. Git supplies both, so the codebase's
     /// own `.gitignore` decides what counts and ignored build output stays out.
     /// Grade captures scope before it injects

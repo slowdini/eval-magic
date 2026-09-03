@@ -154,7 +154,10 @@ extract primitives, it's a code capability, not a bigger DSL.
 
 *What it unlocks:* `transcript_check` assertions, token/duration capture, automatic
 `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
-event — a deterministic `__skill_invoked` meta-check.
+event — a deterministic `__skill_invoked` meta-check. Paired with `[tools]`, tool patterns are
+portable: grading identifies a native tool name's role from the run's own descriptor and retries
+the pattern against every spelling `all_tool_vocabulary()` declares for that role, so one authored
+assertion measures the same behavior on every harness (#308).
 
 **Sub-capability: permission-denied tool results.** A refused tool call can be reported in the
 event stream or a paired harness capture while the overall dispatch still exits 0. On its own that

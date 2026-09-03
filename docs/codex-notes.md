@@ -110,7 +110,9 @@ are omitted from tool arguments so `run.json` records command output once, in `r
 tool invocations: `command_execution`, `file_change`, `web_search`, and MCP items.
 `thread.started.thread_id` is normalized as the resumable session id, and every completed
 `agent_message` is preserved in event order for conversation gating. `transcript_check` matches
-these parsed items. The JSONL exposes **no deterministic skill-tool
+these parsed items, and because the `[tools]` vocabulary declares `command_execution` and
+`file_change` beside their Claude-style spellings, a pattern authored against another harness's
+tool names grades here through role aliasing. The JSONL exposes **no deterministic skill-tool
 event**, so `transcript_surfaces_skill_invocation()` is false and the `__skill_invoked` meta-check
 uses the LLM-judge fallback.
 

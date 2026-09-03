@@ -80,6 +80,14 @@ The runner-ready descriptor has two requirements:
    transcript reader that normalizes a non-empty final response. Use `[transcript.extract]` for a
    flat JSONL stream or a named parser for a supported non-flat shape.
 
+The `[tools]` table is small but load-bearing beyond the descriptor. Grouping this harness's tool
+names under `write`, `patch`, `shell`, and `read` is what lets the stray-write audit classify its
+invocations, and what makes a frozen `transcript_check` tool pattern grade the same here as on
+every other harness: names sharing a role are portable spellings of one another, so
+`shell = ["cool_exec"]` is the whole opt-in. Spell only this harness's own names — cross-listing
+another harness's is neither needed nor wanted. A tool left out of every role matches by its
+native name alone. See `eval-magic docs judging`.
+
 Prove both requirements before a real eval:
 
 ```sh

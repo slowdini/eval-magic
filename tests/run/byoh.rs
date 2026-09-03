@@ -516,3 +516,101 @@ exec_template = "definitely-missing-cli <dispatch_prompt_path>"
         .assert()
         .stderr(contains("harness descriptor drift").not());
 }
+
+/// #308: a BYOH descriptor opts into portable tool patterns through its
+/// `[tools]` vocabulary alone. `zap_exec` is a name no other descriptor knows,
+/// yet declaring it in the `shell` role is enough for a frozen `Bash|Read`
+/// assertion — authored against a different harness — to grade here.
+#[test]
+fn a_user_descriptor_opts_into_portable_tool_patterns_through_tools_alone() {
+    let evals = r#"{ "skill_name": "mr-review", "evals": [ {
+        "id": "e1", "prompt": "review this MR", "expected_output": "a review",
+        "skill_should_trigger": false,
+        "assertions": [ { "id": "ran-a-command", "type": "transcript_check",
+                          "check": "tool_invocation_matches", "pattern": "Bash|Read" } ] } ] }"#;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    write_project_descriptor(
+        &cwd,
+        r#"label = "cool-custom-harness"
+
+[tools]
+write = ["file_change"]
+shell = ["zap_exec"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+parser = "codex-items"
+
+[dispatch]
+exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
+"#,
+    );
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+        ])
+        .assert()
+        .success();
+
+    for task in dispatch_tasks(&cwd) {
+        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
+        fs::write(
+            turn.join("cool-events.jsonl"),
+            concat!(
+                r#"{"type":"item.completed","item":{"id":"item_1","type":"zap_exec","command":"cargo test","aggregated_output":"ok","status":"completed"}}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Done."}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        write_completion(&cwd, &task);
+    }
+
+    for stage in ["ingest", "grade"] {
+        let mut cmd = skill_eval();
+        cmd.current_dir(&cwd)
+            .args([stage, "--skill-dir"])
+            .arg(&skill_dir)
+            .args([
+                "--skill",
+                "mr-review",
+                "--harness",
+                "cool-custom-harness",
+                "--iteration",
+                "1",
+            ]);
+        if stage == "grade" {
+            cmd.arg("--finalize");
+        }
+        cmd.assert().success();
+    }
+
+    for task in dispatch_tasks(&cwd) {
+        let run_record = resolve(&cwd, task["run_record_path"].as_str().unwrap());
+        let grading = read_json(&run_record.with_file_name("grading.json"));
+        let result = &grading["assertion_results"][0];
+        assert_eq!(result["id"], "ran-a-command", "{grading}");
+        assert_eq!(
+            result["passed"], true,
+            "the descriptor's shell role must carry the portable alias: {grading}"
+        );
+        let evidence = result["evidence"].as_str().unwrap();
+        assert!(
+            evidence.contains("via shell alias 'Bash'") && evidence.contains("zap_exec"),
+            "evidence names the alias and the native event: {evidence}"
+        );
+    }
+}

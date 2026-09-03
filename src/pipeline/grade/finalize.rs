@@ -11,7 +11,7 @@ use std::fs;
 
 use serde::Deserialize;
 
-use crate::adapters::adapter_for;
+use crate::adapters::{adapter_for, all_tool_vocabulary};
 use crate::core::fs::write_json;
 use crate::core::{
     Assertion, AssertionResult, BinaryGradingSummary, GradedAssertionResult, Grader, GradingResult,
@@ -27,7 +27,7 @@ use super::GradeContext;
 use super::command_check::CommandCheckResult;
 use super::diff_scope::grade_diff_scope;
 use super::judge_tasks::meta_response_stem;
-use super::transcript_check::grade_transcript_check_with_context;
+use super::transcript_check::{ToolNaming, grade_transcript_check_with_context};
 
 /// What finalize graded, for the CLI summary.
 #[derive(Debug, Default, Clone)]
@@ -80,11 +80,15 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
         .collect();
 
     let mut summary = FinalizeSummary::default();
+    // The run's own descriptor decides which role each native tool name plays;
+    // the registry-wide union supplies the portable spellings of that role, so
+    // one authored pattern grades the same on every harness (#308).
     let transcript_vocabulary = ctx
         .conditions
         .harness
         .map(|harness| adapter_for(harness).tool_vocabulary())
         .unwrap_or_default();
+    let naming = ToolNaming::new(&transcript_vocabulary, all_tool_vocabulary());
 
     for ev in &ctx.evals.evals {
         let assertions = ev.assertions.as_deref().unwrap_or(&[]);
@@ -127,7 +131,7 @@ pub fn finalize(ctx: &GradeContext) -> Result<FinalizeSummary, PipelineError> {
                                         tc,
                                         invocations,
                                         conversation,
-                                        &transcript_vocabulary,
+                                        &naming,
                                     )
                                     .into(),
                                 );
