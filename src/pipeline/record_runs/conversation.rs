@@ -60,6 +60,7 @@ pub(super) fn evidence_for_task(
             let ConversationEvent::UserMessage {
                 text,
                 origin,
+                mode,
                 ..
             } = event
             else {
@@ -70,6 +71,7 @@ pub(super) fn evidence_for_task(
                 round,
                 text: text.clone(),
                 origin: origin.clone(),
+                mode: *mode,
             });
         }
 

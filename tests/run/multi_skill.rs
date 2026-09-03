@@ -582,7 +582,10 @@ fn live_source_detection_checks_every_treatment_member() {
             "tool_invocations": [{
                 "name": "Read",
                 "args": {
-                    "file_path": wire_path(&skill_dir.join("supporting-skill/SKILL.md"))
+                    // Spelled as the runner resolves it: live-source detection
+                    // compares paths lexically, so an unresolved alias of the
+                    // same file would not match.
+                    "file_path": wire_path(&resolved(&skill_dir).join("supporting-skill/SKILL.md"))
                 },
                 "ordinal": 0
             }],

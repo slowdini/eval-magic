@@ -75,7 +75,6 @@ fn staged_task(harness: Harness) -> DispatchTaskOpts<'static> {
         eval_root: Some("/work/task"),
         cond_dir: "/work/cond",
         bootstrap_content: Some("Session guidelines: be concise."),
-        plan_mode_content: Some("PLAN STEP"),
         skill_name: "widget-skill",
         available_skills: fixed_skills(),
         harness,

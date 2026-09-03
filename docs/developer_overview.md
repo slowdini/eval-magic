@@ -58,7 +58,7 @@ preconditions, handoffs, and recovery commands.
   which ignore file a detected formatter or linter reads, so `run` can hide the framework's own
   staged files from a sourced codebase's tooling. Both families detect through
   `src/core/tree_profiles.rs`.
-- `profiles/` contains shared prompt profiles.
+- `profiles/` contains the `RUNBOOK.md` prose template, embedded in the binary.
 - `tests/cli/` covers CLI and packaging contracts; `tests/run/` covers campaign behavior across
   the run boundary. Focused unit tests normally live beside the implementation.
 - `docs/guides/` contains Markdown guides embedded in the binary. Other files under `docs/` are

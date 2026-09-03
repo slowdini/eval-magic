@@ -4,7 +4,7 @@ mod bounds;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +22,8 @@ pub const JUDGE_PROMPT_BYTE_LIMIT: usize = 131_072;
 
 const TASK_PROMPT_BYTE_LIMIT: usize = 8 * 1024;
 const FINAL_MESSAGE_BYTE_LIMIT: usize = 12 * 1024;
+/// The approved plan of a plan-mode run, read from the driver's `plan.md`.
+const PLAN_BYTE_LIMIT: usize = 8 * 1024;
 const CHANGED_FILES_BYTE_LIMIT: usize = 8 * 1024;
 const CONVERSATION_BYTE_LIMIT: usize = 16 * 1024;
 const CONVERSATION_EVENT_BYTE_LIMIT: usize = 4 * 1024;
@@ -170,6 +172,7 @@ pub fn build_evidence_bundle(
         &artifact_path(run_record_path),
     );
     let diff = render_diff(captured_diff.as_ref(), &diff_scope_path, &patch_path)?;
+    let plan = render_plan(run_record, outputs_dir);
     let conversation = render_conversation(run_record, run_record_path);
     let tools = render_tools(&run_record.tool_invocations, run_record_path);
 
@@ -182,6 +185,16 @@ pub fn build_evidence_bundle(
         "## `final_message`".to_string(),
         String::new(),
         final_message.content.clone(),
+    ]);
+    if let Some(plan) = &plan {
+        sections.extend([
+            String::new(),
+            "## Plan".to_string(),
+            String::new(),
+            plan.content.clone(),
+        ]);
+    }
+    sections.extend([
         String::new(),
         diff.summary.content.clone(),
         String::new(),
@@ -205,6 +218,7 @@ pub fn build_evidence_bundle(
     );
     let truncated = prompt.truncated
         || final_message.truncated
+        || plan.as_ref().is_some_and(|plan| plan.truncated)
         || diff.summary.truncated
         || diff.source_truncated
         || patch.truncated
@@ -337,6 +351,43 @@ fn render_diff(
         },
         patch,
         source_truncated: diff.patch.as_ref().is_some_and(|patch| patch.truncated),
+    })
+}
+
+/// The approved plan of a plan-mode run: how it was presented and approved,
+/// then the plan text the driver saved as `plan.md` beside the round outputs.
+/// `None` for a run that never approved a plan.
+fn render_plan(run_record: &RunRecord, outputs_dir: &Path) -> Option<Rendered> {
+    let plan = run_record.conversation.as_ref()?.plan.as_ref()?;
+    // The driver saved the plan inside the task environment's outputs and
+    // recorded where; that is not the directory the judge stage resolves for
+    // raw harness outputs, so the record's own path locates the file.
+    let plan_path = plan
+        .artifact_path
+        .as_deref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| outputs_dir.join("plan.md"));
+    let text = fs::read_to_string(&plan_path).unwrap_or_else(|_| {
+        format!(
+            "[eval-magic] plan artifact unavailable at {}",
+            artifact_path(&plan_path)
+        )
+    });
+    let body = bounded_fenced(
+        "markdown",
+        &text,
+        PLAN_BYTE_LIMIT,
+        &artifact_path(&plan_path),
+    );
+    Some(Rendered {
+        content: format!(
+            "Presented in round {}; approved in round {} (signal: `{}`).\n\n{}",
+            plan.presented_in_round,
+            plan.approved_in_round,
+            serialized_label(&plan.signal),
+            body.content
+        ),
+        truncated: body.truncated,
     })
 }
 
@@ -607,6 +658,118 @@ mod tests {
         }
     }
 
+    /// A plan-mode run's judge sees the approved plan as its own section, read
+    /// from the artifact the driver saved beside the round outputs.
+    #[test]
+    fn a_plan_mode_run_renders_its_plan_section() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let run_dir = temp.path().join("eval-add-cache/with_skill");
+        let outputs_dir = run_dir.join("outputs");
+        fs::create_dir_all(outputs_dir.join("turn-1")).unwrap();
+        fs::write(
+            outputs_dir.join("plan.md"),
+            "1. Add an LRU\n2. Cover eviction\n",
+        )
+        .unwrap();
+        let mut record = serde_json::to_value(realistic_record()).unwrap();
+        record["conversation"]["events"][0]["mode"] = json!("plan");
+        record["conversation"]["events"][3]["mode"] = json!("act");
+        record["conversation"]["events"][3]["origin"] = json!({"runner": "plan_approval"});
+        record["conversation"]["plan"] = json!({
+            "presented_in_round": 1,
+            "approved_in_round": 2,
+            "signal": "plan_file",
+            "artifact_path": outputs_dir.join("plan.md").to_string_lossy()
+        });
+        let record: RunRecord = serde_json::from_value(record).unwrap();
+
+        let bundle = build_evidence_bundle(
+            &record,
+            &run_dir.join("run.json"),
+            &outputs_dir,
+            &run_dir.join("judge-evidence.md"),
+        )
+        .unwrap();
+
+        for expected in [
+            "## Plan",
+            "Presented in round 1",
+            "approved in round 2",
+            "plan_file",
+            "1. Add an LRU",
+            "2. Cover eviction",
+        ] {
+            assert!(bundle.content.contains(expected), "missing {expected:?}");
+        }
+        let plan_at = bundle.content.find("## Plan").unwrap();
+        let transcript_at = bundle.content.find("## Conversation transcript").unwrap();
+        assert!(
+            plan_at < transcript_at,
+            "the plan precedes the transcript it came from"
+        );
+    }
+
+    /// The plan artifact lives where the driver wrote it — inside the task
+    /// environment's outputs — which is not the directory the judge stage
+    /// resolves for raw harness outputs. The record's own path is what locates
+    /// it.
+    #[test]
+    fn the_plan_is_read_from_the_path_the_record_names() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let run_dir = temp.path().join("eval-add-cache/with_skill");
+        let outputs_dir = run_dir.join("outputs");
+        fs::create_dir_all(&outputs_dir).unwrap();
+        let elsewhere = temp.path().join("env-g1-with_skill/.eval-magic-outputs");
+        fs::create_dir_all(&elsewhere).unwrap();
+        fs::write(elsewhere.join("plan.md"), "1. Add an LRU\n").unwrap();
+
+        let mut record = serde_json::to_value(realistic_record()).unwrap();
+        record["conversation"]["plan"] = json!({
+            "presented_in_round": 1,
+            "approved_in_round": 2,
+            "signal": "plan_file",
+            "artifact_path": elsewhere.join("plan.md").to_string_lossy()
+        });
+        let record: RunRecord = serde_json::from_value(record).unwrap();
+
+        let bundle = build_evidence_bundle(
+            &record,
+            &run_dir.join("run.json"),
+            &outputs_dir,
+            &run_dir.join("judge-evidence.md"),
+        )
+        .unwrap();
+
+        assert!(
+            bundle.content.contains("1. Add an LRU"),
+            "{}",
+            bundle.content
+        );
+        assert!(
+            !bundle.content.contains("plan artifact unavailable"),
+            "{}",
+            bundle.content
+        );
+    }
+
+    #[test]
+    fn a_run_without_a_plan_omits_the_section() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let run_dir = temp.path().join("eval-add-cache/with_skill");
+        let outputs_dir = run_dir.join("outputs");
+        fs::create_dir_all(outputs_dir.join("turn-1")).unwrap();
+
+        let bundle = build_evidence_bundle(
+            &realistic_record(),
+            &run_dir.join("run.json"),
+            &outputs_dir,
+            &run_dir.join("judge-evidence.md"),
+        )
+        .unwrap();
+
+        assert!(!bundle.content.contains("## Plan"), "{}", bundle.content);
+    }
+
     #[test]
     fn oversized_bundle_is_bounded_marked_utf8_safe_and_keeps_each_sections_tail() {
         let temp = tempfile::TempDir::new().unwrap();
@@ -652,6 +815,7 @@ mod tests {
                     "conversation é\n".repeat(4_000)
                 ),
                 origin: None,
+                mode: None,
             },
             ConversationEvent::AssistantMessage {
                 ordinal: 1,

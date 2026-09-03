@@ -41,6 +41,9 @@ pub(super) struct Consultation<'a> {
     pub(super) task_prompt: &'a str,
     pub(super) prior_replies: &'a [String],
     pub(super) final_message: &'a str,
+    /// Whether the agent is still in the harness's plan mode. `done` then
+    /// approves the plan instead of ending the task, and the prompt says so.
+    pub(super) planning: bool,
 }
 
 /// What the responder decided. `Answer` carries a reply that has already passed
@@ -171,6 +174,37 @@ fn build_prompt(consultation: &Consultation<'_>, verdict_path: &Path) -> String 
         format!("# What you have said since\n\n{}\n\n", replies.join("\n"))
     };
 
+    // What `done` means depends on the phase: while the agent is planning it
+    // approves the plan, afterwards it ends the task.
+    let phase_note = if consultation.planning {
+        "- The agent is in a planning phase: it may only read and plan, and must present a plan\n  \
+         for your approval before it implements anything."
+    } else {
+        ""
+    };
+    let done_rule = if consultation.planning {
+        "- If the agent has presented its plan and is waiting on your go-ahead, answer `done`:\n  \
+         that approves the plan and lets it start implementing."
+    } else {
+        "- If the agent is reporting the task finished and is not waiting on you, the conversation\n  \
+         is over: answer `done`."
+    };
+    let how_to_decide = [
+        phase_note,
+        "- If the agent asked you something you can answer, answer it. Prefer whatever it marked\n  \
+         as recommended; failing that, the simplest option and the least work.",
+        "- Never add requirements, never introduce facts you have not already stated, and never do\n  \
+         the agent's work for it. No code, no file contents.",
+        "- Keep it to a couple of sentences, as a person typing a reply would.",
+        done_rule,
+        "- If you genuinely cannot answer without inventing something, answer `cannot_answer`\n  \
+         rather than guessing.",
+    ]
+    .into_iter()
+    .filter(|line| !line.is_empty())
+    .collect::<Vec<_>>()
+    .join("\n");
+
     [
         "You are the person who asked for this work. An AI coding agent is doing the task and has",
         "stopped to say something. Decide what you say next.",
@@ -187,15 +221,7 @@ fn build_prompt(consultation: &Consultation<'_>, verdict_path: &Path) -> String 
         "",
         "# How to decide",
         "",
-        "- If the agent asked you something you can answer, answer it. Prefer whatever it marked",
-        "  as recommended; failing that, the simplest option and the least work.",
-        "- Never add requirements, never introduce facts you have not already stated, and never do",
-        "  the agent's work for it. No code, no file contents.",
-        "- Keep it to a couple of sentences, as a person typing a reply would.",
-        "- If the agent is reporting the task finished and is not waiting on you, the conversation",
-        "  is over: answer `done`.",
-        "- If you genuinely cannot answer without inventing something, answer `cannot_answer`",
-        "  rather than guessing.",
+        &how_to_decide,
         "",
         "# Task",
         "",
@@ -280,7 +306,55 @@ mod tests {
             task_prompt: "Requests to the pricing API are slow. Add caching.",
             prior_replies: &[],
             final_message: "Which cache should I use?",
+            planning: false,
         }
+    }
+
+    /// The act-phase rules are what every responder eval has always been shown,
+    /// so they are pinned verbatim: the planning variant must not drift them.
+    #[test]
+    fn the_act_phase_decision_rules_render_verbatim() {
+        let prompt = build_prompt(&consultation(), Path::new("/w/v.json"));
+        let expected = "\
+# How to decide
+
+- If the agent asked you something you can answer, answer it. Prefer whatever it marked
+  as recommended; failing that, the simplest option and the least work.
+- Never add requirements, never introduce facts you have not already stated, and never do
+  the agent's work for it. No code, no file contents.
+- Keep it to a couple of sentences, as a person typing a reply would.
+- If the agent is reporting the task finished and is not waiting on you, the conversation
+  is over: answer `done`.
+- If you genuinely cannot answer without inventing something, answer `cannot_answer`
+  rather than guessing.
+
+# Task
+";
+        assert!(prompt.contains(expected), "{prompt}");
+    }
+
+    /// In the planning phase `done` approves the plan rather than ending the
+    /// task, and the responder is told so — otherwise a presented plan reads
+    /// like a question and gets a reply instead of a go-ahead.
+    #[test]
+    fn a_planning_consultation_tells_the_responder_what_done_means() {
+        let planning = Consultation {
+            planning: true,
+            final_message: "Here is my plan: 1. add an LRU. 2. test it.",
+            ..consultation()
+        };
+        let prompt = build_prompt(&planning, Path::new("/w/v.json"));
+        assert!(prompt.contains("plan"), "{prompt}");
+        assert!(prompt.contains("approve"), "{prompt}");
+        assert!(prompt.contains("`done`"), "{prompt}");
+        assert!(
+            !prompt.contains("reporting the task finished"),
+            "the act-phase meaning of done is not offered while planning: {prompt}"
+        );
+
+        let acting = build_prompt(&consultation(), Path::new("/w/v.json"));
+        assert!(acting.contains("reporting the task finished"), "{acting}");
+        assert!(!acting.contains("approve"), "{acting}");
     }
 
     #[test]

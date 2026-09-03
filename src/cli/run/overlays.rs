@@ -147,6 +147,7 @@ mod tests {
             codebase: None,
             responder: None,
             guard: None,
+            plan_mode: false,
         }
     }
 

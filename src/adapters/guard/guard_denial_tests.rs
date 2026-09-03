@@ -37,6 +37,7 @@ fn install(label: &str, stage_root: &Path) -> PathBuf {
         Path::new("/g/eval-magic"),
         None,
         &Default::default(),
+        &[],
     )
     .unwrap()
 }

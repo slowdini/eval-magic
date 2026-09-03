@@ -516,3 +516,90 @@ fn opencode_permission_denials_accumulate_across_every_scripted_round() {
     assert_eq!(report["total_denials"], 2);
     assert_eq!(report["tasks"][0]["denial_count"], 2);
 }
+
+/// A claude events fixture whose refused call is a write, the way plan mode
+/// refuses one: `Cannot write to <path> while in plan mode.`
+fn write_claude_events_with_write_denial(outputs_dir: &Path, reason: &str) {
+    let lines = vec![
+        json!({"type": "assistant", "message": {"id": "msg_1", "role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": "Edit", "input": {"file_path": "/env/pricing.py", "old_string": "a", "new_string": "b"}}]}}),
+        json!({"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": reason, "is_error": true}]}}),
+        json!({"type": "result", "subtype": "success", "is_error": false, "result": "Here is the plan.", "duration_ms": 30_000, "usage": {"input_tokens": 100, "output_tokens": 20, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 5},
+            "permission_denials": [{"tool_name": "Edit", "tool_use_id": "toolu_1", "tool_input": {"file_path": "/env/pricing.py", "old_string": "a", "new_string": "b"}}]}),
+    ];
+    write_transcript_file(outputs_dir, "claude-events.jsonl", jsonl(&lines));
+}
+
+/// An agent that tries to edit while planning is refused by the mode itself, so
+/// the refusal is recorded but not counted against the run. The same refusal in
+/// the act round is the report's own, and warned about.
+#[test]
+fn a_write_refused_in_a_planning_round_is_attributed_to_plan_mode() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "plan-first",
+            condition: "with_skill",
+        }],
+    );
+    let conversation_path = iter
+        .join("eval-plan-first")
+        .join("with_skill")
+        .join("conversation.json");
+    fs::write(
+        &conversation_path,
+        serde_json::to_string_pretty(&json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix total().", "mode": "plan"},
+                {"type": "user_message", "ordinal": 1, "round": 2,
+                 "text": "The plan is approved. Implement it now.",
+                 "origin": {"runner": "plan_approval"}, "mode": "act"}
+            ],
+            "plan": {"presented_in_round": 1, "approved_in_round": 2, "signal": "plan_file"}
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    for round in [1, 2] {
+        let round_dir = paths[0].outputs_dir.join(format!("turn-{round}"));
+        fs::create_dir_all(&round_dir).unwrap();
+        write_claude_events_with_write_denial(
+            &round_dir,
+            "Cannot write to /env/pricing.py while in plan mode.",
+        );
+    }
+    let dispatch_path = iter.join("dispatch.json");
+    let mut dispatch: Value =
+        serde_json::from_str(&fs::read_to_string(&dispatch_path).unwrap()).unwrap();
+    dispatch["tasks"][0]["conversation_path"] =
+        json!(conversation_path.to_string_lossy().to_string());
+    dispatch["tasks"][0]["plan_mode"] = json!(true);
+    fs::write(
+        &dispatch_path,
+        serde_json::to_string_pretty(&dispatch).unwrap(),
+    )
+    .unwrap();
+
+    let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
+    assert_eq!(result.recorded, 1);
+    // Two refusals recorded, one of them the mode working as designed, so only
+    // the act-round refusal is counted and warned about.
+    assert_eq!(result.permission_denials, 1);
+    assert_eq!(result.permission_denial_tasks, 1);
+
+    let report = read_permission_denials(&iter);
+    assert_eq!(report["total_denials"], 2);
+    let task = &report["tasks"][0];
+    assert_eq!(task["denial_count"], 2);
+    assert_eq!(task["plan_mode_attributed_count"], 1);
+    let attributed: Vec<bool> = task["denials"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|denial| denial["plan_mode_attributed"].as_bool().unwrap_or(false))
+        .collect();
+    assert_eq!(attributed, vec![true, false]);
+}

@@ -421,7 +421,7 @@ fn harness_file_is_reemitted_in_every_generated_command() {
         .assert()
         .success();
 
-    let flag = format!("--harness-file {}", wire_path(&file));
+    let flag = format!("--harness-file {}", wire_path(&resolved(&file)));
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     assert!(
         stdout.contains(&flag),
@@ -444,7 +444,7 @@ fn harness_file_is_reemitted_in_every_generated_command() {
     // Prep-time provenance for the drift backstop: the descriptor the run was
     // prepared with is recorded next to the conditions it produced.
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
-    assert_eq!(conditions["harness_file"], wire_path(&file));
+    assert_eq!(conditions["harness_file"], wire_path(&resolved(&file)));
     let digest = conditions["harness_descriptor_digest"]
         .as_str()
         .expect("conditions record the resolved descriptor digest");
@@ -460,14 +460,16 @@ fn dispatch_and_ingest_warn_when_the_resolved_descriptor_drifted_from_prep() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     // Overlay the claude-code label, retuning dispatch onto a missing binary so
-    // nothing real is ever spawned; every other field merges from the built-in.
+    // nothing real is ever spawned; every other field merges from the built-in,
+    // including its [plan_mode] table, so the template keeps the {mode_args}
+    // slot that table fills.
     let file = tmp.path().join("iso.toml");
     fs::write(
         &file,
         r#"label = "claude-code"
 
 [dispatch]
-exec_template = "definitely-missing-cli <dispatch_prompt_path>"
+exec_template = "definitely-missing-cli{mode_args} <dispatch_prompt_path>"
 "#,
     )
     .unwrap();

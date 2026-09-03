@@ -152,6 +152,15 @@ impl DispatchSummary {
                      trusting this data point.",
                     report.description
                 )),
+                Ok(TaskOutcome::Stopped {
+                    reason: Some(ConversationStopReason::PlanNotPresented),
+                    ..
+                }) => Some(format!(
+                    "{} stopped in plan mode without presenting a plan, so the run never reached \
+                     implementation. Read the planning-phase transcript under its outputs before \
+                     trusting this data point.",
+                    report.description
+                )),
                 Ok(_) => None,
             })
             .collect()

@@ -225,6 +225,75 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// A plan-mode conversation: the opening prompt ran in plan mode, the
+    /// runner's fixed approval opened act mode, and the record names the plan.
+    fn plan_mode_conversation() -> Value {
+        json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan"},
+                {
+                    "type": "user_message",
+                    "ordinal": 1,
+                    "round": 2,
+                    "text": "The plan is approved. Implement it now.",
+                    "origin": {"runner": "plan_approval"},
+                    "mode": "act"
+                }
+            ],
+            "plan": {
+                "presented_in_round": 1,
+                "approved_in_round": 2,
+                "signal": "plan_file",
+                "artifact_path": "outputs/plan.md"
+            }
+        })
+    }
+
+    #[test]
+    fn a_plan_mode_conversation_validates_in_both_schemas() {
+        let conversation = plan_mode_conversation();
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(r.is_ok(), "{r:?}");
+
+        let mut record = valid_run_record();
+        record["conversation"] = conversation;
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::RunRecord, &record, "run.json");
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn a_plan_phase_that_ended_without_a_plan_validates() {
+        let conversation = json!({
+            "status": "stopped",
+            "delivered_followups": 0,
+            "stop_reason": "plan_not_presented",
+            "stopped_before_followup": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan"}
+            ]
+        });
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn a_turn_origin_names_exactly_one_author() {
+        let mut conversation = plan_mode_conversation();
+        conversation["events"][1]["origin"] =
+            json!({"runner": "plan_approval", "responder": "llm"});
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(
+            r.is_err(),
+            "an origin is derived or runner-authored, never both"
+        );
+    }
+
     #[test]
     fn accepts_skill_path_null_on_the_without_skill_arm() {
         let mut data = valid_run_record();

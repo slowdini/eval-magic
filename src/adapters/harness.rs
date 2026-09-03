@@ -22,9 +22,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, SessionMode, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
+use super::descriptor::PlanFileSection;
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
@@ -389,7 +390,8 @@ pub trait HarnessAdapter {
     /// native pre-tool hook surface, returning the staged marker path. The
     /// guard's allowed roots are derived from `stage_root` (the isolated env /
     /// agent cwd), so it bounds the agent to the same env boundary that
-    /// isolates its reads.
+    /// isolates its reads — plus the plan-file root a `[plan_mode.plan_file]`
+    /// declares, since that write is the harness presenting its plan.
     fn install_guard(
         &self,
         _stage_root: &Path,
@@ -479,20 +481,6 @@ pub trait HarnessAdapter {
         super::skill_shadow::shadow_validity_warnings(report)
     }
 
-    // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
-
-    /// **Enhancement: plan-mode context.** Wrap a plan-mode profile as an
-    /// operating-context layer. The shared `<system-reminder>` default
-    /// usually suffices; a harness with a real native plan mode could inject
-    /// it differently.
-    fn render_plan_mode_context(&self, profile_text: &str) -> String {
-        let trimmed = profile_text.trim();
-        if trimmed.is_empty() {
-            return String::new();
-        }
-        format!("<system-reminder>\n{trimmed}\n</system-reminder>")
-    }
-
     // ── Runner requirement: dispatch commands (defaulted) ────────────────────
     // There is no fallback: without an exec template the runner has nothing to
     // spawn, so `run` rejects that harness during preflight.
@@ -516,6 +504,34 @@ pub trait HarnessAdapter {
         None
     }
 
+    /// **Enhancement: native plan mode.** Whether the descriptor declares
+    /// `[plan_mode]`, so a `plan_mode` eval can start its session in the
+    /// harness's read-only planning mode and continue in act mode once the
+    /// plan is approved.
+    fn has_plan_mode(&self) -> bool {
+        false
+    }
+
+    /// The plan file the harness writes in plan mode, when it declares one.
+    fn plan_file(&self) -> Option<PlanFileSection> {
+        None
+    }
+
+    /// [`Self::cli_exec_command`] for one session mode. Act mode is the plain
+    /// command; plan mode is `None` for a harness without `[plan_mode]`.
+    fn cli_exec_command_in_mode(
+        &self,
+        mode: SessionMode,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        match mode {
+            SessionMode::Act => self.cli_exec_command(guard, agent_model, agent_env),
+            SessionMode::Plan => None,
+        }
+    }
+
     /// **Enhancement: native conversation resume.** Whether the harness can
     /// continue a captured native session for scripted follow-up turns.
     fn has_conversation_resume(&self) -> bool {
@@ -537,6 +553,21 @@ pub trait HarnessAdapter {
         _agent_env: &BTreeMap<String, String>,
     ) -> Option<String> {
         None
+    }
+
+    /// [`Self::cli_resume_command`] for one session mode. Act mode is the
+    /// plain command; plan mode is `None` for a harness without `[plan_mode]`.
+    fn cli_resume_command_in_mode(
+        &self,
+        mode: SessionMode,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        match mode {
+            SessionMode::Act => self.cli_resume_command(guard, agent_model, agent_env),
+            SessionMode::Plan => None,
+        }
     }
 
     /// **Enhancement: dispatch commands.** The `Next:` guidance printed after
@@ -798,19 +829,6 @@ mod tests {
                 adapter_for(harness).parse_session_surface(&path).unwrap(),
                 None,
                 "{harness:?} invented a surface from a roster-less transcript"
-            );
-        }
-    }
-
-    #[test]
-    fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
-        for h in Harness::known() {
-            let out = adapter_for(h).render_plan_mode_context("BODY");
-            assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
-            assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
-            assert_eq!(
-                adapter_for(h).render_plan_mode_context("\n\n  BODY  \n\n"),
-                "<system-reminder>\nBODY\n</system-reminder>"
             );
         }
     }

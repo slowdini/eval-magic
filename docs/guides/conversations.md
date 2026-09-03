@@ -20,7 +20,9 @@ Declaring neither leaves the eval one shot.
 Both need a harness that can resume its own session, so a follow-up reaches the
 agent that asked rather than a fresh one. `eval-magic run` rejects the eval up
 front when the selected harness cannot. `eval-magic harness list` names the
-`conversation-resume` capability for every harness that has it.
+`conversation-resume` capability for every harness that has it. An eval that
+begins in the harness's plan mode needs the `plan-mode` capability as well; see
+"Starting in plan mode" below.
 
 ## The responder
 
@@ -42,8 +44,9 @@ front when the selected harness cannot. `eval-magic harness list` names the
 
 Every turn the responder produces is recorded in the run's `conversation.json`
 with an `origin` naming the responder and, when it offered one, its one-line
-reason for answering that way. The eval's own opening prompt carries no
-`origin` — that absence is how you tell an authored turn from a derived one.
+reason for answering that way. A turn the eval authored — the opening prompt, a
+scripted turn — carries no `origin`; the one turn the runner itself authors, a
+plan-mode eval's approval, carries `origin.runner` instead.
 
 The full prompt and verdict of every consultation are kept on disk under the
 run's `responder/turn-<n>/`, so you can audit what the responder was shown and
@@ -107,6 +110,7 @@ dispatch call for different fixes.
 | `completed` | The responder judged the agent finished. The run stops rather than burning its remaining turns. |
 | `stopped`, `responder_cannot_answer` | The responder produced no usable reply. `responder_outcome.cause` says why. |
 | `stopped`, `max_turns_reached` | The agent was still asking at the bound. |
+| `stopped`, `plan_not_presented` | A plan-mode session ended its planning phase with no plan to approve. |
 | `timed_out` | The task outran `dispatch --timeout`. |
 
 A `stopped` conversation is recorded, not failed: `dispatch` exits zero and
@@ -158,3 +162,74 @@ a question mark, and `agent_response_matches` adds a regex the response must
 also match. A turn whose gate is unmet stops the conversation and is recorded as
 `agent_did_not_ask` or `agent_response_mismatch` — a real result about the
 agent, which is usually the point of scripting the exchange.
+
+## Starting in plan mode
+
+A real session often begins in the harness's plan mode: the agent reads and
+plans but cannot edit, presents a plan, and implements only once the person
+approves it. An eval declares that shape with `plan_mode`:
+
+```json
+{
+  "id": "add-request-caching",
+  "prompt": "Requests to the pricing API are slow. Can you add caching?",
+  "expected_output": "A working cache with the pricing endpoint under 100ms.",
+  "plan_mode": true,
+  "responder": { "type": "llm" }
+}
+```
+
+The session runs in two phases, in one native session:
+
+1. **Planning.** The opening prompt is dispatched in the harness's native plan
+   mode, so the agent explores read-only. If it asks a question, the responder
+   answers it and the session stays in plan mode.
+2. **Implementation.** Once the agent has presented its plan, the runner
+   approves it with one fixed message and resumes the same session in act
+   mode. The message is always `The plan is approved. Implement it now.` From
+   there the eval's `turns` or `responder` proceed exactly as they would
+   without plan mode.
+
+The approval is fixed rather than judged, so the transition is identical in
+every run and both arms: what varies between conditions is the plan and the
+implementation, never how the runner reacted to them.
+
+### How the runner knows the plan is ready
+
+Two signals, tried in this order:
+
+| Signal | When it applies |
+| --- | --- |
+| `plan_file` | The harness writes the plan it presents to a file, and its descriptor declares where (`[plan_mode.plan_file]`). A planning round that wrote one has presented its plan, and the file's content is the plan. Claude Code writes to `~/.claude/plans`. |
+| `responder` | The eval declares a `responder`, which is told the agent is planning. Its `done` verdict means the plan is ready, and the agent's last message is the plan. |
+
+A harness that writes no plan file needs the responder to decide, so `run`
+rejects a plan-mode eval there unless it declares one. With a plan file the
+responder is optional; if the agent never writes one and there is no responder
+to ask, the run stops with `plan_not_presented`.
+
+`eval-magic harness list` shows `plan-mode` for every harness that can start a
+session in plan mode. `run` rejects a plan-mode eval on one that cannot, before
+any environment is built.
+
+### What is recorded
+
+- `outputs/plan.md` holds the approved plan, and the judge evidence bundle
+  renders it in a section of its own.
+- Every user message in `conversation.json` carries `mode` (`plan` or `act`),
+  and the approval turn carries `origin.runner: plan_approval`.
+- `conversation.json`'s `plan` names the round the plan was presented in, the
+  round the approval opened, and which signal fired.
+- A responder's `max_turns` is one budget across both phases: planning-phase
+  answers count toward it.
+- A plan-mode run whose session never left the planning phase — whatever
+  stopped it — is counted per condition in `benchmark.json`'s
+  `validity_warnings`, because it never attempted the task.
+- An agent that tries to edit while planning is refused by the mode itself.
+  That refusal is recorded in `permission-denials.json` as behavioral evidence
+  and marked `plan_mode_attributed`, but it raises no validity warning: the
+  mode refusing a write is the mode working.
+
+Where the harness writes its plan file, the write guard and the stray-write
+audit allow that root beside the task environment. The plan file lands where
+the harness puts it in any session; `plan.md` is the copy the judge reads.

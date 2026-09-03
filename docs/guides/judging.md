@@ -105,7 +105,7 @@ evidence, after the dispatch they grade.
 
 So `grade` splits the file. `assertions` and `skill_should_trigger` come from the live
 `<skill>/evals/evals.json`, matched per eval id. Everything the run was defined by — `prompt`,
-`files`, `turns`, `codebase`, `guard`, `runs` — stays as the run captured it. An eval added after
+`files`, `turns`, `plan_mode`, `codebase`, `guard`, `runs` — stays as the run captured it. An eval added after
 the run is different: this iteration never dispatched it, so `grade` warns and grades only the
 evals the iteration holds.
 
@@ -144,6 +144,7 @@ what it changed:
 - an artifact manifest pointing to `run.json`, `diff-scope.json`, `diff.patch`, and raw harness
   outputs
 - the original task `prompt` and the agent's `final_message`
+- the approved plan, when the eval started in plan mode
 - changed-file metrics, a changed-file list, and the captured patch
 - the conversation transcript, including markers showing where tools were invoked
 - a tool invocation summary with bounded arguments and results

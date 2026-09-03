@@ -19,8 +19,18 @@ use crate::adapters::PermissionDenial;
 use crate::core::fs::write_json;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::now_iso8601;
-use crate::sandbox::GUARD_REASON_PREFIX;
+use crate::sandbox::{GUARD_REASON_PREFIX, is_patch_tool, is_write_tool};
 use crate::validation::{SchemaName, validate_against_schema};
+
+/// One refused tool call as captured from a task's transcripts, with the phase
+/// of the round it was refused in. The phase decides attribution: planning is
+/// read-only by definition, so a refused write there is the mode working.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CapturedDenial {
+    pub denial: PermissionDenial,
+    /// Whether the round this was refused in ran in the harness's plan mode.
+    pub plan_phase: bool,
+}
 
 /// One refused tool call, plus where the refusal came from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +40,11 @@ pub(crate) struct PermissionDenialRecord {
     /// True when the reason identifies this as an eval write-guard block, which
     /// `guard-denials.json` already reports in full.
     pub guard_attributed: bool,
+    /// True when a plan-mode round refused a write. Plan mode exists to refuse
+    /// exactly that, so the refusal is recorded as behavioral evidence without
+    /// being counted against the run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode_attributed: bool,
 }
 
 /// Every refused tool call associated with one dispatch task.
@@ -41,6 +56,9 @@ pub(crate) struct TaskPermissionDenials {
     pub run_index: Option<u32>,
     pub denial_count: usize,
     pub guard_attributed_count: usize,
+    /// How many of `denials` plan mode refused by design.
+    #[serde(default)]
+    pub plan_mode_attributed_count: usize,
     pub denials: Vec<PermissionDenialRecord>,
 }
 
@@ -59,18 +77,28 @@ impl TaskPermissionDenials {
         eval_id: String,
         condition: String,
         run_index: Option<u32>,
-        denials: Vec<PermissionDenial>,
+        denials: Vec<CapturedDenial>,
     ) -> Self {
         let denials: Vec<PermissionDenialRecord> = denials
             .into_iter()
-            .map(|denial| {
-                let guard_attributed = denial
+            .map(|captured| {
+                let guard_attributed = captured
+                    .denial
                     .reason
                     .as_deref()
                     .is_some_and(|reason| reason.starts_with(GUARD_REASON_PREFIX));
+                // Only the write side: plan mode denies a write by definition,
+                // while a refused shell command may equally be the guard or an
+                // operator deny rule, and hiding those would bury a real
+                // problem.
+                let plan_mode_attributed = captured.plan_phase
+                    && !guard_attributed
+                    && (is_write_tool(&captured.denial.tool)
+                        || is_patch_tool(&captured.denial.tool));
                 PermissionDenialRecord {
-                    denial,
+                    denial: captured.denial,
                     guard_attributed,
+                    plan_mode_attributed,
                 }
             })
             .collect();
@@ -78,20 +106,26 @@ impl TaskPermissionDenials {
             .iter()
             .filter(|record| record.guard_attributed)
             .count();
+        let plan_mode_attributed_count = denials
+            .iter()
+            .filter(|record| record.plan_mode_attributed)
+            .count();
         Self {
             eval_id,
             condition,
             run_index,
             denial_count: denials.len(),
             guard_attributed_count,
+            plan_mode_attributed_count,
             denials,
         }
     }
 
     /// Refusals this report owns: the harness's own, excluding what the write
-    /// guard blocked. Zero means the guard warning already covers this task.
+    /// guard blocked and what plan mode refused by design. Zero means another
+    /// warning already covers this task, or nothing about it needs one.
     pub(crate) fn harness_denial_count(&self) -> usize {
-        self.denial_count - self.guard_attributed_count
+        self.denial_count - self.guard_attributed_count - self.plan_mode_attributed_count
     }
 }
 
@@ -133,6 +167,9 @@ pub(crate) fn write_report(
 /// so warning here as well would double-count one denial and bury the refusals
 /// only this report can see. A task with nothing but guard blocks therefore emits
 /// nothing, and the guard-denial warning covers it with better detail.
+/// Plan-mode-attributed denials are skipped for a different reason: a planning
+/// round refusing a write is the mode working as designed, and warning about it
+/// would flag every plan-mode run as suspect.
 pub(super) fn collect_warnings(iteration_dir: &Path, warnings: &mut Vec<String>) {
     let Ok(raw) = fs::read_to_string(iteration_dir.join("permission-denials.json")) else {
         return;
@@ -173,6 +210,77 @@ mod tests {
         }
     }
 
+    fn captured(tool: &str, reason: &str, plan_phase: bool) -> CapturedDenial {
+        CapturedDenial {
+            denial: denial(tool, reason),
+            plan_phase,
+        }
+    }
+
+    /// Plan mode refuses an edit by design, so an edit refused while the agent
+    /// was planning is recorded as evidence but is not a threat to the run.
+    #[test]
+    fn a_write_refused_while_planning_is_attributed_to_plan_mode() {
+        let task = TaskPermissionDenials::new(
+            "plan-first".to_string(),
+            "with_skill".to_string(),
+            None,
+            vec![
+                captured(
+                    "Edit",
+                    "Cannot write to /env/pricing.py while in plan mode.",
+                    true,
+                ),
+                captured("Bash", "This command requires approval", true),
+            ],
+        );
+
+        assert_eq!(task.denial_count, 2, "every refusal is recorded");
+        assert_eq!(task.plan_mode_attributed_count, 1);
+        assert!(task.denials[0].plan_mode_attributed);
+        assert!(
+            !task.denials[1].plan_mode_attributed,
+            "a shell refusal is not inherent to planning: it may be the guard or a deny rule"
+        );
+        assert_eq!(
+            task.harness_denial_count(),
+            1,
+            "only the shell refusal is this report's to warn about"
+        );
+    }
+
+    #[test]
+    fn the_same_write_refused_in_act_mode_is_the_reports_own() {
+        let task = TaskPermissionDenials::new(
+            "plan-first".to_string(),
+            "with_skill".to_string(),
+            None,
+            vec![captured("Edit", "This edit requires approval", false)],
+        );
+
+        assert_eq!(task.plan_mode_attributed_count, 0);
+        assert_eq!(task.harness_denial_count(), 1);
+    }
+
+    /// The two attributions are independent: a guard block while planning is
+    /// still the guard's, so `guard-denials.json` keeps owning it.
+    #[test]
+    fn a_guard_block_while_planning_stays_guard_attributed() {
+        let task = TaskPermissionDenials::new(
+            "plan-first".to_string(),
+            "with_skill".to_string(),
+            None,
+            vec![captured(
+                "Write",
+                "eval guard: Write to /tmp/x is outside the eval sandbox",
+                true,
+            )],
+        );
+
+        assert!(task.denials[0].guard_attributed);
+        assert_eq!(task.harness_denial_count(), 0);
+    }
+
     #[test]
     fn guard_blocks_are_attributed_and_left_out_of_the_harness_denial_count() {
         let task = TaskPermissionDenials::new(
@@ -180,10 +288,11 @@ mod tests {
             "with_skill".to_string(),
             None,
             vec![
-                denial("Bash", "This command requires approval"),
-                denial(
+                captured("Bash", "This command requires approval", false),
+                captured(
                     "Write",
                     "eval guard: Write to /tmp/x is outside the eval sandbox",
+                    false,
                 ),
             ],
         );
@@ -204,10 +313,13 @@ mod tests {
             "tz-bug".to_string(),
             "with_skill".to_string(),
             Some(2),
-            vec![PermissionDenial {
-                tool: "Bash".to_string(),
-                reason: None,
-                input_keys: Vec::new(),
+            vec![CapturedDenial {
+                denial: PermissionDenial {
+                    tool: "Bash".to_string(),
+                    reason: None,
+                    input_keys: Vec::new(),
+                },
+                plan_phase: false,
             }],
         );
         assert_eq!(task.guard_attributed_count, 0);
@@ -237,10 +349,13 @@ mod tests {
             "tz-bug".to_string(),
             "with_skill".to_string(),
             None,
-            vec![PermissionDenial {
-                tool: "Write".to_string(),
-                reason: verdict.reason,
-                input_keys: vec!["file_path".to_string()],
+            vec![CapturedDenial {
+                denial: PermissionDenial {
+                    tool: "Write".to_string(),
+                    reason: verdict.reason,
+                    input_keys: vec!["file_path".to_string()],
+                },
+                plan_phase: false,
             }],
         );
         assert_eq!(task.guard_attributed_count, 1);
@@ -255,21 +370,25 @@ mod tests {
                 "b-eval".to_string(),
                 "with_skill".to_string(),
                 None,
-                vec![denial("Bash", "This command requires approval")],
+                vec![captured("Bash", "This command requires approval", false)],
             ),
             TaskPermissionDenials::new(
                 "a-eval".to_string(),
                 "without_skill".to_string(),
                 Some(2),
-                vec![denial("Bash", "This command requires approval")],
+                vec![captured("Bash", "This command requires approval", false)],
             ),
             TaskPermissionDenials::new(
                 "a-eval".to_string(),
                 "without_skill".to_string(),
                 Some(1),
                 vec![
-                    denial("Bash", "This command requires approval"),
-                    denial("Bash", "eval guard: blocked Bash (cd /) — runs outside"),
+                    captured("Bash", "This command requires approval", false),
+                    captured(
+                        "Bash",
+                        "eval guard: blocked Bash (cd /) — runs outside",
+                        false,
+                    ),
                 ],
             ),
         ];

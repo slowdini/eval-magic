@@ -31,13 +31,15 @@ hook-entry and `hookSpecificOutput` verdict templates) is rendered by the generi
   `result` event rather than a file.
 - `</dev/null` detaches stdin so a permission prompt can't block on a TTY and piped task data
   can't become extra prompt context.
-- Dispatches use **`--permission-mode bypassPermissions`**, not `acceptEdits`. See below.
+- Act-mode dispatches use **`--permission-mode bypassPermissions`**, not `acceptEdits`; the
+  planning phase of a `plan_mode` eval uses `--permission-mode plan`. See below.
 - Scripted follow-ups use `claude -p --resume <SESSION_ID>` from the same env; the initial
   `system.session_id` supplies the id. Verified against `claude --help` on 2026-07-24.
 
 ## Permission mode
 
-Every dispatch — eval agent and judge alike — carries `--permission-mode bypassPermissions`. The
+Every act-mode dispatch — eval agent and judge alike — carries `--permission-mode
+bypassPermissions` through the descriptor's `[plan_mode].act_args`. The
 obvious alternative, `acceptEdits`, is wrong here: it auto-approves *file edits* but **not Bash**,
 and because the command detaches stdin (`</dev/null`) there is nobody to approve, so anything not
 trivially safe is auto-denied. Measured on a real dispatch, `ls`/`grep`/`find` ran while
@@ -58,9 +60,38 @@ permissions". With `--no-guard` there is no enforcement boundary at all — that
 flag makes.
 
 `bypassPermissions` is refused in some environments (running as root, or when managed settings
-disable it). Override the mode for those hosts with a `--harness-file` descriptor that retunes the
-four `[dispatch]`/`[conversation]` templates; field-level merge means nothing else has to be
-restated.
+disable it). Override the mode for those hosts with a `--harness-file` descriptor that sets
+`[plan_mode].act_args` (and `plan_args`); the templates keep their `{mode_args}` slot, and
+field-level merge means nothing else has to be restated. An overlay that retunes a template itself
+must keep the slot, or validation rejects it.
+
+## Plan mode
+
+Verified against `claude` **2.1.259** on 2026-09-02, headless (`-p`, stdin detached), against a
+scratch repository with one bug:
+
+- `--permission-mode plan` starts the session read-only; the `system`/`init` event reports
+  `permissionMode: plan`.
+- **`ExitPlanMode` is disabled headless**, so it cannot be the signal. It is absent from the `init`
+  tool list, `ToolSearch` does not find it, and an agent that called it anyway got
+  `Error: No such tool available: ExitPlanMode. ExitPlanMode is disabled for this session, in
+  subagents as well as here.` `AskUserQuestion` is absent the same way, so questions arrive as
+  text — which is what the responder answers.
+- The agent presents its plan the way plan mode instructs it to: it writes the plan file (`Write`
+  to `~/.claude/plans/<slug>.md`, which plan mode permits) and closes the turn with the plan in its
+  final message. That write is the `[plan_mode.plan_file]` signal (`root = "~/.claude/plans"`,
+  `content_field = "content"`), and its `content` is the plan artifact.
+- An agent that tries to edit while planning is refused with `Cannot write to <path> while in plan
+  mode.`, and the refusal reaches the terminal `result` event's `permission_denials` like any
+  other. That is the mode working, so `record-runs` attributes a write refused in a planning round
+  to plan mode and leaves it out of the count `aggregate` warns on (see "Permission denials").
+- Resuming with `claude -p --resume <id> --permission-mode bypassPermissions` reports
+  `permissionMode: bypassPermissions` in `init`, keeps the same `session_id`, and edits succeed:
+  the session leaves plan mode. The Claude Code documentation states the converse — a `-p --resume`
+  stays in plan mode only when `--permission-prompt-tool` is passed and no `--permission-mode` is.
+- The plan file lands in the operator's `~/.claude/plans`, as in any session. The write guard and
+  the stray-write audit allow that root; eval-magic keeps the copy the judge reads as
+  `outputs/plan.md`.
 
 Relaxing the default closes the common case, not the class — a deny rule, a managed setting, or an
 operator-overridden mode still refuses calls — so refusals are detected and reported rather than

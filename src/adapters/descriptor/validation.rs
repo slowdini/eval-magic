@@ -13,6 +13,7 @@ use super::{
 };
 
 mod conversation;
+mod plan_mode;
 mod transcript;
 
 /// The placeholders a slug template must carry to keep cleanup prefix-scans
@@ -40,6 +41,7 @@ const CHECKS: &[Check] = &[
     transcript::check_skill_evidence,
     transcript::check_tiers,
     conversation::validate,
+    plan_mode::validate,
     check_tool_roles_disjoint,
     check_template_placeholder_backing,
     check_manifest_template_newline,

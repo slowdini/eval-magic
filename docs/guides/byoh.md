@@ -191,6 +191,13 @@ reads the agent's message out of the transcript and consults its own model throu
 template you already declared, so it works on any harness that can resume. See
 `eval-magic docs conversations`.
 
+A harness with a native read-only planning mode declares `[plan_mode]`: `plan_args` and
+`act_args` fill a `{mode_args}` slot in both dispatch templates, and `[plan_mode.plan_file]` names
+the file the harness writes its plan to, when it writes one. Verify each value the way you verify a
+resume: one headless turn dispatched with the planning arguments must refuse an edit, and the same
+session resumed with the act arguments must make it. `eval-magic harness show claude-code` is a
+worked descriptor; the eval side is in `eval-magic docs conversations`.
+
 When a shadow preflight reports a live copy, isolate every initial and resumed eval-agent dispatch
 before setting `isolates_live_sources = true`. The per-harness remedies and verification procedure
 are in `eval-magic docs isolation`.

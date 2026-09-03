@@ -5,7 +5,7 @@ use clap::Args;
 use super::args::CommonArgs;
 
 /// `run` adds the build-time flags (mode/baseline selection, staging toggles,
-/// guard, plan-mode, bootstrap) on top of the common set.
+/// guard, bootstrap) on top of the common set.
 #[derive(Debug, Args)]
 pub(crate) struct RunArgs {
     #[command(flatten)]
@@ -137,15 +137,6 @@ pub(crate) struct RunArgs {
     /// registers the staged name for next-run cleanup.
     #[arg(long)]
     pub stage_name: Option<String>,
-    /// Inject the shared plan-mode profile as an operating-context layer.
-    ///
-    /// Injects the shared, harness-agnostic plan-mode procedure
-    /// (`profiles/shared/plan-mode.md`) as a `<system-reminder>` in every
-    /// dispatch, identical across arms and harnesses. Opt-in, for
-    /// plan-mode-relevant skills. It is text the subagent reads, not a real
-    /// injected mode.
-    #[arg(long)]
-    pub plan_mode: bool,
     /// Runs per condition cell, for variance reduction (default: 1).
     ///
     /// Dispatches every eval N times per condition, so an iteration needs

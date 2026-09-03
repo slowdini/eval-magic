@@ -1,7 +1,7 @@
 //! OpenCode-harness behavior: `.opencode/skills` staging, slug sanitization,
-//! native `<available_skills>` dispatch rendering, plan-mode approximation, and
-//! the write guard's project-plugin install. Characterization tests pinning
-//! current behavior so the run-mode refactor stays behavior-preserving.
+//! native `<available_skills>` dispatch rendering, and the write guard's
+//! project-plugin install. Characterization tests pinning current behavior so
+//! the run-mode refactor stays behavior-preserving.
 
 use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
@@ -154,41 +154,6 @@ fn opencode_shadow_preflight_stops_at_the_task_git_repository() {
         "ancestor project skills must be hidden by the task repository boundary:\n{stderr}"
     );
     assert!(!iteration_dir(&cwd).join("plugin-shadow.json").exists());
-}
-
-#[test]
-fn opencode_plan_mode_injects_profile_and_records_flag() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "opencode",
-            "--plan-mode",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], true);
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        if task["condition"] == "with_skill" {
-            assert!(prompt.contains("<available_skills>"));
-        }
-        assert!(prompt.contains("<system-reminder>"));
-        // Shared, harness-agnostic profile: same text every harness sees.
-        assert!(prompt.contains("Plan mode is active"));
-        assert!(!prompt.contains("ExitPlanMode"));
-    }
 }
 
 #[test]

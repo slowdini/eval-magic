@@ -20,11 +20,11 @@ It runs `--jobs` tasks at a time, each in its own private environment, and write
 
 Harness dispatch (OpenCode):
 
-`eval-magic dispatch` runs one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/turn-<n>/opencode-events.jsonl` and stderr as `outputs/turn-<n>/opencode-stderr.log`.
+`eval-magic dispatch` runs one fresh `opencode run --format json --agent build --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/turn-<n>/opencode-events.jsonl` and stderr as `outputs/turn-<n>/opencode-stderr.log`.
 
 ```bash
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-opencode run --dir <eval-root> --format json --auto -m model-x \
+opencode run --dir <eval-root> --format json --agent build --auto -m model-x \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/opencode-events.jsonl \
@@ -62,10 +62,6 @@ Session guidelines: be concise.
     <description>Builds widgets the house way.</description>
   </skill>
 </available_skills>
-
-<system-reminder>
-PLAN STEP
-</system-reminder>
 
 You are executing a single test case for a skill evaluation framework.
 Treat this as a real user request — do NOT optimize behavior for the eval.

@@ -9,10 +9,6 @@ The following skills are available for use with the Skill tool:
 - aux-helper: Assists with auxiliary chores.
 - widget-skill: Builds widgets the house way.
 
-<system-reminder>
-PLAN STEP
-</system-reminder>
-
 You are executing a single test case for a skill evaluation framework.
 Treat this as a real user request — do NOT optimize behavior for the eval.
 

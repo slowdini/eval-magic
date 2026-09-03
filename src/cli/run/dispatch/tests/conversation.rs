@@ -54,3 +54,23 @@ fn manifest_names_one_dispatch_command_for_scripted_and_one_shot_alike() {
         assert!(rendered.contains("conversation.json"), "{rendered}");
     }
 }
+
+/// The eval's `plan_mode` reaches every task of that eval, and only those, so
+/// a task outside plan mode serializes exactly as it did before the field
+/// existed.
+#[test]
+fn a_plan_mode_task_carries_the_flag_and_a_plain_task_omits_it() {
+    let plan = build_dispatch_task(&DispatchTaskOpts {
+        plan_mode: true,
+        ..base_opts()
+    })
+    .unwrap();
+    let plain = build_dispatch_task(&base_opts()).unwrap();
+    assert!(plan.plan_mode);
+    assert!(!plain.plan_mode);
+
+    let plan_json = serde_json::to_value(&plan).unwrap();
+    assert_eq!(plan_json["plan_mode"], serde_json::Value::Bool(true));
+    let plain_json = serde_json::to_value(&plain).unwrap();
+    assert!(plain_json.get("plan_mode").is_none(), "{plain_json}");
+}

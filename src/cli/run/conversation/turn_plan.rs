@@ -74,15 +74,20 @@ impl<'a> TurnPlan<'a> {
         }
     }
 
-    /// Decide what follows a round.
+    /// Decide what follows an act-mode round.
     ///
+    /// `act_delivered` counts the follow-ups delivered in act mode, which is
+    /// what indexes a script; a plan-mode session's approval turn is not one of
+    /// them. `followup` is the 1-based index of the follow-up being decided,
+    /// which names the responder's consultation directory.
     /// `preceding_assistant` is every assistant message of the round joined,
     /// which is what a scripted gate has always been evaluated against.
     /// `final_message` is just the round's last message — the one a user would
     /// actually be answering — and is what the responder reads.
     pub(super) fn next_turn(
         &self,
-        delivered: u32,
+        act_delivered: u32,
+        followup: u32,
         preceding_assistant: &str,
         consultation: &Consultation<'_>,
         runtime: Option<&ResponderRuntime<'_>>,
@@ -91,7 +96,7 @@ impl<'a> TurnPlan<'a> {
         match self {
             Self::OneShot => Ok(NextTurn::Done { responder: None }),
             Self::Scripted(turns) => {
-                let Some(turn) = turns.get(delivered as usize) else {
+                let Some(turn) = turns.get(act_delivered as usize) else {
                     return Ok(NextTurn::Done { responder: None });
                 };
                 if let Some(reason) = unmet_gate(turn, preceding_assistant)? {
@@ -108,9 +113,14 @@ impl<'a> TurnPlan<'a> {
             Self::Responder(policy) => {
                 let runtime = runtime
                     .expect("a responder plan resolved its runtime alongside the plan itself");
-                let verdict =
-                    runtime.consult(delivered.saturating_add(1), consultation, previous_reply);
-                Ok(next_from_verdict(policy, delivered, verdict))
+                let verdict = runtime.consult(followup, consultation, previous_reply);
+                // The bound counts every reply the responder has synthesized,
+                // in the planning phase as much as afterwards.
+                Ok(next_from_verdict(
+                    policy,
+                    consultation.prior_replies.len() as u32,
+                    verdict,
+                ))
             }
         }
     }
@@ -121,9 +131,9 @@ impl<'a> TurnPlan<'a> {
 /// Classification comes first deliberately: an agent that has stopped asking
 /// has finished the task, and finishing on the last permitted turn is a
 /// completion, not a run that ran out of budget.
-fn next_from_verdict(
+pub(super) fn next_from_verdict(
     policy: &ResponderPolicy,
-    delivered: u32,
+    synthesized: u32,
     verdict: Result<Verdict, ResponderStopCause>,
 ) -> NextTurn {
     let verdict = match verdict {
@@ -142,7 +152,7 @@ fn next_from_verdict(
             cannot_answer(ResponderStopCause::Declined, rationale)
         }
         Verdict::Answer { reply, rationale } => {
-            if delivered >= policy.max_turns() {
+            if synthesized >= policy.max_turns() {
                 // The bound is the runner's decision, not a verdict, so no
                 // responder outcome is recorded against it.
                 return NextTurn::Stop {
@@ -152,7 +162,7 @@ fn next_from_verdict(
             }
             NextTurn::Deliver {
                 text: reply,
-                origin: Some(TurnOrigin {
+                origin: Some(TurnOrigin::Responder {
                     responder: ResponderKind::Llm,
                     rationale,
                 }),
@@ -200,7 +210,7 @@ mod tests {
     use crate::cli::run::conversation::responder::Verdict;
     use crate::core::{
         ConversationStopReason, DeliverWhen, ResponderEnding, ResponderKind, ResponderPolicy,
-        ResponderStopCause, ScriptedTurn,
+        ResponderStopCause, ScriptedTurn, TurnOrigin,
     };
 
     fn policy(max_turns: u32) -> ResponderPolicy {
@@ -226,8 +236,13 @@ mod tests {
         };
         assert_eq!(text, "Use the LRU.");
         let origin = origin.expect("a derived turn names its origin");
-        assert_eq!(origin.responder, ResponderKind::Llm);
-        assert_eq!(origin.rationale.as_deref(), Some("the simplest option"));
+        assert_eq!(
+            origin,
+            TurnOrigin::Responder {
+                responder: ResponderKind::Llm,
+                rationale: Some("the simplest option".to_string()),
+            }
+        );
     }
 
     /// Classification comes before the bound: an agent that finishes on its

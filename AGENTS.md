@@ -5,12 +5,12 @@
 `eval-magic` is a Rust CLI crate. The binary entry point is `src/main.rs`; reusable logic lives in
 `src/lib.rs` and submodules such as `cli/`, `pipeline/`, `sandbox/`, `validation/`, and
 `workspace/`. JSON schemas are tracked in `schema/`, harness descriptors (plus embedded harness
-assets such as the OpenCode write-guard plugin template) in `harnesses/`, shared
-prompt profiles in `profiles/`, and docs in `docs/` — user-facing Markdown under `docs/guides/`
-ships embedded in the binary as `eval-magic docs <topic>`; the other files are internal development
-docs. `docs/developer_overview.md` maps the repository and holds the placement policy. Integration
-tests are split by surface area under `tests/cli/` and `tests/run/`; unit tests usually live beside
-the module they exercise.
+assets such as the OpenCode write-guard plugin template) in `harnesses/`, the `RUNBOOK.md` prose
+template in `profiles/`, and docs in `docs/` — user-facing Markdown under `docs/guides/` ships
+embedded in the binary as `eval-magic docs <topic>`; the other files are internal development docs.
+`docs/developer_overview.md` maps the repository and holds the placement policy. Integration tests
+are split by surface area under `tests/cli/` and `tests/run/`; unit tests usually live beside the
+module they exercise.
 
 ## Build, Test, and Development Commands
 
