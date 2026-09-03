@@ -147,7 +147,10 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
         "the selector must not add --skill-dir the invocation never used: {runbook}"
     );
     assert!(
-        runbook.contains(&format!("ingest --skill {}", wire_path(&skill_sub))),
+        runbook.contains(&format!(
+            "ingest --skill {}",
+            wire_path(&resolved(&skill_sub))
+        )),
         "the selector names --skill as an absolute path: {runbook}"
     );
     assert!(runbook.contains("--iteration 1"));

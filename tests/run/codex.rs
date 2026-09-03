@@ -94,7 +94,9 @@ fn codex_stages_repo_local_skills_under_agents() {
         .unwrap();
     assert_eq!(
         task["staged_skill_path"],
-        serde_json::json!(wire_path(&codex_skills.join(slug).join("SKILL.md")))
+        serde_json::json!(wire_path(&resolved(
+            &codex_skills.join(slug).join("SKILL.md")
+        )))
     );
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
     assert!(prompt.contains("## Skills"));

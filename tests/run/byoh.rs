@@ -421,7 +421,7 @@ fn harness_file_is_reemitted_in_every_generated_command() {
         .assert()
         .success();
 
-    let flag = format!("--harness-file {}", wire_path(&file));
+    let flag = format!("--harness-file {}", wire_path(&resolved(&file)));
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
     assert!(
         stdout.contains(&flag),
@@ -444,7 +444,7 @@ fn harness_file_is_reemitted_in_every_generated_command() {
     // Prep-time provenance for the drift backstop: the descriptor the run was
     // prepared with is recorded next to the conditions it produced.
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
-    assert_eq!(conditions["harness_file"], wire_path(&file));
+    assert_eq!(conditions["harness_file"], wire_path(&resolved(&file)));
     let digest = conditions["harness_descriptor_digest"]
         .as_str()
         .expect("conditions record the resolved descriptor digest");
