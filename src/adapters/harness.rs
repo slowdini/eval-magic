@@ -28,6 +28,21 @@ use crate::sandbox::GuardMarker;
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, SessionSurface, TranscriptSummary};
 
+/// Deterministic transcript evidence for the `__skill_invoked` meta-check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillEvidenceSignature {
+    /// A native skill tool whose argument equals the staged slug.
+    Invocation { tool: String, arg: String },
+    /// A successful command carrying the exact staged `SKILL.md` path as a
+    /// literal argument.
+    StagedPathAccess {
+        tool: String,
+        command_arg: String,
+        exit_code_arg: String,
+        read_commands: Vec<String>,
+    },
+}
+
 /// The role a tool name plays in a harness's vocabulary. A descriptor's roles
 /// are validated disjoint (`descriptor::validation::check_tool_roles_disjoint`),
 /// so one native name maps to at most one role.
@@ -302,13 +317,20 @@ pub trait HarnessAdapter {
         ))
     }
 
-    /// **Enhancement: transcript ingest.** The deterministic skill-invocation
-    /// signature the `__skill_invoked` meta-check matches: `(tool name, arg
-    /// carrying the staged slug)` — Claude Code's `Skill`/`skill`, OpenCode's
-    /// `skill`/`name`. `None` for Codex (its JSONL has no skill-tool event),
-    /// which routes the meta-check to the LLM-judge fallback.
+    /// **Enhancement: transcript ingest.** The native skill-invocation part of
+    /// the `__skill_invoked` contract: `(tool name, arg carrying the staged
+    /// slug)` — Claude Code's `Skill`/`skill`, OpenCode's `skill`/`name`.
+    /// Harnesses using exact staged-path access return `None` here and expose
+    /// that alternative through [`Self::transcript_skill_evidence`].
     fn transcript_skill_invocation(&self) -> Option<(String, String)> {
         Some(("Skill".to_string(), "skill".to_string()))
+    }
+
+    /// Deterministic invocation/access evidence exposed by this harness. The
+    /// default preserves the historical native skill-tool contract.
+    fn transcript_skill_evidence(&self) -> Option<SkillEvidenceSignature> {
+        self.transcript_skill_invocation()
+            .map(|(tool, arg)| SkillEvidenceSignature::Invocation { tool, arg })
     }
 
     /// **Enhancement: transcript denial reader.** Whether this harness's
@@ -687,6 +709,15 @@ mod tests {
         assert_eq!(
             adapter_for(Harness::resolve("codex").unwrap()).transcript_skill_invocation(),
             None
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).transcript_skill_evidence(),
+            Some(SkillEvidenceSignature::StagedPathAccess {
+                tool: "command_execution".to_string(),
+                command_arg: "command".to_string(),
+                exit_code_arg: "exit_code".to_string(),
+                read_commands: ["cat", "head", "sed", "tail"].map(str::to_string).to_vec(),
+            })
         );
         assert_eq!(
             adapter_for(Harness::resolve("opencode").unwrap()).transcript_skill_invocation(),

@@ -40,7 +40,7 @@ pub mod transcript;
 
 pub use harness::{
     CliDispatchContext, CliManifestContext, EMPTY_TOOL_VOCABULARY, HarnessAdapter,
-    RUNBOOK_TEMPLATE, TokenUsageAggregation, ToolRole, ToolVocabulary,
+    RUNBOOK_TEMPLATE, SkillEvidenceSignature, TokenUsageAggregation, ToolRole, ToolVocabulary,
 };
 pub use registry::{
     DEFAULT_HARNESS_NAME, UnknownHarnessError, adapter_for, all_config_dir_names,

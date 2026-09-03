@@ -38,6 +38,14 @@ fn assembles_run_and_timing_for_every_task_from_disk() {
     assert_eq!(run.tool_invocations.len(), 1);
     assert_eq!(run.tool_invocations[0].name, "Bash");
     assert_eq!(run.tool_invocations[0].ordinal, 1);
+    let run_json: Value = serde_json::from_str(
+        &fs::read_to_string(iter.join("eval-crash/with_skill/run.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        run_json["staged_skill_path"],
+        json!("/task/.agents/skills/test-slug/SKILL.md")
+    );
 
     assert!(
         read_run(&iter, "crash", "without_skill")

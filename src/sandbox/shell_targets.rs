@@ -6,6 +6,10 @@ use crate::core::fs::artifact_path;
 
 use super::policy::{BashClassification, OUTPUT_REDIRECTION_REASON, is_under_any, resolve_path};
 
+mod skill_access;
+
+pub(crate) use skill_access::command_reads_literal_path;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ShellWord {
     pub(super) value: String,

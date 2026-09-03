@@ -173,13 +173,22 @@ Use `run --judge-samples N` to set a campaign-wide default. An assertion's `samp
 precedence over that default. The effective count must be at least one. The framework-injected
 `__skill_invoked` checks are not substantive grading and remain single-shot per treatment member.
 
-For a multi-skill treatment, deterministic transcript grading checks every staged slug separately.
+For a multi-skill treatment, deterministic transcript grading checks every member separately. A
+native skill-tool signature compares its identifier with that member's staged slug. An exact-path
+access signature instead requires a successful declared read command whose literal argument is
+that member's task-specific staged `SKILL.md` path. Failed commands, skill-name text, final-message
+phrasing, the live source path, and another treatment member's staged path do not count. A local
+result has `confidence: 1.0` and emits no meta judge task.
+
 The response files use `__skill_invoked__skill-N.json`, and each meta result names its
-`skill_name`, so partial and complete invocation are distinguishable. Harness descriptors supply
-the tool and argument signature; a harness without deterministic invocation events receives one
-LLM fallback task per member. The suite-level `meta_summary.skill_invoked` value is true when any
-treatment member was invoked. The `benchmark.json` file retains the suite rate and adds per-skill
-counts and rates. A scalar treatment keeps the `__skill_invoked.json` filename and artifact shape.
+`skill_name`, so partial and complete access or invocation are distinguishable. A run with no
+usable deterministic signature—for example, a descriptor that exposes none—receives one clearly
+labeled behavioral-influence fallback task per member. That fallback can estimate whether the
+skill influenced the response, but a pass does not prove native invocation or staged-file access.
+The compatibility field
+`meta_summary.skill_invoked` is true when any treatment member passes its available check. The
+`benchmark.json` file retains the suite rate and adds per-skill counts and rates. A scalar treatment
+keeps the `__skill_invoked.json` filename and artifact shape.
 
 Each sample is a separate judge task and response, but every sample for a run receives the exact
 same bounded `judge-evidence.md`. The agent is not rerun, and eval-magic does not rebuild or expand

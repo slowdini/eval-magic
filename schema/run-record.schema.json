@@ -25,7 +25,11 @@
     },
     "skill_path": {
       "type": ["string", "null"],
-      "description": "Absolute path to the SKILL.md the subagent could load, or null if no skill was provided (without_skill condition)."
+      "description": "Absolute path to the campaign-owned SKILL.md input, or null if no skill was provided. The task-specific staged location is staged_skill_path."
+    },
+    "staged_skill_path": {
+      "type": "string",
+      "description": "Exact task-environment path to the staged scalar SKILL.md. Absent for control, unstaged, and historical runs."
     },
     "skills": {
       "type": "array",
@@ -107,7 +111,11 @@
       "properties": {
         "name": { "type": "string" },
         "skill_path": { "type": "string" },
-        "staged_skill_slug": { "type": ["string", "null"] }
+        "staged_skill_slug": { "type": ["string", "null"] },
+        "staged_skill_path": {
+          "type": "string",
+          "description": "Exact task-environment path to this member's staged SKILL.md. Absent before a task env is selected and in historical records."
+        }
       }
     },
     "responderOutcome": {

@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::Path;
 
+mod skill_evidence;
+
 fn add_skill(skill_dir: &Path, name: &str) {
     let root = skill_dir.join(name);
     fs::create_dir_all(&root).unwrap();
@@ -93,7 +95,20 @@ fn conditions_and_dispatch_record_the_ordered_treatment_roster() {
         dispatch["skill_name"],
         json!(["mr-review", "supporting-skill"])
     );
-    assert_eq!(dispatch["tasks"][0]["skills"], *treatment);
+    let task_treatment = dispatch["tasks"][0]["skills"].as_array().unwrap();
+    assert_eq!(task_treatment.len(), 2);
+    for (task_skill, condition_skill) in task_treatment.iter().zip(treatment.as_array().unwrap()) {
+        assert_eq!(task_skill["name"], condition_skill["name"]);
+        assert_eq!(task_skill["skill_path"], condition_skill["skill_path"]);
+        assert_eq!(
+            task_skill["staged_skill_slug"],
+            condition_skill["staged_skill_slug"]
+        );
+        assert!(condition_skill.get("staged_skill_path").is_none());
+        let staged_path = task_skill["staged_skill_path"].as_str().unwrap();
+        assert!(staged_path.contains("/env-g1-with_skill/.claude/skills/"));
+        assert!(staged_path.ends_with("/SKILL.md"));
+    }
     assert_eq!(dispatch["tasks"][1]["skills"], json!([]));
     assert_eq!(
         dispatch["tasks"][0]["available_skills"]
@@ -128,7 +143,7 @@ fn conditions_and_dispatch_record_the_ordered_treatment_roster() {
 }
 
 #[test]
-fn a_one_member_list_still_uses_list_artifacts_and_indexed_meta_files() {
+fn a_one_member_list_still_uses_list_artifacts_and_indexed_skill_evidence_files() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = json!({
         "skill_name": ["mr-review"],
@@ -198,19 +213,20 @@ fn a_one_member_list_still_uses_list_artifacts_and_indexed_meta_files() {
         .assert()
         .success();
     let tasks = read_json(&iteration.join("judge-tasks.json"));
-    let meta = tasks["tasks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|task| task["is_meta"] == true)
-        .unwrap();
-    assert_eq!(meta["skill_name"], "mr-review");
     assert!(
-        meta["response_path"]
-            .as_str()
+        tasks["tasks"]
+            .as_array()
             .unwrap()
-            .ends_with("__skill_invoked__skill-1.json")
+            .iter()
+            .all(|task| task["is_meta"] != true),
+        "Codex skill access is graded locally"
     );
+    let evidence = read_json(
+        &iteration.join("eval-e1/with_skill/judge-responses/__skill_invoked__skill-1.json"),
+    );
+    assert_eq!(evidence["passed"], false);
+    assert_eq!(evidence["grader"], "transcript_check");
+    assert!(evidence["evidence"].as_str().unwrap().contains("mr-review"));
 
     skill_eval()
         .current_dir(&cwd)
@@ -544,69 +560,6 @@ fn no_stage_inlines_every_treatment_member_without_staging_ambient_skills() {
             .join(".claude/skills")
             .exists()
     );
-}
-
-#[test]
-fn codex_fallback_emits_one_named_llm_meta_task_per_treatment_member() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), &multi_evals().to_string());
-    add_skill(&skill_dir, "supporting-skill");
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--harness", "codex", "--dry-run"])
-        .assert()
-        .success();
-
-    let iteration = iteration_dir(&cwd);
-    let dispatch = read_json(&iteration.join("dispatch.json"));
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let run_path = Path::new(task["run_record_path"].as_str().unwrap());
-        fs::write(
-            run_path,
-            serde_json::to_vec_pretty(&json!({
-                "eval_id": task["eval_id"],
-                "condition": task["condition"],
-                "skill_path": task["skill_path"],
-                "skills": task["skills"],
-                "prompt": task["user_prompt"],
-                "files": task["files"],
-                "final_message": "done",
-                "tool_invocations": [],
-                "total_tokens": null,
-                "duration_ms": null
-            }))
-            .unwrap(),
-        )
-        .unwrap();
-    }
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["grade", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--harness",
-            "codex",
-            "--iteration",
-            "1",
-        ])
-        .assert()
-        .success();
-
-    let tasks = read_json(&iteration.join("judge-tasks.json"));
-    let meta = tasks["tasks"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|task| task["is_meta"] == true)
-        .collect::<Vec<_>>();
-    assert_eq!(meta.len(), 2);
-    assert_eq!(meta[0]["skill_name"], "mr-review");
-    assert_eq!(meta[1]["skill_name"], "supporting-skill");
-    assert_ne!(meta[0]["response_path"], meta[1]["response_path"]);
 }
 
 #[test]

@@ -6,6 +6,8 @@ use predicates::str::contains;
 use std::fs;
 use std::path::Path;
 
+mod skill_access;
+
 #[test]
 fn codex_no_stage_keeps_inline_fallback() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -90,6 +92,10 @@ fn codex_stages_repo_local_skills_under_agents() {
         .iter()
         .find(|t| t["condition"] == "with_skill")
         .unwrap();
+    assert_eq!(
+        task["staged_skill_path"],
+        serde_json::json!(wire_path(&codex_skills.join(slug).join("SKILL.md")))
+    );
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
     assert!(prompt.contains("## Skills"));
     assert!(prompt.contains(&format!("- {slug}: review merge requests")));

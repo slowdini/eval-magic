@@ -30,7 +30,7 @@ use crate::core::fs::{artifact_path, write_json};
 mod ignore;
 mod roster;
 
-use roster::condition_roster;
+use roster::{condition_roster, staged_skill_path_for, task_roster};
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.
@@ -100,16 +100,6 @@ pub(super) fn write_dispatch(
     // result can only be tied to a skill revision if each record names one.
     let skill_source_record = r.skill.record();
 
-    let staged_skill_path_for = |env_root: &Path, cond_slug: Option<&str>| -> Option<String> {
-        cond_slug.map(|slug| {
-            artifact_path(
-                &skills_dir_for_harness(env_root, ctx.harness)
-                    .join(slug)
-                    .join("SKILL.md"),
-            )
-        })
-    };
-
     // availableSkills for a condition in a given env = siblings + the
     // skill-under-test when that condition loads it. Paths are task-env-specific.
     let available_skills_for = |env_root: &Path,
@@ -146,7 +136,7 @@ pub(super) fn write_dispatch(
                     path: treatment
                         .staged_skill_slug
                         .as_deref()
-                        .and_then(|slug| staged_skill_path_for(env_root, Some(slug)))
+                        .and_then(|slug| staged_skill_path_for(env_root, ctx.harness, Some(slug)))
                         .unwrap_or_else(|| treatment.skill_path.clone()),
                     description: get_skill_description(Path::new(&treatment.skill_path)),
                 });
@@ -160,7 +150,8 @@ pub(super) fn write_dispatch(
             };
             skills.push(AvailableSkill {
                 name,
-                path: staged_skill_path_for(env_root, cond_slug).unwrap_or_else(|| csp.to_string()),
+                path: staged_skill_path_for(env_root, ctx.harness, cond_slug)
+                    .unwrap_or_else(|| csp.to_string()),
                 description: get_skill_description(Path::new(csp)),
             });
         }
@@ -229,13 +220,10 @@ pub(super) fn write_dispatch(
                         env_run_index,
                     );
                     let env_root_str = env_root.to_string_lossy().into_owned();
-                    let staged_path = staged_skill_path_for(&env_root, cond_slug);
-                    let available_skills = available_skills_for(
-                        &env_root,
-                        cond_skill_path,
-                        cond_slug,
-                        condition_roster,
-                    );
+                    let staged_path = staged_skill_path_for(&env_root, ctx.harness, cond_slug);
+                    let task_roster = task_roster(condition_roster, &env_root, ctx.harness);
+                    let available_skills =
+                        available_skills_for(&env_root, cond_skill_path, cond_slug, &task_roster);
                     // Create the per-run meta dir (run.json / timing.json), which
                     // lives above the env.
                     fs::create_dir_all(&run_dir)?;
@@ -263,7 +251,7 @@ pub(super) fn write_dispatch(
                         skill_path: cond_skill_path,
                         staged_skill_slug: cond_slug,
                         staged_skill_path: staged_path.as_deref(),
-                        skills: multi_skill.then_some(condition_roster),
+                        skills: multi_skill.then_some(task_roster.as_slice()),
                         treatment_names: multi_skill.then_some(treatment_names.as_slice()),
                         user_prompt: &ev.prompt,
                         files,

@@ -418,6 +418,11 @@ pub struct ConditionSkill {
     pub name: String,
     pub skill_path: String,
     pub staged_skill_slug: Option<String>,
+    /// Exact task-environment path to the staged `SKILL.md`. Absent in
+    /// conditions-level and historical records, where no single task env owns
+    /// the roster yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged_skill_path: Option<String>,
 }
 
 /// One condition in a comparison run.
@@ -546,6 +551,10 @@ pub struct RunRecord {
     pub eval_id: String,
     pub condition: String,
     pub skill_path: Option<String>,
+    /// Exact task-environment path to the staged scalar skill. Absent for
+    /// unstaged/control runs and historical records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged_skill_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<ConditionSkill>>,
     pub prompt: String,
@@ -839,6 +848,7 @@ mod tests {
             eval_id: "e".into(),
             condition: "with-skill".into(),
             skill_path: None,
+            staged_skill_path: None,
             skills: None,
             prompt: "p".into(),
             files: vec![],

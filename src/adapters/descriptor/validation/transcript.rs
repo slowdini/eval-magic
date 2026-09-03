@@ -13,6 +13,60 @@ pub(super) fn check_tool_vocabulary(d: &HarnessDescriptor) -> Result<(), String>
     Ok(())
 }
 
+/// Exact-path access is an alternative to a native skill-tool signature. Its
+/// tool must be declared as shell so the descriptor cannot assign command-line
+/// semantics to an unrelated transcript item.
+pub(super) fn check_skill_evidence(d: &HarnessDescriptor) -> Result<(), String> {
+    let Some(transcript) = &d.transcript else {
+        return Ok(());
+    };
+    let Some(access) = &transcript.skill_access else {
+        return Ok(());
+    };
+    if !transcript.surfaces_skill_invocation {
+        return Err(
+            "transcript.skill_access requires surfaces_skill_invocation = true; otherwise the \
+             descriptor declares deterministic evidence and disables it at the same time"
+                .into(),
+        );
+    }
+    if transcript.skill_tool.is_some() || transcript.skill_arg.is_some() {
+        return Err(
+            "transcript.skill_access cannot be combined with skill_tool or skill_arg; declare \
+             either exact-path access or a native skill-tool signature"
+                .into(),
+        );
+    }
+    if !d.tools.shell.contains(&access.tool) {
+        return Err(format!(
+            "transcript.skill_access.tool {:?} is not declared in tools.shell; exact-path \
+             command evidence must use a shell tool",
+            access.tool
+        ));
+    }
+    if access.command_arg == access.exit_code_arg {
+        return Err(
+            "transcript.skill_access command_arg and exit_code_arg must name distinct fields"
+                .into(),
+        );
+    }
+    if access.read_commands.iter().any(|command| {
+        command.is_empty()
+            || command == "."
+            || command == ".."
+            || !command
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '+' | '.'))
+    }) {
+        return Err(
+            "transcript.skill_access.read_commands must contain literal executable basenames; \
+             paths, whitespace, and shell syntax are not allowed"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
 /// Transcript ingest has one primary summary reader: a named code parser or
 /// declarative summary outputs. Independent denial and session-surface readers
 /// may compose around it.

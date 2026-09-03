@@ -124,18 +124,28 @@ label = "{label}"
 ## meanwhile.
 ## VERIFY: capture a real events file and check its line shapes against the reader you declare —
 ## an unknown parser name fails the schema gate listing the allowed values. Leave
-## surfaces_skill_invocation false unless you verified the stream yields a deterministic
-## skill-invocation event (false routes the __skill_invoked meta-check to the LLM judge). When
-## true, skill_tool / skill_arg name the skill tool and the argument carrying the skill
-## identifier (defaults: "Skill" / "skill" — Claude Code's spellings; OpenCode uses
-## "skill" / "name").
+## Leave surfaces_skill_invocation false unless the stream yields deterministic native invocation
+## or staged-file access evidence (false routes __skill_invoked to a clearly labeled behavioral-
+## influence fallback). For a native event, skill_tool / skill_arg name the tool and identifier
+## argument (defaults: "Skill" / "skill"; OpenCode uses "skill" / "name"). A harness that exposes
+## only successful shell reads may instead declare [transcript.skill_access]: tool is a [tools]
+## shell name, command_arg and exit_code_arg locate its fields, and read_commands lists literal
+## executable basenames. The exact staged SKILL.md path must be one literal argument.
 # [transcript]
 # events_filename = "{label}-events.jsonl"
 # parser = "codex-items"
 # permission_denials_parser = "codex-items"
-# surfaces_skill_invocation = false
-# skill_tool = "Skill"
-# skill_arg = "skill"
+# surfaces_skill_invocation = true
+#
+# [transcript.skill_access]
+# tool = "command_execution"
+# command_arg = "command"
+# exit_code_arg = "exit_code"
+# read_commands = ["cat", "sed"]
+#
+## Native-tool alternative to [transcript.skill_access]:
+##   skill_tool = "Skill"
+##   skill_arg = "skill"
 #
 # [transcript.extract.session_surface]
 # where = { type = "system", subtype = "init" }

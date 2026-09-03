@@ -58,6 +58,8 @@ struct DispatchTask {
     run_index: Option<u32>,
     skill_path: Option<String>,
     #[serde(default)]
+    staged_skill_path: Option<String>,
+    #[serde(default)]
     skills: Option<Vec<ConditionSkill>>,
     user_prompt: String,
     #[serde(alias = "fixtures")]
@@ -280,6 +282,7 @@ pub fn record_runs(
                 eval_id: task.eval_id.clone(),
                 condition: task.condition.clone(),
                 skill_path: task.skill_path.clone(),
+                staged_skill_path: task.staged_skill_path.clone(),
                 skills: task.skills.clone(),
                 prompt: task.user_prompt.clone(),
                 files: task.files.clone(),

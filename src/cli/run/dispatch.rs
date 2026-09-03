@@ -39,6 +39,8 @@ pub struct DispatchTask {
     pub skill_path: Option<String>,
     pub staged_skill_slug: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged_skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub skills: Option<Vec<ConditionSkill>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub available_skills: Option<Vec<AvailableSkill>>,
@@ -252,6 +254,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         run_index: opts.run_index,
         skill_path,
         staged_skill_slug: opts.staged_skill_slug.map(str::to_string),
+        staged_skill_path,
         skills: opts.skills.map(<[ConditionSkill]>::to_vec),
         available_skills: opts.skills.map(|_| staged_skills),
         user_prompt: opts.user_prompt.to_string(),

@@ -113,6 +113,72 @@ fn accepts_an_independent_permission_denials_parser_with_extract_ingest() {
 }
 
 #[test]
+fn accepts_a_successful_exact_path_skill_access_signature() {
+    let descriptor = format!(
+        "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\
+         parser = \"codex-items\"\nsurfaces_skill_invocation = true\n\n\
+         [transcript.skill_access]\n\
+         tool = \"command_execution\"\n\
+         command_arg = \"command\"\n\
+         exit_code_arg = \"exit_code\"\n\
+         read_commands = [\"cat\", \"sed\"]\n"
+    );
+
+    load_descriptor(&descriptor, "test.toml")
+        .expect("an exact-path access signature should be descriptor-declared");
+}
+
+#[test]
+fn rejects_skill_access_that_is_not_a_true_exclusive_shell_signal() {
+    for (extra_transcript, expected) in [
+        (
+            "surfaces_skill_invocation = false\n",
+            "surfaces_skill_invocation",
+        ),
+        (
+            "surfaces_skill_invocation = true\nskill_tool = \"Skill\"\n",
+            "skill_tool",
+        ),
+    ] {
+        let err = err_of(&format!(
+            "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\
+             parser = \"codex-items\"\n{extra_transcript}\n\
+             [transcript.skill_access]\n\
+             tool = \"command_execution\"\n\
+             command_arg = \"command\"\n\
+             exit_code_arg = \"exit_code\"\n\
+             read_commands = [\"cat\", \"sed\"]\n"
+        ));
+        assert!(err.contains(expected), "{err}");
+    }
+
+    let err = err_of(&format!(
+        "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\
+         parser = \"codex-items\"\nsurfaces_skill_invocation = true\n\n\
+         [transcript.skill_access]\n\
+         tool = \"file_change\"\n\
+         command_arg = \"command\"\n\
+         exit_code_arg = \"exit_code\"\n\
+         read_commands = [\"cat\", \"sed\"]\n"
+    ));
+    assert!(err.contains("tools.shell"), "{err}");
+}
+
+#[test]
+fn rejects_skill_access_read_commands_that_are_not_literal_basenames() {
+    let err = err_of(&format!(
+        "{TOOLED}\n[transcript]\nevents_filename = \"demo-events.jsonl\"\n\
+         parser = \"codex-items\"\nsurfaces_skill_invocation = true\n\n\
+         [transcript.skill_access]\n\
+         tool = \"command_execution\"\n\
+         command_arg = \"command\"\n\
+         exit_code_arg = \"exit_code\"\n\
+         read_commands = [\"/bin/cat\"]\n"
+    ));
+    assert!(err.contains("literal executable basenames"), "{err}");
+}
+
+#[test]
 fn rejects_transcript_with_neither_parser_nor_extract() {
     for auxiliary in ["", "permission_denials_parser = \"codex-items\"\n"] {
         let err = err_of(&format!(
