@@ -66,10 +66,19 @@ assertion set, so a benchmark can be read against the instrument that produced i
 cannot be read leaves the run-time copy in place with a warning; one that fails validation stops
 grading rather than measuring with assertions you have already replaced.
 
-Cached results are keyed by assertion id. Editing an assertion in place — rewording an `llm_judge`
-rubric, changing a `command_check` command — leaves the verdict or result the previous definition
-produced, and `grade` reports every one it reused. Re-run `eval-magic grade --overwrite` to
-re-execute command checks and `eval-magic dispatch --judges --overwrite` to re-judge.
+Cached judge responses are keyed by assertion id. Rewording an `llm_judge` rubric under the same id
+leaves the previous verdict in place; use `eval-magic dispatch --judges --overwrite` to re-judge it.
+
+Command-check results use both the authored definition digest and the exact `run.json` digest as
+their cache key. `grade` reuses only an exact match. A missing or mismatched digest executes the
+check again and replaces the result, so a legacy result, an edited check, or a changed run record
+refreshes without `eval-magic grade --overwrite`; that option forces even an exact match to execute
+again.
+
+A command check is eligible only after its task has a runner-owned `run.json`. Partial ingest leaves
+an incomplete task environment untouched: no held-out setup, command execution, or result write. If
+an incomplete task already carries a cached command-check result, `grade` warns that an older grader
+may have contaminated the environment. That task must not be resumed; build a fresh iteration.
 
 ## What the bundle contains
 

@@ -679,8 +679,12 @@ pub(crate) enum Commands {
     /// `diff_scope` grading for finalize, injects held-out
     /// `command_check.setup_files`, and executes each
     /// runner-owned command check in its task environment, applying its
-    /// environment overrides and running every environment matrix cell. Diff
-    /// scope is captured before held-out files are injected. Then stops at the
+    /// environment overrides and running every environment matrix cell. A task
+    /// is eligible only after its runner-owned `run.json` exists, so a partial
+    /// ingest leaves incomplete task environments untouched. A cached result is
+    /// reused only when its authored definition and run-record digests match;
+    /// legacy or stale results are executed again. Diff scope is captured before
+    /// held-out files are injected. Then stops at the
     /// judge hand-off, writing one bounded `judge-evidence.md` per recorded run
     /// and listing the effective sample count of judge tasks per `llm_judge`
     /// assertion. The exact evidence bundle is shared by that run's tasks and
@@ -761,8 +765,11 @@ pub(crate) enum Commands {
     /// Grade captures scope before it injects
     /// held-out `command_check.setup_files` and executes each runner-owned command
     /// in its task environment, applying fixed environment overrides and running
-    /// every environment matrix cell; completed command and diff-scope results
-    /// are reused. Before emitting tasks, writes one `judge-evidence.md` beside
+    /// every environment matrix cell. Tasks without `run.json` are skipped before
+    /// setup injection or command execution. A command result is reused only when
+    /// its authored definition and run-record digests match; legacy or stale
+    /// results execute again. Completed diff-scope results are reused. Before
+    /// emitting tasks, writes one `judge-evidence.md` beside
     /// every recorded run. This 98,304-byte bounded bundle combines task context,
     /// completion state, diff evidence, conversation, tool summary, and source
     /// paths; its exact bytes are inlined into each run's LLM-judge prompts. The
@@ -793,10 +800,11 @@ pub(crate) enum Commands {
     /// assertions from the run's own evidence, after the dispatch they grade. Every
     /// invocation prints the file it read them from, and each `grading.json` records it
     /// under `assertion_source`. An unreadable live file leaves the run-time copy in
-    /// place with a warning; an invalid one stops grading. Cached judge verdicts and
-    /// command-check results are keyed by assertion id, so an assertion edited in place
-    /// is reported rather than silently reused: `--overwrite` re-executes command
-    /// checks; `dispatch --judges --overwrite` re-judges. See `eval-magic docs judging`.
+    /// place with a warning; an invalid one stops grading. Cached judge verdicts are
+    /// keyed by assertion id, so `dispatch --judges --overwrite` re-judges an edited
+    /// assertion. Command checks invalidate automatically when their definition or
+    /// run record changes; `grade --overwrite` also re-executes an exact cache match.
+    /// See `eval-magic docs judging`.
     Grade(GradeArgs),
     /// Aggregate before/after benchmark deltas.
     ///

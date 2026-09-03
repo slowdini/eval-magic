@@ -234,6 +234,8 @@ fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
         .stdout(contains("skill_should_trigger"))
         .stdout(contains("assertion_source"))
         .stdout(contains("eval-magic grade --overwrite"))
+        .stdout(contains("exact `run.json` digest"))
+        .stdout(contains("must not be resumed"))
         .stdout(contains("eval-magic dispatch --judges --overwrite"));
 
     // The isolation guide explains why the copy exists, so it has to carry the
