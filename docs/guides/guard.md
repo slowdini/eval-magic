@@ -18,6 +18,15 @@ so the denial never points at a fix that cannot unblock the command:
 - Remote Git mutations and repository-routing escapes are blocked.
 - Recognized package, build, and edit destinations must stay inside the task environment. Global
   and user installation modes are blocked unless the classifier can prove an in-task destination.
+- Recognized filesystem mutations must stay inside the task environment. The classifier reads
+  `touch`, `mkdir`, `rm`, `cp`, `mv`, and `install`, resolving their operands and their
+  `-t`/`--target-directory` destinations against the invocation directory; because `mv` unlinks
+  what it moves, its sources are checked too. A glob or brace confined to one path component under
+  an in-task directory is allowed, since it can only expand to entries of that directory; a
+  variable or command expansion names no path and is blocked.
+
+These families are recognized for containment only. Creating a directory or copying a file inside
+the task environment needs no allowance, so `guard` configuration is unchanged by them.
 
 After those checks, the command policy handles recognized development mutations. A recognized
 command that has no matching allowance is blocked. A tool claimed by `allow_commands` also has its

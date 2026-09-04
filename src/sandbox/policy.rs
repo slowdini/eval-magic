@@ -204,6 +204,16 @@ pub fn is_under_any(target: &str, dirs: &[String], repo_root: &Path) -> bool {
 
 pub(super) const OUTPUT_REDIRECTION_REASON: &str = "output redirection to a file";
 
+/// Whether a denial is an ordinary write that landed in the wrong place, and so
+/// earns the pointer at the task scratch directory.
+///
+/// A blocked redirect and a blocked `cp` are the same mistake to the agent that
+/// made it, and the same advice fixes both. A blocked global package install is
+/// not: it has no scratch-directory answer.
+pub(super) fn is_misplaced_write(reason: &str) -> bool {
+    reason == OUTPUT_REDIRECTION_REASON || super::mutation_targets::is_mutator_reason(reason)
+}
+
 /// A cwd-aware Bash denial plus the literal targets the scanner resolved.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BashClassification {

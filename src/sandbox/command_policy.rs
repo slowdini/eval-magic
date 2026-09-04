@@ -62,7 +62,7 @@ fn executable_name(word: &ShellWord) -> Option<&str> {
         .flatten()
 }
 
-fn is_assignment(word: &ShellWord) -> bool {
+pub(super) fn is_assignment(word: &ShellWord) -> bool {
     !word.dynamic
         && word
             .value

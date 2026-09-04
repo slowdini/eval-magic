@@ -55,6 +55,31 @@ fn allows_only_matching_prefixes_for_a_claimed_tool() {
     );
 }
 
+/// The filesystem mutators are recognized for *containment* only. They are
+/// ordinary shell commands an agent needs inside its own environment, so an
+/// in-root `mkdir` or `cp` must not also demand a command-policy allowance the
+/// way `npm install` and `sed -i` do.
+#[test]
+fn in_root_filesystem_mutations_need_no_allowance() {
+    let roots = vec!["/work/env".to_string()];
+    let policy = crate::core::GuardPolicyConfig::default();
+
+    for command in [
+        "touch out.txt",
+        "mkdir -p build/generated",
+        "rm -rf target",
+        "cp -r src dist",
+        "mv build/app dist/app",
+        "install -Dm 755 build/app bin/app",
+    ] {
+        assert_eq!(
+            classify_bash_with_policy(command, &roots, Path::new("/work/env"), &policy),
+            None,
+            "{command}",
+        );
+    }
+}
+
 #[test]
 fn recognized_development_mutations_require_an_allowance() {
     let roots = vec!["/work/env".to_string()];
