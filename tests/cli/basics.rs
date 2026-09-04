@@ -171,7 +171,9 @@ fn dispatch_help_documents_conversation_verification() {
         .success()
         .stdout(contains("delivered_followups"))
         .stdout(contains("same native session ID"))
-        .stdout(contains("interrupted"))
+        .stdout(contains("duration_ms"))
+        .stdout(contains("responder consultations, judges, queueing"))
+        .stdout(contains("timed_out"))
         .stdout(contains("plan_not_presented"));
 }
 

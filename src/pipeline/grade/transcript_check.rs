@@ -450,6 +450,7 @@ mod tests {
             stop_reason: None,
             stopped_before_followup: None,
             timed_out_in_round: None,
+            duration_ms: None,
             events: vec![
                 ConversationEvent::UserMessage {
                     ordinal: 0,

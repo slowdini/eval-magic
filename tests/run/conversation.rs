@@ -10,6 +10,7 @@ use std::path::Path;
 mod dispatch;
 mod responder;
 mod responder_guards;
+mod timing;
 
 #[test]
 fn multi_turn_eval_dispatch_records_followups_and_conversation_artifact_path() {
@@ -166,6 +167,10 @@ fn the_driver_runs_a_task_that_declares_no_scripted_turns() {
     let conversation = read_json(Path::new(task["conversation_path"].as_str().unwrap()));
     assert_eq!(conversation["status"], "completed");
     assert_eq!(conversation["delivered_followups"], 0);
+    assert!(
+        conversation["duration_ms"].is_u64(),
+        "the runner measures every one-shot harness subprocess: {conversation}"
+    );
     assert_eq!(
         conversation["events"],
         serde_json::json!([{
@@ -330,16 +335,18 @@ fn dispatch_task_runs_all_scripted_turns_in_one_native_session() {
         &fixture,
         r#"#!/bin/sh
 outputs=$1
-mode=$2
+exe=$2
+mode=$3
+"$exe" __fixture --sleep-ms 20
 if [ "$ROUND_ENV" != "visible" ]; then
   exit 43
 fi
-if [ "$mode" != "initial" ] && [ "$4" != "session-1" ]; then
+if [ "$mode" != "initial" ] && [ "$5" != "session-1" ]; then
   exit 42
 fi
 printf '%s\n' '{"type":"thread.started","thread_id":"session-1"}' > "$outputs/codex-events.jsonl"
 if [ "$mode" = "initial" ]; then
-  case "$3" in
+  case "$4" in
     *without_skill*) message="Which locale should I use?" ;;
     *) message="Which timezone should I use?" ;;
   esac
@@ -359,11 +366,15 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
     // `sh <stub>` rather than `<stub>`: the script needs no executable bit that
     // way, and the shell running it is the one the driver already resolved.
     let stub = format!("sh \"{}\"", fixture.to_string_lossy());
-    dispatch["harness_descriptor"]["dispatch"]["exec_template"] =
-        serde_json::json!(format!("{stub} <outputs_dir> initial <eval-root>"));
-    dispatch["harness_descriptor"]["conversation"]["resume_exec_template"] = serde_json::json!(
-        format!("{stub} <outputs_dir> resume-<round> <eval-root> {{session_arg}} {{prompt_arg}}")
-    );
+    let fixture_exe = env!("CARGO_BIN_EXE_eval-magic");
+    dispatch["harness_descriptor"]["dispatch"]["exec_template"] = serde_json::json!(format!(
+        "{stub} <outputs_dir> \"{fixture_exe}\" initial <eval-root>"
+    ));
+    dispatch["harness_descriptor"]["conversation"]["resume_exec_template"] =
+        serde_json::json!(format!(
+            "{stub} <outputs_dir> \"{fixture_exe}\" resume-<round> <eval-root> \
+             {{session_arg}} {{prompt_arg}}"
+        ));
     fs::write(
         &dispatch_path,
         format!("{}\n", serde_json::to_string_pretty(&dispatch).unwrap()),
@@ -378,6 +389,10 @@ printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":2,"output_tokens
     let conversation = read_json(Path::new(task["conversation_path"].as_str().unwrap()));
     assert_eq!(conversation["status"], "completed");
     assert_eq!(conversation["delivered_followups"], 2);
+    assert!(
+        conversation["duration_ms"].as_u64().unwrap() >= 50,
+        "three measured 20ms harness rounds must be accumulated: {conversation}"
+    );
     assert_eq!(conversation["stop_reason"], Value::Null);
     assert_eq!(
         conversation["events"],

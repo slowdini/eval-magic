@@ -10,9 +10,10 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-// Preserve the established `core::types::*` artifact API while the focused
-// implementation lives in `core::grading`.
+// Preserve the established `core::types::*` artifact API while focused
+// implementations live in sibling modules.
 pub use super::grading::*;
+pub use super::timing::{TimingRecord, TimingSource};
 use serde_json::Value;
 
 use crate::core::context::Harness;
@@ -611,6 +612,11 @@ pub struct ConversationRecord {
     /// The round the dispatch was killed in, when it outran its deadline.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timed_out_in_round: Option<u32>,
+    /// Monotonic wall time spent inside the eval-agent harness subprocesses,
+    /// summed across the initial dispatch and every resumed round. Runner
+    /// bookkeeping and responder/judge subprocesses are outside this measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
     pub events: Vec<ConversationEvent>,
     /// How the responder ended the conversation, when it was the responder that
     /// ended it. Absent for a scripted or one-shot task, for a timeout, and for
@@ -822,28 +828,6 @@ impl ResponderStopCause {
     }
 }
 
-/// Token/duration provenance for a run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TimingRecord {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<Option<i64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<Option<i64>>,
-    /// Where the numbers came from. `completion-event` = captured live from the
-    /// harness's task-completion event; `transcript` = derived from the persisted
-    /// transcript using the harness's normalization rules.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<TimingSource>,
-}
-
-/// Provenance of a [`TimingRecord`]'s numbers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TimingSource {
-    CompletionEvent,
-    Transcript,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -959,6 +943,7 @@ mod tests {
             stop_reason: None,
             stopped_before_followup: None,
             timed_out_in_round: None,
+            duration_ms: None,
             events: vec![ConversationEvent::UserMessage {
                 ordinal: 0,
                 round: 1,
@@ -1132,14 +1117,6 @@ mod tests {
         let rendered = serde_json::to_value(record).unwrap();
 
         assert_eq!(rendered["exclude_skill_sources"], true);
-    }
-
-    #[test]
-    fn timing_source_kebab_roundtrips() {
-        let v = serde_json::to_value(TimingSource::CompletionEvent).unwrap();
-        assert_eq!(v, Value::String("completion-event".into()));
-        let back: TimingSource = serde_json::from_value(v).unwrap();
-        assert_eq!(back, TimingSource::CompletionEvent);
     }
 }
 

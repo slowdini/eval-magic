@@ -71,8 +71,14 @@ outputs=$1
 prompt_path=$2
 message=$3
 verdicts=$4
+exe=$5
+agent_delay=$6
+responder_delay=$7
 case "$prompt_path" in
   */responder/*)
+    if [ -n "$responder_delay" ]; then
+      "$exe" __fixture --sleep-ms "$responder_delay"
+    fi
     round=$(basename "$outputs" | sed 's/^turn-//')
     file="$verdicts/$round.json"
     [ -f "$file" ] || file="$verdicts/default.json"
@@ -84,6 +90,9 @@ case "$prompt_path" in
     exit 0
     ;;
 esac
+if [ -n "$agent_delay" ]; then
+  "$exe" __fixture --sleep-ms "$agent_delay"
+fi
 printf '%s\n' '{"type":"thread.started","thread_id":"session-1"}' > "$outputs/codex-events.jsonl"
 printf '%s' '{"type":"item.completed","item":{"id":"m1","type":"agent_message","text":"' >> "$outputs/codex-events.jsonl"
 printf '%s' "$message" >> "$outputs/codex-events.jsonl"
@@ -105,6 +114,17 @@ pub(super) fn stub_rounds(
     resumed: &str,
     verdicts: &[(&str, &str)],
 ) -> PathBuf {
+    stub_rounds_with_delays(tmp, cwd, initial, resumed, verdicts, None)
+}
+
+fn stub_rounds_with_delays(
+    tmp: &Path,
+    cwd: &Path,
+    initial: &str,
+    resumed: &str,
+    verdicts: &[(&str, &str)],
+    delays: Option<(u64, u64)>,
+) -> PathBuf {
     let script = stub(tmp, "fake-codex.sh");
     let quoted = script.to_string_lossy().to_string();
 
@@ -114,20 +134,33 @@ pub(super) fn stub_rounds(
         fs::write(verdict_dir.join(format!("{round}.json")), body).unwrap();
     }
     let verdict_dir_quoted = verdict_dir.to_string_lossy().to_string();
+    let (exe, agent_delay, responder_delay) = delays.map_or_else(
+        || (String::new(), String::new(), String::new()),
+        |(agent, responder)| {
+            (
+                env!("CARGO_BIN_EXE_eval-magic").to_string(),
+                agent.to_string(),
+                responder.to_string(),
+            )
+        },
+    );
 
     stub_exec_template(
         cwd,
         &format!(
-            "sh \"{quoted}\" <outputs_dir> <dispatch_prompt_path> \"{initial}\" \"{verdict_dir_quoted}\" <eval-root>"
+            "sh \"{quoted}\" <outputs_dir> <dispatch_prompt_path> \"{initial}\" \
+             \"{verdict_dir_quoted}\" \"{exe}\" \"{agent_delay}\" \"{responder_delay}\" \
+             <eval-root>"
         ),
     );
     let dispatch_path = iteration_dir(cwd).join("dispatch.json");
     let mut dispatch = read_json(&dispatch_path);
-    dispatch["harness_descriptor"]["conversation"]["resume_exec_template"] = serde_json::json!(
-        format!(
-            "sh \"{quoted}\" <outputs_dir> <dispatch_prompt_path> \"{resumed}\" \"{verdict_dir_quoted}\" <eval-root> {{session_arg}} {{prompt_arg}}"
-        )
-    );
+    dispatch["harness_descriptor"]["conversation"]["resume_exec_template"] =
+        serde_json::json!(format!(
+            "sh \"{quoted}\" <outputs_dir> <dispatch_prompt_path> \"{resumed}\" \
+             \"{verdict_dir_quoted}\" \"{exe}\" \"{agent_delay}\" \"{responder_delay}\" \
+             <eval-root> {{session_arg}} {{prompt_arg}}"
+        ));
     fs::write(
         &dispatch_path,
         format!("{}\n", serde_json::to_string_pretty(&dispatch).unwrap()),
@@ -188,6 +221,36 @@ fn a_free_form_question_is_answered_and_the_run_completes() {
         "the simplest option that needs no new service"
     );
     assert_eq!(conversation["responder_outcome"]["ending"], "done");
+}
+
+#[test]
+fn runner_duration_excludes_responder_consultations() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), &responder_evals(None));
+    prepare(&skill_dir, &cwd);
+    stub_rounds_with_delays(
+        tmp.path(),
+        &cwd,
+        "Which cache should I use?",
+        "Caching is in place.",
+        &[("1", ANSWER), ("2", DONE)],
+        Some((20, 750)),
+    );
+
+    let started = std::time::Instant::now();
+    dispatch_one(&skill_dir, &cwd, "codex", 0, false)
+        .assert()
+        .success();
+    let wall_time = started.elapsed();
+
+    let conversation = conversation_of(&cwd, 0);
+    let measured = conversation["duration_ms"].as_u64().unwrap();
+    let wall_ms = u64::try_from(wall_time.as_millis()).unwrap();
+    assert!(
+        measured >= 35 && wall_ms.saturating_sub(measured) >= 1_400,
+        "the two 750ms consultations must remain outside duration_ms: \
+         wall={wall_time:?}, conversation={conversation}"
+    );
 }
 
 /// The opening prompt is authored, not derived, so it carries no origin. The

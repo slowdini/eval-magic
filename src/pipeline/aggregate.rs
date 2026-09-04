@@ -5,7 +5,7 @@
 //! `total_tokens`/`duration_ms` (from `timing.json`), per-assertion pass or vote
 //! counts, raw per-run diff scope, and the skill-invocation determination per
 //! condition; computes mean/stddev and the `a - b` delta; accumulates validity
-//! warnings (mixed timing sources, sub-100% invocation rate, stray-write
+//! warnings (mixed per-metric timing sources, sub-100% invocation rate, stray-write
 //! violations + live-source reads, guard denials, permission-denied tool calls,
 //! plugin shadows); and writes `benchmark.json`.
 
@@ -243,7 +243,8 @@ pub fn aggregate(
 
     let mut missing_gradings = 0usize;
     let mut warnings: Vec<String> = Vec::new();
-    let mut timing_sources: HashSet<String> = HashSet::new();
+    let mut token_sources: HashSet<String> = HashSet::new();
+    let mut duration_sources: HashSet<String> = HashSet::new();
     let mut assertion_counts = AssertionRollup::default();
     let mut has_sampled_gradings = false;
     let mut diff_scope_by_condition: HashMap<String, Vec<DiffScopeRun>> = condition_names
@@ -355,8 +356,12 @@ pub fn aggregate(
                     if let Some(Some(duration)) = timing.duration_ms {
                         bucket.durations.push(duration as f64);
                     }
-                    if has_tokens || has_duration {
-                        timing_sources.insert(timing_source_label(timing.source));
+                    if has_tokens {
+                        token_sources.insert(timing_source_label(timing.effective_token_source()));
+                    }
+                    if has_duration {
+                        duration_sources
+                            .insert(timing_source_label(timing.effective_duration_source()));
                     }
                 }
             }
@@ -435,21 +440,8 @@ pub fn aggregate(
     };
 
     let mut validity_warnings: Vec<String> = Vec::new();
-    if timing_sources.len() > 1 {
-        let mut sorted: Vec<&String> = timing_sources.iter().collect();
-        sorted.sort();
-        let joined = sorted
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        validity_warnings.push(format!(
-            "runs mix timing sources ({joined}) — completion events and transcript extractors \
-             may use different harness-specific accounting, so the token/duration delta may \
-             compare different metrics. Re-record one side or read the delta as a rough signal \
-             only."
-        ));
-    }
+    warn_for_mixed_metric_sources("total_tokens", &token_sources, &mut validity_warnings);
+    warn_for_mixed_metric_sources("duration_ms", &duration_sources, &mut validity_warnings);
     let (n_a, n_b) = (
         by_condition[a].pass_rates.len(),
         by_condition[b].pass_rates.len(),
@@ -602,11 +594,34 @@ fn collect_guard_denial_warnings(iteration_dir: &Path, warnings: &mut Vec<String
     }
 }
 
-/// The provenance label for a timing record (`completion-event` when absent).
-fn timing_source_label(source: Option<TimingSource>) -> String {
+fn warn_for_mixed_metric_sources(
+    metric: &str,
+    sources: &HashSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    if sources.len() <= 1 {
+        return;
+    }
+    let mut sorted: Vec<&String> = sources.iter().collect();
+    sorted.sort();
+    let joined = sorted
+        .iter()
+        .map(|source| source.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    warnings.push(format!(
+        "runs mix {metric} sources ({joined}) — those sources may use different accounting \
+         boundaries, so this metric's delta may compare unlike measurements. Re-record one \
+         side or read the delta as a rough signal only."
+    ));
+}
+
+/// The serialized provenance label for one timing metric.
+fn timing_source_label(source: TimingSource) -> String {
     match source {
-        Some(TimingSource::Transcript) => "transcript",
-        Some(TimingSource::CompletionEvent) | None => "completion-event",
+        TimingSource::CompletionEvent => "completion-event",
+        TimingSource::Runner => "runner",
+        TimingSource::Transcript => "transcript",
     }
     .to_string()
 }
@@ -756,11 +771,12 @@ mod tests {
     }
 
     #[test]
-    fn timing_label_defaults_to_completion_event() {
-        assert_eq!(timing_source_label(None), "completion-event");
+    fn timing_source_labels_match_the_portable_values() {
         assert_eq!(
-            timing_source_label(Some(TimingSource::Transcript)),
-            "transcript"
+            timing_source_label(TimingSource::CompletionEvent),
+            "completion-event"
         );
+        assert_eq!(timing_source_label(TimingSource::Runner), "runner");
+        assert_eq!(timing_source_label(TimingSource::Transcript), "transcript");
     }
 }

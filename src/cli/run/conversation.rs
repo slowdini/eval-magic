@@ -263,6 +263,7 @@ pub fn run_task(
     };
 
     let base_outputs = Path::new(&task.outputs_dir);
+    let mut harness_duration = Duration::ZERO;
     let mut events = vec![ConversationEvent::UserMessage {
         ordinal: 0,
         round: 1,
@@ -280,15 +281,16 @@ pub fn run_task(
         None,
         1,
     );
-    if execute_round(
+    let first_execution = execute_round(
         &initial_command,
         Path::new(eval_root),
         &first_outputs,
         agent_env,
         1,
         deadline,
-    )? == RoundOutcome::TimedOut
-    {
+    )?;
+    harness_duration = harness_duration.saturating_add(first_execution.duration);
+    if first_execution.outcome == RoundOutcome::TimedOut {
         // Turn 1 never answered, so there is no transcript to parse and no
         // session to resume. The seeded user message is the whole record.
         return write_conversation(
@@ -299,6 +301,7 @@ pub fn run_task(
                 stop_reason: None,
                 stopped_before_followup: None,
                 timed_out_in_round: Some(1),
+                duration_ms: Some(duration_millis(harness_duration)),
                 events,
                 responder_outcome: None,
                 plan: None,
@@ -463,15 +466,16 @@ pub fn run_task(
             Some(&prompt),
             round,
         );
-        if execute_round(
+        let execution = execute_round(
             &command,
             Path::new(eval_root),
             &round_outputs,
             agent_env,
             round,
             deadline,
-        )? == RoundOutcome::TimedOut
-        {
+        )?;
+        harness_duration = harness_duration.saturating_add(execution.duration);
+        if execution.outcome == RoundOutcome::TimedOut {
             timed_out_in_round = Some(round);
             break;
         }
@@ -511,6 +515,7 @@ pub fn run_task(
             stop_reason: timed_out_in_round.map_or(stop_reason, |_| None),
             stopped_before_followup: timed_out_in_round.map_or(stopped_before_followup, |_| None),
             timed_out_in_round,
+            duration_ms: Some(duration_millis(harness_duration)),
             events,
             // A timeout outranks the responder's verdict for the same reason it
             // outranks a gate stop: the round it judged never finished.
@@ -673,21 +678,35 @@ fn execute_round(
     agent_env: &BTreeMap<String, String>,
     round: u32,
     deadline: Option<Instant>,
-) -> anyhow::Result<RoundOutcome> {
+) -> anyhow::Result<RoundExecution> {
     fs::create_dir_all(outputs_dir)
         .with_context(|| format!("failed to create turn {round} outputs"))?;
     // Saturating: a deadline already passed leaves zero budget, so a turn that
     // cannot finish is not begun.
     let remaining = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
-    let outcome = run_in_posix_shell(command, eval_root, agent_env, remaining)
-        .map_err(|message| anyhow!("turn {round}: {message}"))?;
+    let started = Instant::now();
+    let shell_result = run_in_posix_shell(command, eval_root, agent_env, remaining);
+    let duration = started.elapsed();
+    let outcome = shell_result.map_err(|message| anyhow!("turn {round}: {message}"))?;
     match outcome {
-        ShellOutcome::Exited(status) if status.success() => Ok(RoundOutcome::Completed),
+        ShellOutcome::Exited(status) if status.success() => Ok(RoundExecution {
+            outcome: RoundOutcome::Completed,
+            duration,
+        }),
         ShellOutcome::Exited(status) => {
             bail!("harness command for turn {round} exited with {status}")
         }
-        ShellOutcome::TimedOut => Ok(RoundOutcome::TimedOut),
+        ShellOutcome::TimedOut => Ok(RoundExecution {
+            outcome: RoundOutcome::TimedOut,
+            duration,
+        }),
     }
+}
+
+/// One harness subprocess result plus the time spent waiting for that process.
+struct RoundExecution {
+    outcome: RoundOutcome,
+    duration: Duration,
 }
 
 /// How one round's harness command ended, once a nonzero exit has been ruled
@@ -696,6 +715,10 @@ fn execute_round(
 enum RoundOutcome {
     Completed,
     TimedOut,
+}
+
+fn duration_millis(duration: Duration) -> i64 {
+    i64::try_from(duration.as_millis()).unwrap_or(i64::MAX)
 }
 
 fn write_json_atomic(path: &Path, value: &impl serde::Serialize) -> anyhow::Result<()> {

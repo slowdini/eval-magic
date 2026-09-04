@@ -53,7 +53,7 @@ pub struct DispatchTask {
     /// Ordered scripted follow-ups; absent for one-shot tasks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<Vec<ScriptedTurn>>,
-    /// Runner-owned completion artifact for a scripted conversation.
+    /// Runner-owned completion artifact for every dispatched task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_path: Option<String>,
     pub agent_description: String,

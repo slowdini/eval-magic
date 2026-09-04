@@ -36,6 +36,7 @@ pub(super) fn evidence_for_task(
     let rounds = completion.delivered_followups.saturating_add(1);
     let Some(filename) = adapter_for(harness).cli_events_filename() else {
         let mut conversation = completion.clone();
+        conversation.duration_ms = None;
         conversation
             .events
             .retain(|event| matches!(event, ConversationEvent::UserMessage { .. }));
@@ -48,6 +49,9 @@ pub(super) fn evidence_for_task(
     };
 
     let mut conversation = completion.clone();
+    // `timing.json` is the canonical timing artifact. The runner measurement
+    // travels through the standalone completion artifact only until ingest.
+    conversation.duration_ms = None;
     conversation.events.clear();
     let mut transcript_events = Vec::new();
     let mut summaries = Vec::new();

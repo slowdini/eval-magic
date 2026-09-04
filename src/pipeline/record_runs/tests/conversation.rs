@@ -2,7 +2,7 @@ use super::*;
 use crate::core::ConversationStatus;
 
 #[test]
-fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_duration() {
+fn assembles_multi_turn_run_using_codex_tokens_and_runner_duration() {
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     let paths = write_iteration(
@@ -21,6 +21,7 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
         serde_json::to_string_pretty(&json!({
             "status": "completed",
             "delivered_followups": 1,
+            "duration_ms": 123,
             "events": [
                 {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
                 {"type": "user_message", "ordinal": 1, "round": 2, "text": "US timezones."}
@@ -70,8 +71,13 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
             }
         ])
     );
+    let recorded_conversation = serde_json::to_value(run.conversation.unwrap()).unwrap();
+    assert!(
+        recorded_conversation.get("duration_ms").is_none(),
+        "run.json keeps timing in timing.json: {recorded_conversation}"
+    );
     assert_eq!(
-        serde_json::to_value(run.conversation.unwrap()).unwrap()["events"],
+        recorded_conversation["events"],
         json!([
             {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
             {"type": "tool_invocation", "ordinal": 1, "round": 1, "name": "command_execution", "args": {"command": "bun test"}, "result": "ok"},
@@ -84,8 +90,9 @@ fn assembles_multi_turn_run_using_last_cumulative_codex_tokens_and_summed_durati
 
     let timing = read_timing_value(&iter, "clarify", "with_skill");
     assert_eq!(timing["total_tokens"], 40);
-    assert_eq!(timing["duration_ms"], 60_000);
-    assert_eq!(timing["source"], "transcript");
+    assert_eq!(timing["duration_ms"], 123);
+    assert_eq!(timing["token_source"], "transcript");
+    assert_eq!(timing["duration_source"], "runner");
 }
 
 #[test]
@@ -183,7 +190,8 @@ fn assembles_multi_turn_run_by_summing_independent_claude_round_timing() {
     let timing = read_timing_value(&iter, "clarify", "with_skill");
     assert_eq!(timing["total_tokens"], 250);
     assert_eq!(timing["duration_ms"], 60_000);
-    assert_eq!(timing["source"], "transcript");
+    assert_eq!(timing["token_source"], "transcript");
+    assert_eq!(timing["duration_source"], "transcript");
 }
 
 #[test]
@@ -252,7 +260,7 @@ fn skips_multi_turn_run_when_conversation_shows_failed_prompt_read() {
 }
 
 #[test]
-fn does_not_record_partial_timing_when_a_conversation_round_transcript_is_missing() {
+fn records_runner_duration_without_partial_tokens_when_a_round_transcript_is_missing() {
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     let paths = write_iteration(
@@ -271,6 +279,7 @@ fn does_not_record_partial_timing_when_a_conversation_round_transcript_is_missin
         serde_json::to_string_pretty(&json!({
             "status": "completed",
             "delivered_followups": 1,
+            "duration_ms": 321,
             "events": [
                 {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
                 {"type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which timezone?"},
@@ -301,7 +310,11 @@ fn does_not_record_partial_timing_when_a_conversation_round_transcript_is_missin
     assert_eq!(result.recorded, 1);
     assert_eq!(result.missing_transcript, 1);
     assert!(paths[0].run_record_path.exists());
-    assert!(!paths[0].timing_path.exists());
+    let timing = read_timing_value(&iter, "clarify", "with_skill");
+    assert!(timing.get("total_tokens").is_none());
+    assert!(timing.get("token_source").is_none());
+    assert_eq!(timing["duration_ms"], 321);
+    assert_eq!(timing["duration_source"], "runner");
 }
 
 /// A task whose completion artifact is missing is only "incomplete" if it was
@@ -371,6 +384,7 @@ fn records_a_run_whose_conversation_timed_out_in_a_later_round() {
             "status": "timed_out",
             "delivered_followups": 1,
             "timed_out_in_round": 2,
+            "duration_ms": 456,
             "events": [
                 {"type": "user_message", "ordinal": 0, "round": 1, "text": "Fix it."},
                 {"type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which timezone?"},
@@ -403,6 +417,11 @@ fn records_a_run_whose_conversation_timed_out_in_a_later_round() {
     let conversation = run.conversation.unwrap();
     assert_eq!(conversation.status, ConversationStatus::TimedOut);
     assert_eq!(conversation.timed_out_in_round, Some(2));
+    assert_eq!(conversation.duration_ms, None);
+    let timing = read_timing_value(&iter, "clarify", "with_skill");
+    assert!(timing.get("total_tokens").is_none(), "{timing}");
+    assert_eq!(timing["duration_ms"], 456);
+    assert_eq!(timing["duration_source"], "runner");
 }
 
 /// The session mode each round ran in survives ingest, so a judge can tell the

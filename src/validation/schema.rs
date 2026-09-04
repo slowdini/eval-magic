@@ -266,6 +266,25 @@ mod tests {
     }
 
     #[test]
+    fn runner_duration_is_valid_only_on_the_completion_artifact() {
+        let mut conversation = plan_mode_conversation();
+        conversation["duration_ms"] = json!(42);
+
+        let standalone: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(standalone.is_ok(), "{standalone:?}");
+
+        let mut record = valid_run_record();
+        record["conversation"] = conversation;
+        let nested: Result<Value, _> =
+            validate_against_schema(SchemaName::RunRecord, &record, "run.json");
+        assert!(
+            nested.is_err(),
+            "run.json keeps canonical timing in its sibling timing.json"
+        );
+    }
+
+    #[test]
     fn a_plan_phase_that_ended_without_a_plan_validates() {
         let conversation = json!({
             "status": "stopped",

@@ -410,21 +410,25 @@ pub(crate) enum Commands {
     /// Run every task in a prepared iteration through its harness CLI.
     ///
     /// Reads `dispatch.json`, executes each task in its own private environment,
-    /// and writes the task's `conversation.json` completion artifact. A task that
-    /// already has one is skipped, so rerunning after a failure retries only what
-    /// did not finish; `--overwrite` redispatches regardless.
+    /// and writes the task's `conversation.json` completion artifact. Its
+    /// `duration_ms` is monotonic time inside eval-agent harness subprocesses,
+    /// summed across resumed rounds; responder consultations, judges, queueing,
+    /// and runner bookkeeping are excluded. A task that already has an artifact
+    /// is skipped, so rerunning after a failure retries only what did not finish;
+    /// `--overwrite` redispatches regardless.
     ///
     /// A task that fails is recorded and the batch continues — one bad dispatch
     /// does not abandon the campaign. The command exits nonzero if any task
-    /// failed. A conversation that stops at a scripted gate is valid eval data,
-    /// not a failure.
+    /// failed. A timeout writes a typed `timed_out` completion artifact with its
+    /// elapsed harness time. A conversation that stops at a scripted gate is
+    /// valid eval data, not a failure.
     ///
     /// A multi-turn task — one declaring scripted `turns`, or a `responder` that
     /// derives them — resumes the same native session for every turn it
     /// delivers, and each round must report the same native session ID or that
     /// task fails. A completed or normally stopped conversation records
-    /// `delivered_followups`; an interrupted task commits no artifact, so a
-    /// rerun picks it up.
+    /// `delivered_followups`; a harness failure commits no artifact, so a rerun
+    /// picks it up.
     ///
     /// A responder task adds one small consultation after every round, run
     /// through the same harness on `run --responder-model` and captured under
@@ -516,9 +520,12 @@ pub(crate) enum Commands {
     /// task in a runner-built iteration, from `dispatch.json`,
     /// `conversation.json`, and each task's
     /// `outputs/turn-<n>/<harness>-events.jsonl`.
-    /// Never clobbers existing records without `--overwrite`; transcript-derived
-    /// timing carries `"source": "transcript"`. Use `--overwrite` to regenerate
-    /// records and timing after extractor accounting changes. Folded into `ingest`.
+    /// Never clobbers existing records without `--overwrite`. New timing records
+    /// carry independent `token_source` and `duration_source` fields: runner
+    /// dispatches normally pair transcript-normalized tokens with runner-measured
+    /// duration. Historical completion artifacts fall back to transcript duration
+    /// when available. Use `--overwrite` to regenerate records and timing after
+    /// accounting changes. Folded into `ingest`.
     ///
     /// For harnesses whose captures identify a refused tool call, it also writes
     /// `permission-denials.json` and warns on
@@ -630,6 +637,8 @@ pub(crate) enum Commands {
     /// per-cell appearances, resolution, and remediation. A timing metric with
     /// `n: 0` is unavailable, not a measured zero. The top-level `diff_scope` field
     /// is omitted for compatible older iterations that predate metric capture.
+    /// Source-mixing warnings are evaluated separately for token and duration
+    /// metrics, so consistently split provenance is not treated as a mismatch.
     ///
     /// Read `validity_warnings` before trusting the delta. Raw `diff_scope` entries
     /// are diagnostic context rather than an optimization target: smaller is not

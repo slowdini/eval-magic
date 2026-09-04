@@ -79,11 +79,11 @@
     },
     "total_tokens": {
       "type": ["integer", "null"],
-      "description": "From the harness's task completion event, or derived from the persisted transcript by record-runs using harness-specific normalization. Canonical timing lives in the sibling timing.json, whose `source` field records which origin produced it. May be null if neither source is available."
+      "description": "Historical compatibility field. Canonical token timing lives in the sibling timing.json, whose token_source records its origin. May be null if no source is available."
     },
     "duration_ms": {
       "type": ["integer", "null"],
-      "description": "From the harness's task completion event, a native duration field, or enough persisted transcript timestamps to derive wall-clock time. Canonical timing lives in the sibling timing.json. May be null when the harness does not expose reliable timing."
+      "description": "Historical compatibility field. Canonical duration lives in the sibling timing.json, whose duration_source records its origin. May be null when no reliable measurement is available."
     },
     "run_index": {
       "type": "integer",
@@ -92,7 +92,7 @@
     },
     "conversation": {
       "$ref": "#/definitions/conversation",
-      "description": "Ordered multi-turn evidence and scripted-delivery outcome. Absent for one-shot runs."
+      "description": "Runner completion state and ordered conversation evidence. Absent only from historical one-shot records."
     },
     "codebase": {
       "$ref": "#/definitions/codebase",

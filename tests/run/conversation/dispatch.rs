@@ -223,6 +223,10 @@ printf '%s
     let hung = read_json(Path::new(tasks[0]["conversation_path"].as_str().unwrap()));
     assert_eq!(hung["status"], "timed_out", "{hung}");
     assert_eq!(hung["timed_out_in_round"], 1);
+    assert!(
+        hung["duration_ms"].as_u64().unwrap() >= 900,
+        "the timeout record retains time spent in the killed harness: {hung}"
+    );
     let healthy = read_json(Path::new(tasks[1]["conversation_path"].as_str().unwrap()));
     assert_eq!(healthy["status"], "completed", "{healthy}");
 }

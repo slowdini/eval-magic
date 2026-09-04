@@ -6,6 +6,7 @@
 //! - [`capabilities`] — per-harness run-option capabilities
 //! - [`git`]          — git spawned with the operator's configuration held off
 //! - [`runtime`]      — runtime helpers (plain git spawning, POSIX shell discovery)
+//! - [`timing`]       — run timing measurements and per-metric provenance
 //!
 //! The submodules are re-exported flat here so downstream code writes
 //! `crate::core::Eval` rather than `crate::core::types::Eval`.
@@ -16,6 +17,7 @@ pub mod fs;
 pub mod git;
 pub mod grading;
 pub mod runtime;
+pub mod timing;
 pub mod tree_profiles;
 pub mod types;
 
