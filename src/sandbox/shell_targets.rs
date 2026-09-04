@@ -35,7 +35,56 @@ pub(crate) fn literal_words(command: &str) -> Vec<String> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ShellWord {
     pub(super) value: String,
+    /// True whenever the word still has something to expand. Kept beside
+    /// `dynamic_prefix` because a word a caller derived from a dynamic one is
+    /// dynamic with no usable prefix.
     pub(super) dynamic: bool,
+    /// What first made this word dynamic, and the literal text that preceded
+    /// it. `None` for a literal word, and also for a word a caller derived from
+    /// a dynamic one, where the recorded text would no longer line up.
+    pub(super) dynamic_prefix: Option<DynamicPrefix>,
+}
+
+/// Where a word stopped being a literal path, and what kind of expansion took
+/// over there.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct DynamicPrefix {
+    /// The word's value as it stood before the first dynamic character.
+    pub(super) literal: String,
+    pub(super) kind: DynamicKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DynamicKind {
+    /// `$`, a backtick, `~`, or a subshell. The result is unbounded: nothing in
+    /// the word says where the expansion can land.
+    Expansion,
+    /// `*`, `?`, a character class, or a brace. The result is drawn from a
+    /// directory listing, so the literal prefix bounds it.
+    Glob,
+}
+
+impl ShellWord {
+    /// A word with nothing left to expand — a spelling a classifier resolved
+    /// for itself, such as the value inside `--opt=value`.
+    pub(super) fn literal(value: &str) -> Self {
+        Self {
+            value: value.to_string(),
+            dynamic: false,
+            dynamic_prefix: None,
+        }
+    }
+
+    /// A slice of `source` re-read as a word of its own. It inherits `source`'s
+    /// dynamism but carries no prefix: the slice boundary need not line up with
+    /// where the expansion began, so it stays unresolvable.
+    pub(super) fn slice_of(value: &str, source: &ShellWord) -> Self {
+        Self {
+            value: value.to_string(),
+            dynamic: source.dynamic,
+            dynamic_prefix: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,7 +246,7 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
             }
             _ => {
                 let mut value = String::new();
-                let mut dynamic = false;
+                let mut dynamic_prefix: Option<DynamicPrefix> = None;
                 let mut started = false;
 
                 while i < chars.len() {
@@ -244,7 +293,10 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                                         i += 1;
                                     }
                                     '$' | '`' => {
-                                        dynamic = true;
+                                        dynamic_prefix.get_or_insert_with(|| DynamicPrefix {
+                                            literal: value.clone(),
+                                            kind: DynamicKind::Expansion,
+                                        });
                                         value.push(chars[i]);
                                         i += 1;
                                     }
@@ -268,13 +320,27 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                             value.push(chars[i]);
                             i += 1;
                         }
-                        '$' | '`' | '*' | '?' | '[' | '{' | '}' | '(' | ')' => {
-                            dynamic = true;
+                        '$' | '`' | '(' | ')' => {
+                            dynamic_prefix.get_or_insert_with(|| DynamicPrefix {
+                                literal: value.clone(),
+                                kind: DynamicKind::Expansion,
+                            });
+                            value.push(c);
+                            i += 1;
+                        }
+                        '*' | '?' | '[' | '{' | '}' => {
+                            dynamic_prefix.get_or_insert_with(|| DynamicPrefix {
+                                literal: value.clone(),
+                                kind: DynamicKind::Glob,
+                            });
                             value.push(c);
                             i += 1;
                         }
                         '~' if value.is_empty() => {
-                            dynamic = true;
+                            dynamic_prefix.get_or_insert_with(|| DynamicPrefix {
+                                literal: value.clone(),
+                                kind: DynamicKind::Expansion,
+                            });
                             value.push(c);
                             i += 1;
                         }
@@ -295,7 +361,11 @@ pub(super) fn lex_shell(command: &str) -> LexedShell {
                             strip_tabs,
                         });
                     }
-                    tokens.push(ShellToken::Word(ShellWord { value, dynamic }));
+                    tokens.push(ShellToken::Word(ShellWord {
+                        value,
+                        dynamic: dynamic_prefix.is_some(),
+                        dynamic_prefix,
+                    }));
                 }
                 if malformed {
                     break;

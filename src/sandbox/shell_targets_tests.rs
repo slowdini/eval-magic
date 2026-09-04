@@ -11,10 +11,7 @@ fn tokens(command: &str) -> Vec<ShellToken> {
 }
 
 fn word(value: &str) -> ShellToken {
-    ShellToken::Word(ShellWord {
-        value: value.to_string(),
-        dynamic: false,
-    })
+    ShellToken::Word(ShellWord::literal(value))
 }
 
 #[test]

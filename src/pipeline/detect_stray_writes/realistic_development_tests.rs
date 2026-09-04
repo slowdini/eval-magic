@@ -56,6 +56,15 @@ fn realistic_development_commands_match_between_guard_and_stray_write_audit() {
         "sed --in-place=.bak -e 's/old/new/' src/lib.rs",
         "mkdir -p .claude/skills/local-skill",
         "touch skills/local-skill/SKILL.md",
+        "mkdir -p build/{debug,release}",
+        "touch -r template.md docs/new.md",
+        "rm -rf target/*",
+        "rm -f build/out.o",
+        "cp -r src dist",
+        "cp /etc/hosts ./hosts-snapshot",
+        "mv build/app dist/app",
+        "install -Dm 755 build/app bin/app",
+        "install -d build/generated",
     ]
     .map(|command| Case {
         command,
@@ -110,6 +119,20 @@ fn realistic_development_commands_match_between_guard_and_stray_write_audit() {
         ("sed -i 's/old/new/' \"$FILE\"", ALLOWED_ROOT),
         ("printf done > /outside/result.txt", ALLOWED_ROOT),
         ("git push origin main", ALLOWED_ROOT),
+        // A direct shell mutation aimed outside the environment. Unlike the
+        // package and build families above, these name their destination
+        // outright, so the cwd stays inside the environment.
+        ("touch /private/tmp/probe", ALLOWED_ROOT),
+        ("mkdir -p /private/tmp/probe", ALLOWED_ROOT),
+        ("rm -rf /private/tmp/probe", ALLOWED_ROOT),
+        ("rm -rf /private/tmp/*", ALLOWED_ROOT),
+        ("rm -rf $BUILD", ALLOWED_ROOT),
+        ("cp -r src /private/tmp/probe", ALLOWED_ROOT),
+        ("cp -t /private/tmp src", ALLOWED_ROOT),
+        ("mv /etc/hosts ./captured", ALLOWED_ROOT),
+        ("install -m 755 build/app /usr/local/bin/app", ALLOWED_ROOT),
+        ("install -d /private/tmp/probe", ALLOWED_ROOT),
+        ("sudo rm -rf /etc", ALLOWED_ROOT),
     ]
     .map(|(command, cwd)| Case {
         command,

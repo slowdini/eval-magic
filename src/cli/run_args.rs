@@ -79,9 +79,14 @@ pub(crate) struct RunArgs {
     /// install modes that do not have a supported in-env destination. Recognized
     /// destinations include npm `--prefix`, pnpm `-C`/`--dir`, Yarn/Bun `--cwd`,
     /// pip `--target`/`--prefix`/`--root`/`--src`, and Cargo `-C`/`--target-dir`
-    /// plus its target-dir environment variables. Generic shell commands are not a
-    /// complete parser: for example, a bare `touch /outside` remains an
-    /// after-the-fact `detect-stray-writes` concern.
+    /// plus its target-dir environment variables. The filesystem mutators `touch`,
+    /// `mkdir`, `rm`, `cp`, `mv`, and `install` are read the same way: their
+    /// operands, their `-t`/`--target-directory` destinations, and the sources a
+    /// `mv` unlinks must all resolve inside the environment. A glob confined to one
+    /// path component under an in-env directory stays allowed; a variable or command
+    /// expansion names no path and is blocked. This is still not a complete shell
+    /// parser: scripts, interpreters, shell functions, and utilities outside these
+    /// families remain after-the-fact `detect-stray-writes` concerns.
     ///
     /// Local Git operations such as status, diff, add, commit, and branching are
     /// allowed inside the task repository. Repository-routing escapes and remote Git

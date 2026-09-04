@@ -1,15 +1,21 @@
 //! Target-aware classification for common development commands that mutate the filesystem.
 //!
 //! Package installs, pip installs, Cargo builds/tests, and in-place `sed` edits use the invocation
-//! cwd as their implicit destination and validate the path options they own. This stays narrower
-//! than a general shell parser; unrecognized commands remain the post-hoc audit's responsibility.
+//! cwd as their implicit destination and validate the path options they own. The commands that
+//! write a path outright — `touch`, `mkdir`, `rm`, `cp`, `mv`, `install` — live in [`filesystem`],
+//! which drives them from one table. This stays narrower than a general shell parser; unrecognized
+//! commands remain the post-hoc audit's responsibility.
 
 use std::path::Path;
 
 use crate::core::fs::artifact_path;
 
 use super::policy::{BashClassification, is_under_any, resolve_path};
-use super::shell_targets::{ShellToken, ShellWord, lex_shell};
+use super::shell_targets::{DynamicKind, ShellToken, ShellWord, lex_shell};
+
+mod filesystem;
+
+pub(super) use filesystem::is_mutator_reason;
 
 const PACKAGE_REASON: &str = "package install/add";
 const PIP_REASON: &str = "pip install";
@@ -85,21 +91,57 @@ fn denial(reason: &'static str, resolved_targets: Vec<String>) -> BashClassifica
     }
 }
 
+/// The one directory a dynamic target can expand within, when the expansion is
+/// confined enough to name one.
+///
+/// A glob or brace draws its result from a directory listing, so a target whose
+/// dynamic part is a single path component cannot land outside the directory
+/// its literal prefix names. Rejecting a remainder that carries `/` is what
+/// keeps that true — `target/*/../..` would otherwise walk back out — and
+/// rejecting a component that starts with `.` keeps `.*`, which matches `..`,
+/// from doing the same. A variable or command expansion names no directory at
+/// all, so it never qualifies.
+fn glob_directory(target: &ShellWord) -> Option<&str> {
+    let prefix = target.dynamic_prefix.as_ref()?;
+    if prefix.kind != DynamicKind::Glob {
+        return None;
+    }
+    if target.value.get(prefix.literal.len()..)?.contains('/') {
+        return None;
+    }
+    let (directory, component) = match prefix.literal.rfind('/') {
+        Some(slash) => prefix.literal.split_at(slash + 1),
+        // No directory in the prefix: the pattern expands within the cwd.
+        None => (".", prefix.literal.as_str()),
+    };
+    (!component.starts_with('.')).then_some(directory)
+}
+
 fn target_denial(
     reason: &'static str,
     target: &ShellWord,
     allowed_roots: &[String],
     invocation_cwd: &Path,
 ) -> Option<BashClassification> {
-    if target.dynamic || target.value.is_empty() || target.value.contains('\0') {
+    if target.value.is_empty() || target.value.contains('\0') {
         return Some(denial(reason, Vec::new()));
     }
-    if is_under_any(&target.value, allowed_roots, invocation_cwd) {
+    let spelling = if target.dynamic {
+        // Nothing analyzable about the expansion: fail closed with no evidence,
+        // rather than record a half-expanded spelling.
+        let Some(directory) = glob_directory(target) else {
+            return Some(denial(reason, Vec::new()));
+        };
+        directory
+    } else {
+        target.value.as_str()
+    };
+    if is_under_any(spelling, allowed_roots, invocation_cwd) {
         return None;
     }
     Some(denial(
         reason,
-        vec![artifact_path(&resolve_path(&target.value, invocation_cwd))],
+        vec![artifact_path(&resolve_path(spelling, invocation_cwd))],
     ))
 }
 
@@ -108,11 +150,12 @@ fn cwd_denial(
     allowed_roots: &[String],
     invocation_cwd: &Path,
 ) -> Option<BashClassification> {
-    let cwd = ShellWord {
-        value: ".".to_string(),
-        dynamic: false,
-    };
-    target_denial(reason, &cwd, allowed_roots, invocation_cwd)
+    target_denial(
+        reason,
+        &ShellWord::literal("."),
+        allowed_roots,
+        invocation_cwd,
+    )
 }
 
 /// Validate every recognized path option. The boolean says whether the command
@@ -166,10 +209,7 @@ fn validate_path_options(
             });
             if let Some(value) = inline {
                 saw_target = true;
-                let target = ShellWord {
-                    value: value.to_string(),
-                    dynamic: word.dynamic,
-                };
+                let target = ShellWord::slice_of(value, word);
                 if let Some(denial) = target_denial(reason, &target, allowed_roots, invocation_cwd)
                 {
                     return Err(denial);
@@ -303,10 +343,7 @@ fn classify_pip_install(
 fn assignment_target(word: &ShellWord, name: &str) -> Option<ShellWord> {
     word.value
         .strip_prefix(&format!("{name}="))
-        .map(|value| ShellWord {
-            value: value.to_string(),
-            dynamic: word.dynamic,
-        })
+        .map(|value| ShellWord::slice_of(value, word))
 }
 
 fn classify_cargo(
@@ -419,6 +456,7 @@ fn classify_segment(
         .or_else(|| classify_pip_install(words, allowed_roots, invocation_cwd))
         .or_else(|| classify_cargo(words, allowed_roots, invocation_cwd))
         .or_else(|| classify_sed(words, allowed_roots, invocation_cwd))
+        .or_else(|| filesystem::classify(words, allowed_roots, invocation_cwd))
 }
 
 /// Whether this segment is one of the development mutations whose in-bounds

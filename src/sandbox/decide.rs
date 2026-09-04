@@ -17,8 +17,8 @@ use crate::core::fs::artifact_path;
 
 use super::command_policy::COMMAND_POLICY_REASON;
 use super::policy::{
-    OUTPUT_REDIRECTION_REASON, apply_patch_paths, classify_bash_denials, is_patch_tool,
-    is_shell_tool, is_under_any, is_write_tool, path_arg, resolve_path,
+    apply_patch_paths, classify_bash_denials, is_misplaced_write, is_patch_tool, is_shell_tool,
+    is_under_any, is_write_tool, path_arg, resolve_path,
 };
 
 /// Prefix every guard denial reason carries. Harnesses surface the reason back
@@ -250,7 +250,7 @@ pub(crate) fn decide_with_cwd(
             };
             let hint = if denials
                 .iter()
-                .any(|denial| denial.reason == OUTPUT_REDIRECTION_REASON)
+                .any(|denial| is_misplaced_write(denial.reason))
             {
                 scratch_hint(&roots)
             } else {
@@ -630,6 +630,67 @@ mod tests {
         let d = decide_now("apply_patch", json!({}), Some(&marker()));
         assert!(!d.allow);
         assert!(d.reason.unwrap().contains("no patch target"));
+    }
+
+    /// A shell mutation aimed outside the environment is denied, names the
+    /// path it resolved, and points the agent at the scratch directory — the
+    /// same help a blocked redirect gets, since it is the same mistake.
+    #[test]
+    fn a_denied_filesystem_mutation_names_its_target_and_the_scratch_directory() {
+        let marker = marker();
+        let cwd = Path::new("/work/.eval-magic/task");
+        for (command, reason, target) in [
+            (
+                "touch /private/tmp/probe",
+                "file creation (touch)",
+                "/private/tmp/probe",
+            ),
+            (
+                "mkdir -p /private/tmp/probe",
+                "directory creation (mkdir)",
+                "/private/tmp/probe",
+            ),
+            (
+                "rm -rf /private/tmp/probe",
+                "file removal (rm)",
+                "/private/tmp/probe",
+            ),
+            (
+                "cp out.txt /private/tmp/probe",
+                "file copy (cp)",
+                "/private/tmp/probe",
+            ),
+            (
+                "mv out.txt /private/tmp/probe",
+                "file move (mv)",
+                "/private/tmp/probe",
+            ),
+            (
+                "install out.txt /private/tmp/probe",
+                "file install (install)",
+                "/private/tmp/probe",
+            ),
+        ] {
+            let result = decide_with_cwd(
+                "Bash",
+                &json!({ "command": command }),
+                Some(&marker),
+                now_ms(),
+                cwd,
+            );
+            assert!(!result.decision.allow, "{command}");
+            let verdict = result.decision.reason.unwrap();
+            assert!(verdict.contains(reason), "{command}: {verdict}");
+            assert!(
+                verdict.ends_with("For temporary or scratch files, use /work/.eval-magic/tmp."),
+                "{command}: {verdict}"
+            );
+            assert_eq!(
+                result.resolved_targets,
+                vec![target.to_string()],
+                "{command}"
+            );
+        }
     }
 
     #[test]
