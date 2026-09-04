@@ -170,6 +170,33 @@ pub fn is_under(target: &str, dir: &str, repo_root: &Path) -> bool {
     abs.starts_with(&base)
 }
 
+/// [`resolve_path`], then symlink resolution, so an alias and its target
+/// collapse onto one spelling.
+///
+/// Absolutization stays with [`resolve_path`], which honours the
+/// [`lexically_absolute`] rule; only the link walk is added on top.
+pub(crate) fn resolve_path_through_links(target: &str, repo_root: &Path) -> PathBuf {
+    crate::core::fs::resolve_existing_ancestor(&resolve_path(target, repo_root))
+}
+
+/// [`is_under`] widened to two spellings of one file.
+///
+/// The paths being compared arrive spelled by different authors — one recorded
+/// by the runner, which resolves what it records, the other typed by an agent,
+/// which does not — so a lexical comparison alone misses a symlinked route to
+/// the same file. On macOS that route is the ordinary one: `$TMPDIR` sits under
+/// `/var`, a link to `/private/var`.
+///
+/// The lexical answer is taken first and the resolved one only widens it, so a
+/// path that resolves to nothing on this host — a transcript recorded on
+/// another machine, an environment already torn down — classifies exactly as it
+/// does without link resolution.
+pub fn is_under_through_links(target: &str, dir: &str, repo_root: &Path) -> bool {
+    is_under(target, dir, repo_root)
+        || resolve_path_through_links(target, repo_root)
+            .starts_with(resolve_path_through_links(dir, repo_root))
+}
+
 /// True when `target` is under any of `dirs`.
 pub fn is_under_any(target: &str, dirs: &[String], repo_root: &Path) -> bool {
     dirs.iter().any(|d| is_under(target, d, repo_root))
@@ -445,6 +472,61 @@ mod tests {
     fn is_under_resolves_relative_targets_against_repo_root() {
         let repo = Path::new("/work");
         assert!(is_under(".eval-magic/x", "/work/.eval-magic", repo));
+    }
+
+    /// A path with nothing to resolve — a transcript recorded on another host,
+    /// an environment already torn down — has to classify exactly as the
+    /// lexical test classifies it, in both directions.
+    #[test]
+    fn is_under_through_links_leaves_unresolvable_paths_on_the_lexical_answer() {
+        let repo = Path::new("/work");
+        for (target, dir) in [
+            ("/work/.eval-magic", "/work/.eval-magic"),
+            ("/work/.eval-magic/x/out.md", "/work/.eval-magic"),
+            ("/work/runner/run.ts", "/work/.eval-magic"),
+            ("/work/.eval-magic2/x", "/work/.eval-magic"),
+            (".eval-magic/x", "/work/.eval-magic"),
+            ("/etc/passwd", r"C:\work\env"),
+        ] {
+            assert_eq!(
+                is_under_through_links(target, dir, repo),
+                is_under(target, dir, repo),
+                "{target} against {dir}"
+            );
+        }
+    }
+
+    /// The widening itself: one directory reached through a symlink is the same
+    /// directory, and a symlink to somewhere else still is not.
+    #[test]
+    fn is_under_through_links_matches_an_aliased_route_to_the_same_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        if crate::core::fs::skip_without_symlinks(
+            tmp.path(),
+            "is_under_through_links_matches_an_aliased_route_to_the_same_dir",
+        ) {
+            return;
+        }
+        let real = tmp.path().join("real");
+        std::fs::create_dir_all(real.join("skills")).unwrap();
+        std::fs::create_dir_all(real.join("docs")).unwrap();
+        let alias = tmp.path().join("alias");
+        crate::core::fs::create_symlink(&real, &alias).unwrap();
+
+        let skills = real.join("skills");
+        let dir = skills.to_string_lossy();
+        let repo = tmp.path();
+
+        assert!(is_under_through_links(
+            &alias.join("skills/SKILL.md").to_string_lossy(),
+            &dir,
+            repo
+        ));
+        assert!(!is_under_through_links(
+            &alias.join("docs/guide.md").to_string_lossy(),
+            &dir,
+            repo
+        ));
     }
 
     #[test]

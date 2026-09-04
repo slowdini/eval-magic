@@ -36,9 +36,10 @@ pub(crate) use install::{GUARD_DENIALS_DIR, GUARD_DENIALS_LOG, guard_is_armed};
 pub use install::{GUARD_MANIFEST, GUARD_MARKER, teardown_guard};
 pub(crate) use policy::lexically_absolute;
 pub use policy::{
-    classify_bash, is_patch_tool, is_shell_tool, is_under, is_under_any, is_write_tool, path_arg,
+    classify_bash, is_patch_tool, is_shell_tool, is_under, is_under_any, is_under_through_links,
+    is_write_tool, path_arg,
 };
-pub(crate) use shell_targets::command_reads_literal_path;
+pub(crate) use shell_targets::{command_reads_literal_path, literal_words};
 
 use std::time::{SystemTime, UNIX_EPOCH};
 

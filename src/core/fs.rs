@@ -62,17 +62,29 @@ pub fn fnv1a_hex(bytes: &[u8]) -> String {
 /// deepest ancestor that exists and re-attaches the rest. With no ancestor on
 /// disk at all, the lexical form is all there is.
 pub fn real_path(path: &Path) -> io::Result<PathBuf> {
-    let absolute = std::path::absolute(path)?;
+    Ok(resolve_existing_ancestor(&std::path::absolute(path)?))
+}
+
+/// Resolve the symlinks in an already-absolute `path`, re-attaching the trailing
+/// components that do not exist on disk, and returning `path` unchanged when no
+/// ancestor of it resolves at all.
+///
+/// Split out from [`real_path`] because a caller comparing agent-recorded paths
+/// must not take that function's leading `std::path::absolute`: it grafts the
+/// process's drive onto a rooted-but-prefixless path, which is exactly what
+/// `sandbox::policy::lexically_absolute` exists to prevent. Such a caller
+/// absolutizes under that rule first, then resolves here.
+pub(crate) fn resolve_existing_ancestor(path: &Path) -> PathBuf {
     let mut unresolved = Vec::new();
-    let mut anchor = absolute.as_path();
+    let mut anchor = path;
     loop {
         if let Ok(canonical) = fs::canonicalize(anchor) {
             let mut resolved = canonical;
             resolved.extend(unresolved.iter().rev());
-            return Ok(resolved);
+            return resolved;
         }
         let (Some(parent), Some(name)) = (anchor.parent(), anchor.file_name()) else {
-            return Ok(absolute);
+            return path.to_path_buf();
         };
         unresolved.push(name.to_os_string());
         anchor = parent;
@@ -160,6 +172,34 @@ pub(crate) fn create_symlink(target: &Path, link: &Path) -> io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
+/// Whether this host lets the test process create a symlink at all, probed by
+/// creating one under `scratch`.
+///
+/// A capability, not a platform label: tests exercise links wherever the
+/// backing filesystem permits them.
+#[cfg(test)]
+fn symlinks_available(scratch: &Path) -> bool {
+    let target = scratch.join("probe-target.txt");
+    let link = scratch.join("probe-link.txt");
+    if fs::write(&target, "probe").is_err() {
+        return false;
+    }
+    create_symlink(&target, &link).is_ok()
+}
+
+/// Report a skipped symlink test, deferring to the shared skip policy so the
+/// enforcement switch is decided in exactly one place.
+///
+/// Test support, shared by every module whose behavior depends on links.
+#[cfg(test)]
+pub(crate) fn skip_without_symlinks(scratch: &Path, test: &str) -> bool {
+    !symlinks_available(scratch)
+        && crate::core::runtime::report_skip(
+            test,
+            "this filesystem does not permit symlink creation",
+        )
+}
+
 /// Create `path`'s parent directory chain, when it has one.
 fn create_parent(path: &Path) -> io::Result<()> {
     match path.parent() {
@@ -173,29 +213,6 @@ mod tests {
     use super::*;
     use serde_json::json;
     use tempfile::TempDir;
-
-    /// Whether this host lets the test process create a symlink at all.
-    ///
-    /// A capability, not a platform label: tests exercise links wherever the
-    /// backing filesystem permits them.
-    fn symlinks_available(scratch: &Path) -> bool {
-        let target = scratch.join("probe-target.txt");
-        let link = scratch.join("probe-link.txt");
-        if fs::write(&target, "probe").is_err() {
-            return false;
-        }
-        create_symlink(&target, &link).is_ok()
-    }
-
-    /// Report a skipped symlink test, deferring to the shared skip policy so the
-    /// enforcement switch is decided in exactly one place.
-    fn skip_without_symlinks(scratch: &Path, test: &str) -> bool {
-        !symlinks_available(scratch)
-            && crate::core::runtime::report_skip(
-                test,
-                "this filesystem does not permit symlink creation",
-            )
-    }
 
     /// Two names for one directory have to come back as one path — that is the
     /// entire point of the function.

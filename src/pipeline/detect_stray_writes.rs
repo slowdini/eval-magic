@@ -29,7 +29,8 @@ use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
 use crate::sandbox::policy::classify_bash_with_policy;
 use crate::sandbox::{
-    is_shell_tool, is_under, is_under_any, is_write_tool, lexically_absolute, path_arg,
+    is_shell_tool, is_under_any, is_under_through_links, is_write_tool, lexically_absolute,
+    literal_words, path_arg,
 };
 use crate::validation::{SchemaName, validate_against_schema};
 
@@ -148,6 +149,12 @@ pub fn detect_stray_writes_in(
     findings
 }
 
+/// Whether a shell word spells a path rather than a bare name, by carrying a
+/// separator in either spelling.
+fn names_a_path(word: &str) -> bool {
+    word.contains('/') || word.contains('\\')
+}
+
 /// Flag tool invocations that read the **live** skill-under-test directory
 /// instead of the staged copy. Reads are detected, not blocked, so this surfaces
 /// post-hoc as a validity warning. See `detect-stray-writes.ts` for the rationale.
@@ -166,7 +173,7 @@ pub fn detect_live_source_reads(
     for inv in invocations {
         if is_read_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
-                && is_under(p, &live_dir_str, repo_root)
+                && is_under_through_links(p, &live_dir_str, repo_root)
             {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -181,8 +188,22 @@ pub fn detect_live_source_reads(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
+            // Neither scan alone covers the command. The raw one reaches
+            // spellings no path resolution can — the other separator, a
+            // directory named inside a word the lexer marks dynamic — and the
+            // per-word one reaches the symlinked route to the live directory,
+            // which no substring of the resolved spelling matches.
+            //
+            // Only words that name a path are resolved: every word resolves
+            // against the runner's cwd, so testing bare ones would make each
+            // `cargo test` a finding whenever that cwd sits inside the live
+            // directory.
             let normalized = normalize_separators(command);
-            if normalized.contains(&live_dir_str) {
+            if normalized.contains(&live_dir_str)
+                || literal_words(command).iter().any(|word| {
+                    names_a_path(word) && is_under_through_links(word, &live_dir_str, repo_root)
+                })
+            {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
                     path: None,
@@ -815,6 +836,123 @@ mod tests {
             repo(),
         );
         assert!(f.is_empty());
+    }
+
+    // --- live-source reads through an alias ---
+
+    /// One live skill directory reached two ways: `real/skills/mr-review`, and
+    /// `alias/skills/mr-review` where `alias` is a symlink to `real`. Returns
+    /// the resolved directory the runner would record and the alias spelling an
+    /// agent could type. `None` when this filesystem forbids links.
+    fn aliased_live_skill(tmp: &Path, test: &str) -> Option<(PathBuf, PathBuf)> {
+        if crate::core::fs::skip_without_symlinks(tmp, test) {
+            return None;
+        }
+        let real = tmp.join("real");
+        let skill = real.join("skills/mr-review");
+        std::fs::create_dir_all(&skill).unwrap();
+        std::fs::write(skill.join("SKILL.md"), "# mr-review").unwrap();
+        let alias = tmp.join("alias");
+        crate::core::fs::create_symlink(&real, &alias).unwrap();
+        Some((skill, alias.join("skills/mr-review")))
+    }
+
+    /// The runner records the live directory resolved, while the agent records
+    /// whatever it typed. Two spellings of one file are one file, so the read is
+    /// contamination either way.
+    #[test]
+    fn a_read_through_an_alias_of_the_live_dir_is_flagged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let Some((live, alias)) = aliased_live_skill(
+            tmp.path(),
+            "a_read_through_an_alias_of_the_live_dir_is_flagged",
+        ) else {
+            return;
+        };
+        let read = alias.join("SKILL.md");
+
+        let f = detect_live_source_reads(
+            &[inv("Read", json!({"file_path": read.to_string_lossy()}), 0)],
+            &live,
+            tmp.path(),
+        );
+
+        assert_eq!(f.len(), 1, "{f:?}");
+        // The evidence is what the agent actually typed, not its resolution.
+        assert_eq!(f[0].path.as_deref(), Some(&*read.to_string_lossy()));
+    }
+
+    #[test]
+    fn a_bash_referencing_the_live_dir_through_an_alias_is_flagged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let Some((live, alias)) = aliased_live_skill(
+            tmp.path(),
+            "a_bash_referencing_the_live_dir_through_an_alias_is_flagged",
+        ) else {
+            return;
+        };
+        let command = format!("cat {}/SKILL.md", alias.display());
+
+        let f = detect_live_source_reads(
+            &[inv("Bash", json!({"command": command.clone()}), 0)],
+            &live,
+            tmp.path(),
+        );
+
+        assert_eq!(f.len(), 1, "{f:?}");
+        assert_eq!(f[0].command.as_deref(), Some(&*command));
+    }
+
+    /// Resolution must not widen the boundary: an alias is only a live-source
+    /// read when it lands inside the live directory.
+    #[test]
+    fn an_alias_of_an_unrelated_directory_is_not_flagged() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let Some((live, _)) = aliased_live_skill(
+            tmp.path(),
+            "an_alias_of_an_unrelated_directory_is_not_flagged",
+        ) else {
+            return;
+        };
+        let elsewhere = tmp.path().join("real/docs");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let alias = tmp.path().join("docs-alias");
+        crate::core::fs::create_symlink(&elsewhere, &alias).unwrap();
+        let read = alias.join("guide.md");
+
+        let f = detect_live_source_reads(
+            &[
+                inv("Read", json!({"file_path": read.to_string_lossy()}), 0),
+                inv(
+                    "Bash",
+                    json!({"command": format!("cat {}", read.display())}),
+                    1,
+                ),
+            ],
+            &live,
+            tmp.path(),
+        );
+
+        assert!(f.is_empty(), "{f:?}");
+    }
+
+    /// A shell word is only a live-source reference when it names a path. A
+    /// bare command name resolves against the runner's cwd like any relative
+    /// word, so without this every command would be a finding whenever that cwd
+    /// sits inside the live directory.
+    #[test]
+    fn a_bare_command_word_is_not_a_path_into_the_live_dir() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let live = tmp.path().join("skills/mr-review");
+        std::fs::create_dir_all(&live).unwrap();
+
+        let f = detect_live_source_reads(
+            &[inv("Bash", json!({"command": "cargo test"}), 0)],
+            &live,
+            &live,
+        );
+
+        assert!(f.is_empty(), "{f:?}");
     }
 
     // --- declared plan-file root ---

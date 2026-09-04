@@ -214,6 +214,11 @@ absolute path. `detect-stray-writes` checks every treatment source and reports t
 read. `aggregate` carries it into `validity_warnings` for the same reason a discoverable plugin
 copy is carried there: the arm may not be comparing what it claims to.
 
+The check compares resolved paths, so a symlinked route to a live directory is reported like the
+direct one. Aliases are the ordinary case rather than an evasion: on macOS `$TMPDIR` sits under
+`/var`, itself a link to `/private/var`, so a dispatch that builds an absolute path from its own
+environment spells one directory a different way than the runner recorded it.
+
 ## The task repository is a separate boundary
 
 Skill-source isolation is about what a dispatch can *load*. The task repository is about what it can
