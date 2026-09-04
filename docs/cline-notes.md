@@ -131,7 +131,8 @@ the descriptor references. "Probe capture" refers to the observed dispatches des
   `skills` surfaces `skill`), results attached from the paired `content_end` (per-tool shape
   coercion, `{"error"}` payloads included), final text from `run_result.text`, ordered assistant
   messages from `content_end` text blocks, token totals from `run_result.usage` (cache reads
-  subtracted), duration from `run_result.durationMs`. `transcript_check` patterns match the
+  subtracted), and fallback duration from `run_result.durationMs`. Runner-driven eval duration uses
+  the runner's monotonic subprocess measurement. `transcript_check` patterns match the
   `"<name> <compact-json-args>"` rendering of the *flattened* args (e.g. `run_commands.*"command"`).
   `run_commands`, `editor`, and the read tools also answer to every other harness's spelling of
   their role, so a pattern written as `Bash` or `Read` grades here too.

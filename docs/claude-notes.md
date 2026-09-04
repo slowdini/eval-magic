@@ -119,10 +119,12 @@ affected task; see [progressive-enhancements.md](progressive-enhancements.md).
 
 `outputs/claude-events.jsonl` is the `-p` stream-json stream. `assistant`/`user` events wrap full
 Anthropic Messages objects (tool-call extraction matches `tool_result` blocks back to their
-`tool_use` by id); a terminal `result` event carries the authoritative final text, wall-clock
-duration, and token usage — there are no per-line timestamps. `system`, `rate_limit_event`, and
-other non-message events are skipped. The transcript exposes Skill-tool invocations, so the
-`__skill_invoked` meta-check is deterministic here.
+`tool_use` by id); a terminal `result` event carries the authoritative final text, native duration,
+and token usage — there are no per-line timestamps. Runner-driven eval duration comes from the
+runner's monotonic subprocess measurement; this native duration remains the fallback for historical
+completion artifacts. `system`, `rate_limit_event`, and other non-message events are skipped. The
+transcript exposes Skill-tool invocations, so the `__skill_invoked` meta-check is deterministic
+here.
 
 The built-in descriptor uses the named parser for this cross-event summary, selects its denial
 reader explicitly, and maps the session roster through the generic

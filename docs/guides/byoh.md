@@ -80,6 +80,12 @@ The runner-ready descriptor has two requirements:
    transcript reader that normalizes a non-empty final response. Use `[transcript.extract]` for a
    flat JSONL stream or a named parser for a supported non-flat shape.
 
+Every runner-ready descriptor gets dispatch duration without another field. The runner measures
+monotonic time inside the harness subprocess and stores it in `conversation.json`; resumed rounds
+are summed. `ingest` carries that value into `timing.json` as `duration_source: "runner"`, while
+tokens retain their transcript provenance. Native transcript duration is only a fallback for
+historical or externally produced completion artifacts that have no runner measurement.
+
 The `[tools]` table is small but load-bearing beyond the descriptor. Grouping this harness's tool
 names under `write`, `patch`, `shell`, and `read` is what lets the stray-write audit classify its
 invocations, and what makes a frozen `transcript_check` tool pattern grade the same here as on

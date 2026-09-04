@@ -28,6 +28,11 @@
       "minimum": 1,
       "description": "The round the dispatch was killed in, when it outran its per-task deadline."
     },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic wall time in milliseconds spent inside eval-agent harness subprocesses, summed across the initial dispatch and every resumed round. Excludes responder consultations, judge dispatches, queue time, and runner bookkeeping."
+    },
     "events": {
       "type": "array",
       "minItems": 1,

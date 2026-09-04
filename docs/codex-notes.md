@@ -139,11 +139,16 @@ max(input_tokens + output_tokens - cached_input_tokens, 0)
 count reasoning. Resumed `turn.completed` usage is cumulative for the native thread; the Codex
 descriptor therefore uses the final round's total instead of summing round totals.
 
-`codex exec --json` transcripts do not include a native duration or event timestamps, so
-`duration_ms` remains `null`. Aggregate reports the missing sample count; a benchmark statistic
-with `n: 0` is unavailable, not a measured zero. Ingest does not migrate timing artifacts
-automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
-them from preserved transcripts when desired.
+`codex exec --json` transcripts do not include a native duration or event timestamps. Runner-driven
+dispatches still have duration: `eval-magic dispatch` measures monotonic time inside each Codex
+subprocess and sums the initial and resumed rounds. `ingest` writes that measurement to
+`timing.json` with `duration_source: "runner"`, independently of the transcript-normalized
+`token_source`.
+
+A historical or externally produced `conversation.json` file without the runner measurement still
+has no Codex duration to recover, so `duration_ms` remains `null`. Aggregate reports the missing
+sample count; a benchmark statistic with `n: 0` is unavailable, not a measured zero. Ingest does not
+migrate existing timing artifacts automatically.
 
 ### Permission denials
 

@@ -91,9 +91,10 @@ label = "{label}"
 
 ## -------------------------------------------------------------------------------------------
 ## [transcript] — declaring an events file plus one primary summary reader unlocks transcript_check
-## grading, token/duration capture, and the deterministic skill-invocation meta-check. The primary
-## reader is either parser OR the summary outputs under extract; auxiliary denial/surface readers
-## can compose with it.
+## grading, token capture, historical duration fallback, and the deterministic skill-invocation
+## meta-check. The runner measures eval-agent subprocess duration for every runner-ready descriptor,
+## independently of this transcript surface. The primary reader is either parser OR the summary
+## outputs under extract; auxiliary denial/surface readers can compose with it.
 ## parser is a NAMED SUMMARY CAPABILITY — real parsing code reused from configuration alone:
 ##   parser = "claude-stream-json"   Claude Code `-p --output-format stream-json` events
 ##   parser = "cline-json"           Cline `--json` agent_event/run_result NDJSON

@@ -41,8 +41,10 @@ runner-owned `command_check` assertions can inject held-out files and execute de
 runner-owned final-environment metrics land in `diff-scope.json` with the diff itself in
 `diff.patch`, `diff_scope` assertions gate files/lines deterministically, and the
 `detect-stray-writes` post-pass (folded into `ingest`) audits
-writes that leave the private task environment. `record-runs` assembles every `run.json` from the
-runner-owned dispatch metadata, completion artifact, and per-round transcripts.
+writes that leave the private task environment. `dispatch` records monotonic eval-agent subprocess
+duration for every runner-ready harness, and `record-runs` assembles every `run.json` and
+`timing.json` from the runner-owned dispatch metadata, completion artifact, and per-round
+transcripts.
 
 In descriptor terms the baseline is `label`, `[dispatch].exec_template`, `[transcript]` with one
 primary reader, and `[tools]` beside that reader. `run` rejects a harness that cannot dispatch or
@@ -152,8 +154,8 @@ stream needing cross-event state — keyed `tool_use`/`tool_result` joins, shape
 coercion — is real per-harness code behind a named capability. If a stream needs more than the
 extract primitives, it's a code capability, not a bigger DSL.
 
-*What it unlocks:* `transcript_check` assertions, token/duration capture, automatic
-`run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
+*What it unlocks:* `transcript_check` assertions, token capture, historical duration fallback,
+automatic `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
 event — a deterministic `__skill_invoked` meta-check. Paired with `[tools]`, tool patterns are
 portable: grading identifies a native tool name's role from the run's own descriptor and retries
 the pattern against every spelling `all_tool_vocabulary()` declares for that role, so one authored

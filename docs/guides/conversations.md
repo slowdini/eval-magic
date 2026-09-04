@@ -120,6 +120,24 @@ with the task unfinished, so `dispatch` warns about each one by name and
 `validity_warnings`. That count is the one to read first: one arm truncated more
 often than the other is a threat to the comparison, not just to the run.
 
+## Dispatch timing
+
+Every task driven by `eval-magic dispatch` records `duration_ms` in its completed, stopped, or
+timed-out `conversation.json` file. This is a runner-owned monotonic measurement of time spent
+inside the eval-agent harness subprocess. For a multi-turn task, it is the sum of the initial
+dispatch and every resumed round.
+
+The measurement excludes responder consultations, judge dispatches, time waiting in the task
+queue, and runner bookkeeping. A timeout retains the elapsed time spent waiting for the killed
+harness process, while a harness command that fails writes no completion artifact.
+
+During `ingest`, `timing.json` becomes the canonical location for the measurement. New timing files
+record provenance per metric: transcript-normalized tokens use `token_source: "transcript"`, and
+runner duration uses `duration_source: "runner"`. `run.json` does not duplicate the runner timing.
+Historical or externally produced completion artifacts without `duration_ms` fall back to a native
+transcript duration when the harness exposes one; existing `timing.json` files are preserved unless
+you pass `--overwrite`.
+
 ## Cross-harness behaviour
 
 The responder needs no per-harness support and no descriptor field. It reads

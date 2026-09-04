@@ -56,7 +56,37 @@ fn assembles_run_and_timing_for_every_task_from_disk() {
     let timing = read_timing_value(&iter, "crash", "with_skill");
     assert_eq!(timing["total_tokens"], json!(125));
     assert_eq!(timing["duration_ms"], json!(30_000));
-    assert_eq!(timing["source"], json!("transcript"));
+    assert_eq!(timing["token_source"], json!("transcript"));
+    assert_eq!(timing["duration_source"], json!("transcript"));
+}
+
+#[test]
+fn historical_codex_completion_without_runner_or_timestamps_keeps_duration_missing() {
+    let root = TempDir::new().unwrap();
+    let iter = dirs(&root);
+    let paths = write_iteration(
+        &iter,
+        &[FixtureTask {
+            eval_id: "historical",
+            condition: "with_skill",
+        }],
+    );
+    write_transcript_file(
+        &paths[0].outputs_dir,
+        "codex-events.jsonl",
+        jsonl(&[
+            json!({"type": "item.completed", "item": {"id": "m1", "type": "agent_message", "text": "Done."}}),
+            json!({"type": "turn.completed", "usage": {"input_tokens": 2, "output_tokens": 3}}),
+        ]),
+    );
+
+    record_runs(&iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
+
+    let timing = read_timing_value(&iter, "historical", "with_skill");
+    assert_eq!(timing["total_tokens"], 5);
+    assert_eq!(timing["token_source"], "transcript");
+    assert!(timing["duration_ms"].is_null(), "{timing}");
+    assert_eq!(timing["duration_source"], "transcript");
 }
 
 /// Grading reads `run.json` and nothing else, so the record has to name the
@@ -255,7 +285,12 @@ fn assembles_codex_records_from_each_tasks_events() {
     let timing = read_timing_value(&iter, "crash", "with_skill");
     assert_eq!(
         timing,
-        json!({"total_tokens": 40, "duration_ms": 30_000, "source": "transcript"})
+        json!({
+            "total_tokens": 40,
+            "duration_ms": 30_000,
+            "token_source": "transcript",
+            "duration_source": "transcript"
+        })
     );
 }
 
@@ -306,7 +341,12 @@ fn assembles_claude_records_from_each_tasks_events() {
     let timing = read_timing_value(&iter, "crash", "with_skill");
     assert_eq!(
         timing,
-        json!({"total_tokens": 125, "duration_ms": 30_000, "source": "transcript"})
+        json!({
+            "total_tokens": 125,
+            "duration_ms": 30_000,
+            "token_source": "transcript",
+            "duration_source": "transcript"
+        })
     );
 }
 

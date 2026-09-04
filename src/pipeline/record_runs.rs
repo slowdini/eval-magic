@@ -4,13 +4,16 @@
 //! backfills `timing.json`) for every task in the iteration's `dispatch.json`,
 //! from sources already on disk: carry-over fields from the dispatch task,
 //! runner-owned completion metadata from `conversation.json`, and assistant
-//! messages, tools, final text, tokens, and duration from transcripts under
+//! messages, tools, final text, and tokens from transcripts under
 //! `outputs/turn-N/<harness>-events.jsonl` according to the harness descriptor.
+//! Duration comes first from the runner's monotonic measurement in
+//! `conversation.json`; historical or externally produced completions fall
+//! back to transcript-native duration when available.
 //!
 //! Existing records always win: a previously assembled `run.json` is skipped
-//! without `overwrite`, and `timing.json` is backfill-only — higher-fidelity
-//! timing captured during dispatch is never replaced by transcript-derived
-//! values whose accounting may not be comparable 1:1.
+//! without `overwrite`, and `timing.json` is backfill-only. Token and duration
+//! provenance are recorded independently because transcript-normalized tokens
+//! and runner-measured duration normally come from different sources.
 //!
 //! Harnesses whose captures identify refused tool calls also get the
 //! iteration-level `permission-denials.json` written here (see
@@ -307,17 +310,14 @@ pub fn record_runs(
             result.recorded += 1;
         }
 
-        // timing.json — backfill only; completion-event numbers always win.
+        // timing.json remains backfill-only. Runner duration and transcript
+        // tokens have independent provenance; an existing live-capture record
+        // still wins unless the operator explicitly requests an overwrite.
         let timing_path = Path::new(&task.timing_path);
-        if evidence.transcripts_complete
-            && let Some(summary) = summary
-            && (!timing_path.exists() || overwrite)
+        if (!timing_path.exists() || overwrite)
+            && let Some(timing) =
+                timing_for_task(&completion, summary, evidence.transcripts_complete)
         {
-            let timing = TimingRecord {
-                total_tokens: Some(summary.total_tokens),
-                duration_ms: Some(summary.duration_ms),
-                source: Some(TimingSource::Transcript),
-            };
             write_json(timing_path, &timing)?;
         }
     }
@@ -340,6 +340,30 @@ pub fn record_runs(
     }
 
     Ok(result)
+}
+
+fn timing_for_task(
+    completion: &ConversationRecord,
+    summary: Option<&TranscriptSummary>,
+    transcripts_complete: bool,
+) -> Option<TimingRecord> {
+    let complete_summary = transcripts_complete.then_some(summary).flatten();
+    let total_tokens = complete_summary.map(|summary| summary.total_tokens);
+    let token_source = complete_summary.map(|_| TimingSource::Transcript);
+    let (duration_ms, duration_source) = if let Some(duration_ms) = completion.duration_ms {
+        (Some(Some(duration_ms)), Some(TimingSource::Runner))
+    } else if let Some(summary) = complete_summary {
+        (Some(summary.duration_ms), Some(TimingSource::Transcript))
+    } else {
+        (None, None)
+    };
+
+    (total_tokens.is_some() || duration_ms.is_some()).then_some(TimingRecord {
+        total_tokens,
+        duration_ms,
+        token_source,
+        duration_source,
+    })
 }
 
 /// The skill/plugin surface each of a task's rounds reported. Unlike refusals,

@@ -28,8 +28,9 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   (`{type, timestamp (epoch ms), sessionID, ...}`). The `opencode-events` parser normalizes
   `tool_use` parts (name at `part.tool`, args at `part.state.input`, outcome at
   `part.state.output`/`part.state.error`), sums `step_finish` `part.tokens` (cache reads excluded,
-  matching codex accounting), takes the final message from the last `text` part, and measures
-  duration from the envelope timestamps. The declarative extract tier was not sufficient here:
+  matching codex accounting), takes the final message from the last `text` part, and derives
+  fallback duration from the envelope timestamps. Runner-driven eval duration uses the runner's
+  monotonic subprocess measurement. The declarative extract tier was not sufficient here:
   tool args nest under `state.input` and timestamps are numbers, not RFC 3339 strings. The
   native `skill` tool (input `{name}`) is a deterministic skill-invocation event, so
   `surfaces_skill_invocation = true` with `skill_tool = "skill"` / `skill_arg = "name"` and the

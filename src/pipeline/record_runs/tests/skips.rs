@@ -47,6 +47,15 @@ fn backfills_timing_only_when_absent() {
         }],
     );
     write_claude_events(&paths[0].outputs_dir, "unused");
+    let conversation_path = paths[0].outputs_dir.join("conversation.json");
+    let mut conversation: Value =
+        serde_json::from_str(&fs::read_to_string(&conversation_path).unwrap()).unwrap();
+    conversation["duration_ms"] = json!(777);
+    fs::write(
+        &conversation_path,
+        serde_json::to_string_pretty(&conversation).unwrap(),
+    )
+    .unwrap();
     fs::write(
         &paths[0].timing_path,
         json!({"total_tokens": 12345, "duration_ms": 9000}).to_string(),
@@ -60,6 +69,14 @@ fn backfills_timing_only_when_absent() {
     assert_eq!(timing["total_tokens"], json!(12345));
     assert_eq!(timing["duration_ms"], json!(9000));
     assert!(timing.get("source").is_none());
+
+    record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), true).unwrap();
+
+    let timing = read_timing_value(&iter, "crash", "with_skill");
+    assert_eq!(timing["total_tokens"], json!(125));
+    assert_eq!(timing["token_source"], json!("transcript"));
+    assert_eq!(timing["duration_ms"], json!(777));
+    assert_eq!(timing["duration_source"], json!("runner"));
 }
 
 #[test]
