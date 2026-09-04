@@ -10,6 +10,28 @@ mod skill_access;
 
 pub(crate) use skill_access::command_reads_literal_path;
 
+/// Every literal word of a shell command — the spellings a path comparison can
+/// resolve.
+///
+/// Dynamic words (expansions, globs) are dropped because they name no single
+/// path, and a malformed command yields none rather than words lexed from a
+/// misread of it. Callers that must still catch those shapes keep their own
+/// scan of the raw command text.
+pub(crate) fn literal_words(command: &str) -> Vec<String> {
+    let lexed = lex_shell(command);
+    if lexed.malformed {
+        return Vec::new();
+    }
+    lexed
+        .tokens
+        .into_iter()
+        .filter_map(|token| match token {
+            ShellToken::Word(word) if !word.dynamic => Some(word.value),
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct ShellWord {
     pub(super) value: String,

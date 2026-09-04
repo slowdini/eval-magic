@@ -582,9 +582,10 @@ fn live_source_detection_checks_every_treatment_member() {
             "tool_invocations": [{
                 "name": "Read",
                 "args": {
-                    // Spelled as the runner resolves it: live-source detection
-                    // compares paths lexically, so an unresolved alias of the
-                    // same file would not match.
+                    // Spelled as the runner resolves it, which is the shape a
+                    // transcript carries when nothing aliases the path. Detection
+                    // matches either spelling; `detect_live_source_reads`' own
+                    // unit tests cover the aliased one.
                     "file_path": wire_path(&resolved(&skill_dir).join("supporting-skill/SKILL.md"))
                 },
                 "ordinal": 0
