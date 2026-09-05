@@ -1,11 +1,29 @@
-# Isolating dispatches from live skill sources
+# Dispatch isolation and sandbox boundaries
 
-> **Audience:** operators whose run printed a skill-shadow warning or whose
-> `plugin-shadow.json` or `benchmark.json` reports a live copy of an eval skill.
+> **Audience:** operators preparing eval dispatches, troubleshooting sandbox failures, or
+> resolving live skill-source warnings.
 
-Use this guide after eval-magic reports a discoverable live skill. It explains how to exclude that
-source from eval-agent dispatches and how to verify the result. Normal task-repository isolation and
-the write guard are separate concerns documented by `eval-magic run --help`.
+Several boundaries shape an eval dispatch. Use this guide to distinguish inherited
+operator restrictions from task protections and skill-source isolation, then follow the relevant
+harness section for troubleshooting or live-source remedies.
+
+## Understand the boundaries
+
+- **Operator sandbox**: the environment around the process launching `eval-magic dispatch`.
+  An operator Codex session can restrict the runner and the harness commands it spawns.
+- **Harness task sandbox**: the harness's own operating-system restrictions on the eval agent.
+  The generated Codex task command uses `--sandbox workspace-write`. This inner sandbox cannot
+  grant access denied by the operator's outer sandbox.
+- **Eval guard**: eval-magic's tool and command checks enforce task containment for recognized
+  operations and apply the eval-authored command policy. These checks complement the harness
+  sandbox; see `eval-magic docs guard` for their scope and limits.
+- **Skill-source isolation**: excluding competing live skill copies from what an eval agent can
+  discover or load, so the treatment comparison measures the intended skills. A task sandbox or
+  eval guard does not by itself exclude these sources.
+
+Every task also has a private Git repository prepared by eval-magic; see `eval-magic run --help`
+and `eval-magic docs codebase`. That repository boundary is independent of the permissions the
+operator and harness sandboxes enforce.
 
 ## Why a live copy matters
 
@@ -47,6 +65,34 @@ Choose one remedy:
 editing global configuration. Project-local staged skills still load under every remedy.
 
 ## Isolate Codex
+
+### Diagnose nested sandbox failures
+
+If the same generated task command succeeds in an ordinary terminal with
+equivalent inputs and configuration, but fails inside the operator Codex session with
+`Operation not permitted`, the outer sandbox may be preventing the dispatch. The error
+`Operation not permitted` alone does not establish a nested-sandbox problem. Compare the command,
+working directory, inputs, and resolved harness configuration before choosing this remedy.
+
+Commands spawned from an operator Codex session inherit its sandbox boundaries. The inner task
+sandbox cannot grant access denied by that outer process. The outer environment may also block
+operations needed to create the inner sandbox. Adding a writable directory alone does not
+guarantee that nested dispatch will work.
+
+Choose one of these remedies:
+
+1. **Preferred:** run the `eval-magic dispatch` command from the generated `RUNBOOK.md` in that
+   ordinary terminal, using the runbook's working directory and arguments.
+2. **Alternative:** approve or escalate the outer launch of `eval-magic dispatch` where the
+   operator surface and policy support it. Limit the approval to the workspace and process access
+   required to launch the guarded tasks, including creation of their inner sandboxes.
+
+Keep the task command's `--sandbox workspace-write` and eval guard enabled under either remedy.
+Do not replace the generated harness command with an unrestricted command or disable the guard.
+Eval-magic does not detect or bypass the operator's sandbox; the remedy belongs to the outer
+execution environment.
+
+### Exclude live skill sources
 
 Choose the remedy that matches each reported source:
 

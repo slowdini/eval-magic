@@ -177,6 +177,26 @@ fn dispatch_help_documents_conversation_verification() {
         .stdout(contains("plan_not_presented"));
 }
 
+#[test]
+fn dispatch_help_documents_nested_codex_sandbox_remedies() {
+    skill_eval()
+        .args(["dispatch", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("same generated task command"))
+        .stdout(contains("equivalent inputs and configuration"))
+        .stdout(contains("fails inside the operator Codex session"))
+        .stdout(contains("Operation not permitted"))
+        .stdout(contains("alone does not establish"))
+        .stdout(contains("Prefer running"))
+        .stdout(contains("ordinary terminal"))
+        .stdout(contains("outer launch of `eval-magic dispatch`"))
+        .stdout(contains("surface and policy support"))
+        .stdout(contains("--sandbox workspace-write"))
+        .stdout(contains("eval guard enabled"))
+        .stdout(contains("eval-magic docs isolation"));
+}
+
 /// Plan mode is a per-eval declaration that starts the harness's native mode;
 /// the run-level flag that injected a simulated one is gone.
 #[test]

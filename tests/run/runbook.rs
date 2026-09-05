@@ -86,6 +86,27 @@ fn run_writes_headless_runbook_for_codex() {
         book.contains("--harness codex"),
         "pipeline commands carry --harness codex: {book}"
     );
+    for guidance in [
+        "same generated task command",
+        "equivalent inputs and configuration",
+        "fails inside the operator Codex session",
+        "Operation not permitted",
+        "alone does not establish",
+        "Prefer running",
+        "ordinary terminal",
+        "outer launch of `eval-magic dispatch`",
+        "surface and policy support",
+        "--sandbox workspace-write",
+        "eval guard enabled",
+        "eval-magic docs isolation",
+    ] {
+        assert!(book.contains(guidance), "missing {guidance:?}: {book}");
+    }
+    assert!(
+        book.find("**Codex inside Codex:**").unwrap()
+            < book.find("\neval-magic dispatch --skill-dir").unwrap(),
+        "the Codex note precedes the pasteable dispatch command: {book}"
+    );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
 }
 
@@ -123,6 +144,10 @@ fn run_writes_headless_runbook_for_claude() {
     assert!(
         !book.contains("switch-condition"),
         "headless does not use the in-session batch loop: {book}"
+    );
+    assert!(
+        !book.contains("Codex inside Codex") && !book.contains("Operation not permitted"),
+        "other harnesses omit the Codex troubleshooting note: {book}"
     );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
 
@@ -186,8 +211,8 @@ fn run_writes_headless_runbook_for_opencode() {
         "pipeline commands carry --harness opencode: {book}"
     );
     assert!(
-        book.contains("--harness opencode"),
-        "pipeline commands carry --harness opencode: {book}"
+        !book.contains("Codex inside Codex") && !book.contains("Operation not permitted"),
+        "other harnesses omit the Codex troubleshooting note: {book}"
     );
     assert!(!book.contains("{{"), "no unsubstituted tokens: {book}");
 

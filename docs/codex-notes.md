@@ -204,8 +204,29 @@ The hook invokes the hidden `guard-codex` subcommand
 
 ## Running inside Codex itself
 
-User-facing guidance lives in `eval-magic run --help`: staging writes `.agents/skills`, guarded
-runs also write
-`.codex/hooks.json`, and Codex's default workspace-write sandbox protects those paths, so the
-runner may need approval/escalation or an external terminal invocation. Keep that help text in sync
-when this changes.
+Preparation and dispatch can encounter separate restrictions from an operator Codex session.
+During `eval-magic run`, staging writes `.agents/skills` and guarded runs write `.codex/hooks.json`.
+The operator's sandbox can protect those paths, so preparation may require outer approval or an
+ordinary terminal invocation.
+
+During `eval-magic dispatch`, the inner Codex process inherits the outer launch environment.
+The report in [issue #245, item 1](https://github.com/slowdini/eval-magic/issues/245) describes an
+`Operation not permitted` failure inside the operator Codex sandbox while the exact generated
+task succeeded outside it with the task's workspace-write sandbox and eval guard intact.
+This is a conditional diagnosis: compare the same generated task command with equivalent inputs,
+working directory, and configuration. The error text alone does not establish the cause.
+
+OpenAI's [sandbox documentation](https://learn.chatgpt.com/docs/sandboxing) states that spawned
+commands inherit the operator sandbox boundaries. Its
+[OS-level implementation notes](https://learn.chatgpt.com/docs/agent-approvals-security#os-level-sandbox)
+also describe environments that block namespace, `bwrap`, or `seccomp` operations needed to create
+the Linux sandbox. These limits explain why granting another writable directory may be insufficient;
+they do not identify which operation caused the reported failure.
+
+The operational guidance lives in `eval-magic dispatch --help`, `eval-magic docs isolation`, and
+Codex-generated `RUNBOOK.md`. Prefer running the generated dispatch command from the ordinary
+terminal. Where the operator surface and policy support it, an alternative is approval or escalation
+of the **outer launch of `eval-magic dispatch`**, limited to the required workspace and process access.
+Keep the task command's `--sandbox workspace-write` and eval guard enabled. Neither weakening the
+inner task protections nor adding runtime sandbox detection or a platform-specific bypass is part
+of this remedy.

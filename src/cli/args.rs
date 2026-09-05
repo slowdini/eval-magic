@@ -443,6 +443,19 @@ pub(crate) enum Commands {
     /// A planning phase that ends with no plan to approve is recorded as
     /// `plan_not_presented` and warned about: that run never reached
     /// implementation.
+    ///
+    /// Nested Codex sandboxes: if the same generated task command succeeds in
+    /// an ordinary terminal with equivalent inputs and configuration, but
+    /// fails inside the operator Codex session with `Operation not permitted`,
+    /// the outer sandbox may be responsible. This error alone does not establish
+    /// the cause. The inner sandbox cannot grant access denied by the outer process.
+    ///
+    /// Prefer running the generated `eval-magic dispatch` command from that
+    /// ordinary terminal. Alternatively, approve or escalate the outer launch of
+    /// `eval-magic dispatch` where the operator surface and policy support it,
+    /// limited to the required workspace and process access. Keep the task's
+    /// `--sandbox workspace-write` and eval guard enabled. See
+    /// `eval-magic docs isolation` for diagnosis and limits on creating the inner sandbox.
     Dispatch(DispatchArgs),
     /// Snapshot a workspace baseline.
     ///
@@ -700,10 +713,10 @@ pub(crate) enum Commands {
     ///
     /// Every Markdown file directly under `docs/guides/` ships inside the binary,
     /// version-matched to the installed release and readable offline. `byoh`
-    /// covers adapting an unknown harness; `isolation` covers excluding live
-    /// skill sources after a shadow warning. Bare `docs` lists the discovered
-    /// topics. Contributor documentation stays unembedded in the repository's
-    /// `docs/` root.
+    /// covers adapting an unknown harness; `isolation` covers sandbox boundaries,
+    /// nested Codex dispatches, and excluding live skill sources after a shadow
+    /// warning. Bare `docs` lists the discovered topics. Contributor documentation
+    /// stays unembedded in the repository's `docs/` root.
     Docs {
         /// Topic to print (bare `docs` lists the available topics).
         topic: Option<String>,
