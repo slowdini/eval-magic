@@ -10,10 +10,9 @@
 //! placeholders the renderer fills with run-specific values. The generated
 //! `RUNBOOK.md` itself is a workspace artifact and is not version controlled.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
-use crate::adapters::{CliDispatchContext, CliJudgeContext, RUNBOOK_TEMPLATE, adapter_for};
+use crate::adapters::RUNBOOK_TEMPLATE;
 use crate::core::fs::artifact_path;
 use crate::core::{Harness, Mode, POSIX_TOOLING_REQUIREMENT};
 
@@ -32,13 +31,10 @@ pub(crate) struct RunbookContext<'a> {
     pub cond_a: &'a str,
     pub cond_b: &'a str,
     pub num_tasks: usize,
-    pub multi_turn_tasks: usize,
+    pub eval_ids: &'a [String],
     /// The self-sufficient `--skill-dir … --skill …` selector (leading space),
     /// from [`command_target_args`](crate::cli::command_target_args).
     pub target_args: &'a str,
-    pub guard: bool,
-    pub agent_model: Option<&'a str>,
-    pub agent_env: &'a BTreeMap<String, String>,
 }
 
 /// Render `RUNBOOK.md` for a run: fill the shared runbook template's
@@ -47,7 +43,6 @@ pub(crate) struct RunbookContext<'a> {
 /// runbook stays in lockstep with `dispatch-manifest.md` and the printed next
 /// steps; pipeline commands carry `--harness`.
 pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
-    let adapter = adapter_for(ctx.harness);
     let template = RUNBOOK_TEMPLATE;
 
     let iteration = ctx.iteration.to_string();
@@ -70,64 +65,50 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         ("POSIX_REQUIREMENT", POSIX_TOOLING_REQUIREMENT),
     ];
 
-    // A human pastes commands. The harness-specific dispatch + judge recipes come
-    // from the adapter's CLI generators, so the runbook stays in lockstep with
-    // `dispatch-manifest.md` and the printed next steps; pipeline commands carry
-    // `--harness`. Owners outlive the `render` call below.
     let label = harness_label(ctx.harness);
-    let one_shot_recipe = adapter.cli_next_steps(CliDispatchContext {
-        guard: ctx.guard,
-        target_args: ctx.target_args,
-        iteration: ctx.iteration,
-        agent_model: ctx.agent_model,
-        agent_env: ctx.agent_env,
-    });
-    let dispatch_recipe = if ctx.multi_turn_tasks == 0 {
-        one_shot_recipe
+    let dispatch_note = if label == "codex" {
+        format!(
+            "{}\n\n",
+            include_str!("../../../profiles/codex/dispatch-note.md").trim_end()
+        )
     } else {
-        let driver = format!(
-            "Scripted tasks must run through eval-magic's conversation driver so every follow-up \
-             resumes the same native session and produces a schema-validated \
-             `conversation.json`. From this iteration directory:\n\n```bash\n\
-             JOBS=${{JOBS:-4}}\n\
-             jq -r '.tasks | to_entries[] | select(.value.turns != null) | .key' \
-             \"{dispatch_json}\" | \\\n  xargs -P \"$JOBS\" -n 1 eval-magic dispatch-task \
-             --dispatch \"{dispatch_json}\" --task-index\n```\n\n\
-             A normal guardrail stop (`agent_did_not_ask` or `agent_response_mismatch`) is valid \
-             completed eval data; an interrupted task has no `conversation.json` and ingest \
-             skips it."
-        );
-        if ctx.multi_turn_tasks == ctx.num_tasks {
-            format!(
-                "{driver}\n\nThen run `eval-magic ingest{} --iteration {} --harness {label}`.",
-                ctx.target_args, ctx.iteration
-            )
-        } else {
-            format!(
-                "{driver}\n\nFor the remaining task entries whose `turns` field is absent, use \
-                 the one-shot harness recipe below (do not use it for scripted tasks):\n\
-                 {one_shot_recipe}"
-            )
-        }
+        String::new()
     };
-    let judge_recipe = adapter
-        .cli_judge_next_steps(CliJudgeContext {
-            guard: ctx.guard,
-            iteration_dir: ctx.iteration_dir,
-        })
-        .unwrap_or_else(|| {
-            "Dispatch each judge task `ingest` listed through the same harness CLI, \
-             capturing its transcript output, then finalize."
-                .to_string()
-        });
+    // The runner drives each phase; commands vary only by the harness selector.
+    let dispatch_cmd = format!(
+        "eval-magic dispatch{} --iteration {} --harness {label}",
+        ctx.target_args, ctx.iteration
+    );
+    let ingest_cmd = format!(
+        "eval-magic ingest{} --iteration {} --harness {label}",
+        ctx.target_args, ctx.iteration
+    );
+    let judge_cmd = format!(
+        "eval-magic dispatch --judges{} --iteration {} --harness {label}",
+        ctx.target_args, ctx.iteration
+    );
     let finalize_cmd = format!(
         "eval-magic finalize{} --iteration {} --harness {label}",
         ctx.target_args, ctx.iteration
     );
+    let compare_commands = ctx
+        .eval_ids
+        .iter()
+        .map(|eval_id| {
+            format!(
+                "eval-magic compare{} --iteration {} --eval {eval_id}",
+                ctx.target_args, ctx.iteration
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
     let teardown_cmd = format!("eval-magic teardown{} --harness {label}", ctx.target_args);
     vars.push(("HARNESS", &label));
-    vars.push(("DISPATCH_RECIPE", &dispatch_recipe));
-    vars.push(("JUDGE_RECIPE", &judge_recipe));
+    vars.push(("HARNESS_DISPATCH_NOTE", &dispatch_note));
+    vars.push(("DISPATCH_CMD", &dispatch_cmd));
+    vars.push(("INGEST_CMD", &ingest_cmd));
+    vars.push(("COMPARE_COMMANDS", &compare_commands));
+    vars.push(("JUDGE_CMD", &judge_cmd));
     vars.push(("FINALIZE_CMD", &finalize_cmd));
     vars.push(("TEARDOWN_CMD", &teardown_cmd));
 
@@ -174,16 +155,11 @@ fn render(template: &str, vars: &[(&str, &str)]) -> String {
 mod tests {
     use super::*;
     use std::path::PathBuf;
-    use std::sync::LazyLock;
-
-    fn empty_env() -> &'static BTreeMap<String, String> {
-        static EMPTY: LazyLock<BTreeMap<String, String>> = LazyLock::new(BTreeMap::new);
-        &EMPTY
-    }
 
     #[test]
     fn runbook_is_human_followed_cli_recipe() {
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
+        let eval_ids = vec!["implement-widget".to_string()];
         let ctx = RunbookContext {
             harness: Harness::resolve("codex").unwrap(),
             skill_name: "widget-skill",
@@ -193,11 +169,8 @@ mod tests {
             cond_a: "old_skill",
             cond_b: "new_skill",
             num_tasks: 6,
-            multi_turn_tasks: 0,
+            eval_ids: &eval_ids,
             target_args: " --skill-dir /tmp/skills --skill widget-skill",
-            guard: false,
-            agent_model: Some("gpt-5-mini"),
-            agent_env: empty_env(),
         };
         let book = build_runbook(&ctx);
 
@@ -215,11 +188,15 @@ mod tests {
             "frames the run for a human at a terminal: {book}"
         );
 
-        // The CLI dispatch recipe comes from the Codex adapter; pipeline commands
-        // carry --harness codex so they are copy-pasteable.
+        // Every phase is a runner command carrying --harness codex, so the whole
+        // runbook is copy-pasteable without knowing the harness's own CLI.
         assert!(
-            book.contains("codex --ask-for-approval never exec"),
-            "carries the Codex CLI dispatch recipe: {book}"
+            book.contains("eval-magic dispatch --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness codex"),
+            "carries the dispatch command: {book}"
+        );
+        assert!(
+            book.contains("eval-magic dispatch --judges --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness codex"),
+            "carries the judge dispatch command: {book}"
         );
         assert!(
             book.contains("eval-magic finalize --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness codex"),
@@ -267,10 +244,13 @@ mod tests {
         assert_eq!(out, "value-with-{{B}}-inside second");
     }
 
+    /// The runbook reads the same whether or not the plan holds scripted turns:
+    /// the runner drives both, so there is nothing to branch on.
     #[test]
-    fn all_scripted_runbook_uses_dispatch_task_instead_of_one_shot_recipe() {
+    fn a_scripted_plan_reads_the_same_as_a_one_shot_plan() {
         let dir = PathBuf::from("/work/.eval-magic/widget-skill/iteration-2");
-        let book = build_runbook(&RunbookContext {
+        let eval_ids = vec!["implement-widget".to_string()];
+        let context = |num_tasks: usize| RunbookContext {
             harness: Harness::resolve("codex").unwrap(),
             skill_name: "widget-skill",
             iteration: 2,
@@ -278,18 +258,21 @@ mod tests {
             mode: Mode::NewSkill,
             cond_a: "with_skill",
             cond_b: "without_skill",
-            num_tasks: 4,
-            multi_turn_tasks: 4,
+            num_tasks,
+            eval_ids: &eval_ids,
             target_args: " --skill /tmp/widget-skill",
-            guard: false,
-            agent_model: None,
-            agent_env: empty_env(),
-        });
-        assert!(book.contains("eval-magic dispatch-task"));
+        };
+        let book = build_runbook(&context(4));
+        assert!(book.contains("eval-magic dispatch --skill /tmp/widget-skill"));
         assert!(book.contains("conversation.json"));
         assert!(
             !book.contains("--output-last-message <outputs_dir>/final-message.md"),
-            "all-scripted runs must not advertise the one-shot eval command"
+            "the runbook no longer carries a harness CLI recipe: {book}"
+        );
+        // Only the dispatch count differs between plans.
+        assert_eq!(
+            build_runbook(&context(4)).replace("**Dispatches:** 4", "**Dispatches:** 6"),
+            build_runbook(&context(6))
         );
     }
 }

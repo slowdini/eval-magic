@@ -2,7 +2,7 @@
 
 use crate::helpers::*;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn write_live_skill(path: &Path) {
     fs::create_dir_all(path).unwrap();
@@ -99,8 +99,6 @@ fn claude_refutes_a_live_skill_when_only_the_staged_slug_is_reported() {
     let iteration = iteration_dir(&cwd);
     let dispatch = read_json(&iteration.join("dispatch.json"));
     for task in dispatch["tasks"].as_array().unwrap() {
-        let outputs = PathBuf::from(task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
         let skills = task["staged_skill_slug"]
             .as_str()
             .into_iter()
@@ -127,7 +125,7 @@ fn claude_refutes_a_live_skill_when_only_the_staged_slug_is_reported() {
         .map(|event| event.to_string())
         .collect::<Vec<_>>()
         .join("\n");
-        fs::write(outputs.join("claude-events.jsonl"), format!("{events}\n")).unwrap();
+        write_task_transcript(&cwd, task, "claude-events.jsonl", &format!("{events}\n"));
     }
 
     skill_eval()

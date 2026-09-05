@@ -1,9 +1,13 @@
 //! The `grade` subcommand — judge-task emission and `--finalize` folding.
 
-use crate::helpers::{canonical_root, skill_eval};
+use crate::helpers::{canonical_root, skill_eval, with_default_codebase};
 use assert_cmd::Command;
+use predicates::prelude::*;
 use predicates::str::contains;
 use std::fs;
+
+mod assertion_source;
+mod sampling;
 
 /// Write `<skill_sub>/SKILL.md` and `<skill_sub>/evals/evals.json`.
 fn write_skill(skill_sub: &std::path::Path, skill_md: &str, evals: &serde_json::Value) {
@@ -11,7 +15,7 @@ fn write_skill(skill_sub: &std::path::Path, skill_md: &str, evals: &serde_json::
     fs::write(skill_sub.join("SKILL.md"), skill_md).unwrap();
     fs::write(
         skill_sub.join("evals").join("evals.json"),
-        serde_json::to_string_pretty(evals).unwrap(),
+        serde_json::to_string_pretty(&with_default_codebase(evals)).unwrap(),
     )
     .unwrap();
 }
@@ -102,6 +106,9 @@ fn grade_codex_staged_run_uses_llm_meta_check_with_skill_content() {
     let prompt =
         fs::read_to_string(cond_dir.join("judge-prompts").join("__skill_invoked.txt")).unwrap();
     assert!(prompt.contains("MERGE-RISK-LADDER"));
+    assert!(prompt.contains(
+        "Compare the agent's `final_message`, conversation transcript, and tool invocation summary against the skill content."
+    ));
 }
 
 /// `grade` (emit): evals marked `skill_should_trigger: false` get no meta-check.
@@ -644,6 +651,30 @@ fn grade_writes_prompt_files_and_drops_inline_prompt() {
         let assertion_id = t["assertion_id"].as_str().unwrap();
         assert!(prompt_path.ends_with(&format!("{assertion_id}.txt")));
         let contents = fs::read_to_string(prompt_path).unwrap();
+        let evidence = &t["evidence_bundle"];
+        assert_eq!(evidence["byte_limit"], json!(98_304));
+        assert_eq!(evidence["truncated"], json!(false));
+        let evidence_path = evidence["path"].as_str().unwrap();
+        assert!(evidence_path.ends_with("judge-evidence.md"));
+        let evidence_contents = fs::read_to_string(evidence_path).unwrap();
+        assert_eq!(
+            evidence["bytes"],
+            json!(evidence_contents.len()),
+            "judge-tasks records the exact persisted bundle size"
+        );
+        assert!(evidence_contents.contains("# Judge evidence bundle"));
+        assert!(evidence_contents.contains("## `prompt`"));
+        assert!(evidence_contents.contains("## `final_message`"));
+        assert!(evidence_contents.contains("done"));
+        assert!(evidence_contents.contains("one-shot run; no conversation record"));
+        assert!(evidence_contents.contains("diff evidence is unavailable"));
+        assert!(contents.contains(&evidence_contents));
+        assert_eq!(t["dispatch_prompt_byte_limit"], json!(131_072));
+        assert_eq!(
+            t["dispatch_prompt_bytes"],
+            json!(contents.len()),
+            "judge-tasks records the exact prompt size"
+        );
         assert!(contents.contains(t["response_path"].as_str().unwrap()));
         assert!(contents.contains("Grade only this one assertion"));
         assert!(contents.contains("Do not run eval-magic"));
@@ -728,4 +759,165 @@ fn grade_finalize_folds_responses_into_grading() {
     assert_eq!(grading["assertion_results"][0]["id"], json!("a1"));
     assert_eq!(grading["assertion_results"][0]["passed"], json!(true));
     assert_eq!(grading["meta_summary"]["skill_invoked"], json!(true));
+}
+
+/// #308: a frozen shell-role pattern must grade identically on every harness.
+/// A Codex run records `command_execution` where Claude Code records `Bash`;
+/// the descriptor vocabulary supplies the alias, so one authored `Bash|Read`
+/// covers both instead of scoring zero on Codex.
+#[test]
+fn finalize_grades_a_shell_role_pattern_across_harness_tool_names() {
+    use serde_json::json;
+    for (harness, tool, command) in [
+        ("codex", "command_execution", "bash -lc 'cargo test'"),
+        // Neither of these descriptors declares `Bash` itself, so the alias can
+        // only come from the registry-wide union.
+        ("opencode", "bash", "cargo test"),
+        ("cline", "run_commands", "cargo test"),
+        ("claude-code", "Bash", "cargo test"),
+    ] {
+        let (_tmp, root) = canonical_root();
+        let skill_dir = root.join("skill-dir");
+        let skill_sub = skill_dir.join("mr-review");
+        write_skill(
+            &skill_sub,
+            "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
+            &json!({"skill_name": "mr-review", "evals": [
+                {"id": "pos-eval", "prompt": "Fix the failing build.", "expected_output": "runs tests",
+                 "skill_should_trigger": false,
+                 "assertions": [{"id": "ran-tests", "type": "transcript_check",
+                                 "check": "tool_invocation_matches", "pattern": "Bash|Read"}]}
+            ]}),
+        );
+        let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
+
+        let cwd = root.join("work");
+        let iteration_dir = cwd
+            .join(".eval-magic")
+            .join("mr-review")
+            .join("iteration-1");
+        let cond_dir = iteration_dir.join("eval-pos-eval").join("with_skill");
+        fs::create_dir_all(&cond_dir).unwrap();
+        fs::write(
+            iteration_dir.join("conditions.json"),
+            serde_json::to_string(&json!({
+                "mode": "new-skill",
+                "conditions": [{"name": "with_skill", "skill_path": skill_md}],
+                "timestamp": "2026-06-08T00:00:00.000Z",
+                "harness": harness,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            cond_dir.join("run.json"),
+            serde_json::to_string(&json!({
+                "eval_id": "pos-eval", "condition": "with_skill", "skill_path": skill_md,
+                "prompt": "p", "files": [], "final_message": "done",
+                "tool_invocations": [{"name": tool, "args": {"command": command}, "ordinal": 0}],
+                "total_tokens": 100, "duration_ms": 1000,
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+
+        grade_cmd(&cwd, &skill_dir, Some(harness))
+            .arg("--finalize")
+            .assert()
+            .success();
+
+        let grading: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(cond_dir.join("grading.json")).unwrap())
+                .unwrap();
+        let result = &grading["assertion_results"][0];
+        assert_eq!(result["id"], json!("ran-tests"), "{harness}: {grading}");
+        assert_eq!(
+            result["passed"],
+            json!(true),
+            "{harness} records `{tool}`, which must satisfy /Bash|Read/: {grading}"
+        );
+        let evidence = result["evidence"].as_str().unwrap();
+        assert!(
+            evidence.contains(tool),
+            "{harness}: evidence must report the actual native invocation: {evidence}"
+        );
+        if harness == "claude-code" {
+            assert!(
+                !evidence.contains("alias"),
+                "{harness}: a native match names no alias: {evidence}"
+            );
+        } else {
+            assert!(
+                evidence.contains("via shell alias 'Bash'"),
+                "{harness}: evidence must name the alias that matched: {evidence}"
+            );
+        }
+    }
+}
+
+/// An iteration recorded before `conditions.json` carried a harness has no
+/// descriptor to read roles from, so its tool patterns match native names only
+/// — exactly how they graded before role aliasing existed.
+#[test]
+fn finalize_grades_native_names_only_when_conditions_name_no_harness() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let skill_dir = root.join("skill-dir");
+    let skill_sub = skill_dir.join("mr-review");
+    write_skill(
+        &skill_sub,
+        "---\nname: mr-review\ndescription: review MRs\n---\n\nbody\n",
+        &json!({"skill_name": "mr-review", "evals": [
+            {"id": "pos-eval", "prompt": "Fix the failing build.", "expected_output": "runs tests",
+             "skill_should_trigger": false,
+             "assertions": [{"id": "ran-tests", "type": "transcript_check",
+                             "check": "tool_invocation_matches", "pattern": "Bash|Read"}]}
+        ]}),
+    );
+    let skill_md = skill_sub.join("SKILL.md").to_string_lossy().into_owned();
+
+    let cwd = root.join("work");
+    let iteration_dir = cwd
+        .join(".eval-magic")
+        .join("mr-review")
+        .join("iteration-1");
+    let cond_dir = iteration_dir.join("eval-pos-eval").join("with_skill");
+    fs::create_dir_all(&cond_dir).unwrap();
+    fs::write(
+        iteration_dir.join("conditions.json"),
+        serde_json::to_string(&json!({
+            "mode": "new-skill",
+            "conditions": [{"name": "with_skill", "skill_path": skill_md}],
+            "timestamp": "2026-06-08T00:00:00.000Z",
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(
+        cond_dir.join("run.json"),
+        serde_json::to_string(&json!({
+            "eval_id": "pos-eval", "condition": "with_skill", "skill_path": skill_md,
+            "prompt": "p", "files": [], "final_message": "done",
+            "tool_invocations": [{"name": "command_execution", "args": {"command": "cargo test"},
+                                  "ordinal": 0}],
+            "total_tokens": 100, "duration_ms": 1000,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+
+    grade_cmd(&cwd, &skill_dir, None)
+        .arg("--finalize")
+        .assert()
+        .success();
+
+    let grading: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(cond_dir.join("grading.json")).unwrap()).unwrap();
+    let result = &grading["assertion_results"][0];
+    assert_eq!(result["passed"], json!(false), "{grading}");
+    assert_eq!(
+        result["evidence"],
+        json!("no candidate matched /Bash|Read/ across 1 invocation(s)"),
+        "no descriptor means no roles, so the message reads as it always did"
+    );
 }

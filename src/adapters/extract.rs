@@ -151,7 +151,12 @@ pub(crate) fn parse_full(spec: &ExtractSpec, path: &Path) -> io::Result<Transcri
         final_text: spec
             .final_text
             .as_ref()
-            .and_then(|f| extract_final_text(f, &records)),
+            .and_then(|pick| extract_final_text(pick, &records))
+            .or_else(|| {
+                spec.assistant_messages
+                    .as_ref()
+                    .and_then(|pick| extract_final_text(pick, &records))
+            }),
     })
 }
 

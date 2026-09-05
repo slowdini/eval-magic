@@ -29,13 +29,19 @@ alias.
 - `--sandbox workspace-write` bounds writes to the env.
 - `--json` streams events to stdout — captured as `outputs/codex-events.jsonl`; stderr goes to
   `codex-stderr.log` so progress/status text (e.g. stdin notices) stays out of the JSONL.
-- `--output-last-message <outputs_dir>/final-message.md` writes the final-message file the
-  pipeline reads.
+- `--json` is the sole completion source; the configured transcript reader extracts the final
+  agent message from the captured events.
 - `</dev/null` matters when dispatching in parallel from a pipe (e.g. `xargs -P`): without it,
   Codex treats piped stdin as additional prompt context.
 - Scripted follow-ups run from `<eval-root>` through `codex exec resume <SESSION_ID> <PROMPT>`;
-  `thread.started.thread_id` supplies the id and each round keeps `--json` plus its own
-  `--output-last-message` capture. Verified against `codex exec resume --help` on 2026-07-24.
+  `thread.started.thread_id` supplies the id and each round keeps `--json` with its own event
+  capture. Verified against `codex exec resume --help` on 2026-07-24.
+- `codex exec` has **no plan-mode flag** (codex-cli 0.147.0: `codex exec --help` lists none; plan
+  mode is a TUI collaboration mode), so the descriptor declares no `[plan_mode]` and `run` rejects
+  plan-mode evals on Codex. The runtime analogue is `--sandbox read-only`: a descriptor that moved
+  the sandbox flag into a `{mode_args}` slot with `plan_args = " --sandbox read-only"` and
+  `act_args = " --sandbox workspace-write"` would opt in, at the cost of an agent that is never told
+  it is planning.
 
 ## Model flag
 
@@ -110,9 +116,18 @@ are omitted from tool arguments so `run.json` records command output once, in `r
 tool invocations: `command_execution`, `file_change`, `web_search`, and MCP items.
 `thread.started.thread_id` is normalized as the resumable session id, and every completed
 `agent_message` is preserved in event order for conversation gating. `transcript_check` matches
-these parsed items. The JSONL exposes **no deterministic skill-tool
-event**, so `transcript_surfaces_skill_invocation()` is false and the `__skill_invoked` meta-check
-uses the LLM-judge fallback.
+these parsed items, and because the `[tools]` vocabulary declares `command_execution` and
+`file_change` beside their Claude-style spellings, a pattern authored against another harness's
+tool names grades here through role aliasing.
+
+The JSONL exposes no dedicated skill-tool event. A bounded Codex CLI 0.152.1 probe instead emitted
+a successful `item.completed` `command_execution` whose `command` contained the exact staged
+`SKILL.md` path as a literal argument to `sed`; the small synthetic event shape is preserved in
+`tests/fixtures/codex/skill-access-0.152.1.jsonl`. The descriptor's
+`[transcript.skill_access]` table therefore names `command_execution`, its command and exit-code
+arguments, and the accepted read-command basenames. `__skill_invoked` passes locally only when one
+of those commands exits zero with the task's exact staged path. A live source, another treatment
+member's path, dynamic or partial path text, and response wording do not count.
 
 Codex token totals use its blended workload metric:
 
@@ -124,11 +139,16 @@ max(input_tokens + output_tokens - cached_input_tokens, 0)
 count reasoning. Resumed `turn.completed` usage is cumulative for the native thread; the Codex
 descriptor therefore uses the final round's total instead of summing round totals.
 
-`codex exec --json` transcripts do not include a native duration or event timestamps, so
-`duration_ms` remains `null`. Aggregate reports the missing sample count; a benchmark statistic
-with `n: 0` is unavailable, not a measured zero. Ingest does not migrate timing artifacts
-automatically. Run `eval-magic ingest --harness codex --iteration <N> --overwrite` to regenerate
-them from preserved transcripts when desired.
+`codex exec --json` transcripts do not include a native duration or event timestamps. Runner-driven
+dispatches still have duration: `eval-magic dispatch` measures monotonic time inside each Codex
+subprocess and sums the initial and resumed rounds. `ingest` writes that measurement to
+`timing.json` with `duration_source: "runner"`, independently of the transcript-normalized
+`token_source`.
+
+A historical or externally produced `conversation.json` file without the runner measurement still
+has no Codex duration to recover, so `duration_ms` remains `null`. Aggregate reports the missing
+sample count; a benchmark statistic with `n: 0` is unavailable, not a measured zero. Ingest does not
+migrate existing timing artifacts automatically.
 
 ### Permission denials
 
@@ -165,7 +185,10 @@ update/delete source, and move destination from that body and resolves relative 
 hook payload's `cwd`. Bash output validation uses a quote-aware lexical scan for `>`, `>>`, `>|`,
 file-descriptor-prefixed redirects, and `tee`: every literal target must resolve under an allowed
 root, while dynamic, malformed, or outside targets are blocked. Merely mentioning an allowed root
-elsewhere in the command does not scope an unrelated redirect.
+elsewhere in the command does not scope an unrelated redirect. The same cwd-aware policy allows
+ordinary installs, builds, tests, and in-place edits inside the task env while denying recognized
+explicit destinations outside it. Repository-routing escapes and remote Git mutations remain
+blocked.
 
 Guard installation initializes `.eval-magic-outputs/guard-denials.jsonl` and records its absolute
 path in the optional marker field `denialLogPath`. Each block appends only timestamp, harness,
@@ -181,8 +204,29 @@ The hook invokes the hidden `guard-codex` subcommand
 
 ## Running inside Codex itself
 
-User-facing guidance lives in `eval-magic run --help`: staging writes `.agents/skills`, guarded
-runs also write
-`.codex/hooks.json`, and Codex's default workspace-write sandbox protects those paths, so the
-runner may need approval/escalation or an external terminal invocation. Keep that help text in sync
-when this changes.
+Preparation and dispatch can encounter separate restrictions from an operator Codex session.
+During `eval-magic run`, staging writes `.agents/skills` and guarded runs write `.codex/hooks.json`.
+The operator's sandbox can protect those paths, so preparation may require outer approval or an
+ordinary terminal invocation.
+
+During `eval-magic dispatch`, the inner Codex process inherits the outer launch environment.
+The report in [issue #245, item 1](https://github.com/slowdini/eval-magic/issues/245) describes an
+`Operation not permitted` failure inside the operator Codex sandbox while the exact generated
+task succeeded outside it with the task's workspace-write sandbox and eval guard intact.
+This is a conditional diagnosis: compare the same generated task command with equivalent inputs,
+working directory, and configuration. The error text alone does not establish the cause.
+
+OpenAI's [sandbox documentation](https://learn.chatgpt.com/docs/sandboxing) states that spawned
+commands inherit the operator sandbox boundaries. Its
+[OS-level implementation notes](https://learn.chatgpt.com/docs/agent-approvals-security#os-level-sandbox)
+also describe environments that block namespace, `bwrap`, or `seccomp` operations needed to create
+the Linux sandbox. These limits explain why granting another writable directory may be insufficient;
+they do not identify which operation caused the reported failure.
+
+The operational guidance lives in `eval-magic dispatch --help`, `eval-magic docs isolation`, and
+Codex-generated `RUNBOOK.md`. Prefer running the generated dispatch command from the ordinary
+terminal. Where the operator surface and policy support it, an alternative is approval or escalation
+of the **outer launch of `eval-magic dispatch`**, limited to the required workspace and process access.
+Keep the task command's `--sandbox workspace-write` and eval guard enabled. Neither weakening the
+inner task protections nor adding runtime sandbox detection or a platform-specific bypass is part
+of this remedy.

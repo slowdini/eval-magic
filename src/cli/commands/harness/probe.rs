@@ -1,24 +1,22 @@
 //! The `harness lint --probe` live dispatch check: render
 //! `dispatch.exec_template` with a trivial prompt in a throwaway temp dir,
-//! execute it, and verify `outputs/final-message.md` is recovered; also
-//! render-only-validate `parallel_command_template` /
-//! `judge_command_template` for placeholder-shape errors. Invokes the real
-//! harness CLI, so it is opt-in and never part of standard CI checks.
+//! execute it, and verify its configured transcript parser recovers a final
+//! response. Invokes the real harness CLI, so it is opt-in and never part of
+//! standard CI checks.
 
+use std::collections::BTreeMap;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
-use std::process::{Command, ExitStatus, Stdio};
-use std::thread::sleep;
-use std::time::{Duration, Instant};
+use std::process::ExitStatus;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
-use regex::Regex;
 
 use crate::adapters::cli_command::{
     render_agent_dispatch_command, render_cli_model_arg, shell_quote_arg,
 };
 use crate::adapters::descriptor::{HarnessDescriptor, subst};
-use crate::core::posix_shell;
+use crate::core::{ShellOutcome, run_in_posix_shell};
 
 /// Options carried from the parsed `--probe` flags into [`run_probe`].
 #[derive(Debug, Clone, Copy)]
@@ -51,21 +49,22 @@ pub(crate) enum ProbeError {
     ExecFailed(ExitStatus),
     #[error("exec template timed out after {0:?}")]
     Timeout(Duration),
-    #[error("outputs/final-message.md is missing")]
-    FinalMessageMissing,
-    #[error("outputs/final-message.md is empty")]
-    FinalMessageEmpty,
-    #[error("unresolved placeholder {0:?} remains after substitution")]
-    UnresolvedBrace(String),
+    #[error("the descriptor declares no transcript parser")]
+    TranscriptUnavailable,
+    #[error("{0} is missing")]
+    TranscriptMissing(String),
+    #[error("{path} could not be parsed: {message}")]
+    TranscriptUnreadable { path: String, message: String },
+    #[error("{0} contains no non-empty final response")]
+    FinalResponseMissing(String),
 }
 
 /// Render the exec template with the angle placeholders (`<eval-root>`,
 /// `<dispatch_prompt_path>`, `<outputs_dir>`, `<round>`) shell-quoted and the
-/// machine placeholders (`{model_arg}`, `{guard_args}`) filled. Mirrors the
-/// conversation driver at `src/cli/run/conversation.rs:317` — single
-/// left-to-right pass, unknown braces pass through verbatim. `<round>` is
-/// intentionally not substituted: the probe is single-shot (turn 1 only), so
-/// the exec template never sees rounds and any `<round>` survives verbatim.
+/// machine placeholders (`{model_arg}`, `{guard_args}`, `{mode_args}`) filled.
+/// Mirrors the conversation driver's single left-to-right pass; unknown braces
+/// pass through verbatim. The probe is a single turn, so `<round>` resolves to
+/// `1`.
 #[allow(clippy::needless_pass_by_value)]
 fn render_probe_exec(
     template: &str,
@@ -74,6 +73,7 @@ fn render_probe_exec(
     outputs_dir: &Path,
     model_arg: &str,
     guard_args: &str,
+    mode_args: &str,
 ) -> String {
     let quoted_eval_root = shell_quote_arg(eval_root);
     let quoted_prompt_path = shell_quote_arg(dispatch_prompt_path);
@@ -82,108 +82,48 @@ fn render_probe_exec(
         &template
             .replace("<eval-root>", &quoted_eval_root)
             .replace("<dispatch_prompt_path>", &quoted_prompt_path)
-            .replace("<outputs_dir>", &quoted_outputs_dir),
-        &[("model_arg", model_arg), ("guard_args", guard_args)],
+            .replace("<outputs_dir>", &quoted_outputs_dir)
+            .replace("<round>", "1"),
+        &[
+            ("model_arg", model_arg),
+            ("guard_args", guard_args),
+            ("mode_args", mode_args),
+        ],
     )
 }
 
-/// Execute `command` via the resolved POSIX shell with `cwd` as the subprocess
-/// working directory, killing the child if it exceeds `timeout`. The child's
-/// stdin is `null`: the parent reads the `y/N` confirm on its own stdin and
-/// never wants the dispatched agent CLI to consume it.
-///
-/// Only the direct child is killed on timeout, not its process group — a shell
-/// that has already forked leaves the grandchild running until it exits.
-fn execute_with_timeout(
-    command: &str,
-    cwd: &Path,
-    timeout: Duration,
-) -> Result<ExitStatus, ProbeError> {
-    let shell = posix_shell().map_err(|message| ProbeError::SpawnFailed(message.to_string()))?;
-    let mut child = Command::new(shell)
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
-        .spawn()
-        .map_err(|e| ProbeError::SpawnFailed(e.to_string()))?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => return Ok(status),
-            Ok(None) => {
-                if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    return Err(ProbeError::Timeout(timeout));
-                }
-                sleep(Duration::from_millis(10));
-            }
-            Err(e) => return Err(ProbeError::SpawnFailed(e.to_string())),
-        }
-    }
-}
-
-/// Verify the final-message recovery contract: `outputs_dir/final-message.md`
-/// exists and is non-empty after trimming.
-fn verify_final_message(outputs_dir: &Path) -> Result<(), ProbeError> {
-    let path = outputs_dir.join("final-message.md");
+/// Verify the runner-readiness contract: the configured events file exists,
+/// parses successfully, and yields a non-empty final response.
+fn verify_transcript(descriptor: &HarnessDescriptor, outputs_dir: &Path) -> Result<(), ProbeError> {
+    let transcript = descriptor
+        .transcript
+        .as_ref()
+        .ok_or(ProbeError::TranscriptUnavailable)?;
+    let path = outputs_dir.join(&transcript.events_filename);
+    let display = path.display().to_string();
     if !path.exists() {
-        return Err(ProbeError::FinalMessageMissing);
+        return Err(ProbeError::TranscriptMissing(display));
     }
-    let contents = std::fs::read_to_string(&path).map_err(|_| ProbeError::FinalMessageMissing)?;
-    if contents.trim().is_empty() {
-        return Err(ProbeError::FinalMessageEmpty);
-    }
-    Ok(())
-}
-
-/// Render-only validate `template`: substitute the supplied stand-in `{vars}`,
-/// then fail if any `{alpha_token}` placeholder remains unresolved — anywhere
-/// in the rendered text, including embedded mid-token. Catches typos like
-/// `{cwdd}` before a real run exercises the template. Shell idioms that are
-/// not placeholder tokens (`${JOBS:-4}`, `-I{}`) do not match the pattern and
-/// pass through cleanly.
-fn render_only_check(template: &str, vars: &[(&str, &str)]) -> Result<(), ProbeError> {
-    let rendered = subst(template, vars);
-    static PLACEHOLDER: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = PLACEHOLDER
-        .get_or_init(|| Regex::new(r"\{[a-zA-Z_][a-zA-Z0-9_]*\}").expect("placeholder regex"));
-    if let Some(m) = re.find(&rendered) {
-        return Err(ProbeError::UnresolvedBrace(m.as_str().to_string()));
+    let summary =
+        transcript
+            .parse_full(&path)
+            .map_err(|error| ProbeError::TranscriptUnreadable {
+                path: display.clone(),
+                message: error.to_string(),
+            })?;
+    if summary
+        .final_text
+        .as_deref()
+        .is_none_or(|text| text.trim().is_empty())
+    {
+        return Err(ProbeError::FinalResponseMissing(display));
     }
     Ok(())
 }
 
-/// Trivial prompt body written to `<eval_root>/probe-prompt.md`. The probe does
-/// not assert on reply content — only that `outputs/final-message.md` ends up
-/// non-empty — so the prompt is intentionally minimal and generic across every
-/// harness.
+/// The trivial prompt the probe dispatches: short, deterministic, and cheap.
 const PROBE_PROMPT: &str = "Reply with the single word: ok\n";
 
-/// Stand-in `{var}` values used by the render-only checks so a missing backing
-/// field never masquerades as a clean render. Every placeholder the dispatch
-/// path fills needs an entry here, or the check reports a token the real run
-/// resolves. The values are visible markers rather than faithful fragments —
-/// the rendered text is only scanned for leftover braces, never executed — so
-/// `{guard_args}` carries one too instead of the empty fragment the probe hands
-/// the exec template.
-const RENDER_STAND_INS: [(&str, &str); 3] = [
-    ("cwd", "/probe/stand-in/cwd"),
-    ("model_arg", "stand-in-model"),
-    ("guard_args", "--stand-in-guard"),
-];
-
-/// The live dispatch probe. Renders `dispatch.exec_template` with a trivial
-/// prompt in a throwaway temp dir, asks for confirmation, runs it under a
-/// timeout through the resolved POSIX shell from that dir, then verifies the final-message
-/// recovery contract. Also render-only-validates `parallel_command_template`
-/// and `judge_command_template` for placeholder-shape errors. Invokes the real
-/// harness CLI and is opt-in; never part of standard CI checks.
-///
-/// `target_display` is the provenance string `lint` already printed under
-/// `"Linted …"` (a file path or the joined layer chain); it appears only in the
-/// confirm banner so the operator can see which descriptor is about to run.
 pub(crate) fn run_probe(
     descriptor: HarnessDescriptor,
     target_display: &str,
@@ -200,11 +140,14 @@ pub(crate) fn run_probe(
     // The probe never arms the guard, so {guard_args} resolves to the empty
     // fragment.
     let model_flag = descriptor.model.as_ref().map(|m| m.flag.as_str());
-    let parallel_template = descriptor.dispatch.parallel_command_template.clone();
-    let judge_template = descriptor.dispatch.judge_command_template.clone();
     let agent_env = descriptor.dispatch.env.clone();
     let model_arg = render_cli_model_arg(model_flag, None);
     let guard_args = "";
+    // The probe is a one-shot act-mode dispatch, like a judge's.
+    let mode_args = descriptor
+        .plan_mode
+        .as_ref()
+        .map_or("", |plan_mode| plan_mode.act_args.as_str());
 
     // Throwaway eval_root: the subprocess runs from here, framework artifacts
     // land under <eval_root>/outputs. TempDir cleans up on drop.
@@ -227,6 +170,7 @@ pub(crate) fn run_probe(
             &outputs_dir,
             &model_arg,
             guard_args,
+            mode_args,
         ),
         &agent_env,
     );
@@ -253,48 +197,32 @@ pub(crate) fn run_probe(
     }
 
     let mut failed = 0u32;
-    match execute_with_timeout(&command, eval_root, opts.timeout) {
-        Ok(status) if status.success() => match verify_final_message(&outputs_dir) {
-            Ok(()) => println!("✓ live exec template: final-message recovered"),
-            Err(e) => {
-                eprintln!("✗ {e}");
-                failed += 1;
+    let probed = run_in_posix_shell(&command, eval_root, &BTreeMap::new(), Some(opts.timeout))
+        .map_err(ProbeError::SpawnFailed);
+    match probed {
+        Ok(ShellOutcome::Exited(status)) if status.success() => {
+            match verify_transcript(&descriptor, &outputs_dir) {
+                Ok(()) => {
+                    println!("✓ live exec template: transcript final response recovered")
+                }
+                Err(e) => {
+                    eprintln!("✗ {e}");
+                    failed += 1;
+                }
             }
-        },
-        Ok(status) => {
+        }
+        Ok(ShellOutcome::Exited(status)) => {
             eprintln!("✗ {}", ProbeError::ExecFailed(status));
+            failed += 1;
+        }
+        Ok(ShellOutcome::TimedOut) => {
+            eprintln!("✗ {}", ProbeError::Timeout(opts.timeout));
             failed += 1;
         }
         Err(e) => {
             eprintln!("✗ {e}");
             failed += 1;
         }
-    }
-
-    // Render-only static checks: render each recipe with stand-in vars and fail
-    // on any `{token}` the run would later surface. Catches typos like
-    // `{cwdd}` before a real dispatch spends usage.
-    if let Some(template) = parallel_template.as_deref() {
-        match render_only_check(template, &RENDER_STAND_INS) {
-            Ok(()) => println!("✓ render: parallel_command_template"),
-            Err(e) => {
-                eprintln!("✗ render: parallel_command_template: {e}");
-                failed += 1;
-            }
-        }
-    } else {
-        println!("· parallel_command_template not declared — skipped");
-    }
-    if let Some(template) = judge_template.as_deref() {
-        match render_only_check(template, &RENDER_STAND_INS) {
-            Ok(()) => println!("✓ render: judge_command_template"),
-            Err(e) => {
-                eprintln!("✗ render: judge_command_template: {e}");
-                failed += 1;
-            }
-        }
-    } else {
-        println!("· judge_command_template not declared — skipped");
     }
 
     if failed > 0 {
@@ -306,8 +234,6 @@ pub(crate) fn run_probe(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::descriptor::{EMBEDDED_DESCRIPTORS, load_descriptor};
-    use std::fs;
     use std::path::PathBuf;
 
     fn dir(p: &str) -> PathBuf {
@@ -325,14 +251,13 @@ mod tests {
             &dir("/var/tmp/out"),
             "--model-X gpt-x",
             "--guard on",
+            "",
         );
         // Angle placeholders are shell-quoted because the values contain spaces.
         assert!(rendered.contains("--root '/path with space/eval'"));
         assert!(rendered.contains("--prompt '/path with space/probe-prompt.md'"));
         assert!(rendered.contains("--out /var/tmp/out"));
-        // The probe is single-shot — `<round>` is not a probe placeholder and
-        // must survive verbatim (the exec template never sees rounds).
-        assert!(rendered.contains("--round <round>"));
+        assert!(rendered.contains("--round 1"));
         // Machine placeholders substituted in place.
         assert!(rendered.contains("--model-X gpt-x"));
         assert!(rendered.contains("--guard on"));
@@ -343,130 +268,12 @@ mod tests {
     #[test]
     fn render_probe_exec_passes_shell_braces_through_verbatim() {
         let template = "xargs -I{} sh -c 'echo ${JOBS:-4} {model_arg}'";
-        let rendered = render_probe_exec(template, "/e", "/p", &dir("/o"), "m", "g");
+        let rendered = render_probe_exec(template, "/e", "/p", &dir("/o"), "m", "g", "");
         assert!(rendered.contains("-I{}"));
         assert!(rendered.contains("${JOBS:-4}"));
         // The {model_arg} token inside the quoted echo becomes "m" with the
         // closing `'` immediately after (no trailing space supplied).
         assert!(rendered.contains("'echo ${JOBS:-4} m'"));
         assert!(!rendered.contains("{model_arg}"));
-    }
-
-    #[test]
-    fn execute_with_timeout_returns_status_on_success() {
-        let status = execute_with_timeout("true", Path::new("."), Duration::from_secs(5))
-            .expect("true should succeed");
-        assert!(status.success());
-    }
-
-    #[test]
-    fn execute_with_timeout_kills_on_overrun() {
-        let err = execute_with_timeout("sleep 5", Path::new("."), Duration::from_millis(100))
-            .expect_err("sleep should time out");
-        assert!(
-            matches!(err, ProbeError::Timeout(d) if d == Duration::from_millis(100)),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn verify_final_message_accepts_a_non_empty_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join("final-message.md"), "ok\n").unwrap();
-        verify_final_message(tmp.path()).expect("non-empty file should pass");
-    }
-
-    #[test]
-    fn verify_final_message_rejects_a_missing_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        let err = verify_final_message(tmp.path()).expect_err("missing should fail");
-        assert!(
-            matches!(err, ProbeError::FinalMessageMissing),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn verify_final_message_rejects_a_blank_file() {
-        let tmp = tempfile::TempDir::new().unwrap();
-        fs::write(tmp.path().join("final-message.md"), "   \n\t \n").unwrap();
-        let err = verify_final_message(tmp.path()).expect_err("blank should fail");
-        assert!(matches!(err, ProbeError::FinalMessageEmpty), "got {err:?}");
-    }
-
-    #[test]
-    fn render_only_check_passes_a_resolved_template() {
-        let template = "judge --cd {cwd} $model_arg";
-        let vars = [("cwd", "/work"), ("model_arg", "gpt-x")];
-        render_only_check(template, &vars).expect("fully resolved template should pass");
-    }
-
-    #[test]
-    fn render_only_check_fails_on_an_unresolved_brace() {
-        let template = "judge --cd {cwd} --model {cwdd}";
-        let vars = [("cwd", "/work"), ("model_arg", "gpt-x")];
-        let err = render_only_check(template, &vars).expect_err("typo should fail");
-        assert!(
-            matches!(err, ProbeError::UnresolvedBrace(ref t) if t == "{cwdd}"),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn render_only_check_fails_on_a_brace_embedded_in_a_token() {
-        // `--out {cwd}/final` substitutes {cwd} cleanly, but `--out {cwdd}/final`
-        // (typo) leaves {cwdd} embedded mid-token — the check must still catch
-        // it, not only standalone {cwdd}.
-        let template = "agent --out {cwdd}/final";
-        let vars = [("cwd", "/work"), ("model_arg", "gpt-x")];
-        let err = render_only_check(template, &vars).expect_err("embedded typo should fail");
-        assert!(
-            matches!(err, ProbeError::UnresolvedBrace(ref t) if t == "{cwdd}"),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn render_only_check_passes_shell_brace_tokens_through() {
-        // `${JOBS:-4}` and `-I{}` are real shell idioms the runbook uses; they
-        // must not be mistaken for unresolved placeholders.
-        let template = "xargs -I{} sh -c 'echo ${JOBS:-4}' {cwd}";
-        let vars = [("cwd", "/work"), ("model_arg", "gpt-x")];
-        render_only_check(template, &vars).expect("shell braces plus a resolved {cwd} should pass");
-    }
-
-    #[test]
-    fn render_stand_ins_cover_guard_args() {
-        // Guarded harnesses splice {guard_args} onto a preceding flag value.
-        // A stand-in must back it or the probe reports a placeholder the real
-        // dispatch path resolves.
-        let template = "agent exec --sandbox workspace-write{guard_args} --cd {cwd}";
-        render_only_check(template, &RENDER_STAND_INS).expect("{guard_args} must have a stand-in");
-    }
-
-    #[test]
-    fn render_stand_ins_cover_every_shipped_dispatch_template() {
-        // The render-only checks run against the shipped descriptors, so the
-        // stand-ins have to cover every placeholder those descriptors use.
-        // Anything missing surfaces as a false `✗ render:` failure.
-        for (source, toml_src) in EMBEDDED_DESCRIPTORS {
-            let descriptor = load_descriptor(toml_src, source)
-                .unwrap_or_else(|e| panic!("embedded descriptor {source} is invalid: {e}"));
-            let dispatch = &descriptor.dispatch;
-            for (field, template) in [
-                (
-                    "parallel_command_template",
-                    dispatch.parallel_command_template.as_deref(),
-                ),
-                (
-                    "judge_command_template",
-                    dispatch.judge_command_template.as_deref(),
-                ),
-            ] {
-                let Some(template) = template else { continue };
-                render_only_check(template, &RENDER_STAND_INS)
-                    .unwrap_or_else(|e| panic!("{source} {field}: {e}"));
-            }
-        }
     }
 }

@@ -1,7 +1,7 @@
 //! OpenCode-harness behavior: `.opencode/skills` staging, slug sanitization,
-//! native `<available_skills>` dispatch rendering, plan-mode approximation, and
-//! the write guard's project-plugin install. Characterization tests pinning
-//! current behavior so the run-mode refactor stays behavior-preserving.
+//! native `<available_skills>` dispatch rendering, and the write guard's
+//! project-plugin install. Characterization tests pinning current behavior so
+//! the run-mode refactor stays behavior-preserving.
 
 use crate::helpers::*;
 use predicates::prelude::PredicateBooleanExt;
@@ -154,41 +154,6 @@ fn opencode_shadow_preflight_stops_at_the_task_git_repository() {
         "ancestor project skills must be hidden by the task repository boundary:\n{stderr}"
     );
     assert!(!iteration_dir(&cwd).join("plugin-shadow.json").exists());
-}
-
-#[test]
-fn opencode_plan_mode_injects_profile_and_records_flag() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "opencode",
-            "--plan-mode",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], true);
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        if task["condition"] == "with_skill" {
-            assert!(prompt.contains("<available_skills>"));
-        }
-        assert!(prompt.contains("<system-reminder>"));
-        // Shared, harness-agnostic profile: same text every harness sees.
-        assert!(prompt.contains("Plan mode is active"));
-        assert!(!prompt.contains("ExitPlanMode"));
-    }
 }
 
 #[test]
@@ -367,7 +332,7 @@ fn opencode_warns_when_live_skill_shadows_staged_skill() {
         .stderr(contains("OPENCODE_DISABLE_CLAUDE_CODE_SKILLS"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["schema_version"], 3);
     assert_eq!(report["findings"][0]["skill_name"], "mr-review");
     let sources = report["findings"][0]["sources"].as_array().unwrap();
     let live = sources
@@ -419,17 +384,12 @@ fn opencode_ingest_parses_events_and_code_checks_the_skill_invocation() {
 
     // Simulate `opencode run --format json` dispatches: a bash call, the staged
     // skill loaded through the native `skill` tool, two text parts, and a
-    // step_finish token report. No final-message.md — the transcript's last
-    // text is the final-message fallback.
+    // step_finish token report. The transcript's last text is authoritative.
     for task in dispatch_tasks(&cwd) {
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
         let slug_line = format!(
             r#"{{"type":"tool_use","timestamp":3000,"sessionID":"ses_1","part":{{"id":"p3","type":"tool","tool":"skill","state":{{"status":"completed","input":{{"name":"{OPENCODE_SLUG}"}},"output":"<skill/>","title":"skill","metadata":{{}},"time":{{"start":2900,"end":3000}}}}}}}}"#
         );
-        fs::write(
-            outputs.join("opencode-events.jsonl"),
-            [
+        let events = [
                 r#"{"type":"step_start","timestamp":1000,"sessionID":"ses_1","part":{"id":"p1","type":"step-start"}}"#.to_string(),
                 r#"{"type":"tool_use","timestamp":2000,"sessionID":"ses_1","part":{"id":"p2","type":"tool","tool":"bash","state":{"status":"completed","input":{"command":"ls"},"output":"ok","title":"ls","metadata":{},"time":{"start":1900,"end":2000}}}}"#.to_string(),
                 slug_line,
@@ -438,9 +398,8 @@ fn opencode_ingest_parses_events_and_code_checks_the_skill_invocation() {
                 r#"{"type":"step_finish","timestamp":6000,"sessionID":"ses_1","part":{"id":"p6","type":"step-finish","reason":"stop","cost":0.002,"tokens":{"input":100,"output":20,"reasoning":5,"cache":{"read":75,"write":0}}}}"#.to_string(),
             ]
             .join("\n")
-                + "\n",
-        )
-        .unwrap();
+            + "\n";
+        write_task_transcript(&cwd, &task, "opencode-events.jsonl", &events);
     }
 
     skill_eval()

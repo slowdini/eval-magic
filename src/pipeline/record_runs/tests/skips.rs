@@ -1,5 +1,5 @@
 //! When the stage declines to write: an existing record or timing file it must
-//! not clobber, and a task with no final message or no transcript.
+//! not clobber, and a task whose transcript is missing.
 
 use super::*;
 
@@ -12,10 +12,9 @@ fn skips_existing_run_without_overwrite_then_replaces_with_it() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: Some("New."),
         }],
     );
-    write_claude_events(&paths[0].outputs_dir, "unused");
+    write_claude_events(&paths[0].outputs_dir, "New.");
     let hand_written = json!({
         "eval_id": "crash", "condition": "with_skill",
         "skill_path": "/staged/skill/SKILL.md", "prompt": "Do the crash task",
@@ -45,10 +44,18 @@ fn backfills_timing_only_when_absent() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     write_claude_events(&paths[0].outputs_dir, "unused");
+    let conversation_path = paths[0].outputs_dir.join("conversation.json");
+    let mut conversation: Value =
+        serde_json::from_str(&fs::read_to_string(&conversation_path).unwrap()).unwrap();
+    conversation["duration_ms"] = json!(777);
+    fs::write(
+        &conversation_path,
+        serde_json::to_string_pretty(&conversation).unwrap(),
+    )
+    .unwrap();
     fs::write(
         &paths[0].timing_path,
         json!({"total_tokens": 12345, "duration_ms": 9000}).to_string(),
@@ -62,10 +69,18 @@ fn backfills_timing_only_when_absent() {
     assert_eq!(timing["total_tokens"], json!(12345));
     assert_eq!(timing["duration_ms"], json!(9000));
     assert!(timing.get("source").is_none());
+
+    record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), true).unwrap();
+
+    let timing = read_timing_value(&iter, "crash", "with_skill");
+    assert_eq!(timing["total_tokens"], json!(125));
+    assert_eq!(timing["token_source"], json!("transcript"));
+    assert_eq!(timing["duration_ms"], json!(777));
+    assert_eq!(timing["duration_source"], json!("runner"));
 }
 
 #[test]
-fn skips_the_slot_entirely_when_no_final_message_source_exists() {
+fn skips_the_run_when_its_transcript_is_missing() {
     let root = TempDir::new().unwrap();
     let iter = dirs(&root);
     write_iteration(
@@ -73,38 +88,26 @@ fn skips_the_slot_entirely_when_no_final_message_source_exists() {
         &[FixtureTask {
             eval_id: "crash",
             condition: "with_skill",
-            final_message: None,
         }],
     );
-    // No final-message.md, no transcript.
+    // Completion metadata exists, but no transcript owns a final response.
 
     let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
     assert_eq!(result.recorded, 0);
-    assert_eq!(result.skipped_no_final_message, 1);
-    assert!(!run_exists(&iter, "crash", "with_skill"));
-    assert!(!timing_exists(&iter, "crash", "with_skill"));
-}
-
-#[test]
-fn writes_empty_invocations_and_no_timing_when_transcript_missing() {
-    let root = TempDir::new().unwrap();
-    let iter = dirs(&root);
-    write_iteration(
-        &iter,
-        &[FixtureTask {
-            eval_id: "crash",
-            condition: "with_skill",
-            final_message: Some("Done."),
-        }],
-    );
-    // final-message.md exists but no events file is present.
-
-    let result = record_runs(&iter, 1, Harness::resolve("claude-code").unwrap(), false).unwrap();
-    assert_eq!(result.recorded, 1);
     assert_eq!(result.missing_transcript, 1);
-
-    let run = read_run(&iter, "crash", "with_skill");
-    assert_eq!(run.final_message, "Done.");
-    assert!(run.tool_invocations.is_empty());
+    assert_eq!(result.skipped_no_final_response, 1);
+    let warning = result
+        .transcript_warning(Harness::resolve("claude-code").unwrap())
+        .expect("missing transcript is reported");
+    assert!(
+        warning.contains("1 task missing transcript evidence"),
+        "{warning}"
+    );
+    assert!(
+        warning.contains("no final response was skipped"),
+        "{warning}"
+    );
+    assert!(!warning.contains("one-shot runs lack"), "{warning}");
+    assert!(!run_exists(&iter, "crash", "with_skill"));
     assert!(!timing_exists(&iter, "crash", "with_skill"));
 }

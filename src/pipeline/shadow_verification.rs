@@ -10,11 +10,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
 
-use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::adapters::skill_shadow::verification::{
     DispatchEvidence, EvidenceIndex, ReportVerification, VerificationStatus, finding_status,
     verify_finding,
 };
+use crate::adapters::skill_shadow::{PluginShadowArtifact, ShadowFindingClass};
 use crate::core::fs::write_json;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::io::now_iso8601;
@@ -98,12 +98,17 @@ pub(crate) fn verify_iteration(iteration_dir: &Path) -> Result<(), PipelineError
         .collect();
 
     let index = SurfaceIndex(&surfaces);
-    let (mut refuted, mut confirmed, mut unverified) = (0, 0, 0);
+    let (mut refuted, mut confirmed, mut unverified, mut confirmed_operator) = (0, 0, 0, 0);
     for finding in &mut artifact.report.findings {
         finding.resolved_severity = Some(verify_finding(finding, &index, &expected_by_group));
         match finding_status(finding) {
             VerificationStatus::Refuted => refuted += 1,
-            VerificationStatus::Confirmed => confirmed += 1,
+            VerificationStatus::Confirmed => {
+                confirmed += 1;
+                if finding.class == ShadowFindingClass::OperatorEnvironment {
+                    confirmed_operator += 1;
+                }
+            }
             VerificationStatus::Unverified => unverified += 1,
         }
     }
@@ -118,7 +123,7 @@ pub(crate) fn verify_iteration(iteration_dir: &Path) -> Result<(), PipelineError
         unverified_findings: unverified,
         // A declared assertion that evidence contradicts: the suppressed
         // findings were real, which is worth saying louder than the assertion.
-        assertion_contradicted: artifact.isolates_live_sources && confirmed > 0,
+        assertion_contradicted: artifact.isolates_live_sources && confirmed_operator > 0,
     });
 
     write_verified(&shadow_path, &artifact)
@@ -143,9 +148,9 @@ pub(crate) fn write_verified(
 mod tests {
     use super::*;
     use crate::adapters::skill_shadow::{
-        PluginShadowReport, ShadowAppearance, ShadowFinding, ShadowNamespace, ShadowRelation,
-        ShadowResolution, ShadowResolvedSeverity, ShadowRoot, ShadowRootScope, ShadowSeverity,
-        ShadowSkillRole, ShadowSource, ShadowSourceKind, ShadowSourceOrigin,
+        PluginShadowReport, ShadowAppearance, ShadowFinding, ShadowFindingClass, ShadowNamespace,
+        ShadowRelation, ShadowResolution, ShadowResolvedSeverity, ShadowRoot, ShadowRootScope,
+        ShadowSeverity, ShadowSkillRole, ShadowSource, ShadowSourceKind, ShadowSourceOrigin,
     };
     use crate::adapters::{LoadedPlugin, SessionSurface};
     use crate::pipeline::session_surface::RoundSurface;
@@ -184,6 +189,7 @@ mod tests {
             PluginShadowReport {
                 config_dir: "/home/u/.claude".into(),
                 findings: vec![ShadowFinding {
+                    class: ShadowFindingClass::OperatorEnvironment,
                     skill_name: "mr-review".into(),
                     role: ShadowSkillRole::Subject,
                     severity: ShadowSeverity::ComparisonInvalid,
@@ -305,6 +311,33 @@ mod tests {
                 .unwrap()
                 .assertion_contradicted,
             "a false isolation assertion must be reported, not trusted"
+        );
+    }
+
+    #[test]
+    fn a_loaded_codebase_source_does_not_contradict_operator_isolation() {
+        let dir = TempDir::new().unwrap();
+        let mut artifact = shadow_artifact(true);
+        artifact.report.findings[0].class = ShadowFindingClass::CodebaseSourced;
+        write_both(
+            dir.path(),
+            &artifact,
+            &surface_report(vec![
+                task("with_skill", &["slow-powers@slowdini"], true),
+                task("without_skill", &[], true),
+            ]),
+        );
+
+        verify_iteration(dir.path()).unwrap();
+
+        let artifact = read_back(dir.path());
+        assert_eq!(artifact.verification.unwrap().confirmed_findings, 1);
+        assert!(
+            !read_back(dir.path())
+                .verification
+                .unwrap()
+                .assertion_contradicted,
+            "operator isolation does not make claims about the sourced codebase"
         );
     }
 

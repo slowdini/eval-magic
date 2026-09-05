@@ -57,6 +57,38 @@ fn overwrites_existing_staged_skill_at_same_slug() {
 }
 
 #[test]
+fn generated_slug_collision_is_backed_up_and_restored() {
+    let tmp = TempDir::new().unwrap();
+    let slug = "slow-powers-eval-1-with_skill__s";
+    let existing = tmp.path().join(".claude/skills").join(slug);
+    write(&existing.join("SKILL.md"), "CODEBASE OWNED");
+
+    stage_skill_for_cc(&StageSkillOpts {
+        content: "STAGED",
+        iteration: 1,
+        condition: "with_skill",
+        skill_name: "s",
+        repo_root: tmp.path(),
+        ..Default::default()
+    })
+    .unwrap();
+
+    assert_eq!(read(&existing.join("SKILL.md")), "STAGED");
+    let manifest = read_manifest(&tmp.path().join(".claude/skills"));
+    let entry = manifest
+        .created_entries
+        .iter()
+        .find(|entry| entry.name == slug)
+        .expect("the staged subject is registered for cleanup");
+    assert!(entry.preexisting);
+    assert!(entry.backup_path.is_some());
+
+    cleanup_staged_skills(tmp.path(), Harness::resolve("claude-code").unwrap()).unwrap();
+
+    assert_eq!(read(&existing.join("SKILL.md")), "CODEBASE OWNED");
+}
+
+#[test]
 fn copies_sibling_assets_from_assets_dir() {
     let tmp = TempDir::new().unwrap();
     let assets = tmp.path().join("assets-src");

@@ -28,39 +28,29 @@
 
 eval-magic runs the same task in two controlled conditions—such as a new skill versus no skill, or
 an edited skill versus its previous version—and grades both results against shared assertions. It
-builds isolated task workspaces, stages skills, generates harness-specific dispatch instructions,
-ingests transcripts and final state, and produces comparison artifacts. You dispatch the agent
-sessions with Claude Code, Cline, Codex, OpenCode, or a descriptor-backed harness of your own.
+builds isolated task workspaces, stages skills, dispatches the agent sessions itself, ingests
+transcripts and final state, and produces comparison artifacts. It drives Claude Code, Cline,
+Codex, OpenCode, or a descriptor-backed harness of your own.
 
 The installed CLI is the primary manual. Start with `eval-magic --help`, and use
 `eval-magic <command> --help` whenever you reach a new phase.
 
 ## Install
 
-Git is required at runtime, plus a POSIX shell with `jq`: the dispatch and judge recipes eval-magic
-generates are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. The shell that runs them
-has to resolve the same paths the workspace was prepared with. On Windows that is Git Bash (Git for
-Windows), with `jq` installed separately — Git for Windows does not bundle it. WSL resolves a
-different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it.
-Set `EVAL_MAGIC_SH` to select a specific `sh`.
+eval-magic supports Linux and macOS. On Windows, install and run eval-magic inside Windows
+Subsystem for Linux (WSL); native Windows is unsupported. Keep the repository, workspace, and
+harness commands inside the same WSL environment.
 
-Windows support runs through Git Bash and is deprecated: a future release will require WSL.
+Git and a POSIX shell are required. Set `EVAL_MAGIC_SH` to select a specific `sh`.
 
-Prebuilt binaries for macOS, Linux, and Windows are attached to each
+Prebuilt binaries for macOS and Linux are attached to each
 [GitHub release](https://github.com/slowdini/eval-magic/releases).
 
-macOS or Linux:
+Install on macOS, Linux, or inside WSL:
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf \
   https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.sh | sh
-```
-
-Windows PowerShell:
-
-```powershell
-powershell -ExecutionPolicy Bypass -c \
-  "irm https://github.com/slowdini/eval-magic/releases/latest/download/eval-magic-installer.ps1 | iex"
 ```
 
 Or build and install from crates.io:
@@ -80,8 +70,11 @@ cd path/to/my-skill
 eval-magic init
 ```
 
-`init` creates `evals/evals.json` with one valid seed case. Edit the prompt and expected behavior to
-describe a realistic task, add concrete assertions as the eval matures, then check the file:
+`init` creates `evals/evals.json` with one valid seed case and the pinned Weeknight example
+codebase. Use `eval-magic init --help` to select another URL, local path, or the current directory,
+and use `eval-magic docs codebase` for project selection and provenance details. Edit the prompt
+and expected behavior to describe a realistic task, add concrete assertions as the eval matures,
+then check the file:
 
 ```bash
 eval-magic validate
@@ -101,10 +94,10 @@ eval-magic run --harness codex
 eval-magic run --harness opencode
 ```
 
-`run` prepares the campaign; it does not dispatch agents. Review the printed task and model-usage
-summary before continuing. Then read the generated `RUNBOOK.md` from beginning to end. It contains
-the exact dispatch, ingest, judge, finalize, and `eval-magic teardown` commands for that campaign
-and harness.
+`run` prepares the campaign; `eval-magic dispatch` runs it. Review the printed task and model-usage
+summary before continuing — dispatch is where model usage is spent. Then read the generated
+`RUNBOOK.md` from beginning to end. It contains the exact dispatch, ingest, judge, finalize, and
+`eval-magic teardown` commands for that campaign and harness.
 
 After finalization, open the generated `benchmark.json` to compare pass rates, token and duration
 measurements, and validity warnings. Use `eval-magic aggregate --help` when you need to combine
@@ -120,12 +113,19 @@ eval-magic run --mode revision
 
 The command help and generated runbook describe baseline selection and the rest of the workflow.
 
+An eval can treat coordinated skills as one treatment by setting `skill_name` to an ordered list.
+Pass one listed member with `--skill`; it remains the eval owner and supplies overlay files. See
+`eval-magic docs isolation` for the complete configuration, Mode A/B behavior, and provenance.
+
 ## How it works
 
 Each eval case runs once per condition and repetition in its own clean Git repository. The two arms
-receive the same task and fixtures; only the condition under test changes. Assertions can combine
-LLM judgment with runner-owned command checks, transcript checks, and final diff limits. Scripted
-`turns` resume one native harness session so follow-up answers remain part of the same conversation.
+receive the same codebase, task, and overlays; only the condition under test changes. Assertions can
+combine LLM judgment with runner-owned command checks, transcript checks, and final diff limits.
+Multi-turn evals resume one native harness session so follow-up answers remain part of the same
+conversation, whether the turns are scripted or derived by a responder. An eval can start that
+session in the harness's native plan mode and continue in act mode once the plan is approved
+(`eval-magic docs conversations`).
 
 Most harness features are declared in TOML descriptors. See the current registry and resolved data
 instead of relying on a static compatibility table:
@@ -144,6 +144,9 @@ eval-magic harness show codex
 - `eval-magic docs isolation` explains how live or installed skill sources can contaminate a
   comparison and how to verify isolation. Its source is
   [docs/guides/isolation.md](docs/guides/isolation.md).
+- `eval-magic docs guard` explains eval-authored command allowances, packaged defaults, and the
+  containment checks those allowances cannot bypass. Its source is
+  [docs/guides/guard.md](docs/guides/guard.md).
 - [docs/developer_overview.md](docs/developer_overview.md) maps the codebase, sources of truth,
   verification workflow, and internal documentation.
 
@@ -152,9 +155,11 @@ Issues and planned work are tracked in the
 
 ## Development
 
-Development carries the same host requirement as use: a POSIX shell with `jq`. The scripted-turn
-tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite
-cannot pass without one. Tests that need `jq` or symlink creation report a skip instead.
+Development carries the same host requirement as use: Linux or macOS with a POSIX shell. On
+Windows, clone the repository and run the complete toolchain inside WSL; native Windows development
+is unsupported. The dispatch tests spawn `#!/bin/sh` harness stubs through the resolved shell and
+do not skip, so the suite cannot pass without one. Tests that need symlink creation report a skip
+instead.
 
 ```bash
 cargo fmt --check

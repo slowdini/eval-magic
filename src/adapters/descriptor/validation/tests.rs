@@ -7,6 +7,7 @@ use super::super::load_descriptor;
 mod conversation;
 mod dispatch;
 mod guard;
+mod plan_mode;
 mod staging;
 mod tools;
 mod transcript;

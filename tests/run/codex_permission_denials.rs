@@ -33,10 +33,10 @@ fn codex_record_runs_reports_permission_denials_from_stderr() {
     assert_eq!(tasks.len(), 2, "{tasks:?}");
     for task in &tasks {
         let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Reviewed.\n").unwrap();
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
         fs::write(
-            outputs.join("codex-events.jsonl"),
+            turn.join("codex-events.jsonl"),
             concat!(
                 r#"{"type":"thread.started","thread_id":"thread_1","timestamp":"2026-07-30T06:00:00Z"}"#,
                 "\n",
@@ -49,7 +49,7 @@ fn codex_record_runs_reports_permission_denials_from_stderr() {
         .unwrap();
         if task["condition"] == "with_skill" {
             fs::write(
-                outputs.join("codex-stderr.log"),
+                turn.join("codex-stderr.log"),
                 concat!(
                     "2026-07-30T06:00:01Z ERROR codex_core::tools::router: ",
                     "error=exec_command failed for `/bin/zsh -lc pwd`: CreateProcess { ",
@@ -59,6 +59,7 @@ fn codex_record_runs_reports_permission_denials_from_stderr() {
             )
             .unwrap();
         }
+        write_task_completion(&cwd, task);
     }
 
     skill_eval()

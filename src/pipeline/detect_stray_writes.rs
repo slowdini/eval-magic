@@ -5,28 +5,33 @@
 //!
 //! - **violations**: file-write tools (per the adapters' cross-harness
 //!   vocabulary union) whose target path resolves outside the task's eval root.
-//! - **warnings**: shell commands matching a mutating pattern that don't
-//!   reference the eval root, or literal redirect/`tee` targets resolving
-//!   outside it from the invocation cwd.
+//! - **warnings**: recognized development mutations whose invocation cwd or
+//!   explicit destination escapes the eval root, output redirect/`tee` targets
+//!   that cannot be proven in bounds, and Git operations that escape the local
+//!   task repository.
 //! - **live_source_reads**: read tools / shell commands that touched the live
 //!   skill-under-test directory instead of its staged copy.
 //! - **guard denials**: raw per-task JSONL is joined through `dispatch.json`
 //!   into the separate schema-gated `guard-denials.json` artifact, even when a
 //!   task has no `run.json`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::adapters::{all_config_dir_names, all_tool_vocabulary};
+use crate::adapters::all_tool_vocabulary;
+use crate::adapters::descriptor::PlanFileSection;
 use crate::core::fs::{normalize_separators, write_json};
-use crate::core::{ConditionsRecord, RunRecord, ToolInvocation};
+use crate::core::{ConditionsRecord, GuardPolicyConfig, RunRecord, ToolInvocation};
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::guard_denials::collect_guard_denials;
 use crate::pipeline::io::now_iso8601;
 use crate::pipeline::slots::{run_key, run_slots};
-use crate::sandbox::policy::classify_bash_with_cwd;
-use crate::sandbox::{is_shell_tool, is_under, is_write_tool, lexically_absolute, path_arg};
+use crate::sandbox::policy::classify_bash_with_policy;
+use crate::sandbox::{
+    is_shell_tool, is_under_any, is_under_through_links, is_write_tool, lexically_absolute,
+    literal_words, path_arg,
+};
 use crate::validation::{SchemaName, validate_against_schema};
 
 /// A read-only tool carrying a target path argument, in any harness's
@@ -74,12 +79,45 @@ pub fn detect_stray_writes(
     eval_root: &str,
     invocation_cwd: &Path,
 ) -> RunFindings {
+    detect_stray_writes_with_policy(
+        invocations,
+        eval_root,
+        invocation_cwd,
+        &GuardPolicyConfig::default(),
+    )
+}
+
+/// Classify invocations with the command policy frozen for this task.
+pub fn detect_stray_writes_with_policy(
+    invocations: &[ToolInvocation],
+    eval_root: &str,
+    invocation_cwd: &Path,
+    guard_policy: &GuardPolicyConfig,
+) -> RunFindings {
+    detect_stray_writes_in(
+        invocations,
+        std::slice::from_ref(&eval_root.to_string()),
+        invocation_cwd,
+        guard_policy,
+    )
+}
+
+/// Classify invocations against every root a task may write under: its eval
+/// root first, then any root the harness declares beside it (the plan file a
+/// plan-mode session writes). Mirrors the guard's `allowedRoots`, so the audit
+/// and the live guard draw the same boundary.
+pub fn detect_stray_writes_in(
+    invocations: &[ToolInvocation],
+    allowed_roots: &[String],
+    invocation_cwd: &Path,
+    guard_policy: &GuardPolicyConfig,
+) -> RunFindings {
     let mut findings = RunFindings::default();
 
     for inv in invocations {
         if is_write_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
-                && !is_under(p, eval_root, invocation_cwd)
+                && !is_under_any(p, allowed_roots, invocation_cwd)
             {
                 findings.violations.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -94,11 +132,9 @@ pub fn detect_stray_writes(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
-            if let Some(classification) = classify_bash_with_cwd(
-                command,
-                std::slice::from_ref(&eval_root.to_string()),
-                invocation_cwd,
-            ) {
+            if let Some(classification) =
+                classify_bash_with_policy(command, allowed_roots, invocation_cwd, guard_policy)
+            {
                 findings.warnings.push(StrayFinding {
                     tool: inv.name.clone(),
                     path: None,
@@ -113,65 +149,10 @@ pub fn detect_stray_writes(
     findings
 }
 
-/// Node-style lexical `path.relative(from, to)` over absolute, normalized paths.
-/// Returns forward-slash-joined components; starts with `..` when `to` is not
-/// under `from`.
-fn path_relative(from: &Path, to: &Path) -> String {
-    let from_comps: Vec<_> = from.components().collect();
-    let to_comps: Vec<_> = to.components().collect();
-    let mut i = 0;
-    while i < from_comps.len() && i < to_comps.len() && from_comps[i] == to_comps[i] {
-        i += 1;
-    }
-    let mut parts: Vec<String> = vec!["..".to_string(); from_comps.len() - i];
-    for c in &to_comps[i..] {
-        parts.push(c.as_os_str().to_string_lossy().into_owned());
-    }
-    parts.join("/")
-}
-
-/// Leading boundary before a bare `rel` reference: start-of-string or one of
-/// `\s'"=:(/`.
-fn is_leading_boundary(b: u8) -> bool {
-    b.is_ascii_whitespace() || matches!(b, b'\'' | b'"' | b'=' | b':' | b'(' | b'/')
-}
-
-/// Trailing boundary after a bare `rel` reference: end-of-string or one of
-/// `/\s'")`.
-fn is_trailing_boundary(b: u8) -> bool {
-    b == b'/' || b.is_ascii_whitespace() || matches!(b, b'\'' | b'"' | b')')
-}
-
-/// True if `command` references `rel` as a bare path token — bounded as a path
-/// segment and **not** prefixed by any harness config dir (`config_dirs`, the
-/// caller-supplied `adapters::all_config_dir_names()` list). The `regex` crate
-/// has no lookbehind, so each occurrence is scanned directly for the boundary +
-/// preceding-segment conditions.
-fn references_bare_rel(command: &str, rel: &str, config_dirs: &[String]) -> bool {
-    if rel.is_empty() {
-        return false;
-    }
-    let bytes = command.as_bytes();
-    let mut search_from = 0;
-    while let Some(off) = command[search_from..].find(rel) {
-        let start = search_from + off;
-        let end = start + rel.len();
-
-        let leading_ok = start == 0 || is_leading_boundary(bytes[start - 1]);
-        // The lookbehind sits before the boundary char: the text up to (but not
-        // including) that char must not end with a staging-dir prefix.
-        let lookbehind_ok = start == 0 || {
-            let before = &command[..start - 1];
-            !config_dirs.iter().any(|dir| before.ends_with(dir.as_str()))
-        };
-        let trailing_ok = end == command.len() || is_trailing_boundary(bytes[end]);
-
-        if leading_ok && lookbehind_ok && trailing_ok {
-            return true;
-        }
-        search_from = start + 1;
-    }
-    false
+/// Whether a shell word spells a path rather than a bare name, by carrying a
+/// separator in either spelling.
+fn names_a_path(word: &str) -> bool {
+    word.contains('/') || word.contains('\\')
 }
 
 /// Flag tool invocations that read the **live** skill-under-test directory
@@ -188,14 +169,11 @@ pub fn detect_live_source_reads(
     // host path while the command is whatever the agent typed, so on Windows the
     // two spell the same directory differently.
     let live_dir_str = normalize_separators(&live_dir.to_string_lossy());
-    let rel = path_relative(repo_root, &live_dir);
-    let rel_usable = !rel.starts_with("..");
-    let config_dirs = all_config_dir_names();
 
     for inv in invocations {
         if is_read_tool(&inv.name) {
             if let Some(p) = inv.args.as_ref().and_then(path_arg)
-                && is_under(p, &live_dir_str, repo_root)
+                && is_under_through_links(p, &live_dir_str, repo_root)
             {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -210,9 +188,21 @@ pub fn detect_live_source_reads(
 
         if is_shell_tool(&inv.name) {
             let command = command_of(inv);
+            // Neither scan alone covers the command. The raw one reaches
+            // spellings no path resolution can — the other separator, a
+            // directory named inside a word the lexer marks dynamic — and the
+            // per-word one reaches the symlinked route to the live directory,
+            // which no substring of the resolved spelling matches.
+            //
+            // Only words that name a path are resolved: every word resolves
+            // against the runner's cwd, so testing bare ones would make each
+            // `cargo test` a finding whenever that cwd sits inside the live
+            // directory.
             let normalized = normalize_separators(command);
             if normalized.contains(&live_dir_str)
-                || (rel_usable && references_bare_rel(&normalized, &rel, &config_dirs))
+                || literal_words(command).iter().any(|word| {
+                    names_a_path(word) && is_under_through_links(word, &live_dir_str, repo_root)
+                })
             {
                 findings.push(StrayFinding {
                     tool: inv.name.clone(),
@@ -278,10 +268,25 @@ pub struct StrayWritesReport {
     pub notices: Vec<String>,
 }
 
-/// `dispatch.json` fields the report builder reads (task-environment boundary).
+/// `dispatch.json` fields the report builder reads: the task-environment
+/// boundaries, and the frozen descriptor's plan-file root when it declares one.
 #[derive(Debug, Deserialize)]
 struct DispatchEnvelope {
     tasks: Option<Vec<DispatchRef>>,
+    #[serde(default)]
+    harness_descriptor: Option<FrozenDescriptorRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FrozenDescriptorRef {
+    #[serde(default)]
+    plan_mode: Option<FrozenPlanModeRef>,
+}
+
+#[derive(Debug, Deserialize)]
+struct FrozenPlanModeRef {
+    #[serde(default)]
+    plan_file: Option<PlanFileSection>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -292,6 +297,15 @@ struct DispatchRef {
     run_index: Option<u32>,
     #[serde(default)]
     eval_root: Option<String>,
+    #[serde(default)]
+    guard_policy: GuardPolicyConfig,
+}
+
+struct TaskBoundary {
+    eval_root: String,
+    /// The eval root, then the declared plan-file root when there is one.
+    allowed_roots: Vec<String>,
+    guard_policy: GuardPolicyConfig,
 }
 
 /// Build, validate, and write `<iteration_dir>/stray-writes.json` for every
@@ -312,13 +326,33 @@ pub fn detect_stray_writes_report(
     }
     let conditions: ConditionsRecord =
         serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
+    let live_skill_dirs = conditions
+        .skill_source
+        .as_ref()
+        .and_then(|source| source.skills.as_ref())
+        .map(|skills| {
+            skills
+                .iter()
+                .map(|skill| {
+                    PathBuf::from(
+                        skill
+                            .source
+                            .resolved_path
+                            .as_deref()
+                            .unwrap_or(&skill.source.source),
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .filter(|skills| !skills.is_empty())
+        .unwrap_or_else(|| vec![live_skill_dir.to_path_buf()]);
     let condition_names: Vec<String> = conditions
         .conditions
         .iter()
         .map(|c| c.name.clone())
         .collect();
 
-    let allowed_roots_by_key = eval_roots_by_key(iteration_dir);
+    let boundaries_by_key = task_boundaries_by_key(iteration_dir);
     let guard_denials = collect_guard_denials(iteration_dir, iteration, repo_root)?;
 
     let mut runs = Vec::new();
@@ -355,15 +389,20 @@ pub fn detect_stray_writes_report(
                     &source,
                 )?;
 
-                let eval_root = allowed_roots_by_key.get(&run_key(eval_id, cond, slot.run_index));
+                let boundary = boundaries_by_key.get(&run_key(eval_id, cond, slot.run_index));
 
                 invocations_inspected += run.tool_invocations.len();
                 // `dispatch.json` is the authoritative source of the private task
                 // environment boundary. Without it we skip out-of-bounds write
                 // classification rather than guess. Live-source-read detection is
                 // independent of this boundary and still runs.
-                let findings = match eval_root {
-                    Some(dir) => detect_stray_writes(&run.tool_invocations, dir, Path::new(dir)),
+                let findings = match boundary {
+                    Some(boundary) => detect_stray_writes_in(
+                        &run.tool_invocations,
+                        &boundary.allowed_roots,
+                        Path::new(&boundary.eval_root),
+                        &boundary.guard_policy,
+                    ),
                     None => {
                         let run_label = slot
                             .run_index
@@ -376,8 +415,16 @@ pub fn detect_stray_writes_report(
                         RunFindings::default()
                     }
                 };
-                let live_reads =
-                    detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root);
+                let mut live_reads = Vec::new();
+                for live_skill_dir in &live_skill_dirs {
+                    for finding in
+                        detect_live_source_reads(&run.tool_invocations, live_skill_dir, repo_root)
+                    {
+                        if !live_reads.contains(&finding) {
+                            live_reads.push(finding);
+                        }
+                    }
+                }
 
                 totals.violations += findings.violations.len();
                 totals.warnings += findings.warnings.len();
@@ -421,16 +468,42 @@ pub fn detect_stray_writes_report(
     Ok(report)
 }
 
-/// Map `"<eval_id>:<condition>[:r<k>]"` → the task's `eval_root` from
-/// `dispatch.json`. Empty when the file is absent or malformed.
-fn eval_roots_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, String> {
+/// Map `"<eval_id>:<condition>[:r<k>]"` to the task boundary and frozen guard
+/// policy from `dispatch.json`. Empty when the file is absent or malformed.
+fn task_boundaries_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, TaskBoundary> {
+    task_boundaries_by_key_with_home(iteration_dir, std::env::home_dir().as_deref())
+}
+
+/// [`task_boundaries_by_key`] with the home directory the frozen descriptor's
+/// plan-file root (`~/…`) expands against. Without one the plan-file root is
+/// left out, and a plan-file write is reported like any other.
+fn task_boundaries_by_key_with_home(
+    iteration_dir: &Path,
+    home: Option<&Path>,
+) -> std::collections::HashMap<String, TaskBoundary> {
     let mut out = std::collections::HashMap::new();
     if let Ok(raw) = std::fs::read_to_string(iteration_dir.join("dispatch.json"))
         && let Ok(env) = serde_json::from_str::<DispatchEnvelope>(&raw)
     {
+        let plan_file_root = env
+            .harness_descriptor
+            .and_then(|descriptor| descriptor.plan_mode)
+            .and_then(|plan_mode| plan_mode.plan_file)
+            .zip(home)
+            .map(|(plan_file, home)| plan_file.expanded_root(home).to_string_lossy().into_owned());
         for t in env.tasks.unwrap_or_default() {
-            if let Some(dir) = t.eval_root {
-                out.insert(run_key(&t.eval_id, &t.condition, t.run_index), dir);
+            if let Some(eval_root) = t.eval_root {
+                let allowed_roots = std::iter::once(eval_root.clone())
+                    .chain(plan_file_root.clone())
+                    .collect();
+                out.insert(
+                    run_key(&t.eval_id, &t.condition, t.run_index),
+                    TaskBoundary {
+                        eval_root,
+                        allowed_roots,
+                        guard_policy: t.guard_policy,
+                    },
+                );
             }
         }
     }
@@ -438,420 +511,7 @@ fn eval_roots_by_key(iteration_dir: &Path) -> std::collections::HashMap<String, 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
+mod realistic_development_tests;
 
-    const ALLOWED_ROOT: &str = "/work/iteration-1/env-g1-with_skill";
-    const REPO: &str = "/work/repo";
-    const LIVE_SKILL: &str = "/work/repo/skills/mr-review";
-
-    /// Build a minimal invocation from name/args/ordinal (result is unused here).
-    fn inv(name: &str, args: serde_json::Value, ordinal: u32) -> ToolInvocation {
-        ToolInvocation {
-            name: name.to_string(),
-            args: Some(args),
-            result: None,
-            ordinal,
-        }
-    }
-
-    fn repo() -> &'static Path {
-        Path::new(REPO)
-    }
-
-    fn live() -> &'static Path {
-        Path::new(LIVE_SKILL)
-    }
-
-    // --- detectStrayWrites ---
-
-    #[test]
-    fn a_write_inside_the_task_environment_is_clean() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Write",
-                json!({"file_path": format!("{ALLOWED_ROOT}/answer.md")}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert!(f.violations.is_empty());
-        assert!(f.warnings.is_empty());
-    }
-
-    #[test]
-    fn a_relative_write_resolves_from_the_task_environment() {
-        let f = detect_stray_writes(
-            &[inv("Edit", json!({"file_path": "src/lib.rs"}), 0)],
-            ALLOWED_ROOT,
-            Path::new(ALLOWED_ROOT),
-        );
-        assert!(f.violations.is_empty());
-    }
-
-    #[test]
-    fn a_write_outside_the_task_environment_is_a_violation() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Write",
-                json!({"file_path": format!("{REPO}/runner/run.ts")}),
-                2,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.violations.len(), 1);
-        assert_eq!(f.violations[0].tool, "Write");
-        assert_eq!(
-            f.violations[0].path.as_deref(),
-            Some(&*format!("{REPO}/runner/run.ts"))
-        );
-        assert_eq!(f.violations[0].ordinal, 2);
-    }
-
-    #[test]
-    fn edit_multiedit_notebookedit_outside_the_task_environment_is_a_violation() {
-        let f = detect_stray_writes(
-            &[
-                inv("Edit", json!({"file_path": "/etc/hosts"}), 0),
-                inv("NotebookEdit", json!({"notebook_path": "/tmp/x.ipynb"}), 1),
-            ],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        let mut tools: Vec<&str> = f.violations.iter().map(|v| v.tool.as_str()).collect();
-        tools.sort();
-        assert_eq!(tools, vec!["Edit", "NotebookEdit"]);
-    }
-
-    #[test]
-    fn an_install_command_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv("Bash", json!({"command": "npm install left-pad"}), 0)],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert_eq!(f.warnings[0].tool, "Bash");
-        assert!(f.warnings[0].reason.to_lowercase().contains("install"));
-    }
-
-    #[test]
-    fn a_codex_command_execution_install_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv(
-                "command_execution",
-                json!({"command": "npm install left-pad"}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert_eq!(f.warnings[0].tool, "command_execution");
-        assert!(f.warnings[0].reason.to_lowercase().contains("install"));
-    }
-
-    #[test]
-    fn a_codex_file_change_outside_the_task_environment_is_a_violation() {
-        let f = detect_stray_writes(
-            &[inv(
-                "file_change",
-                json!({"path": format!("{REPO}/src/app.ts")}),
-                4,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.violations.len(), 1);
-        assert_eq!(f.violations[0].tool, "file_change");
-        assert_eq!(
-            f.violations[0].path.as_deref(),
-            Some(&*format!("{REPO}/src/app.ts"))
-        );
-        assert_eq!(f.violations[0].ordinal, 4);
-    }
-
-    #[test]
-    fn a_mutating_bash_scoped_to_the_task_environment_is_not_flagged() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": format!("echo hi > {ALLOWED_ROOT}/log.txt")}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert!(f.warnings.is_empty());
-    }
-
-    #[test]
-    fn a_relative_redirection_resolves_from_the_task_environment() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": "printf done > final-message.md"}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            Path::new(ALLOWED_ROOT),
-        );
-        assert!(f.warnings.is_empty(), "{:?}", f.warnings);
-    }
-
-    #[test]
-    fn git_worktree_add_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": "git worktree add ../wt -b scratch"}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("worktree"));
-    }
-
-    #[test]
-    fn creating_a_path_under_dot_claude_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv("Bash", json!({"command": "mkdir -p .claude/foo"}), 0)],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
-    }
-
-    #[test]
-    fn creating_a_path_under_dot_codex_is_a_warning() {
-        let f = detect_stray_writes(
-            &[inv(
-                "Bash",
-                json!({"command": "cp evil.json .codex/hooks.json"}),
-                0,
-            )],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert_eq!(f.warnings.len(), 1);
-        assert!(f.warnings[0].reason.to_lowercase().contains("config dir"));
-    }
-
-    #[test]
-    fn read_only_tools_are_never_flagged() {
-        let f = detect_stray_writes(
-            &[
-                inv("Read", json!({"file_path": "/anywhere"}), 0),
-                inv("Grep", json!({"pattern": "x"}), 1),
-                inv("Bash", json!({"command": "ls -la /"}), 2),
-            ],
-            ALLOWED_ROOT,
-            repo(),
-        );
-        assert!(f.violations.is_empty());
-        assert!(f.warnings.is_empty());
-    }
-
-    // --- detectLiveSourceReads ---
-
-    #[test]
-    fn a_read_of_the_live_skill_md_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Read",
-                json!({"file_path": format!("{LIVE_SKILL}/SKILL.md")}),
-                1,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "Read");
-        assert_eq!(
-            f[0].path.as_deref(),
-            Some(&*format!("{LIVE_SKILL}/SKILL.md"))
-        );
-        assert_eq!(f[0].ordinal, 1);
-        assert!(f[0].reason.to_lowercase().contains("live skill source"));
-    }
-
-    #[test]
-    fn a_read_of_a_staged_eval_copy_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Read",
-                json!({"file_path": format!("{REPO}/.claude/skills/slow-powers-eval-1-old_skill__mr-review/SKILL.md")}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn a_relative_read_resolving_under_the_live_dir_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Read",
-                json!({"file_path": "skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-    }
-
-    #[test]
-    fn a_grep_scoped_to_the_live_dir_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv("Grep", json!({"pattern": "x", "path": LIVE_SKILL}), 2)],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "Grep");
-    }
-
-    #[test]
-    fn a_bash_referencing_the_live_dir_relatively_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat skills/mr-review/SKILL.md"}),
-                3,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "Bash");
-        assert_eq!(
-            f[0].command.as_deref(),
-            Some("cat skills/mr-review/SKILL.md")
-        );
-    }
-
-    #[test]
-    fn a_codex_command_referencing_the_live_dir_relatively_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "command_execution",
-                json!({"command": "cat skills/mr-review/SKILL.md"}),
-                3,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "command_execution");
-        assert_eq!(
-            f[0].command.as_deref(),
-            Some("cat skills/mr-review/SKILL.md")
-        );
-    }
-
-    #[test]
-    fn a_bash_referencing_the_live_dir_absolutely_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": format!("grep -r trigger {LIVE_SKILL}/")}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-    }
-
-    /// A contaminated arm is not comparable data, so the scan has to hold when
-    /// the command spells the live directory with the other separator — which
-    /// on Windows is every command, since the recorded directory is a host path.
-    #[test]
-    fn a_bash_spelling_the_live_dir_with_the_other_separator_is_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": r"cat \work\repo\skills\mr-review\SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].tool, "Bash");
-    }
-
-    #[test]
-    fn a_bash_referencing_a_staged_copy_under_dot_claude_skills_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat .claude/skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn a_bash_referencing_a_staged_copy_under_dot_agents_skills_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat .agents/skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn a_bash_referencing_a_staged_copy_under_dot_opencode_skills_is_not_flagged() {
-        let f = detect_live_source_reads(
-            &[inv(
-                "Bash",
-                json!({"command": "cat .opencode/skills/mr-review/SKILL.md"}),
-                0,
-            )],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-
-    #[test]
-    fn unrelated_reads_and_commands_are_not_flagged() {
-        let f = detect_live_source_reads(
-            &[
-                inv(
-                    "Read",
-                    json!({"file_path": format!("{ALLOWED_ROOT}/x.md")}),
-                    0,
-                ),
-                inv("Bash", json!({"command": "ls .eval-magic"}), 1),
-                // Write tools are detect_stray_writes' jurisdiction — reads only here.
-                inv(
-                    "Write",
-                    json!({"file_path": format!("{LIVE_SKILL}/SKILL.md")}),
-                    2,
-                ),
-            ],
-            live(),
-            repo(),
-        );
-        assert!(f.is_empty());
-    }
-}
+#[cfg(test)]
+mod tests;

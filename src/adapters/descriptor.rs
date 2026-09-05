@@ -13,6 +13,7 @@
 //! same checks.
 
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -59,6 +60,8 @@ pub struct HarnessDescriptor {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skills_dir: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_project_skill_dirs: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub config_dirs: Vec<String>,
     #[serde(default, skip_serializing_if = "RunSection::is_default")]
     pub run: RunSection,
@@ -80,6 +83,9 @@ pub struct HarnessDescriptor {
     pub dispatch: DispatchSection,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<ConversationSection>,
+    /// Native plan mode: the per-round arguments the `{mode_args}` slot takes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_mode: Option<PlanModeSection>,
 }
 
 /// Run-option capabilities. The `Default` mirrors the baseline every harness
@@ -268,8 +274,6 @@ pub struct DispatchSection {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub capture_prefix: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub guard_args: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model_note: Option<String>,
@@ -277,10 +281,6 @@ pub struct DispatchSection {
     pub next_steps_template: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub exec_template: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub parallel_command_template: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub judge_command_template: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub manifest_template: Option<String>,
 }
@@ -298,6 +298,43 @@ pub struct ConversationSection {
     pub token_usage_aggregation: TokenUsageAggregation,
 }
 
+/// The harness's native plan mode, entered for the planning phase of a
+/// `plan_mode` eval. `plan_args` and `act_args` fill the `{mode_args}` slot in
+/// `dispatch.exec_template` and `conversation.resume_exec_template`.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PlanModeSection {
+    /// Arguments spliced at `{mode_args}` for every plan-phase round.
+    pub plan_args: String,
+    /// Arguments spliced at `{mode_args}` for every other dispatch: act-mode
+    /// rounds, judges, responder consultations, and `harness lint --probe`.
+    pub act_args: String,
+    /// The file the harness writes its plan to, when it writes one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_file: Option<PlanFileSection>,
+}
+
+/// The plan file a harness writes in plan mode. Writes under `root` are allowed
+/// by the write guard and the stray-write audit; a plan-phase round that wrote
+/// one has presented its plan, and that write's `content_field` is the plan
+/// artifact.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
+pub struct PlanFileSection {
+    /// Directory the plan file lands in. A leading `~` means the home directory.
+    pub root: String,
+    /// The write tool's input field carrying the file contents.
+    pub content_field: String,
+}
+
+impl PlanFileSection {
+    /// [`Self::root`] with a leading `~` replaced by `home`.
+    pub fn expanded_root(&self, home: &Path) -> PathBuf {
+        match self.root.strip_prefix('~') {
+            Some(rest) => home.join(rest.trim_start_matches('/')),
+            None => PathBuf::from(&self.root),
+        }
+    }
+}
+
 fn token_usage_aggregation_is_sum(value: &TokenUsageAggregation) -> bool {
     *value == TokenUsageAggregation::Sum
 }
@@ -306,13 +343,10 @@ impl DispatchSection {
     /// True when no dispatch field is set.
     pub fn is_empty(&self) -> bool {
         self.env.is_empty()
-            && self.capture_prefix.is_none()
             && self.guard_args.is_none()
             && self.model_note.is_none()
             && self.next_steps_template.is_none()
             && self.exec_template.is_none()
-            && self.parallel_command_template.is_none()
-            && self.judge_command_template.is_none()
             && self.manifest_template.is_none()
     }
 }
@@ -648,6 +682,72 @@ timestamp_spread = "timestamp"
     }
 
     #[test]
+    fn additional_project_skill_dirs_load_and_reserialize() {
+        let d = load(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\n\
+             additional_project_skill_dirs = [\".claude/skills\", \".agents/skills\"]\n\
+             config_dirs = [\".demo\", \".claude\", \".agents\"]\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            d.additional_project_skill_dirs,
+            vec![".claude/skills", ".agents/skills"]
+        );
+        let shown = toml::to_string(&d).unwrap();
+        assert!(shown.contains("additional_project_skill_dirs"), "{shown}");
+    }
+
+    #[test]
+    fn rejects_config_dirs_missing_an_additional_project_skill_parent() {
+        let error = err_of(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\n\
+             additional_project_skill_dirs = [\".claude/skills\"]\n\
+             config_dirs = [\".demo\"]\n",
+        );
+
+        assert!(error.contains(".claude"), "{error}");
+        assert!(error.contains("additional project skill"), "{error}");
+    }
+
+    #[test]
+    fn rejects_additional_project_skill_dirs_without_a_native_skills_dir() {
+        let error = err_of(
+            "label = \"demo\"\nadditional_project_skill_dirs = [\".claude/skills\"]\n\
+             config_dirs = [\".claude\"]\n",
+        );
+
+        assert!(error.contains("additional_project_skill_dirs"), "{error}");
+        assert!(error.contains("skills_dir"), "{error}");
+    }
+
+    #[test]
+    fn rejects_project_skill_dirs_that_escape_or_duplicate_the_native_root() {
+        for additional in [
+            "../skills",
+            "/tmp/skills",
+            ".claude/../skills",
+            ".demo/skills",
+        ] {
+            let error = err_of(&format!(
+                "{MINIMAL}\nadditional_project_skill_dirs = [\"{additional}\"]\n"
+            ));
+            assert!(error.contains("project skill"), "{additional}: {error}");
+        }
+    }
+
+    #[test]
+    fn rejects_backslash_separated_project_skill_dirs() {
+        let error = err_of(
+            "label = \"demo\"\nskills_dir = \".demo/skills\"\n\
+             additional_project_skill_dirs = [\".claude\\\\skills\"]\n\
+             config_dirs = [\".demo\", \".claude\\\\skills\"]\n",
+        );
+
+        assert!(error.contains("`/`-separated"), "{error}");
+    }
+
+    #[test]
     fn dispatch_environment_loads_and_reserializes() {
         let d = load(&format!(
             "{MINIMAL}\n[dispatch.env]\nTZ = \"UTC\"\nEMPTY = \"\"\n"
@@ -781,6 +881,15 @@ timestamp_spread = "timestamp"
     }
 
     #[test]
+    fn rejects_the_retired_capture_prefix_field() {
+        let err = err_of(&format!(
+            "{MINIMAL}\n[dispatch]\ncapture_prefix = \"demo\"\n"
+        ));
+        assert!(err.contains("capture_prefix"), "{err}");
+        assert!(err.contains("harness-descriptor schema"), "{err}");
+    }
+
+    #[test]
     fn merge_deep_merges_tables_and_replaces_scalars_and_arrays() {
         let mut base: serde_json::Value = toml::from_str(
             r#"
@@ -791,7 +900,7 @@ config_dirs = [".demo"]
 flag = "--model"
 
 [dispatch]
-capture_prefix = "demo"
+exec_template = "demo run"
 
 [dispatch.env]
 KEEP = "base"
@@ -817,7 +926,7 @@ TZ = "America/Los_Angeles"
         // Nested-table scalar replaced; sibling table untouched; array replaced
         // wholesale (no element-wise merge).
         assert_eq!(base["model"]["flag"], "--model-x");
-        assert_eq!(base["dispatch"]["capture_prefix"], "demo");
+        assert_eq!(base["dispatch"]["exec_template"], "demo run");
         assert_eq!(base["dispatch"]["env"]["KEEP"], "base");
         assert_eq!(base["dispatch"]["env"]["ADDED"], "overlay");
         assert_eq!(

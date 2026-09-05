@@ -53,17 +53,11 @@ fn descriptor_defaults_and_cli_overrides_are_recorded_and_rendered() {
         expected
     );
 
-    let manifest = read_str(&iteration.join("dispatch-manifest.md"));
-    assert!(
-        manifest.contains("export EMPTY=\nexport MODE=cli\nexport TZ=UTC"),
-        "{manifest}"
-    );
+    // The environment travels in the dispatch envelope, not in pasted `export`
+    // lines: the runner applies it per task when it spawns the harness, so
+    // neither the manifest nor the runbook restates it.
     let runbook = read_str(&iteration.join("RUNBOOK.md"));
-    let judge = runbook
-        .split_once("## 2. Dispatch the judge agents, then finalize")
-        .unwrap()
-        .1;
-    assert!(!judge.contains("export TZ=UTC"), "{judge}");
+    assert!(!runbook.contains("export TZ=UTC"), "{runbook}");
 }
 
 #[test]
@@ -91,8 +85,10 @@ fn cli_agent_environment_renders_for_every_builtin_harness() {
             .assert()
             .success();
 
-        let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
-        assert!(manifest.contains("export TZ=UTC"), "{harness}: {manifest}");
+        // Recorded once, in the envelope the runner dispatches from, for every
+        // built-in harness.
+        let envelope = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+        assert_eq!(envelope["agent_env"]["TZ"], "UTC", "{harness}: {envelope}");
     }
 }
 
@@ -148,9 +144,18 @@ fn dispatch_task_revalidates_persisted_agent_environment() {
 
     skill_eval()
         .current_dir(&cwd)
-        .args(["dispatch-task", "--dispatch"])
-        .arg(&dispatch_path)
-        .args(["--task-index", "0"])
+        .args(["dispatch", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--iteration",
+            "1",
+            "--harness",
+            "codex",
+            "--task-index",
+            "0",
+        ])
         .assert()
         .failure()
         .stderr(predicates::str::contains("BAD-NAME"));

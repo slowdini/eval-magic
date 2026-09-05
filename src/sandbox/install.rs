@@ -20,7 +20,7 @@ use chrono::{DateTime, SecondsFormat};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::core::Harness;
+use crate::core::{GuardPolicyConfig, Harness};
 
 use super::now_ms;
 use super::{guard::read_marker, marker_is_armed};
@@ -63,17 +63,23 @@ fn absolutize(p: &Path) -> PathBuf {
     std::path::absolute(p).unwrap_or_else(|_| p.to_path_buf())
 }
 
-/// The guard's sole allowed write root: the isolated env (`stage_root`, the
-/// agent-under-test's cwd). The staged skills dir and the per-task outputs dir
-/// both live *inside* `stage_root`, so this root covers every legitimate agent
-/// write. Scoping to the env — not the parent `.eval-magic/` or the host temp
+/// The guard's allowed write roots: the isolated env (`stage_root`, the
+/// agent-under-test's cwd) first, then any `extra_roots` the harness declares.
+/// The staged skills dir and the per-task outputs dir both live *inside*
+/// `stage_root`, so that root covers every legitimate agent write into the
+/// task. Scoping to the env — not the parent `.eval-magic/` or the host temp
 /// directory — keeps the guard boundary identical to the isolation boundary:
 /// the agent can't reach a sibling iteration or the `iteration-N/` meta tree
 /// above its cwd. eval-magic's own above-env writes (e.g. `benchmark.json`) are
 /// not gated here: they run as non-mutating `eval-magic` subprocesses the
-/// guard's Bash classifier passes.
-fn marker_allowed_roots(stage_root: &Path) -> Vec<String> {
-    vec![absolutize(stage_root).display().to_string()]
+/// guard's Bash classifier passes. An extra root is a harness's own bookkeeping
+/// outside the env — the plan file Claude Code writes in plan mode — which a
+/// denial would distort rather than protect.
+fn marker_allowed_roots(stage_root: &Path, extra_roots: &[PathBuf]) -> Vec<String> {
+    std::iter::once(stage_root)
+        .chain(extra_roots.iter().map(PathBuf::as_path))
+        .map(|root| absolutize(root).display().to_string())
+        .collect()
 }
 
 /// Write the guard marker that arms the hook for `stage_root`. The guard is a
@@ -83,6 +89,8 @@ pub(crate) fn write_marker(
     marker_path: &Path,
     stage_root: &Path,
     ttl: Option<Duration>,
+    guard_policy: &GuardPolicyConfig,
+    extra_allowed_roots: &[PathBuf],
 ) -> io::Result<()> {
     let expires_ms = now_ms() + ttl.unwrap_or(GUARD_TTL).as_millis() as i64;
     let denial_log_path = absolutize(&stage_root.join(GUARD_DENIALS_DIR).join(GUARD_DENIALS_LOG));
@@ -96,9 +104,10 @@ pub(crate) fn write_marker(
         marker_path,
         &json!({
             "active": true,
-            "allowedRoots": marker_allowed_roots(stage_root),
+            "allowedRoots": marker_allowed_roots(stage_root, extra_allowed_roots),
             "expiresAt": iso_millis(expires_ms),
             "denialLogPath": denial_log_path,
+            "guardPolicy": guard_policy,
         }),
     )
 }
@@ -204,11 +213,9 @@ mod tests {
         stage_root: PathBuf,
     }
 
-    /// The marker path as it appears *inside* a JSON string value: the hook
-    /// command embeds it, so every Windows separator is escaped to `\\`.
-    /// Interpolating `display()` raw builds an expectation that is not even
-    /// valid JSON, and the byte pin then fails on a difference the file does
-    /// not have.
+    /// The marker path as it appears *inside* a JSON string value. Serializing
+    /// it keeps the expectation valid JSON even when the path contains bytes
+    /// that need escaping.
     fn json_string_body(path: &Path) -> String {
         let quoted = serde_json::to_string(&path.to_string_lossy()).unwrap();
         quoted[1..quoted.len() - 1].to_string()
@@ -255,7 +262,12 @@ mod tests {
         let c = setup();
         let adapter = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
         let marker = adapter
-            .install_guard(&c.stage_root, Path::new("/g/eval-magic"), None)
+            .install_guard(
+                &c.stage_root,
+                Path::new("/g/eval-magic"),
+                None,
+                &Default::default(),
+            )
             .unwrap();
 
         let settings =
@@ -289,7 +301,12 @@ mod tests {
         let c = setup();
         let adapter = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
         let marker = adapter
-            .install_guard(&c.stage_root, Path::new("/g/eval-magic"), None)
+            .install_guard(
+                &c.stage_root,
+                Path::new("/g/eval-magic"),
+                None,
+                &Default::default(),
+            )
             .unwrap();
 
         let hooks = fs::read_to_string(c.stage_root.join(".codex").join("hooks.json")).unwrap();
@@ -322,13 +339,17 @@ mod tests {
         let c = setup();
         let exe = Path::new("/g/eval-magic");
         let claude = crate::adapters::adapter_for(Harness::resolve("claude-code").unwrap());
-        claude.install_guard(&c.stage_root, exe, None).unwrap();
+        claude
+            .install_guard(&c.stage_root, exe, None, &Default::default())
+            .unwrap();
         assert!(guard_is_armed(&c.stage_root));
         teardown_guard(&c.stage_root);
         assert!(!guard_is_armed(&c.stage_root));
 
         let codex = crate::adapters::adapter_for(Harness::resolve("codex").unwrap());
-        codex.install_guard(&c.stage_root, exe, None).unwrap();
+        codex
+            .install_guard(&c.stage_root, exe, None, &Default::default())
+            .unwrap();
         assert!(guard_is_armed(&c.stage_root));
     }
 }

@@ -12,11 +12,17 @@
 //! stateless helpers in [`super::util`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use crate::adapters::skill_shadow::ShadowSource;
 use crate::adapters::{CliDispatchContext, adapter_for};
 use crate::cli::command_target_args;
-use crate::core::{Eval, Mode, RunContext};
+use crate::core::fs::artifact_path;
+use crate::core::{
+    Assertion, CodebaseRecord, CodebaseSource, CodebaseUse, Eval, GuardPolicyConfig, Mode,
+    RunContext, SourceKind, SourceRecord,
+};
+use crate::source::ResolvedSource;
 
 use super::RunError;
 use super::statistics::format_minimum_attainable_fisher_p_value;
@@ -28,7 +34,10 @@ mod git;
 mod resolve;
 mod shadow_preflight;
 mod shell;
+mod skill;
 mod stage;
+
+use skill::{RunSkill, TreatmentSkill};
 
 /// Run options parsed from the `run` subcommand flags (everything beyond the
 /// shared skill/workspace/harness context, which lives in [`RunContext`]).
@@ -46,7 +55,6 @@ pub struct RunOptions<'a> {
     /// active), `Some` = explicit `--guard` / `--no-guard`.
     pub guard: Option<bool>,
     pub stage_name: Option<&'a str>,
-    pub plan_mode: bool,
     /// Runs per condition cell; per-eval `runs` overrides take precedence.
     pub runs: u32,
     /// Operator-declared models + label, persisted into `conditions.json` for
@@ -55,6 +63,10 @@ pub struct RunOptions<'a> {
     /// Resolved descriptor defaults plus run-level agent environment overrides.
     pub agent_env: BTreeMap<String, String>,
     pub judge_model: Option<&'a str>,
+    /// Non-default judge sample count. Absence means one and keeps legacy
+    /// manifests byte-compatible.
+    pub judge_samples: Option<u32>,
+    pub responder_model: Option<&'a str>,
     pub label: Option<&'a str>,
 }
 
@@ -72,7 +84,10 @@ impl RunOptions<'_> {
 struct Resolved {
     mode: Mode,
     baseline: Option<String>,
-    skill_md_path: PathBuf,
+    /// Distinct codebases backing the selection, already resolved.
+    codebases: Vec<RunCodebase>,
+    /// The skill under test, resolved but not yet copied.
+    skill: RunSkill,
     iteration: u32,
     iteration_dir: PathBuf,
     run_nonce: String,
@@ -81,6 +96,8 @@ struct Resolved {
     cond_b: &'static str,
     skill_path_a: Option<String>,
     skill_path_b: Option<String>,
+    skill_paths_a: Vec<(String, String)>,
+    skill_paths_b: Vec<(String, String)>,
     selected_evals: Vec<Eval>,
     total_evals: usize,
     /// Task-scoped groups computed from the selected evals in config order.
@@ -88,16 +105,99 @@ struct Resolved {
     groups: Vec<super::grouping::Group>,
 }
 
+/// One resolved codebase and the evals built from it.
+struct RunCodebase {
+    /// The declaration as written, which is what deduplication compares.
+    declared: CodebaseSource,
+    source: ResolvedSource,
+    /// Directory name under `iteration-N/.codebase/` this materializes into.
+    key: String,
+    eval_ids: Vec<String>,
+}
+
+/// Where an iteration keeps its copies of the skills under test.
+///
+/// A sibling of `.codebase/`, and scaffolding in the same sense: it holds inputs
+/// the runner placed, above every environment root, so an agent reaching it is
+/// already a stray write.
+pub(super) fn skills_copy_root(iteration_dir: &Path) -> PathBuf {
+    iteration_dir.join(".skills")
+}
+
+impl RunCodebase {
+    /// The artifact form, shared by every provenance surface so a reader never
+    /// has to reconcile two spellings of the same resolution.
+    fn record(&self) -> CodebaseRecord {
+        CodebaseRecord {
+            source: SourceRecord {
+                kind: match self.declared {
+                    CodebaseSource::Git { .. } => SourceKind::Git,
+                    CodebaseSource::Path { .. } => SourceKind::Path,
+                },
+                source: self.source.source.clone(),
+                resolved_path: self
+                    .source
+                    .resolved_path
+                    .as_deref()
+                    .map(|path| artifact_path(Path::new(path))),
+                reference: self.source.reference.clone(),
+                revision: self.source.revision.clone(),
+                origin_url: self.source.origin_url.clone(),
+                branch: self.source.branch.clone(),
+                host_local: self.source.host_local,
+                // Materialization checks out a commit, so the environment never
+                // carries uncommitted work however the source directory looked.
+                dirty: false,
+            },
+            exclude_skill_sources: self.declared.exclude_skill_sources(),
+        }
+    }
+
+    fn usage(&self) -> CodebaseUse {
+        CodebaseUse {
+            codebase: self.record(),
+            evals: self.eval_ids.clone(),
+        }
+    }
+}
+
+impl Resolved {
+    /// The codebase backing a private eval environment.
+    fn codebase_for(&self, eval_ids: &[String]) -> Result<&RunCodebase, RunError> {
+        let [eval_id] = eval_ids else {
+            return Err(RunError::msg(format!(
+                "private task environment must contain exactly one eval, found: {}",
+                eval_ids.join(", ")
+            )));
+        };
+        self.codebases
+            .iter()
+            .find(|candidate| candidate.eval_ids.contains(eval_id))
+            .ok_or_else(|| RunError::msg(format!("eval '{eval_id}' has no resolved codebase")))
+    }
+}
+
 /// The product of [`stage::stage_conditions`]: the staged slugs plus the
 /// dispatch-prompt inputs shared across every task.
 struct Staged {
     cond_a_slug: Option<String>,
     cond_b_slug: Option<String>,
+    cond_a_skills: Vec<StagedTreatmentSkill>,
+    cond_b_skills: Vec<StagedTreatmentSkill>,
     /// Sibling skills' `(name, description)` — env-independent. `build` resolves
     /// the on-disk path for each private task environment.
     sibling_meta: Vec<(String, String)>,
     bootstrap_content: Option<String>,
-    plan_mode_content: Option<String>,
+    guard_policies: std::collections::HashMap<PathBuf, GuardPolicyConfig>,
+    /// Matching project skill sources inventoried from each sourced codebase
+    /// before exclusion or staging changes its discovery roots.
+    codebase_shadow_sources: std::collections::HashMap<PathBuf, Vec<ShadowSource>>,
+}
+
+#[derive(Clone)]
+struct StagedTreatmentSkill {
+    name: String,
+    slug: Option<String>,
 }
 
 /// Build the iteration workspace and dispatch plan for a run.
@@ -118,42 +218,82 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
     // to the eval config actually selected for the run.
     let resolved = resolve::resolve_request(ctx, opts)?;
 
-    if resolved
-        .selected_evals
-        .iter()
-        .any(|eval| eval.turns.as_ref().is_some_and(|turns| !turns.is_empty()))
-        && !adapter_for(ctx.harness).has_conversation_resume()
-    {
-        return Err(RunError::msg(format!(
-            "--harness {} cannot run evals with scripted follow-up turns: its descriptor \
-             declares no [conversation] native resume capability",
-            adapter_for(ctx.harness).label()
-        )));
+    // Both ways of driving a conversation need the same capability: without one
+    // preserved session, a follow-up answers a fresh agent that never asked.
+    // Reported here rather than at dispatch time, so the gap surfaces before a
+    // workspace is built.
+    if !adapter_for(ctx.harness).has_conversation_resume() {
+        let label = adapter_for(ctx.harness).label();
+        if resolved
+            .selected_evals
+            .iter()
+            .any(|eval| eval.turns.as_ref().is_some_and(|turns| !turns.is_empty()))
+        {
+            return Err(RunError::msg(format!(
+                "--harness {label} cannot run evals with scripted follow-up turns: its descriptor \
+                 declares no [conversation] native resume capability"
+            )));
+        }
+        if resolved
+            .selected_evals
+            .iter()
+            .any(|eval| eval.responder.is_some())
+        {
+            return Err(RunError::msg(format!(
+                "--harness {label} cannot run evals with a responder: its descriptor declares no \
+                 [conversation] native resume capability"
+            )));
+        }
     }
 
-    // The harness preflight provides supported enhancements automatically (the
-    // write guard auto-arms), warns about undeclared ones (naming each
-    // fallback), and adjusts the options — it only rejects genuinely
-    // contradictory flag combinations.
-    let preflight = super::util::harness_run_preflight(
-        opts,
-        ctx,
-        super::util::evals_use_transcript_check(&resolved.selected_evals),
-    )?;
+    // Plan mode is a native capability with no fallback, and the approved plan
+    // is implemented by resuming the session, so it is gated here too. A
+    // harness that writes no plan file has no signal of its own for "the plan
+    // is ready", so those evals have to bring a responder to decide it.
+    let plan_mode_evals: Vec<&str> = resolved
+        .selected_evals
+        .iter()
+        .filter(|eval| eval.plan_mode)
+        .map(|eval| eval.id.as_str())
+        .collect();
+    if !plan_mode_evals.is_empty() {
+        let adapter = adapter_for(ctx.harness);
+        let label = adapter.label();
+        if !adapter.has_plan_mode() {
+            return Err(RunError::msg(format!(
+                "--harness {label} cannot run plan-mode evals ({}): its descriptor declares no \
+                 [plan_mode] table, so eval-magic cannot start their sessions in a native plan \
+                 mode (`eval-magic harness list` names the harnesses with the plan-mode \
+                 capability)",
+                plan_mode_evals.join(", ")
+            )));
+        }
+        if adapter.plan_file().is_none() {
+            let without_responder: Vec<&str> = resolved
+                .selected_evals
+                .iter()
+                .filter(|eval| eval.plan_mode && eval.responder.is_none())
+                .map(|eval| eval.id.as_str())
+                .collect();
+            if !without_responder.is_empty() {
+                return Err(RunError::msg(format!(
+                    "--harness {label} needs a responder on plan-mode evals ({}): its descriptor \
+                     declares no [plan_mode.plan_file], so only a responder can tell when the plan \
+                     is ready for approval (`eval-magic docs conversations`)",
+                    without_responder.join(", ")
+                )));
+            }
+        }
+    }
+
+    // The harness preflight enforces the runner-ready dispatch/transcript
+    // contract, provides supported enhancements automatically (the write guard
+    // auto-arms), and adjusts optional capabilities such as native staging.
+    let preflight = super::util::harness_run_preflight(opts, ctx)?;
     for warning in &preflight.warnings {
         eprintln!("⚠ {warning}");
     }
     let opts = &preflight.opts;
-
-    // Redirect staging into the isolated env dir. `resolve_request` has now
-    // computed `iteration_dir`; `env/` becomes the agent-under-test's cwd and the
-    // staging root, so the existing root-parameterized staging path follows it.
-    // eval-magic metadata
-    // stays above the env in `iteration_dir`. Only `run` overrides the cwd default
-    // set in `detect_run_context`; teardown/finalize keep operating at cwd.
-    let mut owned_ctx = ctx.clone();
-    owned_ctx.stage_root = resolved.iteration_dir.join("env");
-    let ctx = &owned_ctx;
 
     print_run_plan(ctx, opts, &resolved);
     let staged = stage::stage_conditions(ctx, opts, &resolved)?;
@@ -171,16 +311,66 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
         r.iteration,
         mode_str(r.mode)
     );
-    println!(
-        "  {}: {}",
-        r.cond_a,
-        r.skill_path_a.as_deref().unwrap_or("(no skill)")
-    );
-    println!(
-        "  {}: {}",
-        r.cond_b,
-        r.skill_path_b.as_deref().unwrap_or("(no skill)")
-    );
+    let render_paths = |paths: &[(String, String)]| {
+        if paths.is_empty() {
+            "(no skill)".to_string()
+        } else if !r.skill.multi {
+            paths[0].1.clone()
+        } else {
+            paths
+                .iter()
+                .map(|(name, path)| format!("{name}: {path}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    };
+    println!("  {}: {}", r.cond_a, render_paths(&r.skill_paths_a));
+    println!("  {}: {}", r.cond_b, render_paths(&r.skill_paths_b));
+    // The conditions above name the copy; this names where the copy came from,
+    // which is what a reader of the report has to be able to find again.
+    for treatment in &r.skill.treatments {
+        let source = &treatment.source;
+        let revision = match (source.revision.as_deref(), source.dirty) {
+            (Some(sha), true) => format!(" ({}, uncommitted changes)", &sha[..7.min(sha.len())]),
+            (Some(sha), false) => format!(" ({})", &sha[..7.min(sha.len())]),
+            (None, _) => String::new(),
+        };
+        println!(
+            "  skill source{}: {}{revision}",
+            if !r.skill.multi {
+                String::new()
+            } else {
+                format!(" ({})", treatment.name)
+            },
+            source.resolved_path.as_deref().unwrap_or(&source.source)
+        );
+    }
+    // The codebases the environments are built from, in the same shape as the
+    // skill source line — and the one-checkout-per-iteration fact the caching
+    // makes true.
+    for codebase in &r.codebases {
+        let source = &codebase.source;
+        let revision = source
+            .revision
+            .as_deref()
+            .map(|sha| format!(" ({})", &sha[..7.min(sha.len())]))
+            .unwrap_or_default();
+        println!(
+            "  codebase: {}{revision} — materialized once per iteration",
+            source.resolved_path.as_deref().unwrap_or(&source.source)
+        );
+    }
+    let plan_mode_evals = r
+        .selected_evals
+        .iter()
+        .filter(|eval| eval.plan_mode)
+        .count();
+    if plan_mode_evals > 0 {
+        println!(
+            "  plan mode: {plan_mode_evals} eval(s) start in the harness's native plan mode and \
+             continue in act mode once the plan is approved"
+        );
+    }
     if r.selected_evals.len() != r.total_evals {
         let (flag, ids) = match (opts.only, opts.skip) {
             (Some(ids), _) => ("--only", ids),
@@ -193,17 +383,47 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
             ids.join(", ")
         );
     }
-    let effective_run_counts: BTreeSet<u32> = r
-        .selected_evals
-        .iter()
-        .map(|eval| eval.runs.unwrap_or(opts.runs))
-        .collect();
-    for runs in effective_run_counts {
+    let mut binary_run_counts = BTreeSet::new();
+    let mut sampled_endpoints: BTreeSet<(u32, Vec<u32>)> = BTreeSet::new();
+    for eval in &r.selected_evals {
+        let runs = eval.runs.unwrap_or(opts.runs);
+        let sample_counts: BTreeSet<u32> = eval
+            .assertions
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .filter_map(|assertion| match assertion {
+                Assertion::LlmJudge(judge) => {
+                    Some(judge.samples.or(opts.judge_samples).unwrap_or(1))
+                }
+                _ => None,
+            })
+            .collect();
+        if sample_counts.iter().any(|count| *count > 1) {
+            sampled_endpoints.insert((runs, sample_counts.into_iter().collect()));
+        } else {
+            binary_run_counts.insert(runs);
+        }
+    }
+    for runs in binary_run_counts {
         let run_label = if runs == 1 { "run" } else { "runs" };
         println!(
             "  statistical floor: 2 conditions × {runs} {run_label}; minimum attainable \
              two-sided Fisher exact p on a binary endpoint is {}",
             format_minimum_attainable_fisher_p_value(runs)
+        );
+    }
+    for (runs, sample_counts) in sampled_endpoints {
+        let run_label = if runs == 1 { "run" } else { "runs" };
+        let counts = sample_counts
+            .iter()
+            .map(u32::to_string)
+            .collect::<Vec<_>>()
+            .join(", ");
+        println!(
+            "  statistical endpoint: 2 conditions × {runs} {run_label}; LLM judge sample counts \
+             per assertion: {counts}; report vote proportion and pass^k; the binary Fisher exact \
+             floor does not apply"
         );
     }
     if opts.no_stage {
@@ -267,23 +487,8 @@ fn print_next_steps(ctx: &RunContext, opts: &RunOptions, r: &Resolved, num_tasks
         return;
     }
     let target_args = command_target_args(ctx);
-    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
-        let mix = r.selected_evals.iter().any(|eval| eval.turns.is_none());
-        println!(
-            "\nNext: read RUNBOOK.md and run every task with scripted `turns` through \
-             `eval-magic dispatch-task` so follow-ups resume the same native session.{} \
-             Then run `eval-magic ingest{target_args} --iteration {} --harness {}`.",
-            if mix {
-                " Use its harness recipe only for the remaining one-shot tasks."
-            } else {
-                ""
-            },
-            r.iteration,
-            adapter_for(ctx.harness).label()
-        );
-        return;
-    }
-    // One-shot CLI dispatch; the exact command is harness-specific.
+    // One command whatever the plan holds: scripted and one-shot tasks are both
+    // runner-driven.
     println!(
         "{}",
         adapter_for(ctx.harness).cli_next_steps(CliDispatchContext {

@@ -8,6 +8,8 @@ use regex::Regex;
 use serde_json::Value;
 
 use crate::core::{Assertion, DeliverWhen, EvalsConfig};
+use crate::sandbox::command_policy::validate_policy_syntax;
+use crate::sandbox::guard_profiles::has_profile;
 use crate::validation::error::ValidationError;
 use crate::validation::schema::{SchemaName, validate_against_schema};
 
@@ -15,7 +17,15 @@ use crate::validation::schema::{SchemaName, validate_against_schema};
 /// supplemental duplicate-`id`, command environment, and held-out path guards,
 /// returning the typed config on success.
 pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig, ValidationError> {
+    validate_retired_fields(config, source)?;
+    validate_codebase_declarations(config, source)?;
+    validate_effective_codebases(config, source)?;
+    validate_turn_source_declarations(config, source)?;
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
+
+    if let Some(policy) = &validated.guard {
+        validate_guard_policy(policy, source, "guard")?;
+    }
 
     let mut seen = HashSet::new();
     for (index, ev) in validated.evals.iter().enumerate() {
@@ -25,6 +35,9 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
                 index,
                 id: ev.id.clone(),
             });
+        }
+        if let Some(policy) = &ev.guard {
+            validate_guard_policy(policy, source, &format!("eval '{}', guard", ev.id))?;
         }
 
         for (turn_index, turn) in ev.turns.as_deref().unwrap_or(&[]).iter().enumerate() {
@@ -62,12 +75,16 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
         let visible = ev.files.as_deref().unwrap_or(&[]);
         for assertion in ev.assertions.as_deref().unwrap_or(&[]) {
             if let Assertion::TranscriptCheck(check) = assertion {
-                if check.check == "assistant_message_matches" && ev.turns.is_none() {
+                if check.check == "assistant_message_matches"
+                    && ev.turns.is_none()
+                    && ev.responder.is_none()
+                {
                     return Err(ValidationError::InvalidConfig {
                         path: source.to_string(),
                         message: format!(
                             "eval '{}', transcript_check '{}': assistant_message_matches \
-                             requires a non-empty turns array",
+                             requires a multi-turn conversation — a non-empty turns array or a \
+                             responder",
                             ev.id, check.id
                         ),
                     });
@@ -108,16 +125,16 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
                         ),
                     }
                 })?;
-                for fixture in visible {
-                    let Ok(fixture_path) = normalize_relative(fixture) else {
+                for overlay in visible {
+                    let Ok(overlay_path) = normalize_relative(overlay) else {
                         continue;
                     };
-                    if paths_overlap(&fixture_path, &setup_path) {
+                    if paths_overlap(&overlay_path, &setup_path) {
                         return Err(ValidationError::InvalidConfig {
                             path: source.to_string(),
                             message: format!(
-                                "eval '{}', command_check '{}': visible fixture '{}' and setup_files path '{}' overlap; held-out setup paths must be disjoint from agent-visible files",
-                                ev.id, check.id, fixture, setup
+                                "eval '{}', command_check '{}': visible overlay '{}' and setup_files path '{}' overlap; held-out setup paths must be disjoint from agent-visible files",
+                                ev.id, check.id, overlay, setup
                             ),
                         });
                     }
@@ -127,6 +144,188 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     }
 
     Ok(validated)
+}
+
+/// Name retired fields before the structural schema can reduce them to an
+/// `additionalProperties` error. These are authored configuration, not a
+/// generated artifact compatibility surface.
+fn validate_retired_fields(config: &Value, source: &str) -> Result<(), ValidationError> {
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        if eval.get("isolation").is_none() {
+            continue;
+        }
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{id}': field 'isolation' is no longer supported or needed; every eval run already uses a private environment"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// Every eval runs against a codebase. A config-level declaration supplies the
+/// default; without one, each eval must carry its own declaration.
+fn validate_effective_codebases(config: &Value, source: &str) -> Result<(), ValidationError> {
+    if config.get("codebase").is_some() {
+        return Ok(());
+    }
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        if eval.get("codebase").is_some() {
+            continue;
+        }
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{id}': no effective codebase; set top-level 'codebase' or this eval's 'codebase'"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_guard_policy(
+    policy: &crate::core::GuardPolicyConfig,
+    source: &str,
+    label: &str,
+) -> Result<(), ValidationError> {
+    for profile in &policy.profiles {
+        if !has_profile(profile) {
+            return Err(ValidationError::InvalidConfig {
+                path: source.to_string(),
+                message: format!("{label}: unknown guard profile {profile:?}"),
+            });
+        }
+    }
+    validate_policy_syntax(policy).map_err(|message| ValidationError::InvalidConfig {
+        path: source.to_string(),
+        message: format!("{label}: {message}"),
+    })
+}
+
+/// Name what is wrong with a `codebase` block before the schema reports only
+/// that it matched neither `oneOf` branch.
+///
+/// This runs *ahead* of the structural check rather than beside it. The schema
+/// still owns the contract — an editor validating `evals.json` against it gets
+/// the full rules — but `oneOf` cannot explain itself: a git source missing its
+/// `ref` reports the whole block as unmatched and never mentions `ref`. Only the
+/// mistakes worth a sentence are repeated here, plus the whitespace rule
+/// `minLength: 1` cannot express.
+fn validate_codebase_declarations(config: &Value, source: &str) -> Result<(), ValidationError> {
+    if let Some(codebase) = config.get("codebase") {
+        validate_codebase(source, "codebase", codebase)?;
+    }
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        let Some(codebase) = eval.get("codebase") else {
+            continue;
+        };
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        validate_codebase(source, &format!("eval '{id}', codebase"), codebase)?;
+    }
+    Ok(())
+}
+
+/// Reject an eval that declares both ways of driving a conversation. Checked
+/// before the schema for the same reason the codebase rules are: the schema
+/// states it as a bare `not`, which reports the whole eval as disallowed and
+/// never names the two fields that clash.
+fn validate_turn_source_declarations(config: &Value, source: &str) -> Result<(), ValidationError> {
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        if eval.get("turns").is_none() || eval.get("responder").is_none() {
+            continue;
+        }
+        let id = eval
+            .get("id")
+            .and_then(Value::as_str)
+            .map_or_else(|| format!("evals[{index}]"), str::to_string);
+        return Err(ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message: format!(
+                "eval '{id}': declares both 'turns' and 'responder'; a conversation is either \
+                 scripted or derived, not both"
+            ),
+        });
+    }
+    Ok(())
+}
+
+fn validate_codebase(source: &str, label: &str, value: &Value) -> Result<(), ValidationError> {
+    // A non-object is a plain type error the schema words perfectly well.
+    let Some(fields) = value.as_object() else {
+        return Ok(());
+    };
+    let invalid = |message: String| ValidationError::InvalidConfig {
+        path: source.to_string(),
+        message,
+    };
+
+    if fields.contains_key("url") && fields.contains_key("path") {
+        return Err(invalid(format!(
+            "{label}: declares both 'url' and 'path'; a codebase is sourced from one or the other"
+        )));
+    }
+    if fields.contains_key("url") && !fields.contains_key("ref") {
+        return Err(invalid(format!(
+            "{label}: 'url' requires an explicit 'ref' (branch, tag, or commit SHA). The runner \
+             records the resolved SHA, so an eval tracking a moving branch could not be re-run \
+             against what it measured."
+        )));
+    }
+    for field in ["url", "ref", "path"] {
+        if let Some(Value::String(text)) = fields.get(field)
+            && text.trim().is_empty()
+        {
+            return Err(invalid(format!(
+                "{label}: '{field}' must contain non-whitespace text"
+            )));
+        }
+    }
+    // `run` writes these paths inside a task environment, so one that leaves it
+    // would reach the operator's own tree. The schema can state "non-empty
+    // string" and no more; containment is a semantic rule.
+    for entry in fields
+        .get("ignore_files")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if entry.trim().is_empty() {
+            return Err(invalid(format!(
+                "{label}: 'ignore_files' entries must contain non-whitespace text"
+            )));
+        }
+        if !is_contained_relative_path(entry) {
+            return Err(invalid(format!(
+                "{label}: 'ignore_files' entry {entry:?} must be a relative path inside the task \
+                 environment (no leading '/', no '..' segment)"
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// True when `path` names something inside the directory it is resolved
+/// against: relative, and with no `..` hop out of it. Split on `/` alone,
+/// because that is what the writer splits on.
+fn is_contained_relative_path(path: &str) -> bool {
+    !path.starts_with('/') && path.split('/').all(|segment| segment != "..")
 }
 
 fn validate_environment_name(
@@ -185,12 +384,14 @@ fn paths_overlap(left: &Path, right: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::validate_evals_config;
+    use crate::core::Assertion;
     use serde_json::{Value, json};
 
     /// The minimal valid config the cases below mutate.
     fn base() -> Value {
         json!({
             "skill_name": "demo",
+            "codebase": { "path": "." },
             "evals": [
                 {
                     "id": "e1",
@@ -218,6 +419,39 @@ mod tests {
     }
 
     #[test]
+    fn llm_judge_accepts_a_positive_sample_count() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "quality",
+            "type": "llm_judge",
+            "rubric": "Is the implementation well designed?",
+            "samples": 10
+        }]);
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let Assertion::LlmJudge(judge) = &parsed.evals[0].assertions.as_ref().unwrap()[0] else {
+            panic!("expected llm_judge assertion");
+        };
+        assert_eq!(judge.samples, Some(10));
+    }
+
+    #[test]
+    fn llm_judge_rejects_zero_samples() {
+        let mut config = base();
+        config["evals"][0]["assertions"] = json!([{
+            "id": "quality",
+            "type": "llm_judge",
+            "rubric": "Is the implementation well designed?",
+            "samples": 0
+        }]);
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("samples"), "error was: {error}");
+    }
+
+    #[test]
     fn rejects_an_empty_files_root() {
         let mut config = base();
         config["evals"][0]["files_root"] = json!("");
@@ -237,45 +471,6 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("skill_should_trigger"), "error was: {err}");
-    }
-
-    #[test]
-    fn accepts_isolation_isolated() {
-        let mut config = base();
-        config["evals"][0]["isolation"] = json!("isolated");
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        assert_eq!(
-            parsed.evals[0].isolation,
-            Some(crate::core::Isolation::Isolated)
-        );
-    }
-
-    #[test]
-    fn accepts_isolation_shared() {
-        let mut config = base();
-        config["evals"][0]["isolation"] = json!("shared");
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        assert_eq!(
-            parsed.evals[0].isolation,
-            Some(crate::core::Isolation::Shared)
-        );
-    }
-
-    #[test]
-    fn defaults_isolation_to_none_when_absent() {
-        let config = base();
-        let parsed = validate_evals_config(&config, "evals.json").unwrap();
-        assert_eq!(parsed.evals[0].isolation, None);
-    }
-
-    #[test]
-    fn rejects_an_unknown_isolation_value() {
-        let mut config = base();
-        config["evals"][0]["isolation"] = json!("sometimes");
-        let err = validate_evals_config(&config, "evals.json")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("isolation"), "error was: {err}");
     }
 
     #[test]
@@ -378,6 +573,63 @@ mod tests {
                 .to_string();
             assert!(error.contains(expected), "{expected}: {error}");
         }
+    }
+
+    #[test]
+    fn accepts_an_eval_declaring_only_a_responder() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "llm", "max_turns": 3 });
+
+        let parsed = validate_evals_config(&config, "evals.json").unwrap();
+        let responder = parsed.evals[0].responder.as_ref().unwrap();
+        assert_eq!(responder.kind, crate::core::ResponderKind::Llm);
+        assert_eq!(responder.max_turns, Some(3));
+    }
+
+    /// The two ways to drive a conversation are alternatives, not layers: a
+    /// scripted array says exactly what the user says, a responder derives it.
+    #[test]
+    fn rejects_responder_and_turns_together() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "llm" });
+        config["evals"][0]["turns"] = json!([{ "prompt": "go on", "deliver_when": "always" }]);
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("responder"), "{error}");
+        assert!(error.contains("turns"), "{error}");
+    }
+
+    /// A bound of zero would dispatch turn 1 and refuse to answer anything,
+    /// which is a one-shot eval written the long way round.
+    #[test]
+    fn rejects_a_zero_max_turns() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "llm", "max_turns": 0 });
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("max_turns"), "{error}");
+    }
+
+    /// The check needs a multi-turn conversation to read, and a responder
+    /// produces one just as a scripted array does.
+    #[test]
+    fn assistant_message_matches_accepts_a_responder_eval() {
+        let mut config = base();
+        config["evals"][0]["responder"] = json!({ "type": "llm" });
+        config["evals"][0]["assertions"] = json!([{
+            "id": "asked",
+            "type": "transcript_check",
+            "check": "assistant_message_matches",
+            "pattern": "timezone"
+        }]);
+
+        validate_evals_config(&config, "evals.json").unwrap();
     }
 
     #[test]
@@ -629,3 +881,9 @@ mod tests {
         validate_evals_config(&config, "evals.json").unwrap();
     }
 }
+
+#[cfg(test)]
+mod codebase_tests;
+
+#[cfg(test)]
+mod multi_skill_tests;

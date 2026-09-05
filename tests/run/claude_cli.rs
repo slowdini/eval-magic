@@ -4,7 +4,7 @@
 use crate::helpers::*;
 use predicates::str::contains;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 #[test]
 fn claude_dispatch_guidance_uses_claude_p() {
@@ -26,16 +26,19 @@ fn claude_dispatch_guidance_uses_claude_p() {
         .success();
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
 
-    assert!(stdout.contains("claude -p --output-format stream-json"));
-    assert!(stdout.contains("--verbose"));
-    assert!(stdout.contains("cd <eval-root>"));
-    assert!(stdout.contains("claude-events.jsonl"));
-    assert!(!stdout.contains("--output-last-message"));
+    // The post-run hand-off names the runner command; the harness CLI it will
+    // spawn is documented in the manifest, not pasted at the operator.
+    assert!(stdout.contains("eval-magic dispatch"), "{stdout}");
+    assert!(stdout.contains("--harness claude-code"), "{stdout}");
 
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("claude -p --output-format stream-json"));
+    assert!(manifest.contains("--verbose"));
+    assert!(manifest.contains("cd <eval-root>"));
     assert!(manifest.contains("claude-events.jsonl"));
-    assert!(manifest.contains("xargs -0 -P"));
+    assert!(!manifest.contains("--output-last-message"));
+    // Concurrency is the runner's `--jobs`, not a pasted `xargs -P` pipeline.
+    assert!(manifest.contains("eval-magic dispatch"));
 
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
     assert_eq!(conditions["harness"], "claude-code");
@@ -59,9 +62,10 @@ fn claude_dispatch_guidance_includes_agent_model_when_provided() {
         ])
         .assert()
         .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("claude -p --output-format stream-json"));
-    assert!(stdout.contains("--model opus"));
+    assert.success();
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(manifest.contains("claude -p --output-format stream-json"));
+    assert!(manifest.contains("--model opus"), "{manifest}");
 }
 
 #[test]
@@ -87,15 +91,15 @@ fn claude_run_writes_human_followed_runbook() {
 
     // Each task dispatches from its own per-(group, condition) env, so the shared
     // human-followed runbook lives in the iteration dir, above those envs, and
-    // carries the claude -p recipe plus the --harness-threaded pipeline commands.
+    // carries the runner commands with --harness threaded through them.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
     assert!(
         runbook.contains("human driving"),
         "uses the human-followed template: {runbook}"
     );
     assert!(
-        runbook.contains("claude -p"),
-        "carries the claude -p dispatch recipe: {runbook}"
+        runbook.contains("eval-magic dispatch"),
+        "carries the dispatch command: {runbook}"
     );
     assert!(
         runbook.contains("--harness claude-code"),
@@ -196,13 +200,13 @@ fn claude_cli_guard_installs_project_hook() {
 #[test]
 fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
     let tmp = tempfile::TempDir::new().unwrap();
-    // The eval stages a project-local `.claude/settings.json` into its env (fixture).
+    // The eval overlays a project-local `.claude/settings.json` into its codebase.
     let evals = r#"{ "skill_name": "mr-review", "evals": [ { "id": "e1", "prompt": "p", "expected_output": "o", "files": [".claude/settings.json"] } ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
 
     // A Claude config dir whose installed plugin provides a skill named like the SUT,
     // but the plugin is NOT enabled at config level — only the project-local
-    // `.claude/settings.json` (staged into each env as a fixture) enables it. So the
+    // `.claude/settings.json` (applied to each env as an overlay) enables it. So the
     // preflight can only see the override when it scans the real staged env; under Cli
     // the legacy `env/` is never created, which is the bug this locks down.
     let config = tmp.path().join("config");
@@ -223,7 +227,7 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
     )
     .unwrap();
 
-    // The fixture that, once staged into the env, enables the plugin project-locally.
+    // The overlay that enables the plugin project-locally in each environment.
     // (No config-level settings.json — the plugin is enabled ONLY via the env's file.)
     fs::create_dir_all(skill_dir.join("mr-review/evals/.claude")).unwrap();
     fs::write(
@@ -246,7 +250,7 @@ fn cli_plugin_shadow_preflight_reads_per_env_project_settings() {
         "preflight detected the project-enabled plugin shadow by scanning the staged env"
     );
     let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(artifact["schema_version"], 2);
+    assert_eq!(artifact["schema_version"], 3);
     assert!(
         artifact.get("isolates_live_sources").is_none(),
         "false isolation assertions stay omitted"
@@ -287,7 +291,7 @@ fn declared_shadow_isolation_records_findings_as_informational_provenance() {
     assert!(!stderr.contains("Plugin-shadow warning"), "{stderr}");
 
     let artifact = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(artifact["schema_version"], 2);
+    assert_eq!(artifact["schema_version"], 3);
     assert_eq!(artifact["isolates_live_sources"], true);
     assert_eq!(artifact["findings"][0]["skill_name"], "mr-review");
     assert_eq!(artifact["findings"][0]["severity"], "comparison-invalid");
@@ -381,18 +385,17 @@ fn ingest_refutes_a_shadow_finding_when_dispatches_report_an_empty_surface() {
     // Every dispatch reports an init event whose rosters are empty: the live
     // `mr-review` copy was not discoverable from any of them.
     for task in dispatch["tasks"].as_array().unwrap() {
-        let outputs = PathBuf::from(task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(
-            outputs.join("claude-events.jsonl"),
+        write_task_transcript(
+            &cwd,
+            task,
+            "claude-events.jsonl",
             "{\"type\":\"system\",\"subtype\":\"hook_started\"}\n\
              {\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s1\",\
               \"plugins\":[],\"skills\":[]}\n\
              {\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,\
               \"result\":\"done\",\"duration_ms\":5,\"usage\":{\"input_tokens\":1,\
               \"output_tokens\":1}}\n",
-        )
-        .unwrap();
+        );
     }
 
     skill_eval()
@@ -509,23 +512,17 @@ fn claude_ingest_reports_permission_denied_tool_calls() {
         .clone();
     assert_eq!(tasks.len(), 2, "{tasks:?}");
     for task in &tasks {
-        let outputs = Path::new(task["outputs_dir"].as_str().unwrap()).to_path_buf();
-        let outputs = if outputs.is_absolute() {
-            outputs
-        } else {
-            cwd.join(outputs)
-        };
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Reviewed.\n").unwrap();
         let refused = task["condition"].as_str() == Some("with_skill");
         let denials = if refused {
             r#","permission_denials":[{"tool_name":"Bash","tool_use_id":"toolu_1","tool_input":{"command":"TZ=UTC bun run repro.ts","description":"repro"}}]"#
         } else {
             ""
         };
-        fs::write(
-            outputs.join("claude-events.jsonl"),
-            format!(
+        write_task_transcript(
+            &cwd,
+            task,
+            "claude-events.jsonl",
+            &format!(
                 concat!(
                     r#"{{"type":"assistant","message":{{"id":"msg_1","role":"assistant","content":[{{"type":"tool_use","id":"toolu_1","name":"Bash","input":{{"command":"TZ=UTC bun run repro.ts"}}}}]}}}}"#,
                     "\n",
@@ -536,8 +533,7 @@ fn claude_ingest_reports_permission_denied_tool_calls() {
                 ),
                 denials = denials
             ),
-        )
-        .unwrap();
+        );
     }
 
     skill_eval()

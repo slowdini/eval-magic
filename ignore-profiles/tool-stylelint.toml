@@ -1,0 +1,6 @@
+id = "tool/stylelint"
+ignore_file = ".stylelintignore"
+create_if_missing = true
+markers = [".stylelintignore"]
+marker_patterns = [".stylelintrc*", "stylelint.config.*"]
+package_json_dependencies = ["stylelint"]

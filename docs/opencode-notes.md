@@ -28,8 +28,9 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   (`{type, timestamp (epoch ms), sessionID, ...}`). The `opencode-events` parser normalizes
   `tool_use` parts (name at `part.tool`, args at `part.state.input`, outcome at
   `part.state.output`/`part.state.error`), sums `step_finish` `part.tokens` (cache reads excluded,
-  matching codex accounting), takes the final message from the last `text` part, and measures
-  duration from the envelope timestamps. The declarative extract tier was not sufficient here:
+  matching codex accounting), takes the final message from the last `text` part, and derives
+  fallback duration from the envelope timestamps. Runner-driven eval duration uses the runner's
+  monotonic subprocess measurement. The declarative extract tier was not sufficient here:
   tool args nest under `state.input` and timestamps are numbers, not RFC 3339 strings. The
   native `skill` tool (input `{name}`) is a deterministic skill-invocation event, so
   `surfaces_skill_invocation = true` with `skill_tool = "skill"` / `skill_arg = "name"` and the
@@ -37,7 +38,7 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   ids (`bash` = the shell tool id; `edit`/`write` take `filePath`; `apply_patch` takes
   `patchText` — the shared boundary policy reads all three spellings).
 - **Dispatch recipes + model flag:** the `[dispatch]` templates run `opencode run --dir
-  <eval-root> --format json --auto` (plus `[model] flag = "-m"`; they landed together because
+  <eval-root> --format json --agent build --auto` (plus `[model] flag = "-m"`; they landed together because
   descriptor validation ties the judge template's `$model_arg` to a declared model flag).
   Verified against opencode v1.18.3 (`opencode run --help` and
   `packages/opencode/src/cli/cmd/run.ts`):
@@ -48,15 +49,12 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   - Headless permission asks are auto-**rejected** unless `--auto` is passed; explicit `deny`
     rules are still enforced under `--auto`.
   - `--format json` streams raw JSON events (`tool_use` / `text` / `step_finish` / `error`) to
-    stdout; there is no `--output-last-message`, so the final message comes from the `text`
-    events via transcript ingest (the dispatch prompt still asks for `outputs/final-message.md`,
-    which wins when the agent writes it).
+    stdout; the final message comes from the `text` events via transcript ingest.
   - `-m` takes models in `provider/model` format; the value passes through verbatim.
   - Live-verified on v1.18.3 (one `opencode run` per the recipe + `ingest`, #153): the staged
     skill is discovered and invoked under its slug via the `skill` tool, and the events file
-    ingests to a full run record. An operator config with an explicit `edit: deny` rule blocks
-    the `final-message.md` write even under `--auto` (deny rules stay enforced) — record-runs
-    then falls back to the transcript's last `text` part, so the run still records cleanly.
+    ingests to a full run record. An operator config with an explicit `edit: deny` rule remains
+    enforced under `--auto`; transcript-owned completion does not require an agent-authored file.
 - **Shadow preflight:** the `opencode-skills` capability scans every root OpenCode discovers
   skills from and warns at build time when a staged logical skill is also live there — see
   "Isolating from live skills" below.
@@ -65,6 +63,22 @@ rules (a regex + length cap) — is the descriptor file `harnesses/opencode.toml
   supplies and verifies the native id. Verified against `opencode run --help` on 2026-07-24.
 - **Write guard:** a project plugin staged at `.opencode/plugins/slow-powers-eval-guard.js` —
   see "Write guard" below.
+- **Plan mode:** `[plan_mode]` maps the planning phase to `--agent plan` and act mode to
+  `--agent build --auto` — see "Plan mode" below.
+
+## Plan mode
+
+Verified against opencode **1.18.10** on 2026-09-02, headless, against a scratch repository with one
+bug (free model `opencode/nemotron-3.5-lightning-free`):
+
+- `opencode run --agent plan` without `--auto` is the read-only phase: the built-in plan agent's
+  `edit` call failed with `The user has specified a rule which prevents you from using this
+  specific tool call`, and the working tree stayed clean. `--auto` would approve the asks the plan
+  agent makes, so it belongs to `act_args` only.
+- `opencode run --session <id> --agent build --auto` resumed the same session and edited the file.
+  `--agent build` is explicit so a resumed session does not inherit the plan agent.
+- OpenCode writes no plan file, so the descriptor declares no `[plan_mode.plan_file]`; a plan-mode
+  eval on OpenCode needs a `responder`, whose `done` verdict in the planning phase approves the plan.
 
 ## Write guard
 
@@ -104,9 +118,11 @@ Two boundary notes, shared with the other harnesses' guards:
 - The marker's sole allowed root is the private task env on every host. Host temp locations such
   as `/tmp` and `$TMPDIR` remain out of bounds; dispatch prompts direct scratch work to
   `<env>/tmp/` instead without rewriting `TMPDIR`, `TMP`, or `TEMP`.
-- Bash coverage is the shared heuristic denylist (installs, git mutations, redirects, config-dir
-  tampering): a bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
-  detection of those is `detect-stray-writes`' job, same as claude/codex.
+- Bash coverage is the shared target-aware heuristic. Ordinary installs, builds, tests, and
+  in-place edits run from the task env; recognized explicit project/output destinations must also
+  remain there. Output redirects, repository-routing escapes, and remote Git mutations remain
+  blocked. A bare `touch /abs/outside/path` matches no pattern and is allowed — after-the-fact
+  detection of those is `detect-stray-writes`' job, same as the other harnesses.
 
 One hook-shape caveat: `tool.execute.before` fires for *every* tool (OpenCode has no matcher
 surface), so each tool call spawns one `eval-magic guard-hook`. Classification stays in the
@@ -178,7 +194,7 @@ failed or unparseable probe remains `unknown` rather than guessing. Unique runti
 probe and are `selected`. The shared banner and `aggregate` validity warnings render this same
 report; historical unversioned artifacts remain readable.
 
-eval-magic detects but cannot unload these sources, and the generated dispatch recipes never
+eval-magic detects but cannot unload these sources, and the dispatch commands the runner spawns never
 set the `OPENCODE_DISABLE_*` kill switches on the operator's behalf — parity with a real user
 session matters. The operator-facing recipes — both switches with their exact scopes, and
 move-or-rename as the only remedy for an `.opencode` root — are in the shipped

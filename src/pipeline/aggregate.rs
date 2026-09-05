@@ -1,16 +1,17 @@
 //! Stage 5 — `aggregate`.
 //!
 //! Compares exactly two conditions: collects
-//! `pass_rate` (from `grading.json`), `total_tokens`/`duration_ms` (from
-//! `timing.json`), per-assertion pass counts, raw per-run diff scope, and the
-//! skill-invocation determination per condition; computes mean/stddev and the
-//! `a - b` delta; accumulates validity warnings (mixed timing sources, sub-100%
-//! invocation rate, stray-write violations + live-source reads, guard denials,
-//! permission-denied tool calls, plugin shadows); and writes `benchmark.json`.
+//! grading endpoints (binary pass rate or sampled vote proportion and pass^k),
+//! `total_tokens`/`duration_ms` (from `timing.json`), per-assertion pass or vote
+//! counts, raw per-run diff scope, and the skill-invocation determination per
+//! condition; computes mean/stddev and the `a - b` delta; accumulates validity
+//! warnings (mixed per-metric timing sources, sub-100% invocation rate, stray-write
+//! violations + live-source reads, guard denials, permission-denied tool calls,
+//! plugin shadows); and writes `benchmark.json`.
 
 mod assertions;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
@@ -20,7 +21,10 @@ use serde_json::Value;
 use self::assertions::AssertionRollup;
 use crate::adapters::skill_shadow::PluginShadowArtifact;
 use crate::core::fs::write_json;
-use crate::core::{ConditionsRecord, GradingResult, Mode, TimingRecord, TimingSource};
+use crate::core::{
+    CodebaseUse, ConditionsRecord, ConversationEvent, ConversationRecord, GradingResult, Mode,
+    ResponderEnding, ResponderStopCause, SessionMode, SkillSource, TimingRecord, TimingSource,
+};
 use crate::pipeline::DiffScopeMetrics;
 use crate::pipeline::error::PipelineError;
 use crate::pipeline::git_isolation;
@@ -77,6 +81,10 @@ pub struct Stats {
 #[derive(Debug, Clone, Serialize)]
 struct ConditionSummary {
     pass_rate: Stats,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vote_proportion: Option<Stats>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_power_k: Option<Stats>,
     duration_ms: Stats,
     total_tokens: Stats,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -84,6 +92,16 @@ struct ConditionSummary {
     /// Present (possibly `null`) only when the skill was loaded.
     #[serde(skip_serializing_if = "Option::is_none")]
     skill_invocation_rate: Option<Option<f64>>,
+    /// Per-treatment-member invocation rollup. Present only for multi-skill
+    /// artifacts; the suite-level fields above retain their established shape.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    skill_invocations: Option<BTreeMap<String, SkillInvocationSummary>>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SkillInvocationSummary {
+    n: usize,
+    rate: f64,
 }
 
 /// The `a - b` differences between the two compared conditions.
@@ -91,6 +109,10 @@ struct ConditionSummary {
 struct Delta {
     direction: String,
     pass_rate: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    vote_proportion: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pass_power_k: Option<f64>,
     duration_ms: f64,
     total_tokens: f64,
 }
@@ -114,6 +136,21 @@ pub struct Benchmark {
     pub warnings: Vec<String>,
     pub run_summary: Value,
     pub assertions: Value,
+    /// Codebases the compared conditions ran against, echoed from
+    /// `conditions.json` so a published benchmark names the trees it measured
+    /// without a reader having to hold two artifacts side by side. Empty only
+    /// when reading a historical iteration that predates codebase provenance.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub codebases: Vec<CodebaseUse>,
+    /// The skill under test, echoed from `conditions.json` for the same reason
+    /// the codebases are: a published benchmark should name what it measured on
+    /// both sides without a reader holding two artifacts side by side.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
+    /// Effective write-guard state echoed from `conditions.json`. Absence
+    /// means the iteration predates guard provenance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard_armed: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff_scope: Option<Value>,
     delta: Delta,
@@ -132,9 +169,12 @@ struct DiffScopeRun {
 #[derive(Default)]
 struct Bucket {
     pass_rates: Vec<f64>,
+    vote_proportions: Vec<f64>,
+    pass_power_k: Vec<f64>,
     durations: Vec<f64>,
     tokens: Vec<f64>,
     skill_invoked: Vec<bool>,
+    skill_invoked_by_skill: HashMap<String, Vec<bool>>,
     had_skill_loaded: bool,
 }
 
@@ -192,7 +232,10 @@ pub fn aggregate(
         by_condition.insert(
             c.name.clone(),
             Bucket {
-                had_skill_loaded: c.skill_path.is_some(),
+                had_skill_loaded: c
+                    .skills
+                    .as_ref()
+                    .map_or_else(|| c.skill_path.is_some(), |skills| !skills.is_empty()),
                 ..Bucket::default()
             },
         );
@@ -200,13 +243,22 @@ pub fn aggregate(
 
     let mut missing_gradings = 0usize;
     let mut warnings: Vec<String> = Vec::new();
-    let mut timing_sources: HashSet<String> = HashSet::new();
+    let mut token_sources: HashSet<String> = HashSet::new();
+    let mut duration_sources: HashSet<String> = HashSet::new();
     let mut assertion_counts = AssertionRollup::default();
+    let mut has_sampled_gradings = false;
     let mut diff_scope_by_condition: HashMap<String, Vec<DiffScopeRun>> = condition_names
         .iter()
         .map(|condition| (condition.clone(), Vec::new()))
         .collect();
     let mut missing_diff_scopes = Vec::new();
+    // Per condition, the causes that ended a run before its task was finished.
+    // Tallied per condition on purpose: one arm being truncated more than the
+    // other is the threat to the comparison, not the raw total.
+    let mut responder_stops: HashMap<String, Vec<&'static str>> = HashMap::new();
+    // Per condition, plan-mode runs whose session never left the planning
+    // phase — whatever stopped it — since those never attempted the task.
+    let mut plans_never_implemented: HashMap<String, usize> = HashMap::new();
 
     for eval_dir in &eval_dirs {
         for cond in &condition_names {
@@ -240,6 +292,13 @@ pub fn aggregate(
                     missing_diff_scopes.push(format!("{eval_dir}/{cond}{run}"));
                 }
 
+                if let Some(cause) = responder_stop_cause(&slot.dir) {
+                    responder_stops.entry(cond.clone()).or_default().push(cause);
+                }
+                if plan_never_implemented(&slot.dir) {
+                    *plans_never_implemented.entry(cond.clone()).or_default() += 1;
+                }
+
                 if !grading_path.exists() {
                     let run = slot
                         .run_index
@@ -255,13 +314,35 @@ pub fn aggregate(
                     .strip_prefix("eval-")
                     .unwrap_or(eval_dir)
                     .to_string();
-                assertion_counts.record(&eval_id, cond, &grading.assertion_results);
+                assertion_counts.record(&eval_id, cond, &grading.assertion_results)?;
                 let bucket = by_condition.get_mut(cond).expect("condition bucket");
-                bucket.pass_rates.push(grading.summary.pass_rate);
+                bucket.pass_rates.push(grading.summary.pass_rate());
+                let vote_proportion = grading
+                    .summary
+                    .vote_proportion()
+                    .unwrap_or_else(|| grading.summary.pass_rate());
+                let pass_power_k = grading
+                    .summary
+                    .pass_power_k()
+                    .unwrap_or_else(|| grading.summary.pass_rate());
+                has_sampled_gradings |= grading.summary.vote_proportion().is_some();
+                bucket.vote_proportions.push(vote_proportion);
+                bucket.pass_power_k.push(pass_power_k);
                 if let Some(meta) = &grading.meta_summary
                     && let Some(invoked) = meta.skill_invoked
                 {
                     bucket.skill_invoked.push(invoked);
+                }
+                if let Some(results) = &grading.meta_results {
+                    for result in results {
+                        if let Some(skill_name) = &result.skill_name {
+                            bucket
+                                .skill_invoked_by_skill
+                                .entry(skill_name.clone())
+                                .or_default()
+                                .push(result.passed);
+                        }
+                    }
                 }
 
                 if timing_path.exists() {
@@ -275,8 +356,12 @@ pub fn aggregate(
                     if let Some(Some(duration)) = timing.duration_ms {
                         bucket.durations.push(duration as f64);
                     }
-                    if has_tokens || has_duration {
-                        timing_sources.insert(timing_source_label(timing.source));
+                    if has_tokens {
+                        token_sources.insert(timing_source_label(timing.effective_token_source()));
+                    }
+                    if has_duration {
+                        duration_sources
+                            .insert(timing_source_label(timing.effective_duration_source()));
                     }
                 }
             }
@@ -302,10 +387,28 @@ pub fn aggregate(
         };
         let summary = ConditionSummary {
             pass_rate: stats(&bucket.pass_rates, 3),
+            vote_proportion: has_sampled_gradings.then(|| stats(&bucket.vote_proportions, 3)),
+            pass_power_k: has_sampled_gradings.then(|| stats(&bucket.pass_power_k, 6)),
             duration_ms: stats(&bucket.durations, 0),
             total_tokens: stats(&bucket.tokens, 0),
             skill_invocation_n,
             skill_invocation_rate,
+            skill_invocations: (!bucket.skill_invoked_by_skill.is_empty()).then(|| {
+                bucket
+                    .skill_invoked_by_skill
+                    .iter()
+                    .map(|(name, results)| {
+                        let passed = results.iter().filter(|&&invoked| invoked).count();
+                        (
+                            name.clone(),
+                            SkillInvocationSummary {
+                                n: results.len(),
+                                rate: round(passed as f64 / results.len() as f64, 3),
+                            },
+                        )
+                    })
+                    .collect()
+            }),
         };
         run_summary.insert(cond.clone(), serde_json::to_value(&summary)?);
         summaries.insert(cond.clone(), summary);
@@ -318,26 +421,27 @@ pub fn aggregate(
     let delta = Delta {
         direction: format!("{a} - {b}"),
         pass_rate: round(sa.pass_rate.mean - sb.pass_rate.mean, 3),
+        vote_proportion: has_sampled_gradings.then(|| {
+            round(
+                sa.vote_proportion.expect("sampled vote stats").mean
+                    - sb.vote_proportion.expect("sampled vote stats").mean,
+                3,
+            )
+        }),
+        pass_power_k: has_sampled_gradings.then(|| {
+            round(
+                sa.pass_power_k.expect("sampled pass^k stats").mean
+                    - sb.pass_power_k.expect("sampled pass^k stats").mean,
+                6,
+            )
+        }),
         duration_ms: round(sa.duration_ms.mean - sb.duration_ms.mean, 0),
         total_tokens: round(sa.total_tokens.mean - sb.total_tokens.mean, 0),
     };
 
     let mut validity_warnings: Vec<String> = Vec::new();
-    if timing_sources.len() > 1 {
-        let mut sorted: Vec<&String> = timing_sources.iter().collect();
-        sorted.sort();
-        let joined = sorted
-            .iter()
-            .map(|s| s.as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
-        validity_warnings.push(format!(
-            "runs mix timing sources ({joined}) — completion events and transcript extractors \
-             may use different harness-specific accounting, so the token/duration delta may \
-             compare different metrics. Re-record one side or read the delta as a rough signal \
-             only."
-        ));
-    }
+    warn_for_mixed_metric_sources("total_tokens", &token_sources, &mut validity_warnings);
+    warn_for_mixed_metric_sources("duration_ms", &duration_sources, &mut validity_warnings);
     let (n_a, n_b) = (
         by_condition[a].pass_rates.len(),
         by_condition[b].pass_rates.len(),
@@ -369,6 +473,36 @@ pub fn aggregate(
                 rate * 100.0
             ));
         }
+    }
+
+    for cond in &condition_names {
+        let Some(causes) = responder_stops.get(cond).filter(|c| !c.is_empty()) else {
+            continue;
+        };
+        let mut named: Vec<&str> = causes.to_vec();
+        named.sort_unstable();
+        named.dedup();
+        validity_warnings.push(format!(
+            "condition '{cond}' had {} run(s) end before the task was finished because the \
+             responder produced no usable reply ({}) — those runs measure an interrupted task, \
+             so their gradings are not comparable with a completed run's.",
+            causes.len(),
+            named.join(", ")
+        ));
+    }
+
+    for cond in &condition_names {
+        let Some(count) = plans_never_implemented
+            .get(cond)
+            .filter(|count| **count > 0)
+        else {
+            continue;
+        };
+        validity_warnings.push(format!(
+            "condition '{cond}' had {count} plan-mode run(s) that never reached implementation — \
+             the session ended while still planning, so their gradings are not comparable with \
+             a completed run's."
+        ));
     }
 
     git_isolation::collect_warnings(iteration_dir, &mut validity_warnings);
@@ -408,6 +542,9 @@ pub fn aggregate(
         generated: now_iso8601(),
         mode: conditions.mode,
         baseline: conditions.baseline.clone(),
+        codebases: conditions.codebases.clone(),
+        skill_source: conditions.skill_source.clone(),
+        guard_armed: conditions.guard_armed,
         conditions_compared: vec![a.clone(), b.clone()],
         missing_gradings,
         validity_warnings,
@@ -457,13 +594,75 @@ fn collect_guard_denial_warnings(iteration_dir: &Path, warnings: &mut Vec<String
     }
 }
 
-/// The provenance label for a timing record (`completion-event` when absent).
-fn timing_source_label(source: Option<TimingSource>) -> String {
+fn warn_for_mixed_metric_sources(
+    metric: &str,
+    sources: &HashSet<String>,
+    warnings: &mut Vec<String>,
+) {
+    if sources.len() <= 1 {
+        return;
+    }
+    let mut sorted: Vec<&String> = sources.iter().collect();
+    sorted.sort();
+    let joined = sorted
+        .iter()
+        .map(|source| source.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    warnings.push(format!(
+        "runs mix {metric} sources ({joined}) — those sources may use different accounting \
+         boundaries, so this metric's delta may compare unlike measurements. Re-record one \
+         side or read the delta as a rough signal only."
+    ));
+}
+
+/// The serialized provenance label for one timing metric.
+fn timing_source_label(source: TimingSource) -> String {
     match source {
-        Some(TimingSource::Transcript) => "transcript",
-        Some(TimingSource::CompletionEvent) | None => "completion-event",
+        TimingSource::CompletionEvent => "completion-event",
+        TimingSource::Runner => "runner",
+        TimingSource::Transcript => "transcript",
     }
     .to_string()
+}
+
+/// Whether a plan-mode run ended before its plan was approved: its opening
+/// round ran in plan mode and no approval was recorded, whatever stopped it —
+/// a missing plan, an exhausted responder bound, a refusal, or a timeout.
+/// Read leniently, like [`responder_stop_cause`].
+fn plan_never_implemented(run_dir: &Path) -> bool {
+    let Ok(raw) = fs::read_to_string(run_dir.join("conversation.json")) else {
+        return false;
+    };
+    let Ok(record) = serde_json::from_str::<ConversationRecord>(&raw) else {
+        return false;
+    };
+    let started_planning = matches!(
+        record.events.first(),
+        Some(ConversationEvent::UserMessage {
+            mode: Some(SessionMode::Plan),
+            ..
+        })
+    );
+    started_planning && record.plan.is_none()
+}
+
+/// Why one run's responder ended it early, if it did. A conversation the
+/// responder carried to completion, a scripted one, and a timeout all return
+/// `None`: only an unfinished task threatens the comparison. Read leniently —
+/// an unreadable artifact is the ingest stage's problem, not this one's.
+fn responder_stop_cause(run_dir: &Path) -> Option<&'static str> {
+    let raw = fs::read_to_string(run_dir.join("conversation.json")).ok()?;
+    let record: ConversationRecord = serde_json::from_str(&raw).ok()?;
+    let outcome = record.responder_outcome?;
+    match outcome.ending {
+        ResponderEnding::Done => None,
+        ResponderEnding::CannotAnswer => Some(
+            outcome
+                .cause
+                .map_or("unrecorded", ResponderStopCause::wire_name),
+        ),
+    }
 }
 
 /// Add a warning per stray-write violation / live-source read. A malformed
@@ -516,6 +715,9 @@ fn collect_shadow_warnings(
         .as_ref()
         .is_some_and(|verification| verification.assertion_contradicted);
     if artifact.isolates_live_sources && !contradicted {
+        warnings.extend(artifact.validity_warnings_for_class(
+            crate::adapters::skill_shadow::ShadowFindingClass::CodebaseSourced,
+        ));
         return;
     }
     if contradicted {
@@ -569,11 +771,12 @@ mod tests {
     }
 
     #[test]
-    fn timing_label_defaults_to_completion_event() {
-        assert_eq!(timing_source_label(None), "completion-event");
+    fn timing_source_labels_match_the_portable_values() {
         assert_eq!(
-            timing_source_label(Some(TimingSource::Transcript)),
-            "transcript"
+            timing_source_label(TimingSource::CompletionEvent),
+            "completion-event"
         );
+        assert_eq!(timing_source_label(TimingSource::Runner), "runner");
+        assert_eq!(timing_source_label(TimingSource::Transcript), "transcript");
     }
 }

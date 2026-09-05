@@ -1,36 +1,30 @@
 //! The post-dispatch / post-judge pipeline command handlers: the `ingest` and
 //! `finalize` chains and each individual stage (`record-runs`,
-//! `fill-transcripts`, `detect-stray-writes`, `grade`, `aggregate`).
+//! `detect-stray-writes`, `grade`, `aggregate`).
 
 use anyhow::bail;
 
-use crate::adapters::{CliJudgeContext, adapter_for};
 use crate::cli::args::{CommonArgs, GradeArgs};
 use crate::cli::command_target_args;
 use crate::cli::run;
-use crate::cli::{iteration_dir, resolve_iteration, run_context_from, staged_env_roots};
+use crate::cli::{
+    harness_descriptor_drift_warning, iteration_dir, resolve_iteration, run_context_from,
+    staged_env_roots,
+};
 use crate::core::RunContext;
 use crate::pipeline;
 use crate::sandbox;
-use crate::validation;
+use std::path::{Path, PathBuf};
 
-const JUDGE_WORKER_PROMPT: &str = "Read the file at <dispatch_prompt_path> and follow it exactly. You are a judge worker only: write the JSON verdict to <response_path>, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers.";
-
+/// The command that dispatches the judge tasks `ingest` emitted. Harness-
+/// independent: the runner drives judges the same way it drives eval tasks, so
+/// the only thing that varies is the `--harness` selector.
 fn judge_dispatch_guidance(ctx: &RunContext, iteration: u32) -> String {
-    let iteration_dir = ctx
-        .workspace_root
-        .join(&ctx.skill_name)
-        .join(format!("iteration-{iteration}"));
-    adapter_for(ctx.harness)
-        .cli_judge_next_steps(CliJudgeContext {
-            guard: sandbox::guard_is_armed(&ctx.stage_root),
-            iteration_dir: &iteration_dir,
-        })
-        .unwrap_or_else(|| {
-            format!(
-                "Dispatch each task from judge-tasks.json with:\n  {JUDGE_WORKER_PROMPT}\nModel selection is recorded in judge-tasks.json, but this harness adapter has no judge CLI recipe wired yet."
-            )
-        })
+    format!(
+        "eval-magic dispatch --judges{} --iteration {iteration} --harness {}",
+        command_target_args(ctx),
+        ctx.harness.name()
+    )
 }
 
 /// Execute one chain step by mapping its [`run::steps::StepKind`] to the stage
@@ -52,7 +46,6 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
     };
     let result = match step.kind {
         StepKind::RecordRuns => run_record_runs(common),
-        StepKind::FillTranscripts => run_fill_transcripts(common),
         StepKind::DetectStrayWrites => run_detect_stray_writes(common),
         StepKind::Grade { finalize } => run_grade(GradeArgs { common, finalize }),
         StepKind::Aggregate => run_aggregate(common),
@@ -63,20 +56,17 @@ fn run_step(step: &run::steps::StepCommand) -> anyhow::Result<()> {
     result
 }
 
-/// Run the post-dispatch chain (record-runs → fill-transcripts →
-/// detect-stray-writes → grade) and stop at the judge hand-off.
+/// Run the post-dispatch chain (record-runs → detect-stray-writes → grade) and
+/// stop at the judge hand-off.
 pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args)?;
     let iteration = resolve_iteration(&ctx, args.iteration)?;
-
-    let adapter = crate::adapters::adapter_for(ctx.harness);
-    if adapter.cli_events_filename().is_none() {
-        eprintln!(
-            "ℹ --harness {}: no transcript parser — records come from outputs/final-message.md \
-             only; steps/tokens/duration go unrecorded and transcript_check assertions grade \
-             as unverifiable (llm_judge carries the grading).",
-            adapter.label()
-        );
+    let dir = ctx
+        .workspace_root
+        .join(&ctx.skill_name)
+        .join(format!("iteration-{iteration}"));
+    if let Some(warning) = harness_descriptor_drift_warning(&ctx, &dir) {
+        eprintln!("⚠ {warning}");
     }
 
     let steps = run::steps::build_ingest_commands(&run::steps::StepParams {
@@ -92,11 +82,7 @@ pub(crate) fn run_ingest(args: CommonArgs) -> anyhow::Result<()> {
         );
     }
 
-    let judge_path = ctx
-        .workspace_root
-        .join(&ctx.skill_name)
-        .join(format!("iteration-{iteration}"))
-        .join("judge-tasks.json");
+    let judge_path = dir.join("judge-tasks.json");
     let total_tasks = std::fs::read_to_string(&judge_path)
         .ok()
         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
@@ -137,8 +123,9 @@ pub(crate) fn run_finalize(args: CommonArgs) -> anyhow::Result<()> {
         "\n✅ Finalize complete. Read the benchmark above, then tear down: eval-magic teardown{target_args}"
     );
     // Warn if a guard is still armed. There is one env per (group, condition), so
-    // walk each per-env marker as well as the cwd. `teardown` (not the cwd-only
-    // `teardown-guard`) is what disarms them all.
+    // walk each per-env marker as well as the cwd. The reminder names `teardown`
+    // rather than `teardown-guard`: both disarm every one of these, but at end of
+    // run the staged skill set and the workspace want reclaiming too.
     let mut armed = sandbox::guard_is_armed(&ctx.stage_root);
     if !armed && let Ok(dir) = iteration_dir(&ctx, Some(iteration)) {
         armed = staged_env_roots(&dir)
@@ -162,10 +149,10 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     let result = pipeline::record_runs(&dir, iteration, ctx.harness, args.overwrite)?;
 
     println!(
-        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final message): {}, skipped (prompt unread): {}, skipped (incomplete conversation): {}, missing transcript: {}",
+        "\nRecorded: {}, skipped (existing run.json): {}, skipped (no final response): {}, skipped (prompt unread): {}, skipped (missing completion artifact): {}, missing transcript: {}",
         result.recorded,
         result.skipped_existing,
-        result.skipped_no_final_message,
+        result.skipped_no_final_response,
         result.skipped_prompt_unread,
         result.skipped_incomplete_conversation,
         result.missing_transcript
@@ -182,20 +169,6 @@ pub(crate) fn run_record_runs(args: CommonArgs) -> anyhow::Result<()> {
     if let Some(warning) = result.permission_denial_warning() {
         eprintln!("{warning}");
     }
-    Ok(())
-}
-
-/// Populate `tool_invocations` from persisted transcripts for every `run.json` in
-/// the iteration.
-pub(crate) fn run_fill_transcripts(args: CommonArgs) -> anyhow::Result<()> {
-    let ctx = run_context_from(&args)?;
-    let dir = iteration_dir(&ctx, args.iteration)?;
-    let result = pipeline::fill_transcripts(&dir, ctx.harness, args.overwrite)?;
-
-    println!(
-        "\nFilled: {}, skipped (already populated): {}, missing transcript: {}",
-        result.filled, result.skipped, result.missing
-    );
     Ok(())
 }
 
@@ -274,6 +247,41 @@ pub(crate) fn run_detect_stray_writes(args: CommonArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The skill directory a post-dispatch phase reads its inputs from: the copy the
+/// iteration holds, falling back to the live tree for iterations prepared before
+/// skills were sourced.
+///
+/// The eval definitions that describe what ran — prompt, files, turns, codebase —
+/// have to come from what the run captured, so this is where they are read from.
+/// Assertions are the exception, resolved against the live tree by
+/// [`crate::pipeline::resolve_grading_instrument`]: they are the measuring
+/// instrument, not the treatment. Live-source detection is the other exception —
+/// it needs the live path precisely because that is what it is looking for.
+fn graded_skill_subdir(ctx: &RunContext, iteration_dir: &Path) -> PathBuf {
+    let copied = iteration_dir.join(".skills").join(&ctx.skill_name);
+    if copied.is_dir() {
+        copied
+    } else {
+        ctx.skill_subdir.clone()
+    }
+}
+
+/// The line that keeps a grading summary from being ambiguous about which
+/// `evals.json` produced it. `Judge tasks: 0` reads as "my assertions did not
+/// match" unless the file measured against is named beside it.
+fn assertion_source_summary(instrument: &pipeline::GradingInstrument) -> String {
+    let path = &instrument.source.path;
+    if !instrument.source.refreshed {
+        return format!("Assertions: {path} (unchanged since the run)");
+    }
+    let ids: Vec<&str> = instrument.refreshed_eval_ids().collect();
+    format!(
+        "Assertions: {path}\n  refreshed — differs from the run-time copy for {} eval(s): {}",
+        ids.len(),
+        ids.join(", ")
+    )
+}
+
 /// Grade run records. Default mode emits LLM judge tasks (+ the skill-invocation
 /// meta-check); `--finalize` folds judge responses into `grading.json`.
 pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
@@ -289,15 +297,22 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
     let conditions: crate::core::ConditionsRecord =
         serde_json::from_str(&std::fs::read_to_string(&conditions_path)?)?;
 
-    let evals_path = ctx.skill_subdir.join("evals").join("evals.json");
-    let evals_value: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&evals_path)?)?;
-    let evals = validation::validate_evals_config(&evals_value, &evals_path.to_string_lossy())?;
+    // The treatment comes from the copy the run froze; the assertions come from
+    // the live file. The documented workflow authors assertions from the run's
+    // own paired evidence, after the dispatch they grade, so the frozen copy
+    // does not hold them yet (#295).
+    let skill_subdir = graded_skill_subdir(&ctx, &dir);
+    let instrument = pipeline::resolve_grading_instrument(&skill_subdir, &ctx.skill_subdir)?;
+    for warning in &instrument.warnings {
+        eprintln!("⚠ {warning}");
+    }
+    println!("{}", assertion_source_summary(&instrument));
 
     let gctx = pipeline::GradeContext {
         iteration_dir: &dir,
         conditions: &conditions,
-        evals: &evals,
+        evals: &instrument.evals,
+        assertion_source: &instrument.source,
     };
 
     if args.finalize {
@@ -326,13 +341,15 @@ pub(crate) fn run_grade(args: GradeArgs) -> anyhow::Result<()> {
             "Diff scope: {} measured, {} reused, {} missing baseline, {} shared environment",
             diffs.measured, diffs.reused, diffs.missing_baseline, diffs.shared_environment
         );
-        let commands =
-            pipeline::grade_command_checks(&dir, &evals, &ctx.skill_subdir, common.overwrite)?;
-        if commands.executed + commands.reused > 0 {
+        let commands = pipeline::grade_command_checks(&dir, &instrument, common.overwrite)?;
+        if commands.executed + commands.reused + commands.skipped_incomplete > 0 {
             println!(
-                "Command checks: {} executed, {} reused, {} failed",
-                commands.executed, commands.reused, commands.failed
+                "Command checks: {} executed, {} reused, {} failed, {} skipped (missing run.json)",
+                commands.executed, commands.reused, commands.failed, commands.skipped_incomplete
             );
+        }
+        for w in &commands.warnings {
+            eprintln!("⚠ {w}");
         }
         let s = pipeline::emit_judge_tasks(&gctx)?;
         for w in &s.warnings {

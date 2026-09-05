@@ -41,7 +41,8 @@ use super::descriptor::{GuardEngine, GuardSection, subst};
 
 /// Arm the write guard: marker + manifest under `skills_dir` (absolute,
 /// resolved by the caller), then the engine-specific hook surface. Returns
-/// the staged marker path.
+/// the staged marker path. `extra_allowed_roots` are allowed beside the env
+/// itself — the plan file a harness writes in plan mode, when it declares one.
 ///
 /// Template parse failures panic (`expect`): descriptor validation proved the
 /// templates at load time, and arming runs in the orchestrator where a loud
@@ -52,11 +53,19 @@ pub(crate) fn install_guard(
     stage_root: &Path,
     guard_exe: &Path,
     ttl: Option<Duration>,
+    guard_policy: &crate::core::GuardPolicyConfig,
+    extra_allowed_roots: &[PathBuf],
 ) -> io::Result<PathBuf> {
     fs::create_dir_all(skills_dir)?;
 
     let marker_path = skills_dir.join(GUARD_MARKER);
-    write_marker(&marker_path, stage_root, ttl)?;
+    write_marker(
+        &marker_path,
+        stage_root,
+        ttl,
+        guard_policy,
+        extra_allowed_roots,
+    )?;
 
     match guard.engine {
         GuardEngine::JsonHooks => {
@@ -335,6 +344,16 @@ fn append_guard_denial(path: &Path, record: &GuardDenialRecord) -> io::Result<()
     file.write_all(&line)
 }
 
+/// The env-relative file this guard engine stages: the merged hook config for
+/// `json-hooks`, the project plugin for the plugin engines. One place decides
+/// it, so a new engine cannot teach half the codebase where its file lives.
+pub(crate) fn guard_staged_file(guard: &GuardSection) -> Option<&str> {
+    match guard.engine {
+        GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
+        GuardEngine::OpencodePlugin | GuardEngine::ClinePlugin => guard.plugin_file.as_deref(),
+    }
+}
+
 /// The hook-surface dir the install created outside the skills dir, which
 /// teardown prunes when restoring the original file leaves it empty. Derived
 /// from the data: the engine's staged file's parent dir (`hooks_file` for
@@ -346,10 +365,7 @@ pub(crate) fn hook_cleanup_dir(
     skills_dir_rel: Option<&str>,
     stage_root: &Path,
 ) -> Option<PathBuf> {
-    let hook_file = match guard.engine {
-        GuardEngine::JsonHooks => guard.hooks_file.as_deref(),
-        GuardEngine::OpencodePlugin | GuardEngine::ClinePlugin => guard.plugin_file.as_deref(),
-    }?;
+    let hook_file = guard_staged_file(guard)?;
     let (parent, _) = hook_file.rsplit_once('/')?;
     if let Some(skills) = skills_dir_rel {
         // Component-wise ancestry: `.a` owns `.a/b/skills` but not `.ab/skills`.
@@ -412,7 +428,6 @@ mod cline_plugin_tests;
 
 #[cfg(test)]
 mod guard_denial_tests;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -457,6 +472,8 @@ mod tests {
             stage_root,
             Path::new("/g/eval-magic"),
             None,
+            &Default::default(),
+            &[],
         )
         .unwrap()
     }
@@ -491,9 +508,37 @@ mod tests {
         GuardMarker {
             active: Some(true),
             allowed_roots: Some(vec!["/work/.eval-magic".to_string()]),
-            expires_at: None,
-            denial_log_path: None,
+            ..Default::default()
         }
+    }
+
+    /// A harness whose plan mode writes its plan outside the env declares that
+    /// root; the marker allows it beside the env, and nothing else.
+    #[test]
+    fn marker_also_allows_the_extra_roots_the_caller_declares() {
+        let c = setup();
+        let d = descriptor("claude-code");
+        let skills = resolve_rel(&c.stage_root, d.skills_dir.as_deref().unwrap());
+        install_guard(
+            d.guard.as_ref().unwrap(),
+            &skills,
+            &c.stage_root,
+            Path::new("/g/eval-magic"),
+            None,
+            &Default::default(),
+            &[PathBuf::from("/Users/someone/.claude/plans")],
+        )
+        .unwrap();
+
+        let marker = read_json(&claude_skills_dir(&c.stage_root).join(GUARD_MARKER));
+        let roots: Vec<String> = marker["allowedRoots"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r.as_str().unwrap().to_string())
+            .collect();
+        let env = absolutize(&c.stage_root).display().to_string();
+        assert_eq!(roots, vec![env, "/Users/someone/.claude/plans".to_string()]);
     }
 
     #[test]
@@ -639,12 +684,11 @@ mod tests {
              /work/.eval-magic/tmp.\"}}"
         );
 
-        let payload =
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#;
+        let payload = r#"{ "tool_name": "Bash", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
         assert_eq!(
             verdict("codex", payload, Some(marker())).expect("should block"),
             "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
-             (package install/add) — runs outside the eval sandbox\"}"
+             (package install/add — runs outside the eval sandbox; command not allowed by eval guard policy)\"}"
         );
     }
 
@@ -737,7 +781,7 @@ mod tests {
 
     #[test]
     fn codex_deny_returns_decision_block_json() {
-        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#;
+        let payload = r#"{ "hook_event_name": "PreToolUse", "tool_name": "Bash", "cwd": "/work/.eval-magic", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#;
         let out = verdict("codex", payload, Some(marker())).expect("should block");
         let v: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(v["decision"], "block");

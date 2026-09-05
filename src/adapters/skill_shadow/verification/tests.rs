@@ -2,8 +2,8 @@
 
 use super::*;
 use crate::adapters::skill_shadow::{
-    ShadowAppearance, ShadowNamespace, ShadowRelation, ShadowResolution, ShadowRoot,
-    ShadowRootScope, ShadowSkillRole,
+    ShadowAppearance, ShadowFindingClass, ShadowNamespace, ShadowRelation, ShadowResolution,
+    ShadowRoot, ShadowRootScope, ShadowSkillRole,
 };
 
 /// One dispatch's evidence, as the policy sees it.
@@ -174,6 +174,7 @@ fn staged_source(skill: &str, dir_name: &str, cells: &[(&str, &str)]) -> ShadowS
 
 fn finding(role: ShadowSkillRole, sources: Vec<ShadowSource>) -> ShadowFinding {
     ShadowFinding {
+        class: ShadowFindingClass::OperatorEnvironment,
         skill_name: sources[0].skill_name.clone(),
         role,
         severity: match role {

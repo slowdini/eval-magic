@@ -140,8 +140,8 @@ fn detect_stray_writes_flags_unverifiable_when_nothing_was_inspected() {
     )
     .unwrap();
 
-    // A recorded run whose transcript never linked: final message present,
-    // tool_invocations empty.
+    // A historical recorded run whose transcript never linked: normalized final
+    // response present, tool_invocations empty.
     fs::write(
         cond_dir.join("run.json"),
         serde_json::to_string(&json!({
@@ -331,6 +331,7 @@ fn detect_stray_writes_uses_eval_root_boundary_from_dispatch() {
                     "condition": "old_skill",
                     "outputs_dir": outputs_dir.to_string_lossy(),
                     "eval_root": eval_root.to_string_lossy(),
+                    "guard_policy": { "allow_commands": ["cargo test"] },
                 }
             ],
         }))
@@ -351,6 +352,7 @@ fn detect_stray_writes_uses_eval_root_boundary_from_dispatch() {
                 {"name": "Write", "args": {"file_path": output_artifact}, "ordinal": 0},
                 {"name": "Edit", "args": {"file_path": source_edit}, "ordinal": 1},
                 {"name": "Write", "args": {"file_path": stray}, "ordinal": 2},
+                {"name": "Bash", "args": {"command": "cargo test --workspace"}, "ordinal": 3},
             ],
             "total_tokens": null,
             "duration_ms": null,
@@ -375,6 +377,7 @@ fn detect_stray_writes_uses_eval_root_boundary_from_dispatch() {
         serde_json::from_str(&fs::read_to_string(iteration_dir.join("stray-writes.json")).unwrap())
             .unwrap();
     assert_eq!(report["totals"]["violations"], json!(1));
+    assert_eq!(report["totals"]["warnings"], json!(0));
     assert_eq!(report["runs"].as_array().unwrap().len(), 1);
     assert_eq!(report["runs"][0]["violations"][0]["path"], json!(stray));
 }

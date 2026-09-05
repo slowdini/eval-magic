@@ -7,6 +7,8 @@ use predicates::str::contains;
 use std::fs;
 use std::path::Path;
 
+mod guard_provenance;
+
 #[test]
 fn missing_git_fails_before_creating_an_iteration() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -56,19 +58,32 @@ fn guard_installs_pretooluse_hook_under_env() {
     // Nothing is armed at the invocation cwd anymore.
     assert!(!cwd.join(".claude/settings.local.json").exists());
 
-    // `teardown-guard` operates at the invocation cwd, so it does not reach the
-    // env-scoped guard: this is a transitional no-op, reconciled when the loop runs
-    // inside the env session / teardown is reworked. The env is disposable
-    // and the guard auto-expires (6h TTL); full `teardown` reclaims it (see
-    // `teardown_reclaims_workspace_and_env_guard`).
+    // `teardown-guard` reaches the per-(group, condition) env guards when the shared
+    // target flags point it at the run — the mid-run "disarm before I hand-edit"
+    // path the command exists for. It stays guard-only: the staged skill set and
+    // the workspace survive, which is what separates it from full `teardown`.
     skill_eval()
         .current_dir(&cwd)
         .args(["teardown-guard", "--skill-dir"])
         .arg(&skill_dir)
         .args(["--skill", "mr-review"])
         .assert()
-        .success();
-    assert!(settings.exists(), "env guard survives a cwd teardown-guard");
+        .success()
+        .stdout(contains("Write guard removed"))
+        .stdout(contains("task env"));
+    assert!(!settings.exists(), "env guard survived teardown-guard");
+    assert!(
+        !cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".claude/skills/.slow-powers-eval-guard.json")
+            .exists(),
+        "env guard marker survived teardown-guard"
+    );
+    assert!(
+        cli_env_dir(&cwd, "g1", "with_skill")
+            .join(".claude/skills")
+            .exists(),
+        "teardown-guard removed the staged skill set — that is `teardown`'s job"
+    );
 }
 
 #[test]
@@ -146,10 +161,15 @@ fn teardown_reclaims_workspace_and_env_guard() {
         .success();
     assert!(settings.exists());
     assert!(staged.exists());
+    // Staging is env-scoped: nothing is placed at the invocation cwd, which is why
+    // teardown no longer sweeps there.
+    assert!(
+        !cwd.join(".claude").exists(),
+        "run staged into the invocation cwd"
+    );
 
     // Full `teardown` reclaims the workspace iteration; the env (and its guard) lives
-    // inside it, so removing the workspace removes the env guard too — this is what makes
-    // deferring the cwd teardown-guard rework safe.
+    // inside it, so removing the workspace removes the env guard too.
     skill_eval()
         .current_dir(&cwd)
         .args(["teardown", "--skill-dir"])
@@ -160,7 +180,6 @@ fn teardown_reclaims_workspace_and_env_guard() {
     assert!(!cwd.join(".eval-magic").exists());
     assert!(!settings.exists());
     assert!(!staged.exists());
-    assert!(!cwd.join(".claude").exists());
 }
 
 #[test]
@@ -212,57 +231,6 @@ fn dry_run_skips_guard_install() {
     assert!(
         !cli_env_dir(&cwd, "g1", "with_skill")
             .join(".claude/settings.local.json")
-            .exists()
-    );
-}
-
-#[test]
-fn default_run_auto_arms_guard_in_each_env() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // No guard flag at all: the harness declares guard support, so the run
-    // arms it automatically (#126 — enhancements are provided, not opted into).
-    let assert = skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill"])
-        .assert()
-        .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(
-        stdout.contains("guard: armed"),
-        "the run plan reports the armed guard: {stdout}"
-    );
-    for condition in ["with_skill", "without_skill"] {
-        let env = cli_env_dir(&cwd, "g1", condition);
-        assert!(
-            env.join(".claude/settings.local.json").exists(),
-            "guard hook staged in env-g1-{condition}"
-        );
-        assert!(
-            env.join(".claude/skills/.slow-powers-eval-guard.json")
-                .exists(),
-            "guard marker armed in env-g1-{condition}"
-        );
-    }
-}
-
-#[test]
-fn no_guard_run_installs_no_guard() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill", "--no-guard"])
-        .assert()
-        .success();
-    let env = cli_env_dir(&cwd, "g1", "with_skill");
-    assert!(!env.join(".claude/settings.local.json").exists());
-    assert!(
-        !env.join(".claude/skills/.slow-powers-eval-guard.json")
             .exists()
     );
 }
@@ -343,6 +311,37 @@ fn omitted_models_and_label_are_absent_from_conditions() {
     assert!(conditions.get("judge_model").is_none());
     assert!(conditions.get("label").is_none());
     assert!(conditions.get("agent_env").is_none());
+    assert!(conditions.get("judge_samples").is_none());
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert!(dispatch.get("judge_samples").is_none());
+}
+
+#[test]
+fn records_a_non_default_judge_sample_count_in_manifests() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--judge-samples",
+            "10",
+            "--dry-run",
+        ])
+        .assert()
+        .success();
+
+    let iteration = iteration_dir(&cwd);
+    let conditions = read_json(&iteration.join("conditions.json"));
+    let dispatch = read_json(&iteration.join("dispatch.json"));
+    assert_eq!(conditions["judge_samples"], serde_json::json!(10));
+    assert_eq!(dispatch["judge_samples"], serde_json::json!(10));
 }
 
 #[test]
@@ -507,6 +506,28 @@ fn runs_zero_is_rejected() {
         ])
         .assert()
         .failure();
+}
+
+#[test]
+fn judge_samples_zero_is_rejected() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--judge-samples",
+            "0",
+            "--dry-run",
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("invalid value '0' for '--judge-samples"));
 }
 
 #[test]

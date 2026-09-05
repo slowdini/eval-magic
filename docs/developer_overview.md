@@ -12,18 +12,23 @@ focused internal notes instead of duplicating their details.
 ## How an evaluation moves through the system
 
 1. `eval-magic init` scaffolds an eval workspace next to a skill. Eval definitions describe the
-   task, fixtures, assertions, conditions, run count, and optional scripted follow-up turns.
-2. `eval-magic run` validates the configuration, creates isolated task roots, stages the requested
-   skill condition, snapshots the starting state, and writes `RUNBOOK.md`, `dispatch.json`, and
-   related campaign artifacts. The generated runbook—not a checked-in recipe—is the authority for
-   dispatching that particular campaign.
-3. An operator or automation dispatches each task with the selected harness. One-shot tasks invoke
-   the harness once; scripted conversations use `eval-magic dispatch-task` to preserve one native
-   harness session across turns.
+   codebase, task, overlay files, assertions, conditions, run count, and — for a multi-turn eval —
+   either scripted follow-up turns or a responder policy that derives them.
+2. `eval-magic run` validates the configuration, resolves and copies the skill under test into the
+   iteration, creates isolated task roots, stages the requested skill condition from that copy,
+   snapshots the starting state, and writes `RUNBOOK.md`, `dispatch.json`, and related campaign
+   artifacts. The iteration lives in the eval home, which defaults outside the skill's own
+   repository (`workspace_root_from`, `src/core/context.rs`). The generated runbook—not a
+   checked-in recipe—is the authority for dispatching that particular campaign.
+3. `eval-magic dispatch` runs every task through the selected harness, `--jobs` at a time, each in
+   its own private environment. A scripted conversation resumes one native harness session across
+   its turns. Each task ends with a `conversation.json`, which is also what a rerun skips on.
 4. `eval-magic ingest` reads the harness outputs, transcript evidence, guard denials, and final
    task state. Runner-owned deterministic checks and diff-scope evidence are collected here.
-5. `eval-magic grade` evaluates runner-owned assertions and emits tasks for assertions that require
-   an LLM. The generated recipes dispatch those judge tasks through the selected harness.
+5. `eval-magic grade` evaluates runner-owned assertions, writes one bounded `judge-evidence.md`
+   per recorded run, and emits one or more tasks for assertions that require an LLM. Every sample
+   inlines the exact same bundle for its run. `eval-magic dispatch --judges` runs those judge tasks
+   through the selected harness.
 6. `eval-magic finalize` checks that required work is complete and writes the final per-run and
    benchmark artifacts. `eval-magic aggregate` combines campaigns when a larger comparison is
    needed.
@@ -43,9 +48,17 @@ preconditions, handoffs, and recovery commands.
   few named capabilities that require harness-specific code.
 - `src/sandbox/`, `src/workspace/`, and `src/validation/` own task isolation, filesystem/workspace
   mechanics, and configuration checks.
+- `src/source/` resolves a declared source — a git URL and ref, or a local directory — to a commit,
+  and materializes it as a tree. It knows nothing about what is being sourced, so both the codebase
+  a task environment is built from and the skills under test resolve through it.
 - `schema/` contains the JSON schemas for user input and generated artifacts.
 - `harnesses/` contains built-in descriptors, descriptor scaffolding, and embedded harness assets.
-- `profiles/` contains shared prompt profiles.
+- `guard-profiles/` contains packaged command-policy defaults discovered and embedded by `build.rs`.
+- `ignore-profiles/` contains packaged tool-ignore targets, discovered and embedded the same way:
+  which ignore file a detected formatter or linter reads, so `run` can hide the framework's own
+  staged files from a sourced codebase's tooling. Both families detect through
+  `src/core/tree_profiles.rs`.
+- `profiles/` contains the `RUNBOOK.md` prose template, embedded in the binary.
 - `tests/cli/` covers CLI and packaging contracts; `tests/run/` covers campaign behavior across
   the run boundary. Focused unit tests normally live beside the implementation.
 - `docs/guides/` contains Markdown guides embedded in the binary. Other files under `docs/` are
@@ -70,22 +83,19 @@ following authorities:
 
 | Tier | Platform | Verified by |
 | --- | --- | --- |
-| Supported | Linux, macOS | the `ubuntu-latest` CI job |
-| Deprecated | Windows, through Git Bash (Git for Windows) | the `windows-latest` CI job |
-| Unsupported | preparing a workspace on Windows and dispatching it from WSL | — |
+| Supported | Linux, macOS, Linux inside WSL | the `ubuntu-latest` CI job |
+| Unsupported | native Windows | — |
 
-Windows support is deprecated in favor of WSL, and its removal is gated on #256, which replaces
-the generated POSIX recipes with a runner-driven `eval-magic dispatch`. Until that lands, the
-Windows runner stays green and Windows-native behavior is held to the same bar as any other
-platform: a Windows failure is a real failure, not an accepted gap. Do not add new Windows-native
-accommodation in the meantime.
+Windows users run the Linux build inside Windows Subsystem for Linux (WSL). Keep the binary,
+repository, eval workspaces, and harness processes inside the same WSL environment. `dispatch`
+passes workspace-owned absolute paths to harness command lines, so crossing from a native Windows
+process into WSL would change the filesystem namespace and invalidate those paths.
 
-The unsupported row is a correctness boundary rather than a preference. A generated recipe carries
-the absolute paths of the host that prepared the workspace. Git Bash shares the Windows filesystem,
-so those paths resolve; WSL resolves its own namespace, where a `C:\…` path names nothing. Nothing
-in the tree translates between the two, so the split fails quietly instead of loudly.
-`POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is the single wording every user-facing surface
-reuses to state this; `src/cli/help.rs` restates it for clap by hand.
+Do not add native Windows accommodations or release targets. Preserve support for Windows-shaped
+paths only where they are data read from artifacts or transcripts; those portable-data contracts
+do not imply native Windows runtime support. `POSIX_TOOLING_REQUIREMENT` (`src/core/runtime.rs`) is
+the single wording every user-facing Markdown surface reuses. `src/cli/help.rs` restates it for
+clap by hand.
 
 ## Make and verify a change
 
@@ -94,11 +104,11 @@ editing. Add a focused failing test at the narrowest useful boundary, implement 
 run the focused test again. Cross-harness changes belong at shared descriptor, runner, or adapter
 boundaries unless the evidence requires a named harness capability.
 
-Development carries the host requirement the tool itself declares: a POSIX shell with `jq`. The
-scripted-turn tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so
-the suite cannot pass without one. Tests needing `jq`, symlink creation, or a path past Windows'
-259-character limit report a skip instead; `EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into
-failures, as CI sets it to do on both its Ubuntu and its Windows runner.
+Development requires Linux or macOS with a POSIX shell. Windows contributors clone the repository
+and run the complete toolchain inside WSL; native Windows development is unsupported. The dispatch
+tests spawn `#!/bin/sh` harness stubs through the resolved shell and do not skip, so the suite
+cannot pass without one. Tests needing symlink creation report a skip instead;
+`EVAL_MAGIC_REQUIRE_POSIX_TOOLS=1` turns those skips into failures in CI.
 
 Before handing work off, run:
 
@@ -143,3 +153,11 @@ implementation evidence in an internal note.
   `eval-magic docs byoh`.
 - [Shipped isolation guide](guides/isolation.md) is the repository source for
   `eval-magic docs isolation`.
+- [Shipped codebase guide](guides/codebase.md) is the repository source for
+  `eval-magic docs codebase`.
+- [Shipped guard guide](guides/guard.md) is the repository source for
+  `eval-magic docs guard`.
+- [Shipped conversations guide](guides/conversations.md) is the repository source for
+  `eval-magic docs conversations`.
+- [Shipped judging guide](guides/judging.md) is the repository source for
+  `eval-magic docs judging`.

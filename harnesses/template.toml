@@ -22,12 +22,19 @@ label = "{label}"
 
 ## Where the harness discovers project-local skills. Declaring skills_dir unlocks native
 ## staging; without it every run is forced to --no-stage. The first path segment of skills_dir
-## must appear in config_dirs (it feeds the staging sibling filter, guard tamper rules, and
-## stray-write lookbehind).
+## must appear in config_dirs (it feeds the staging sibling filter and task-repository baseline).
+## If the harness also discovers compatibility roots, list them in
+## additional_project_skill_dirs. They participate in sourced-codebase shadow detection and
+## codebase.exclude_skill_sources but never receive staged skills. Each first path segment must
+## also appear in config_dirs.
+## skills_dir and the [guard] staged file are also what `run` writes into a sourced codebase's own
+## ignore files (.prettierignore and friends), so the project's linters never report eval-magic's
+## staged skills — see `eval-magic docs codebase`.
 ## VERIFY: which directory does the harness actually scan for skills? Quote the doc or the
 ## observed behavior in the notes file.
 # skills_dir = ".{label}/skills"
-# config_dirs = [".{label}"]
+# additional_project_skill_dirs = [".claude/skills", ".agents/skills"]
+# config_dirs = [".{label}", ".claude", ".agents"]
 
 ## -------------------------------------------------------------------------------------------
 ## [dispatch] — the highest-leverage first enhancement: with exec_template declared, the
@@ -35,40 +42,27 @@ label = "{label}"
 ## generic handoff guidance.
 ##
 ## Two placeholder families:
-##   {model_arg} / {guard_args} are machine slots eval-magic fills — {model_arg} renders the
-##   [model] flag + requested model (empty when absent); {guard_args} splices guard-only args
-##   (guarded built-ins only).
+##   {model_arg} / {guard_args} / {mode_args} are machine slots eval-magic fills — {model_arg}
+##   renders the [model] flag + requested model (empty when absent); {guard_args} splices
+##   guard-only args (guarded built-ins only); {mode_args} splices the [plan_mode] arguments
+##   for the round's session mode (only with a [plan_mode] table).
 ##   <eval-root>, <dispatch_prompt_path>, <outputs_dir> are prose placeholders whoever
 ##   dispatches fills per task (the runbook explains each).
 ## Two hard requirements: the command runs from the task's <eval-root> (the env dir is the
-## subprocess cwd), and the agent's final reply must land in <outputs_dir>/final-message.md —
-## if the CLI cannot write it directly, capture it like the redirect below.
-## VERIFY: run the command once by hand with a trivial prompt and confirm the final message
-## actually lands in the redirect before declaring this. Multi-line templates are fine in TOML
+## subprocess cwd), and it captures the native event stream at the [transcript].events_filename
+## path under <outputs_dir>. VERIFY with `eval-magic harness lint --probe`; the probe parses that
+## capture and requires a non-empty final response. Multi-line templates are fine in TOML
 ## '''...''' strings — see `eval-magic harness show claude-code`.
 # [dispatch]
-# exec_template = '{label} run --cd <eval-root>{model_arg} "Read the file at <dispatch_prompt_path> and follow its instructions exactly." > <outputs_dir>/final-message.md'
-
-## capture_prefix names the judge recipe's per-task capture files
-## ($response_base.<prefix>-events.jsonl); required by judge_command_template.
-# capture_prefix = "{label}"
-
-## parallel_command_template is the per-task command block spliced into the shared parallel
-## dispatch scaffold.
-# parallel_command_template = 'cd "$eval_root" && {label} run{model_arg} "Read the file at $prompt_path and follow its instructions exactly." > "$outputs_dir/final-message.md"'
-
-## judge_command_template splices into the shared judge recipe. Contract: requires [model].flag
-## and capture_prefix, must reference $model_arg and {cwd}, and must end with a shell line
-## continuation (" \") so the recipe's prompt line follows it.
-# judge_command_template = 'cd "{cwd}" && {label} run $model_arg \'
+# exec_template = '{label} run --cd <eval-root>{model_arg} "Read the file at <dispatch_prompt_path> and follow its instructions exactly." > <outputs_dir>/{label}-events.jsonl'
 
 ## next_steps_template is the post-run handoff text ({exec_command}, {target_args}, {iteration},
 ## {model_note} placeholders; referencing {model_note} requires the model_note field).
 # next_steps_template = "\nNext: dispatch each task in dispatch.json with:\n{exec_command}\nThen run `ingest --harness {label}`."
 
-## manifest_template is this harness's dispatch-manifest section ({exec_command} and
-## {parallel_recipe} placeholders); it must end with exactly one trailing newline.
-# manifest_template = "After all dispatches ({label}):\n\n{exec_command}\n\nParallel dispatch from the iteration directory:\n\n{parallel_recipe}\n"
+## manifest_template is this harness's dispatch-manifest section ({exec_command}
+## placeholder); it must end with exactly one trailing newline.
+# manifest_template = "Harness dispatch ({label}):\n\n{exec_command}\n"
 
 ## guard_args (guard-only args spliced at {guard_args}) and model_note (sentence spliced at
 ## {model_note}) are niche — see the schema; guard_args only matters to guarded built-ins.
@@ -82,7 +76,10 @@ label = "{label}"
 
 ## -------------------------------------------------------------------------------------------
 ## [tools] — the harness's tool-name vocabulary by role, spelled exactly as its transcripts and
-## hook payloads spell them (the stray-writes audit classifies invocations by these names).
+## hook payloads spell them (the stray-writes audit classifies invocations by these names, and
+## `transcript_check` treats every name declared for a role as a portable spelling of it, so an
+## authored tool pattern grades the same here as on any other harness). Declare only this
+## harness's own names — cross-listing another harness's spellings is neither needed nor wanted.
 ## Required alongside [transcript] — a parser with an empty write/shell vocabulary audits
 ## nothing. Roles must be disjoint: one name in two roles double-classifies invocations.
 ## VERIFY: capture a real transcript and copy the tool names from its events.
@@ -94,9 +91,10 @@ label = "{label}"
 
 ## -------------------------------------------------------------------------------------------
 ## [transcript] — declaring an events file plus one primary summary reader unlocks transcript_check
-## grading, token/duration capture, and the deterministic skill-invocation meta-check. The primary
-## reader is either parser OR the summary outputs under extract; auxiliary denial/surface readers
-## can compose with it.
+## grading, token capture, historical duration fallback, and the deterministic skill-invocation
+## meta-check. The runner measures eval-agent subprocess duration for every runner-ready descriptor,
+## independently of this transcript surface. The primary reader is either parser OR the summary
+## outputs under extract; auxiliary denial/surface readers can compose with it.
 ## parser is a NAMED SUMMARY CAPABILITY — real parsing code reused from configuration alone:
 ##   parser = "claude-stream-json"   Claude Code `-p --output-format stream-json` events
 ##   parser = "cline-json"           Cline `--json` agent_event/run_result NDJSON
@@ -128,18 +126,28 @@ label = "{label}"
 ## meanwhile.
 ## VERIFY: capture a real events file and check its line shapes against the reader you declare —
 ## an unknown parser name fails the schema gate listing the allowed values. Leave
-## surfaces_skill_invocation false unless you verified the stream yields a deterministic
-## skill-invocation event (false routes the __skill_invoked meta-check to the LLM judge). When
-## true, skill_tool / skill_arg name the skill tool and the argument carrying the skill
-## identifier (defaults: "Skill" / "skill" — Claude Code's spellings; OpenCode uses
-## "skill" / "name").
+## Leave surfaces_skill_invocation false unless the stream yields deterministic native invocation
+## or staged-file access evidence (false routes __skill_invoked to a clearly labeled behavioral-
+## influence fallback). For a native event, skill_tool / skill_arg name the tool and identifier
+## argument (defaults: "Skill" / "skill"; OpenCode uses "skill" / "name"). A harness that exposes
+## only successful shell reads may instead declare [transcript.skill_access]: tool is a [tools]
+## shell name, command_arg and exit_code_arg locate its fields, and read_commands lists literal
+## executable basenames. The exact staged SKILL.md path must be one literal argument.
 # [transcript]
 # events_filename = "{label}-events.jsonl"
 # parser = "codex-items"
 # permission_denials_parser = "codex-items"
-# surfaces_skill_invocation = false
-# skill_tool = "Skill"
-# skill_arg = "skill"
+# surfaces_skill_invocation = true
+#
+# [transcript.skill_access]
+# tool = "command_execution"
+# command_arg = "command"
+# exit_code_arg = "exit_code"
+# read_commands = ["cat", "sed"]
+#
+## Native-tool alternative to [transcript.skill_access]:
+##   skill_tool = "Skill"
+##   skill_arg = "skill"
 #
 # [transcript.extract.session_surface]
 # where = { type = "system", subtype = "init" }
@@ -150,8 +158,12 @@ label = "{label}"
 # plugin_version_field = "version"
 
 ## -------------------------------------------------------------------------------------------
-## [conversation] — native same-session continuation for scripted eval `turns`. This capability
-## has no generic fallback: run rejects multi-turn evals for a harness that omits it. It requires
+## [conversation] — native same-session continuation for multi-turn evals, both scripted `turns`
+## and a `responder` that derives them. The responder needs nothing further from a descriptor: it
+## reads the agent's own message out of the transcript and consults its model through the
+## [dispatch].exec_template below, so declaring this table is all it takes.
+## This capability has no generic fallback: run rejects multi-turn evals for a harness that omits
+## it. It requires
 ## [dispatch].exec_template plus transcript parsing that exposes both ordered assistant messages
 ## and the native session id. Named summary parsers provide those directly; a declarative extractor
 ## must declare [transcript.extract.assistant_messages] and [transcript.extract.session_id].
@@ -167,6 +179,21 @@ label = "{label}"
 # [conversation]
 # token_usage_aggregation = "sum"
 # resume_exec_template = '{label} run --cd <eval-root> --session {session_arg}{model_arg} {prompt_arg} > <outputs_dir>/{label}-events.jsonl'
+
+## -------------------------------------------------------------------------------------------
+## [plan_mode] — the harness's native read-only planning mode, for evals that declare
+## `plan_mode: true`. eval-magic starts such a session with plan_args spliced at the
+## {mode_args} slot, lets the agent present a plan, approves it with one fixed message, and
+## resumes the same session with act_args. Both [dispatch].exec_template and
+## [conversation].resume_exec_template must carry {mode_args}; every other dispatch (judges,
+## responder consultations, the lint probe) renders act_args. Requires [conversation].
+## [plan_mode.plan_file] names the file the harness writes its plan to: writes under root are
+## allowed by the write guard and the stray-write audit, a plan-phase round that wrote one has
+## presented its plan, and that write's content_field is the plan artifact. Omit plan_file when
+## the harness writes no plan file; the eval's responder then decides when the plan is ready.
+## VERIFY: run one headless turn in the planning mode and confirm edits are refused; resume it
+## with the act arguments and confirm that same session edits. See `eval-magic harness show
+## claude-code` for a plan_file example and `eval-magic docs conversations` for the eval side.
 
 ## -------------------------------------------------------------------------------------------
 ## [model] — the CLI flag that selects a model. Without it, --agent-model / --judge-model are
@@ -243,10 +270,11 @@ label = "{label}"
 ## Before opening a PR (`eval-magic docs byoh` "Upstreaming your descriptor"):
 ##   1. eval-magic harness lint .eval-magic/harnesses/{label}.toml — all checks pass.
 ##   2. A real smoke eval: eval-magic run --harness {label}, dispatch the tasks, then ingest and
-##      finalize — the preflight warnings name the fallback carrying anything not declared.
+##      finalize — the preflight warnings name optional capabilities using a fallback.
 ##      For the exec template specifically, `eval-magic harness lint .eval-magic/harnesses/{label}.toml
-##      --probe --yes` renders it with a trivial prompt and verifies final-message recovery — opt-in,
-##      invokes the real harness CLI, never part of standard CI. See `harness lint --help`.
+##      --probe --yes` renders it with a trivial prompt, parses the captured transcript, and verifies
+##      final-response recovery — opt-in, invokes the real harness CLI, never part of standard CI.
+##      See `harness lint --help`.
 ##   3. .eval-magic/harnesses/{label}-notes.md records every verified value, its source, and the
 ##      harness version.
 ##   4. Open the PR with .github/PULL_REQUEST_TEMPLATE/harness-descriptor.md — a data-only PR:

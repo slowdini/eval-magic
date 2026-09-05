@@ -22,6 +22,50 @@ fn main() {
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").unwrap());
     fs::write(out_dir.join("guide_topics.rs"), generated)
         .expect("failed to write generated guide topic table");
+
+    embed_profiles(
+        &manifest_dir.join("guard-profiles"),
+        &out_dir.join("guard_profiles.rs"),
+        "PACKAGED_GUARD_PROFILES",
+    );
+    embed_profiles(
+        &manifest_dir.join("ignore-profiles"),
+        &out_dir.join("ignore_profiles.rs"),
+        "PACKAGED_IGNORE_PROFILES",
+    );
+}
+
+/// Render one directory of TOML profiles as a `&[(filename, body)]` table the
+/// crate `include!`s. Both packaged profile families — guard command policy and
+/// tool-ignore targets — ship this way, so a new profile is a new file and
+/// nothing else.
+fn embed_profiles(profile_dir: &Path, out_file: &Path, table_name: &str) {
+    println!("cargo:rerun-if-changed={}", profile_dir.display());
+    let mut profiles: Vec<PathBuf> = fs::read_dir(profile_dir)
+        .unwrap_or_else(|err| panic!("failed to read {}: {err}", profile_dir.display()))
+        .map(|entry| entry.expect("failed to read profile entry").path())
+        .filter(|path| path.extension().and_then(|value| value.to_str()) == Some("toml"))
+        .collect();
+    profiles.sort();
+    assert!(
+        !profiles.is_empty(),
+        "{} must contain a TOML profile",
+        profile_dir.display()
+    );
+
+    let mut generated = format!("const {table_name}: &[(&str, &str)] = &[\n");
+    for path in profiles {
+        let name = path
+            .file_name()
+            .and_then(|value| value.to_str())
+            .unwrap_or_else(|| panic!("profile path is not UTF-8: {}", path.display()));
+        let body = fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", path.display()));
+        generated.push_str(&format!("    ({name:?}, {body:?}),\n"));
+    }
+    generated.push_str("];\n");
+    fs::write(out_file, generated)
+        .unwrap_or_else(|err| panic!("failed to write {}: {err}", out_file.display()));
 }
 
 fn discover_guides(guide_dir: &Path) -> Vec<Guide> {

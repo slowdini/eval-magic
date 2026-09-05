@@ -10,6 +10,8 @@ use predicates::str::contains;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+mod codebase;
+
 fn repo_root() -> &'static Path {
     Path::new(env!("CARGO_MANIFEST_DIR"))
 }
@@ -140,7 +142,28 @@ fn docs_byoh_keeps_the_authoring_workflow() {
         .stdout(contains("harness init"))
         .stdout(contains("harness lint"))
         .stdout(contains("--probe"))
+        .stdout(contains("additional_project_skill_dirs"))
+        .stdout(contains("[plan_mode]"))
+        .stdout(contains("{mode_args}"))
         .stdout(contains("Upstreaming your descriptor"));
+}
+
+#[test]
+fn docs_conversations_keeps_the_plan_mode_contract() {
+    skill_eval()
+        .args(["docs", "conversations"])
+        .assert()
+        .success()
+        .stdout(contains("# Multi-turn conversations"))
+        .stdout(contains("Starting in plan mode"))
+        .stdout(contains("\"plan_mode\": true"))
+        .stdout(contains("plan-mode"))
+        .stdout(contains("The plan is approved. Implement it now."))
+        .stdout(contains("plan_file"))
+        .stdout(contains("plan_not_presented"))
+        .stdout(contains("plan_approval"))
+        .stdout(contains("plan_mode_attributed"))
+        .stdout(contains("plan.md"));
 }
 
 #[test]
@@ -149,16 +172,148 @@ fn docs_isolation_keeps_remedies_and_verification() {
         .args(["docs", "isolation"])
         .assert()
         .success()
-        .stdout(contains("# Isolating dispatches from live skill sources"))
+        .stdout(contains("# Dispatch isolation and sandbox boundaries"))
         .stdout(contains("--setting-sources project,local"))
         .stdout(contains("CLAUDE_CONFIG_DIR"))
         .stdout(contains("--disable plugins"))
         .stdout(contains("OPENCODE_DISABLE_EXTERNAL_SKILLS"))
         .stdout(contains("resumed"))
         .stdout(contains("isolates_live_sources"))
+        .stdout(contains("operator-environment"))
+        .stdout(contains("codebase-sourced"))
+        .stdout(contains("codebase.exclude_skill_sources"))
         .stdout(contains("claude plugin list"))
         .stdout(contains("`comparison-invalid`"))
         .stdout(contains("\"subtype\":\"init\""));
+}
+
+#[test]
+fn docs_isolation_explains_nested_codex_sandboxes_and_remedies() {
+    skill_eval()
+        .args(["docs", "isolation"])
+        .assert()
+        .success()
+        .stdout(contains("**Operator sandbox**"))
+        .stdout(contains("**Harness task sandbox**"))
+        .stdout(contains("**Eval guard**"))
+        .stdout(contains("**Skill-source isolation**"))
+        .stdout(contains("same generated task command"))
+        .stdout(contains("equivalent inputs and configuration"))
+        .stdout(contains("fails inside the operator Codex session"))
+        .stdout(contains("Operation not permitted"))
+        .stdout(contains("alone does not establish"))
+        .stdout(contains("1. **Preferred:**"))
+        .stdout(contains("ordinary terminal"))
+        .stdout(contains("2. **Alternative:**"))
+        .stdout(contains("outer launch of `eval-magic dispatch`"))
+        .stdout(contains("surface and policy support"))
+        .stdout(contains("Adding a writable directory alone"))
+        .stdout(contains("--sandbox workspace-write"))
+        .stdout(contains("eval guard enabled"));
+
+    skill_eval()
+        .args(["docs", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("sandbox boundaries"))
+        .stdout(contains("live skill sources"));
+}
+
+#[test]
+fn docs_guard_keeps_configuration_defaults_and_boundary_contracts() {
+    skill_eval()
+        .args(["docs", "guard"])
+        .assert()
+        .success()
+        .stdout(contains("# Configuring guarded commands"))
+        .stdout(contains("allow_tools"))
+        .stdout(contains("allow_commands"))
+        .stdout(contains("language/rust"))
+        .stdout(contains("framework/nextjs"))
+        .stdout(contains("replaces"))
+        .stdout(contains("dispatch.json"))
+        .stdout(contains("guard_armed"))
+        .stdout(contains("unknown"))
+        .stdout(contains("cannot override"));
+
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("eval-magic docs guard"))
+        .stdout(contains("guard_armed"));
+}
+
+/// Judge evidence is the primary grading input, so the shipped reference must
+/// keep the bounds, sampling semantics, trust boundary, source fallback, and
+/// retention contract.
+#[test]
+fn docs_judging_keeps_bundle_bounds_truncation_and_retention_contract() {
+    skill_eval()
+        .args(["docs", "judging"])
+        .assert()
+        .success()
+        .stdout(contains("# Judge evidence bundles"))
+        .stdout(contains("judge-evidence.md"))
+        .stdout(contains("98,304 bytes"))
+        .stdout(contains("131,072 bytes"))
+        .stdout(contains("diff.patch"))
+        .stdout(contains("run.json"))
+        .stdout(contains("final_message"))
+        .stdout(contains("conversation transcript"))
+        .stdout(contains("tool invocation summary"))
+        .stdout(contains("truncated"))
+        .stdout(contains("untrusted"))
+        .stdout(contains("read-only"))
+        .stdout(contains("\"samples\": 10"))
+        .stdout(contains("--judge-samples"))
+        .stdout(contains("6 / 10"))
+        .stdout(contains("0.6^10"))
+        .stdout(contains("__sample-N"))
+        .stdout(contains("missing response"))
+        .stdout(contains("__skill_invoked"))
+        .stdout(contains("Explore before writing assertions"))
+        .stdout(contains("eval-magic compare"))
+        .stdout(contains("no assertions"))
+        .stdout(contains("not a grade"))
+        .stdout(contains("evals/baseline/evidence"));
+
+    // The explore-first loop is only usable if it names the file to edit and
+    // what re-reads it (#295).
+    skill_eval()
+        .args(["docs", "judging"])
+        .assert()
+        .success()
+        .stdout(contains("Which evals.json grade reads"))
+        .stdout(contains("evals/evals.json"))
+        .stdout(contains("skill_should_trigger"))
+        .stdout(contains("assertion_source"))
+        .stdout(contains("eval-magic grade --overwrite"))
+        .stdout(contains("exact `run.json` digest"))
+        .stdout(contains("must not be resumed"))
+        .stdout(contains("eval-magic dispatch --judges --overwrite"));
+
+    // The isolation guide explains why the copy exists, so it has to carry the
+    // one exception rather than contradict the judging guide.
+    skill_eval()
+        .args(["docs", "isolation"])
+        .assert()
+        .success()
+        .stdout(contains("freezes the treatment, not the assertions"))
+        .stdout(contains("eval-magic docs judging"));
+
+    skill_eval()
+        .args(["grade", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("assertion_source"));
+
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("--judge-samples"))
+        .stdout(contains("pass^k"));
 }
 
 #[test]
@@ -204,14 +359,13 @@ fn every_guide_reference_in_shipped_help_resolves() {
     for help_args in [
         "--help",
         "run --help",
-        "dispatch-task --help",
+        "dispatch --help",
         "snapshot --help",
         "teardown --help",
         "teardown-guard --help",
         "ingest --help",
         "finalize --help",
         "record-runs --help",
-        "fill-transcripts --help",
         "detect-stray-writes --help",
         "grade --help",
         "aggregate --help",
@@ -280,13 +434,25 @@ fn repository_documentation_map_names_each_surface() {
     assert!(!agents.contains("docs/README.md"));
 
     // A POSIX shell is a development requirement, not a probed capability: the
-    // scripted-turn tests spawn a `#!/bin/sh` stub through it and cannot skip.
-    // Both contributor-facing docs have to say so, or the next contributor on
-    // Windows rediscovers it as a test failure (issue #248).
+    // dispatch tests spawn a `#!/bin/sh` stub through it and cannot skip. Both
+    // contributor-facing docs have to say so, including where Windows
+    // contributors run the toolchain.
     for (name, text) in [("AGENTS.md", &agents), ("developer overview", &overview)] {
         assert!(
-            text.contains("POSIX shell") && text.contains("jq"),
-            "{name} should record the POSIX shell + jq development requirement"
+            text.contains("POSIX shell"),
+            "{name} should record the POSIX shell development requirement"
+        );
+        assert!(
+            text.contains("WSL"),
+            "{name} should direct Windows work to WSL"
+        );
+        assert!(
+            text.contains("native Windows"),
+            "{name} should state the unsupported native-Windows boundary"
+        );
+        assert!(
+            !text.contains("Git Bash"),
+            "{name} should not retain a Git Bash fallback"
         );
     }
 }
@@ -301,9 +467,13 @@ fn help_states_the_posix_tooling_requirement() {
         .success()
         .stdout(contains("REQUIREMENTS:"))
         .stdout(contains("POSIX shell"))
-        .stdout(contains("jq"))
-        .stdout(contains("Git Bash"))
-        .stdout(contains("WSL"));
+        .stdout(contains("WSL"))
+        .stdout(contains("native Windows"))
+        .stdout(contains("Git Bash").not())
+        .stdout(contains("PowerShell").not())
+        // `jq` was a requirement only while operators pasted the generated
+        // recipes; the runner dispatches directly and needs no such toolchain.
+        .stdout(contains("jq").not());
 }
 
 #[test]
@@ -323,13 +493,17 @@ fn readme_is_a_concise_first_run_path() {
         "eval-magic docs isolation",
         "docs/developer_overview.md",
         // The declared host requirement, stated for both audiences the README
-        // serves: installing the tool, and developing it (issue #248).
+        // serves: installing the tool and developing it. `jq` is deliberately
+        // absent because the runner dispatches directly.
         "POSIX shell",
-        "Git Bash",
         "WSL",
-        "jq",
+        "native Windows",
     ] {
         assert!(readme.contains(expected), "README is missing {expected}");
+    }
+
+    for retired in ["Git Bash", "Windows PowerShell", "eval-magic-installer.ps1"] {
+        assert!(!readme.contains(retired), "README still contains {retired}");
     }
 
     assert!(

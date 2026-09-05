@@ -12,12 +12,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 mod extract;
+mod guard_provenance;
 
-/// A minimal BYOH descriptor: label + exec template, nothing else.
+/// A runner-ready BYOH descriptor using the named Codex transcript capability.
 const COOL_DESCRIPTOR: &str = r#"label = "cool-custom-harness"
 
+[tools]
+write = ["file_change"]
+shell = ["command_execution"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+parser = "codex-items"
+
 [dispatch]
-exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/final-message.md"
+exec_template = "cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
 "#;
 
 /// Write `<cwd>/.eval-magic/harnesses/cool.toml`.
@@ -45,6 +54,40 @@ fn dispatch_tasks(cwd: &Path) -> Vec<Value> {
         .clone()
 }
 
+fn write_completed_task(cwd: &Path, task: &Value, final_text: &str) {
+    let outputs = resolve(cwd, task["outputs_dir"].as_str().unwrap());
+    let turn = outputs.join("turn-1");
+    fs::create_dir_all(&turn).unwrap();
+    fs::write(
+        turn.join("cool-events.jsonl"),
+        format!(
+            "{{\"type\":\"item.completed\",\"item\":{{\"id\":\"item_1\",\"type\":\"agent_message\",\"text\":{}}}}}\n",
+            serde_json::to_string(final_text).unwrap()
+        ),
+    )
+    .unwrap();
+    write_completion(cwd, task);
+}
+
+fn write_completion(cwd: &Path, task: &Value) {
+    let conversation_path = resolve(cwd, task["conversation_path"].as_str().unwrap());
+    fs::write(
+        conversation_path,
+        serde_json::to_string_pretty(&serde_json::json!({
+            "status": "completed",
+            "delivered_followups": 0,
+            "events": [{
+                "type": "user_message",
+                "ordinal": 0,
+                "round": 1,
+                "text": task["user_prompt"]
+            }]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
 /// Criterion: a descriptor file alone produces a complete llm_judge-graded
 /// run with the stray-writes audit — warnings name their fallbacks, and the
 /// exec recipe lands in RUNBOOK.md and dispatch-manifest.md.
@@ -54,7 +97,7 @@ fn descriptor_alone_carries_a_complete_run() {
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     write_project_descriptor(&cwd, COOL_DESCRIPTOR);
 
-    // Build the run: every undeclared enhancement warns naming its fallback.
+    // Build the run: optional undeclared enhancements warn naming their fallback.
     skill_eval()
         .current_dir(&cwd)
         .args(["run", "--skill-dir"])
@@ -74,19 +117,16 @@ fn descriptor_alone_carries_a_complete_run() {
         .stderr(
             contains("declares no skills_dir")
                 .and(contains("--no-stage"))
-                .and(contains("declares no transcript parser"))
-                .and(contains("tokens/duration"))
-                .and(contains("unverifiable").not())
-                .and(contains("final-message.md"))
                 .and(contains("declares no model flag"))
                 .and(contains("provenance")),
         );
 
-    // The exec recipe reached both human-facing artifacts.
+    // The runbook drives through the runner, so it names the command rather
+    // than the harness CLI; the manifest still shows what the runner spawns.
     let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
-    assert!(runbook.contains("cool-cli run"), "{runbook}");
+    assert!(runbook.contains("eval-magic dispatch"), "{runbook}");
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
-    assert!(manifest.contains("## Dispatch recipe"), "{manifest}");
+    assert!(manifest.contains("## Dispatch"), "{manifest}");
     assert!(manifest.contains("cool-cli run"), "{manifest}");
 
     // Forced --no-stage: nothing was staged, so no task carries a staged slug.
@@ -97,14 +137,12 @@ fn descriptor_alone_carries_a_complete_run() {
         "no-stage run stages nothing"
     );
 
-    // Simulate the dispatches: recover each final message by hand.
+    // Simulate runner-owned completion metadata and per-round transcripts.
     for task in &tasks {
-        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "I reviewed the MR.\n").unwrap();
+        write_completed_task(&cwd, task, "I reviewed the MR.");
     }
 
-    // Ingest: record-runs from final messages, the stray-writes audit, and
+    // Ingest: record-runs from transcripts, the stray-writes audit, and
     // grade's llm_judge hand-off all run without any harness code.
     skill_eval()
         .current_dir(&cwd)
@@ -119,8 +157,7 @@ fn descriptor_alone_carries_a_complete_run() {
             "1",
         ])
         .assert()
-        .success()
-        .stderr(contains("no transcript parser"));
+        .success();
 
     assert!(
         iteration_dir(&cwd).join("stray-writes.json").exists(),
@@ -137,15 +174,19 @@ fn descriptor_alone_carries_a_complete_run() {
     }
 }
 
-/// A descriptor without an exec_template warns naming the generic handoff:
-/// RUNBOOK.md and dispatch-manifest.md carry guidance, not a copy-pasteable
-/// per-task command. (The built-in-harness half of this pin — wired harnesses
-/// stay quiet — lives in src/cli/run/util.rs.)
+/// A descriptor without an exec_template is rejected before a workspace is
+/// built because the runner has no command to spawn.
 #[test]
-fn dispatchless_descriptor_warns_naming_the_generic_handoff() {
+fn dispatchless_descriptor_is_rejected_before_build() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    write_project_descriptor(&cwd, "label = \"cool-custom-harness\"\n");
+    write_project_descriptor(
+        &cwd,
+        &COOL_DESCRIPTOR.replace(
+            "\n[dispatch]\nexec_template = \"cool-cli run --cd <eval-root>{model_arg} <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl\"\n",
+            "\n",
+        ),
+    );
 
     skill_eval()
         .current_dir(&cwd)
@@ -160,8 +201,14 @@ fn dispatchless_descriptor_warns_naming_the_generic_handoff() {
             "cool-custom-harness",
         ])
         .assert()
-        .success()
-        .stderr(contains("declares no dispatch exec recipe").and(contains("RUNBOOK.md")));
+        .failure()
+        .stderr(
+            contains("declares no dispatch exec template")
+                .and(contains("runner-ready"))
+                .and(contains("eval-magic docs byoh")),
+        );
+
+    assert!(!iteration_dir(&cwd).join("dispatch.json").exists());
 }
 
 /// `--guard` with a harness that exists only in user-supplied descriptors is
@@ -201,48 +248,24 @@ fn guard_with_a_user_only_harness_is_rejected_in_preflight() {
     );
 }
 
-/// Auto-arm never turns the user-only-descriptor restriction into an error:
-/// without an explicit `--guard`, the run proceeds unguarded with a warning
-/// naming the fallback.
+/// A transcript parser is a runner-readiness requirement regardless of which
+/// assertion types the eval declares.
 #[test]
-fn auto_guard_stays_off_without_error_on_user_only_harness() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "cool-custom-harness",
-        ])
-        .assert()
-        .success()
-        .stderr(contains("declares no write guard").and(contains("detect-stray-writes")));
-
-    assert!(
-        iteration_dir(&cwd).join("dispatch.json").exists(),
-        "the run builds; only explicit --guard is rejected"
-    );
-}
-
-/// The transcript_check clause of the no-transcript-parser warning is scoped
-/// to eval configs that actually use the assertion type.
-#[test]
-fn transcript_check_warning_fires_only_when_evals_use_it() {
+fn transcriptless_descriptor_is_rejected_before_build() {
     let evals = r#"{ "skill_name": "mr-review", "evals": [ {
         "id": "e1", "prompt": "review this MR", "expected_output": "a review",
         "assertions": [ { "id": "a1", "type": "transcript_check",
                           "check": "ran tests", "pattern": "cargo test" } ] } ] }"#;
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), evals);
-    write_project_descriptor(&cwd, COOL_DESCRIPTOR);
+    write_project_descriptor(
+        &cwd,
+        r#"label = "cool-custom-harness"
+
+[dispatch]
+exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path>"
+"#,
+    );
 
     skill_eval()
         .current_dir(&cwd)
@@ -257,13 +280,14 @@ fn transcript_check_warning_fires_only_when_evals_use_it() {
             "cool-custom-harness",
         ])
         .assert()
-        .success()
+        .failure()
         .stderr(
             contains("declares no transcript parser")
-                .and(contains("unverifiable"))
-                .and(contains("llm_judge"))
-                .and(contains("final-message.md")),
+                .and(contains("runner-ready"))
+                .and(contains("eval-magic docs byoh")),
         );
+
+    assert!(!iteration_dir(&cwd).join("dispatch.json").exists());
 }
 
 /// A `--harness-file` descriptor becomes the invocation's default harness
@@ -334,10 +358,10 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
     // Simulate dispatches that emit Codex-compatible JSONL events.
     for task in dispatch_tasks(&cwd) {
         let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
-        fs::create_dir_all(&outputs).unwrap();
-        fs::write(outputs.join("final-message.md"), "Done.\n").unwrap();
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
         fs::write(
-            outputs.join("cool-events.jsonl"),
+            turn.join("cool-events.jsonl"),
             concat!(
                 r#"{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"bash -lc 'cat notes.md'","aggregated_output":"notes","status":"completed"}}"#,
                 "\n",
@@ -346,6 +370,7 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
             ),
         )
         .unwrap();
+        write_completion(&cwd, &task);
     }
 
     skill_eval()
@@ -371,5 +396,223 @@ exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs
         let invocations = record["tool_invocations"].as_array().unwrap();
         assert_eq!(invocations.len(), 1, "{record}");
         assert_eq!(invocations[0]["name"], "command_execution");
+    }
+}
+
+/// Issue #294: a run prepared with `--harness-file` must re-emit the flag in
+/// every generated follow-up command — the printed `Next:` block and every
+/// `eval-magic …` line in RUNBOOK.md — or follow-ups silently resolve a
+/// different descriptor than the run was prepared with, while the iteration's
+/// artifacts keep the prep-time declarations.
+#[test]
+fn harness_file_is_reemitted_in_every_generated_command() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    let file = tmp.path().join("cool.toml");
+    fs::write(&file, COOL_DESCRIPTOR).unwrap();
+
+    let assert = skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .arg("--harness-file")
+        .arg(&file)
+        .assert()
+        .success();
+
+    let flag = format!("--harness-file {}", wire_path(&resolved(&file)));
+    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains(&flag),
+        "the printed Next: block re-emits the flag: {stdout}"
+    );
+
+    let runbook = read_str(&iteration_dir(&cwd).join("RUNBOOK.md"));
+    let commands: Vec<&str> = runbook
+        .lines()
+        .filter(|line| line.starts_with("eval-magic "))
+        .collect();
+    assert!(!commands.is_empty(), "the runbook carries commands");
+    for command in commands {
+        assert!(
+            command.contains(&flag),
+            "every runbook command re-emits --harness-file: {command}"
+        );
+    }
+
+    // Prep-time provenance for the drift backstop: the descriptor the run was
+    // prepared with is recorded next to the conditions it produced.
+    let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
+    assert_eq!(conditions["harness_file"], wire_path(&resolved(&file)));
+    let digest = conditions["harness_descriptor_digest"]
+        .as_str()
+        .expect("conditions record the resolved descriptor digest");
+    assert_eq!(digest.len(), 16, "FNV-1a hex digest: {digest}");
+}
+
+/// Issue #294 backstop: a follow-up stage that resolves a descriptor different
+/// from the prep-time one warns loudly instead of silently switching. The
+/// overlay keeps the built-in label so the flag-less follow-up *resolves*
+/// (against the un-overlaid built-in) instead of failing on an unknown label.
+#[test]
+fn dispatch_and_ingest_warn_when_the_resolved_descriptor_drifted_from_prep() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    // Overlay the claude-code label, retuning dispatch onto a missing binary so
+    // nothing real is ever spawned; every other field merges from the built-in,
+    // including its [plan_mode] table, so the template keeps the {mode_args}
+    // slot that table fills.
+    let file = tmp.path().join("iso.toml");
+    fs::write(
+        &file,
+        r#"label = "claude-code"
+
+[dispatch]
+exec_template = "definitely-missing-cli{mode_args} <dispatch_prompt_path>"
+"#,
+    )
+    .unwrap();
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill"])
+        .arg("--harness-file")
+        .arg(&file)
+        .assert()
+        .success();
+
+    // The flag-less follow-up resolves the un-overlaid built-in descriptor:
+    // the digest no longer matches the prep-time one.
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["dispatch", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .stderr(
+            contains("harness descriptor drift")
+                .and(contains("--harness-file"))
+                .and(contains(wire_path(&file))),
+        );
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["ingest", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .stderr(contains("harness descriptor drift"));
+
+    // Re-emitting the flag resolves the same descriptor the run was prepared
+    // with: digests match, no drift warning. (Dispatch still fails: the
+    // overlaid exec template names a missing binary.)
+    skill_eval()
+        .current_dir(&cwd)
+        .arg("--harness-file")
+        .arg(&file)
+        .args(["dispatch", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--iteration", "1"])
+        .assert()
+        .stderr(contains("harness descriptor drift").not());
+}
+
+/// #308: a BYOH descriptor opts into portable tool patterns through its
+/// `[tools]` vocabulary alone. `zap_exec` is a name no other descriptor knows,
+/// yet declaring it in the `shell` role is enough for a frozen `Bash|Read`
+/// assertion — authored against a different harness — to grade here.
+#[test]
+fn a_user_descriptor_opts_into_portable_tool_patterns_through_tools_alone() {
+    let evals = r#"{ "skill_name": "mr-review", "evals": [ {
+        "id": "e1", "prompt": "review this MR", "expected_output": "a review",
+        "skill_should_trigger": false,
+        "assertions": [ { "id": "ran-a-command", "type": "transcript_check",
+                          "check": "tool_invocation_matches", "pattern": "Bash|Read" } ] } ] }"#;
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), evals);
+    write_project_descriptor(
+        &cwd,
+        r#"label = "cool-custom-harness"
+
+[tools]
+write = ["file_change"]
+shell = ["zap_exec"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+parser = "codex-items"
+
+[dispatch]
+exec_template = "cool-cli run --cd <eval-root> <dispatch_prompt_path> > <outputs_dir>/cool-events.jsonl"
+"#,
+    );
+
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args([
+            "--skill",
+            "mr-review",
+            "--mode",
+            "new-skill",
+            "--harness",
+            "cool-custom-harness",
+        ])
+        .assert()
+        .success();
+
+    for task in dispatch_tasks(&cwd) {
+        let outputs = resolve(&cwd, task["outputs_dir"].as_str().unwrap());
+        let turn = outputs.join("turn-1");
+        fs::create_dir_all(&turn).unwrap();
+        fs::write(
+            turn.join("cool-events.jsonl"),
+            concat!(
+                r#"{"type":"item.completed","item":{"id":"item_1","type":"zap_exec","command":"cargo test","aggregated_output":"ok","status":"completed"}}"#,
+                "\n",
+                r#"{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"Done."}}"#,
+                "\n",
+            ),
+        )
+        .unwrap();
+        write_completion(&cwd, &task);
+    }
+
+    for stage in ["ingest", "grade"] {
+        let mut cmd = skill_eval();
+        cmd.current_dir(&cwd)
+            .args([stage, "--skill-dir"])
+            .arg(&skill_dir)
+            .args([
+                "--skill",
+                "mr-review",
+                "--harness",
+                "cool-custom-harness",
+                "--iteration",
+                "1",
+            ]);
+        if stage == "grade" {
+            cmd.arg("--finalize");
+        }
+        cmd.assert().success();
+    }
+
+    for task in dispatch_tasks(&cwd) {
+        let run_record = resolve(&cwd, task["run_record_path"].as_str().unwrap());
+        let grading = read_json(&run_record.with_file_name("grading.json"));
+        let result = &grading["assertion_results"][0];
+        assert_eq!(result["id"], "ran-a-command", "{grading}");
+        assert_eq!(
+            result["passed"], true,
+            "the descriptor's shell role must carry the portable alias: {grading}"
+        );
+        let evidence = result["evidence"].as_str().unwrap();
+        assert!(
+            evidence.contains("via shell alias 'Bash'") && evidence.contains("zap_exec"),
+            "evidence names the alias and the native event: {evidence}"
+        );
     }
 }

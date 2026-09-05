@@ -225,6 +225,94 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// A plan-mode conversation: the opening prompt ran in plan mode, the
+    /// runner's fixed approval opened act mode, and the record names the plan.
+    fn plan_mode_conversation() -> Value {
+        json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan"},
+                {
+                    "type": "user_message",
+                    "ordinal": 1,
+                    "round": 2,
+                    "text": "The plan is approved. Implement it now.",
+                    "origin": {"runner": "plan_approval"},
+                    "mode": "act"
+                }
+            ],
+            "plan": {
+                "presented_in_round": 1,
+                "approved_in_round": 2,
+                "signal": "plan_file",
+                "artifact_path": "outputs/plan.md"
+            }
+        })
+    }
+
+    #[test]
+    fn a_plan_mode_conversation_validates_in_both_schemas() {
+        let conversation = plan_mode_conversation();
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(r.is_ok(), "{r:?}");
+
+        let mut record = valid_run_record();
+        record["conversation"] = conversation;
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::RunRecord, &record, "run.json");
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn runner_duration_is_valid_only_on_the_completion_artifact() {
+        let mut conversation = plan_mode_conversation();
+        conversation["duration_ms"] = json!(42);
+
+        let standalone: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(standalone.is_ok(), "{standalone:?}");
+
+        let mut record = valid_run_record();
+        record["conversation"] = conversation;
+        let nested: Result<Value, _> =
+            validate_against_schema(SchemaName::RunRecord, &record, "run.json");
+        assert!(
+            nested.is_err(),
+            "run.json keeps canonical timing in its sibling timing.json"
+        );
+    }
+
+    #[test]
+    fn a_plan_phase_that_ended_without_a_plan_validates() {
+        let conversation = json!({
+            "status": "stopped",
+            "delivered_followups": 0,
+            "stop_reason": "plan_not_presented",
+            "stopped_before_followup": 1,
+            "events": [
+                {"type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan"}
+            ]
+        });
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(r.is_ok(), "{r:?}");
+    }
+
+    #[test]
+    fn a_turn_origin_names_exactly_one_author() {
+        let mut conversation = plan_mode_conversation();
+        conversation["events"][1]["origin"] =
+            json!({"runner": "plan_approval", "responder": "llm"});
+        let r: Result<Value, _> =
+            validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json");
+        assert!(
+            r.is_err(),
+            "an origin is derived or runner-authored, never both"
+        );
+    }
+
     #[test]
     fn accepts_skill_path_null_on_the_without_skill_arm() {
         let mut data = valid_run_record();
@@ -298,11 +386,12 @@ mod tests {
     }
 
     #[test]
-    fn validates_v2_plugin_shadow_artifacts() {
+    fn validates_v3_plugin_shadow_artifacts() {
         let artifact = json!({
-            "schema_version": 2,
+            "schema_version": 3,
             "config_dir": "/home/u/.config/opencode",
             "findings": [{
+                "class": "operator-environment",
                 "skill_name": "mr-review",
                 "role": "subject",
                 "severity": "comparison-invalid",
@@ -345,6 +434,36 @@ mod tests {
         let valid: Result<Value, _> =
             validate_against_schema(SchemaName::DiffScope, &metrics, "diff-scope.json");
         assert!(valid.is_ok(), "{valid:?}");
+
+        // The changed-file list and the patch record are additive: a record
+        // carrying them validates, and one written before they existed still
+        // does, so an older iteration stays gradeable.
+        let mut complete = metrics.clone();
+        complete["files"] = json!([
+            { "path": "src/main.rs", "status": "modified", "lines_added": 4, "lines_removed": 1 }
+        ]);
+        complete["patch"] = json!({ "path": "diff.patch", "bytes": 512, "truncated": false });
+        let valid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &complete, "diff-scope.json");
+        assert!(valid.is_ok(), "{valid:?}");
+
+        let mut unknown_status = complete.clone();
+        unknown_status["files"][0]["status"] = json!("renamed");
+        let invalid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &unknown_status, "diff-scope.json");
+        assert!(
+            invalid.is_err(),
+            "renames are off, so no record may claim one"
+        );
+
+        let mut partial_patch = complete;
+        partial_patch["patch"] = json!({ "path": "diff.patch" });
+        let invalid: Result<Value, _> =
+            validate_against_schema(SchemaName::DiffScope, &partial_patch, "diff-scope.json");
+        assert!(
+            invalid.is_err(),
+            "a patch record without `truncated` cannot say whether it is whole"
+        );
 
         let mut extra = metrics;
         extra["paths"] = json!(["src/main.rs"]);
@@ -456,7 +575,13 @@ mod tests {
                 "rubric": "did it apply the skill?", "model": null, "is_meta": true,
                 "run_record_path": "/w/run.json", "outputs_dir": "/w/outputs",
                 "response_path": "/w/judge-responses/__skill_invoked.json",
-                "dispatch_prompt_path": "/w/judge-prompts/__skill_invoked.txt"
+                "dispatch_prompt_path": "/w/judge-prompts/__skill_invoked.txt",
+                "evidence_bundle": {
+                    "path": "/w/judge-evidence.md", "bytes": 1024,
+                    "byte_limit": 98304, "truncated": false
+                },
+                "dispatch_prompt_bytes": 4096,
+                "dispatch_prompt_byte_limit": 131072
             }]
         });
         let r: Result<Value, _> =
@@ -475,6 +600,12 @@ mod tests {
                 "rubric": "r", "model": null, "is_meta": false,
                 "run_record_path": "/w/run.json", "outputs_dir": "/w/outputs",
                 "response_path": "/w/r.json", "dispatch_prompt_path": "/w/p.txt",
+                "evidence_bundle": {
+                    "path": "/w/judge-evidence.md", "bytes": 1024,
+                    "byte_limit": 98304, "truncated": false
+                },
+                "dispatch_prompt_bytes": 4096,
+                "dispatch_prompt_byte_limit": 131072,
                 "dispatch_prompt": "SHOULD NOT BE HERE"
             }]
         });

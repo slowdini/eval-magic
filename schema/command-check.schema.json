@@ -37,6 +37,14 @@
       "type": "string",
       "description": "Lossy UTF-8 stderr diagnostic, truncated to at most 2 KiB; empty for a matrix result."
     },
+    "definition_digest": {
+      "type": "string",
+      "description": "Digest of the authored command_check this result came from. A result is reusable only when this and run_record_digest match the current check and run record. Absent in legacy results, which are rerun."
+    },
+    "run_record_digest": {
+      "type": "string",
+      "description": "Digest of the exact runner-owned run.json bytes this result graded. A result is reusable only when this and definition_digest match the current run record and check. Absent in legacy results, which are rerun."
+    },
     "cells": {
       "type": "array",
       "minItems": 1,

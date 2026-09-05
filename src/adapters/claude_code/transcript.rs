@@ -185,7 +185,7 @@ pub(crate) fn extract_events(records: &[TranscriptRecord]) -> Vec<TranscriptEven
 }
 
 /// The concatenated text blocks of the last assistant message carrying any text.
-/// Shared with the `-p` stream-json parser, which uses it as the final-message
+/// Shared with the `-p` stream-json parser, which uses it as the final-response
 /// fallback when the terminal `result` event is absent or errored.
 pub(crate) fn last_assistant_text(records: &[TranscriptRecord]) -> Option<String> {
     let mut final_text: Option<String> = None;

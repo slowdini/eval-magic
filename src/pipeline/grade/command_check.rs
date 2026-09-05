@@ -9,11 +9,16 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use crate::core::fs::{copy_entry_materialized, write_json};
-use crate::core::{Assertion, AssertionCommandCheck, EvalsConfig, clear_git_environment};
+use crate::core::{Assertion, AssertionCommandCheck, clear_git_environment};
 use crate::pipeline::error::PipelineError;
+use crate::pipeline::grade::instrument::GradingInstrument;
 use crate::validation::{SchemaName, validate_against_schema};
 
+use cache::{definition_digest, has_cached_results, run_record_digest};
+
 const DIAGNOSTIC_LIMIT: usize = 2 * 1024;
+
+mod cache;
 
 /// The schema-gated intermediate result persisted before finalize converts it
 /// into a normal [`crate::core::AssertionResult`].
@@ -28,6 +33,14 @@ pub struct CommandCheckResult {
     pub stderr: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cells: Option<Vec<CommandCheckCellResult>>,
+    /// Digest of the `command_check` this result came from. Reuse requires it to
+    /// match the current definition; an absent legacy value is never reusable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub definition_digest: Option<String>,
+    /// Digest of the exact runner-owned `run.json` bytes this result graded.
+    /// Absent in legacy results, which are never reusable as a cache entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_record_digest: Option<String>,
 }
 
 /// The result of one environment-matrix cell.
@@ -41,11 +54,16 @@ pub struct CommandCheckCellResult {
     pub stderr: String,
 }
 
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct CommandCheckSummary {
     pub executed: usize,
     pub reused: usize,
     pub failed: usize,
+    /// Tasks skipped because their runner-owned `run.json` is absent.
+    pub skipped_incomplete: usize,
+    /// Safety warnings returned rather than printed: the CLI handler owns how
+    /// user-facing warnings read.
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,18 +76,20 @@ struct DispatchFile {
 struct DispatchTask {
     eval_id: String,
     condition: String,
+    #[serde(default)]
+    run_index: Option<u32>,
     eval_root: Option<String>,
     run_record_path: String,
 }
 
-/// Inject held-out setup files and execute all command checks in declaration
-/// order for every matching dispatch task.
+/// For each matching task with a completed run record, inject held-out setup
+/// files and execute all command checks in declaration order.
 pub fn grade_command_checks(
     iteration_dir: &Path,
-    evals: &EvalsConfig,
-    skill_dir: &Path,
+    instrument: &GradingInstrument,
     overwrite: bool,
 ) -> Result<CommandCheckSummary, PipelineError> {
+    let evals = &instrument.evals;
     let has_command_checks = evals.evals.iter().any(|eval| {
         eval.assertions
             .as_deref()
@@ -117,6 +137,26 @@ pub fn grade_command_checks(
             continue;
         }
 
+        let run_record_path = Path::new(&task.run_record_path);
+        let run_dir = run_record_path.parent().ok_or_else(|| {
+            PipelineError::Message(format!(
+                "command_check task '{}'/{} has no run directory in run_record_path",
+                task.eval_id, task.condition
+            ))
+        })?;
+        let results_dir = run_dir.join("command-checks");
+        if !run_record_path.exists() {
+            summary.skipped_incomplete += 1;
+            if has_cached_results(&results_dir)? {
+                summary.warnings.push(format!(
+                    "command_check results already exist for {}, but run.json is missing. An older eval-magic version may have copied held-out setup files or executed commands in this task environment; it may already be contaminated and must not be resumed. Build a fresh iteration.",
+                    task_label(task)
+                ));
+            }
+            continue;
+        }
+        let run_record_digest = run_record_digest(run_record_path)?;
+
         let eval_root = task
             .eval_root
             .as_deref()
@@ -128,30 +168,29 @@ pub fn grade_command_checks(
             ));
         }
         let eval_root = Path::new(eval_root);
-        let run_dir = Path::new(&task.run_record_path).parent().ok_or_else(|| {
-            PipelineError::Message(format!(
-                "command_check task '{}'/{} has no run directory in run_record_path",
-                task.eval_id, task.condition
-            ))
-        })?;
-        let results_dir = run_dir.join("command-checks");
 
         for check in checks {
             validate_assertion_id(&check.id)?;
+            let digest = definition_digest(check);
             let result_path = results_dir.join(format!("{}.json", check.id));
             if result_path.exists() && !overwrite {
                 let value = serde_json::from_str(&fs::read_to_string(&result_path)?)?;
-                validate_against_schema::<CommandCheckResult>(
+                let reused = validate_against_schema::<CommandCheckResult>(
                     SchemaName::CommandCheck,
                     &value,
                     &result_path.to_string_lossy(),
                 )?;
-                summary.reused += 1;
-                continue;
+                if reused.definition_digest.as_deref() == Some(digest.as_str())
+                    && reused.run_record_digest.as_deref() == Some(run_record_digest.as_str())
+                {
+                    summary.reused += 1;
+                    continue;
+                }
             }
 
-            inject_setup_files(check, skill_dir, eval_root)?;
-            let result = execute_command_check(check, eval_root)?;
+            inject_setup_files(check, instrument.setup_root_for(&task.eval_id), eval_root)?;
+            let mut result = execute_command_check(check, eval_root)?;
+            result.run_record_digest = Some(run_record_digest.clone());
             if !result.passed {
                 summary.failed += 1;
             }
@@ -167,6 +206,14 @@ pub fn grade_command_checks(
     }
 
     Ok(summary)
+}
+
+fn task_label(task: &DispatchTask) -> String {
+    let run = task
+        .run_index
+        .map(|index| format!("/run-{index}"))
+        .unwrap_or_default();
+    format!("{}/{}{run}", task.eval_id, task.condition)
 }
 
 fn isolation_error(task: &DispatchTask, detail: &str) -> PipelineError {
@@ -243,6 +290,8 @@ pub(super) fn execute_command_check(
             stdout: cell.stdout,
             stderr: cell.stderr,
             cells: None,
+            definition_digest: Some(definition_digest(assertion)),
+            run_record_digest: None,
         });
     };
 
@@ -280,6 +329,8 @@ pub(super) fn execute_command_check(
         stdout: String::new(),
         stderr: String::new(),
         cells: Some(cells),
+        definition_digest: Some(definition_digest(assertion)),
+        run_record_digest: None,
     })
 }
 
@@ -345,27 +396,8 @@ fn execute_command_check_cell(
     eval_root: &Path,
     env: BTreeMap<String, String>,
 ) -> Result<CommandCheckCellResult, PipelineError> {
-    #[cfg(unix)]
-    let mut command = {
-        let mut command = Command::new("sh");
-        command.arg("-c").arg(&assertion.command);
-        command
-    };
-    #[cfg(windows)]
-    let mut command = {
-        use std::os::windows::process::CommandExt;
-        let mut command = Command::new("cmd");
-        // `raw_arg` plus `/S` and one wrapping pair of quotes is the only
-        // spelling that hands `cmd` the command verbatim. `arg` would escape the
-        // command's own quotes as `\"`, which `cmd` does not understand — a
-        // quoted argument arrives split at its spaces — and `/S` makes `cmd`
-        // strip exactly the wrapping pair rather than guessing.
-        command
-            .arg("/S")
-            .arg("/C")
-            .raw_arg(format!("\"{}\"", assertion.command));
-        command
-    };
+    let mut command = Command::new("sh");
+    command.arg("-c").arg(&assertion.command);
 
     command.current_dir(eval_root);
     // The task root defines repository discovery for runner-owned checks.
@@ -377,7 +409,7 @@ fn execute_command_check_cell(
 
     let output = output.map_err(|error| {
         PipelineError::Message(format!(
-            "could not launch the platform shell for command_check '{}': {error}",
+            "could not launch the POSIX shell for command_check '{}': {error}",
             assertion.id
         ))
     })?;
@@ -433,8 +465,8 @@ fn execute_command_check_cell(
 }
 
 /// The evidence line for a child that ended without an exit code. Split from
-/// [`termination_evidence`] so the wording is pinned on every platform, leaving
-/// the per-OS arms below with nothing to do but read the signal.
+/// [`termination_evidence`] so tests can pin the wording independently of
+/// signal extraction.
 fn termination_message(signal: Option<i32>) -> String {
     match signal {
         Some(signal) => format!("command terminated by signal {signal}"),
@@ -442,17 +474,9 @@ fn termination_message(signal: Option<i32>) -> String {
     }
 }
 
-#[cfg(unix)]
 fn termination_evidence(status: &ExitStatus) -> String {
     use std::os::unix::process::ExitStatusExt;
     termination_message(status.signal())
-}
-
-/// Windows has no signals — `ExitStatus::code()` is always `Some`, so this arm
-/// exists only to keep the caller platform-agnostic.
-#[cfg(windows)]
-fn termination_evidence(_status: &ExitStatus) -> String {
-    termination_message(None)
 }
 
 fn truncate_diagnostic(value: &str) -> String {

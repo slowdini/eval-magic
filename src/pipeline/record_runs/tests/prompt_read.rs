@@ -68,7 +68,6 @@ fn flags_dispatch_whose_prompt_read_failed() {
         &[FixtureTask {
             eval_id: "e1",
             condition: "with_skill",
-            final_message: Some("I could not read the prompt file."),
         }],
     );
     let prompt_path = iter
@@ -107,7 +106,6 @@ fn records_dispatch_when_prompt_read_succeeded() {
         &[FixtureTask {
             eval_id: "e1",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     let prompt_path = iter
@@ -141,7 +139,6 @@ fn records_codex_prompt_read_from_aggregated_output() {
         &[FixtureTask {
             eval_id: "e1",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     let prompt_path = iter
@@ -161,11 +158,7 @@ fn records_codex_prompt_read_from_aggregated_output() {
         json!({"type": "item.completed", "item": {"id": "item_2", "type": "agent_message", "text": "Done."}}),
         json!({"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 0, "output_tokens": 2}}),
     ];
-    fs::write(
-        paths[0].outputs_dir.join("codex-events.jsonl"),
-        jsonl(&lines),
-    )
-    .unwrap();
+    write_transcript_file(&paths[0].outputs_dir, "codex-events.jsonl", jsonl(&lines));
 
     let result = record_runs(iter, 1, Harness::resolve("codex").unwrap(), false).unwrap();
 
@@ -177,7 +170,7 @@ fn records_codex_prompt_read_from_aggregated_output() {
             "name": "command_execution",
             "args": {"command": command, "exit_code": 0},
             "result": command_output,
-            "ordinal": 0
+            "ordinal": 1
         }])
     );
 }
@@ -197,7 +190,6 @@ fn records_dispatch_when_prompt_read_has_no_result_evidence() {
         &[FixtureTask {
             eval_id: "e1",
             condition: "with_skill",
-            final_message: Some("Done."),
         }],
     );
     let prompt_path = iter
@@ -216,11 +208,7 @@ fn records_dispatch_when_prompt_read_has_no_result_evidence() {
         json!({"ts": "2026-08-11T19:29:52.000Z", "type": "agent_event", "event": {"type": "content_end", "contentType": "text", "text": "Done."}}),
         json!({"ts": "2026-08-11T19:29:54.000Z", "type": "run_result", "finishReason": "completed", "iterations": 1, "usage": {"inputTokens": 10, "outputTokens": 2, "cacheReadTokens": 0, "cacheWriteTokens": 0, "totalCost": 0.001}, "durationMs": 4000, "text": "Done."}),
     ];
-    fs::write(
-        paths[0].outputs_dir.join("cline-events.jsonl"),
-        jsonl(&lines),
-    )
-    .unwrap();
+    write_transcript_file(&paths[0].outputs_dir, "cline-events.jsonl", jsonl(&lines));
 
     let result = record_runs(iter, 1, Harness::resolve("cline").unwrap(), false).unwrap();
 

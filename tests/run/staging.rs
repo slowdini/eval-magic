@@ -1,4 +1,4 @@
-//! Staging, plan-mode injection, `--stage-name`, and dispatch-prompt rendering.
+//! Staging, `--stage-name`, and dispatch-prompt rendering.
 
 use crate::helpers::*;
 use predicates::str::contains;
@@ -17,7 +17,16 @@ fn setup_direct_skill(root: &Path) -> (PathBuf, PathBuf, PathBuf) {
         "---\nname: mr-review\ndescription: review merge requests\n---\n\nbody\n",
     )
     .unwrap();
-    fs::write(skill_sub.join("evals").join("evals.json"), DEFAULT_EVALS).unwrap();
+    let codebase = root.join("codebase");
+    fs::create_dir_all(&codebase).unwrap();
+    fs::write(codebase.join("README.md"), "# Test codebase\n").unwrap();
+    let mut evals: Value = serde_json::from_str(DEFAULT_EVALS).unwrap();
+    evals["codebase"] = serde_json::json!({ "path": codebase.to_string_lossy() });
+    fs::write(
+        skill_sub.join("evals").join("evals.json"),
+        serde_json::to_string_pretty(&evals).unwrap(),
+    )
+    .unwrap();
     fs::write(
         helper.join("SKILL.md"),
         "---\nname: helper-skill\ndescription: helper\n---\n\nhelper\n",
@@ -34,8 +43,57 @@ fn direct_iteration_dir(cwd: &Path) -> PathBuf {
         .join("iteration-1")
 }
 
+/// The relocation's acceptance criterion, end to end: a run started from inside
+/// a skills repository leaves nothing behind in it. `XDG_DATA_HOME` stands in
+/// for the operator's data directory so the derived default — slug and all — is
+/// the thing under test rather than something the harness pinned.
 #[test]
-fn stages_only_sut_and_writes_workspace_under_cwd() {
+fn a_run_from_inside_a_skills_repo_writes_no_workspace_into_it() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (_skills, skill_sub, _cwd) = setup_direct_skill(tmp.path());
+    let data_home = tmp.path().join("xdg-data");
+
+    skill_eval()
+        .env_remove("EVAL_MAGIC_WORKSPACE_DIR")
+        .env("XDG_DATA_HOME", &data_home)
+        .current_dir(&skill_sub)
+        .args(["run", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    assert!(
+        !skill_sub.join(".eval-magic").exists(),
+        "the skill directory holds a workspace"
+    );
+    assert!(
+        !tmp.path().join("skills").join(".eval-magic").exists(),
+        "the skills repository holds a workspace"
+    );
+
+    let roots: Vec<PathBuf> = fs::read_dir(data_home.join("eval-magic"))
+        .expect("the derived eval home was created")
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    assert_eq!(
+        roots.len(),
+        1,
+        "expected one per-source root, got {roots:?}"
+    );
+    assert!(
+        roots[0].join("mr-review").join("iteration-1").exists(),
+        "iteration missing under {}",
+        roots[0].display()
+    );
+
+    let slug = roots[0].file_name().unwrap().to_string_lossy().into_owned();
+    assert!(
+        slug.starts_with("skills-") && slug.len() > "skills-".len(),
+        "root should be namespaced by the skill directory, was {slug}"
+    );
+}
+
+#[test]
+fn stages_only_sut_and_writes_workspace_under_the_configured_home() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -80,10 +138,21 @@ fn run_from_skill_dir_defaults_to_new_skill_without_staging_siblings() {
 
     // Run from inside the skill dir with no args: the auto-derived target selector
     // (`command_target_args`) is threaded into the RUNBOOK's pipeline commands. The
-    // RUNBOOK lives in the iteration dir (Cli dispatch has no single env/).
+    // RUNBOOK lives in the iteration dir (Cli dispatch has no single env/). The
+    // invocation used no --skill-dir, so the selector must not invent one:
+    // --skill-dir stages sibling skills, changing the experiment (#294).
     let runbook = read_str(&direct_iteration_dir(&skill_sub).join("RUNBOOK.md"));
-    assert!(runbook.contains("ingest --skill-dir"));
-    assert!(runbook.contains("--skill mr-review --workspace-dir"));
+    assert!(
+        !runbook.contains("--skill-dir"),
+        "the selector must not add --skill-dir the invocation never used: {runbook}"
+    );
+    assert!(
+        runbook.contains(&format!(
+            "ingest --skill {}",
+            wire_path(&resolved(&skill_sub))
+        )),
+        "the selector names --skill as an absolute path: {runbook}"
+    );
     assert!(runbook.contains("--iteration 1"));
 
     let dispatch = read_json(&direct_iteration_dir(&skill_sub).join("dispatch.json"));
@@ -121,7 +190,31 @@ fn run_with_skill_path_defaults_to_single_skill_mode() {
 }
 
 #[test]
-fn plan_mode_injects_profile_and_records_flag() {
+fn dispatch_carries_no_run_level_plan_flag_and_no_system_reminder_block() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
+    skill_eval()
+        .current_dir(&cwd)
+        .args(["run", "--skill-dir"])
+        .arg(&skill_dir)
+        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
+        .assert()
+        .success();
+
+    // Plan mode is a per-eval declaration that starts the harness's native
+    // plan mode (`eval-magic docs conversations`); nothing about it is a
+    // run-level flag or a prompt injection any more.
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    assert!(dispatch.get("plan_mode").is_none());
+    for task in dispatch["tasks"].as_array().unwrap() {
+        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
+        assert!(!prompt.contains("<system-reminder>"));
+        assert!(!prompt.contains("Plan mode is active"));
+    }
+}
+
+#[test]
+fn the_simulated_plan_mode_flag_is_gone() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
     skill_eval()
@@ -137,38 +230,8 @@ fn plan_mode_injects_profile_and_records_flag() {
             "--dry-run",
         ])
         .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], Value::Bool(true));
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        assert!(prompt.contains("<system-reminder>"));
-        assert!(prompt.contains("Plan mode is active"));
-        // The shared profile is harness-agnostic: no Claude-specific ExitPlanMode rail.
-        assert!(prompt.contains("for the user's approval"));
-        assert!(!prompt.contains("ExitPlanMode"));
-    }
-}
-
-#[test]
-fn without_plan_mode_records_false_and_omits_block() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args(["--skill", "mr-review", "--mode", "new-skill", "--dry-run"])
-        .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], Value::Bool(false));
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        assert!(!prompt.contains("<system-reminder>"));
-    }
+        .failure()
+        .stderr(contains("--plan-mode"));
 }
 
 #[test]
@@ -222,38 +285,6 @@ fn stage_name_threads_verbatim_name_and_registers_cleanup() {
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
     assert!(prompt.contains("registered under the identifier `mr-review`"));
     assert!(!prompt.contains("slow-powers-eval-"));
-}
-
-#[test]
-fn stage_name_refuses_to_clobber_preexisting_dir() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    // Staging now lands in env-g1-with_skill/.claude/skills, which is fresh per
-    // iteration. The clobber guard still matters on a re-run (--iteration 1) where the
-    // env already holds an untracked skill dir; pre-seed that and confirm it is preserved.
-    let preexisting = cli_env_dir(&cwd, "g1", "with_skill").join(".claude/skills/my-real-skill");
-    fs::create_dir_all(&preexisting).unwrap();
-    fs::write(preexisting.join("SKILL.md"), "USER OWNED").unwrap();
-
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--iteration",
-            "1",
-            "--stage-name",
-            "my-real-skill",
-            "--dry-run",
-        ])
-        .assert()
-        .failure();
-
-    assert_eq!(read_str(&preexisting.join("SKILL.md")), "USER OWNED");
 }
 
 #[test]

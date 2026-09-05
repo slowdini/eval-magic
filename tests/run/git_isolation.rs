@@ -77,25 +77,24 @@ fn every_task_is_a_clean_local_git_repo_inside_a_dirty_ignored_parent_repo() {
         assert_eq!(git(eval_root, &["symbolic-ref", "--short", "HEAD"]), "work");
         assert_eq!(git(eval_root, &["status", "--porcelain"]), "");
         assert_eq!(git(eval_root, &["remote"]), "");
-        // Without this, a staged skill under a deep workspace hits Windows'
-        // MAX_PATH. Asserted on every host, since a Linux runner cannot prove it
-        // with a deep path but can still catch the setting going missing.
+        // Both framework-owned directories: the outputs dir, and the task-local
+        // scratch directory dispatch prompts designate (#298). Neither is the
+        // agent's change, so neither may reach a measurement.
+        for framework_owned in [".eval-magic-outputs/probe.txt", "tmp/probe.txt"] {
+            assert_eq!(
+                git(eval_root, &["check-ignore", framework_owned]),
+                framework_owned
+            );
+        }
+        // Git spells a zero UTC offset either `+00:00` (2.43) or `Z` (newer).
+        // Both name the same instant, so normalize rather than pin a version.
+        let log = git(
+            eval_root,
+            &["log", "-1", "--format=%an|%ae|%aI|%cn|%ce|%cI|%s"],
+        )
+        .replace("+00:00", "Z");
         assert_eq!(
-            git(eval_root, &["config", "--local", "--get", "core.longpaths"]),
-            "true"
-        );
-        assert_eq!(
-            git(
-                eval_root,
-                &["check-ignore", ".eval-magic-outputs/probe.txt"]
-            ),
-            ".eval-magic-outputs/probe.txt"
-        );
-        assert_eq!(
-            git(
-                eval_root,
-                &["log", "-1", "--format=%an|%ae|%aI|%cn|%ce|%cI|%s"]
-            ),
+            log,
             "eval-magic|eval-magic@localhost|2000-01-01T00:00:00Z|\
              eval-magic|eval-magic@localhost|2000-01-01T00:00:00Z|\
              eval-magic task baseline"
@@ -160,7 +159,7 @@ fn explicit_iteration_rebuild_resets_task_git_history_branch_and_remotes() {
 }
 
 #[test]
-fn nested_git_repository_fixture_is_preserved_inside_the_task_repo() {
+fn nested_git_repository_overlay_is_preserved_inside_the_task_repo() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
         { "id": "e1", "prompt": "review", "expected_output": "a review",

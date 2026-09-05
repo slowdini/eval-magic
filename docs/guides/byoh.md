@@ -21,14 +21,14 @@ eval-magic run --harness cool-custom-harness
 `harness init` writes two files:
 
 - `.eval-magic/harnesses/cool-custom-harness.toml` is a commented descriptor with only `label`
-  enabled.
+  enabled, ready for you to declare its runner contract.
 - `.eval-magic/harnesses/cool-custom-harness-notes.md` records the source and harness version for
   every value you enable.
 
-The label-only descriptor is usable. It falls back to `--no-stage`, inlines each `SKILL.md`, uses
-`llm_judge` and runner-owned assertions for grading, and audits writes after dispatch. Read the
-warnings from `run`; each warning names the lower-fidelity fallback carrying an undeclared
-capability.
+The label-only scaffold is not runner-ready until it declares `[dispatch]`, `[transcript]`, and
+`[tools]`. Once those are valid, optional omissions have narrower fallbacks: no `skills_dir` forces
+`--no-stage` and inlines each `SKILL.md`, while no built-in guard leaves the post-dispatch
+`detect-stray-writes` audit as the filesystem safety net. `run` names those tradeoffs.
 
 For a descriptor that should not live in the project, pass it directly:
 
@@ -36,12 +36,17 @@ For a descriptor that should not live in the project, pass it directly:
 eval-magic run --harness-file ./cool-custom-harness.toml
 ```
 
-Its `label` becomes the default harness for that invocation.
+Its `label` becomes the default harness for that invocation. Every follow-up command `run`
+generates — the printed Next: steps and each `eval-magic …` line in RUNBOOK.md — re-emits
+`--harness-file`, because the descriptor can decide whether a comparison is valid (dispatch
+templates, shadow isolation). Follow the generated commands verbatim: dropping the flag resolves a
+different descriptor, and `dispatch`/`ingest` compare the resolved descriptor against the digest
+`run` records in `conditions.json` and warn when the two differ.
 
-## Add a dispatch recipe first
+## Add a dispatch command first
 
-The highest-leverage field is `[dispatch].exec_template`. It lets the generated `RUNBOOK.md` and
-`dispatch-manifest.md` carry a copy-pasteable command for every task.
+The highest-leverage field is `[dispatch].exec_template`. It is the command `eval-magic dispatch`
+spawns for every task, so without it there is nothing for the runner to run.
 
 ```toml
 label = "cool-custom-harness"
@@ -50,15 +55,44 @@ label = "cool-custom-harness"
 exec_template = '''
 cool-cli run --cd <eval-root>{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly." \
-  > <outputs_dir>/final-message.md'''
+  > <outputs_dir>/cool-events.jsonl'''
+
+[tools]
+write = ["file_change"]
+patch = []
+shell = ["command_execution"]
+read = ["file_read"]
+
+[transcript]
+events_filename = "cool-events.jsonl"
+surfaces_skill_invocation = false
+
+[transcript.extract.final_text]
+where = { type = "agent_message" }
+field = "text"
 ```
 
-The command has two requirements:
+The runner-ready descriptor has two requirements:
 
 1. Run the agent from the supplied `<eval-root>`. Each condition and repetition owns a private task
    repository there.
-2. Recover the final reply at `<outputs_dir>/final-message.md`. Redirect stdout or copy the native
-   output there when the CLI cannot write the file itself.
+2. Capture the native event stream at `<outputs_dir>/<transcript.events_filename>` and declare a
+   transcript reader that normalizes a non-empty final response. Use `[transcript.extract]` for a
+   flat JSONL stream or a named parser for a supported non-flat shape.
+
+Every runner-ready descriptor gets dispatch duration without another field. The runner measures
+monotonic time inside the harness subprocess and stores it in `conversation.json`; resumed rounds
+are summed. `ingest` carries that value into `timing.json` as `duration_source: "runner"`, while
+tokens retain their transcript provenance. Native transcript duration is only a fallback for
+historical or externally produced completion artifacts that have no runner measurement.
+
+The `[tools]` table is small but load-bearing beyond the descriptor. Grouping this harness's tool
+names under `write`, `patch`, `shell`, and `read` is what lets the stray-write audit classify its
+invocations, and what makes a frozen `transcript_check` tool pattern grade the same here as on
+every other harness: names sharing a role are portable spellings of one another, so
+`shell = ["cool_exec"]` is the whole opt-in. Spell only this harness's own names — cross-listing
+another harness's is neither needed nor wanted. A tool left out of every role matches by its
+native name alone. See `eval-magic docs judging`.
 
 Prove both requirements before a real eval:
 
@@ -67,9 +101,9 @@ eval-magic harness lint .eval-magic/harnesses/cool-custom-harness.toml --probe
 ```
 
 The probe renders the real command, asks for confirmation, invokes the harness CLI in a temporary
-directory, and checks that the final-message file is nonempty. It can spend tokens and use network
-services. Static lint runs first, and non-interactive use defaults to no; `--yes` explicitly accepts
-the dispatch and `--probe-timeout SECONDS` bounds it.
+directory, parses the configured event capture, and checks that the normalized final response is
+nonempty. It can spend tokens and use network services. Static lint runs first, and non-interactive
+use defaults to no; `--yes` explicitly accepts the dispatch and `--probe-timeout SECONDS` bounds it.
 
 ## Use the generated field reference
 
@@ -92,6 +126,26 @@ commands while filling it in:
 The scaffold and resolved descriptor output are the installed references. Repository contributors
 can trace the underlying schema and adapter contracts from `docs/developer_overview.md` in a source
 checkout.
+
+When a harness discovers project skills from more than its native staging directory, declare the
+extra roots beside `skills_dir`:
+
+```toml
+skills_dir = ".cool/skills"
+additional_project_skill_dirs = [".claude/skills", ".agents/skills"]
+config_dirs = [".cool", ".claude", ".agents"]
+```
+
+`skills_dir` is the only staging destination. The additional roots participate in sourced-codebase
+shadow detection and `codebase.exclude_skill_sources`; eval-magic never stages into them. Every
+path must be normalized, `/`-separated, and relative to the task repository. Its first segment must
+also appear in `config_dirs`, keeping discovery, sibling filtering, and task-repository baselining
+on one descriptor surface.
+
+`skills_dir` and the file your `[guard]` section stages (`hooks_file`, or `plugin_file` for a
+plugin engine) are also what `run` hides from a sourced codebase's own linters and formatters, by
+writing them into the project's ignore files. Declaring them correctly is all a descriptor has to
+do; see `eval-magic docs codebase`.
 
 ## Layer descriptors by field
 
@@ -135,9 +189,20 @@ Use this sequence:
 3. Run a small eval through `run`, dispatch, `ingest`, and `finalize`.
 4. Confirm that every declared enhancement was exercised by the smoke run.
 
-Scripted `turns` require `[conversation].resume_exec_template` plus transcript extraction of ordered
-assistant messages and the native session ID. There is no fresh-session fallback: `run` rejects the
-case when the harness cannot preserve the conversation.
+Multi-turn evals — scripted `turns` and `responder` alike — require
+`[conversation].resume_exec_template` plus transcript extraction of ordered assistant messages and
+the native session ID. There is no fresh-session fallback: `run` rejects the case when the harness
+cannot preserve the conversation. The responder itself needs nothing further from a descriptor; it
+reads the agent's message out of the transcript and consults its own model through the dispatch
+template you already declared, so it works on any harness that can resume. See
+`eval-magic docs conversations`.
+
+A harness with a native read-only planning mode declares `[plan_mode]`: `plan_args` and
+`act_args` fill a `{mode_args}` slot in both dispatch templates, and `[plan_mode.plan_file]` names
+the file the harness writes its plan to, when it writes one. Verify each value the way you verify a
+resume: one headless turn dispatched with the planning arguments must refuse an edit, and the same
+session resumed with the act arguments must make it. `eval-magic harness show claude-code` is a
+worked descriptor; the eval side is in `eval-magic docs conversations`.
 
 When a shadow preflight reports a live copy, isolate every initial and resumed eval-agent dispatch
 before setting `isolates_live_sources = true`. The per-harness remedies and verification procedure

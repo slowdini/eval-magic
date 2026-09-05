@@ -1,6 +1,6 @@
 //! Model-selection behavior for emitted judge tasks.
 
-use crate::helpers::{canonical_root, skill_eval};
+use crate::helpers::{canonical_root, skill_eval, with_default_codebase};
 use assert_cmd::Command;
 use std::fs;
 
@@ -9,7 +9,7 @@ fn write_skill(skill_sub: &std::path::Path, skill_md: &str, evals: &serde_json::
     fs::write(skill_sub.join("SKILL.md"), skill_md).unwrap();
     fs::write(
         skill_sub.join("evals").join("evals.json"),
-        serde_json::to_string_pretty(evals).unwrap(),
+        serde_json::to_string_pretty(&with_default_codebase(evals)).unwrap(),
     )
     .unwrap();
 }
@@ -85,9 +85,11 @@ fn grade_defaults_judge_tasks_to_recorded_judge_model() {
     let assert = grade_cmd(&cwd, &skill_dir, Some("codex"))
         .assert()
         .success();
+    // The hand-off is the runner's own command now, not a harness recipe with
+    // a `$model_arg` slot: each judge task carries its resolved model in
+    // judge-tasks.json, and `dispatch --judges` reads it from there.
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-    assert!(stdout.contains("codex --ask-for-approval never exec"));
-    assert!(stdout.contains("model_arg=\"-m $model\""));
+    assert!(stdout.contains("eval-magic dispatch --judges"), "{stdout}");
 
     let tasks: serde_json::Value =
         serde_json::from_str(&fs::read_to_string(iteration_dir.join("judge-tasks.json")).unwrap())

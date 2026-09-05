@@ -1,0 +1,3 @@
+
+Next: eval-magic dispatch --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness cline
+Then run `eval-magic ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness cline`.

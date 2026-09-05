@@ -1,4 +1,5 @@
 use super::*;
+use crate::core::Grader;
 use serde_json::{Value, json};
 
 #[test]
@@ -187,5 +188,212 @@ fn run_record_roundtrips_a_stopped_multi_turn_conversation() {
     assert_eq!(
         out["conversation"]["events"][1]["type"],
         "assistant_message"
+    );
+}
+
+/// A responder-driven record has to satisfy three contracts at once: the Rust
+/// types, `conversation.schema.json` (which the driver validates against before
+/// writing), and `run-record.schema.json` (which ingest validates against
+/// afterwards). Checking one alone lets the other two drift.
+#[test]
+fn a_responder_record_satisfies_both_schemas_and_roundtrips() {
+    use crate::validation::{SchemaName, validate_against_schema};
+
+    let conversation = json!({
+        "status": "stopped",
+        "delivered_followups": 1,
+        "stop_reason": "responder_cannot_answer",
+        "stopped_before_followup": 2,
+        "responder_outcome": {
+            "ending": "cannot_answer",
+            "cause": "declined",
+            "rationale": "the agent asked for a credential I was never given"
+        },
+        "events": [
+            { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+            { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which cache should I use?" },
+            {
+                "type": "user_message",
+                "ordinal": 2,
+                "round": 2,
+                "text": "An in-process LRU is fine.",
+                "origin": {
+                    "responder": "llm",
+                    "rationale": "the simplest option that needs no new service"
+                }
+            },
+            { "type": "assistant_message", "ordinal": 3, "round": 2, "text": "Which API key should it use?" }
+        ]
+    });
+
+    let parsed: ConversationRecord =
+        validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json")
+            .unwrap();
+    assert_eq!(
+        parsed.stop_reason,
+        Some(ConversationStopReason::ResponderCannotAnswer)
+    );
+    let outcome = parsed
+        .responder_outcome
+        .as_ref()
+        .expect("a responder-ended conversation records how it ended");
+    assert_eq!(outcome.ending, ResponderEnding::CannotAnswer);
+    assert_eq!(outcome.cause, Some(ResponderStopCause::Declined));
+
+    let ConversationEvent::UserMessage { origin, .. } = &parsed.events[2] else {
+        panic!("event 2 is the synthesized turn");
+    };
+    let origin = origin
+        .as_ref()
+        .expect("a synthesized turn names its origin");
+    assert_eq!(
+        origin,
+        &TurnOrigin::Responder {
+            responder: ResponderKind::Llm,
+            rationale: Some("the simplest option that needs no new service".into()),
+        }
+    );
+
+    // The seeded prompt is authored, not derived, so it carries no origin at
+    // all — the field's absence is what distinguishes the two.
+    let ConversationEvent::UserMessage { origin, .. } = &parsed.events[0] else {
+        panic!("event 0 is the eval prompt");
+    };
+    assert!(origin.is_none());
+
+    let record = json!({
+        "eval_id": "add-caching",
+        "condition": "with_skill",
+        "skill_path": null,
+        "prompt": "Add caching.",
+        "files": [],
+        "final_message": "Which API key should it use?",
+        "tool_invocations": [],
+        "total_tokens": null,
+        "duration_ms": null,
+        "conversation": conversation
+    });
+    let record: RunRecord =
+        validate_against_schema(SchemaName::RunRecord, &record, "run.json").unwrap();
+
+    assert_eq!(
+        serde_json::to_value(&record).unwrap()["conversation"],
+        serde_json::to_value(record.conversation.clone().unwrap()).unwrap()
+    );
+}
+
+/// A conversation the responder judged finished records why, because
+/// completion is now a model judgement rather than the absence of a question
+/// mark. `cause` is absent: nothing went wrong.
+#[test]
+fn a_responder_completion_records_its_rationale_and_no_cause() {
+    use crate::validation::{SchemaName, validate_against_schema};
+
+    let conversation = json!({
+        "status": "completed",
+        "delivered_followups": 1,
+        "responder_outcome": {
+            "ending": "done",
+            "rationale": "the agent reported the cache in place and asked nothing"
+        },
+        "events": [
+            { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+            { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which cache?" },
+            {
+                "type": "user_message",
+                "ordinal": 2,
+                "round": 2,
+                "text": "An in-process LRU is fine.",
+                "origin": { "responder": "llm" }
+            },
+            { "type": "assistant_message", "ordinal": 3, "round": 2, "text": "Done — the LRU is wired in." }
+        ]
+    });
+
+    let parsed: ConversationRecord =
+        validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json")
+            .unwrap();
+    let outcome = parsed
+        .responder_outcome
+        .expect("a responder ended this one");
+    assert_eq!(outcome.ending, ResponderEnding::Done);
+    assert_eq!(outcome.cause, None);
+
+    // A turn whose responder offered no rationale still records its origin —
+    // the tag is what marks the turn derived, not the prose.
+    let ConversationEvent::UserMessage { origin, .. } = &parsed.events[2] else {
+        panic!("event 2 is the synthesized turn");
+    };
+    assert_eq!(
+        origin.as_ref().unwrap(),
+        &TurnOrigin::Responder {
+            responder: ResponderKind::Llm,
+            rationale: None,
+        }
+    );
+}
+
+/// An operator reads a stop cause in a `dispatch` warning and greps for it in
+/// `conversation.json`. Those are two spellings of one name, so they are pinned
+/// to each other rather than kept in step by hand.
+#[test]
+fn every_stop_cause_prints_the_name_it_serializes_as() {
+    for cause in [
+        ResponderStopCause::Declined,
+        ResponderStopCause::DispatchFailed,
+        ResponderStopCause::DispatchTimedOut,
+        ResponderStopCause::MissingVerdict,
+        ResponderStopCause::MalformedVerdict,
+        ResponderStopCause::EmptyReply,
+        ResponderStopCause::ReplyTooLong,
+        ResponderStopCause::ReplyContainsCode,
+        ResponderStopCause::ReplyRepeated,
+    ] {
+        assert_eq!(
+            serde_json::to_value(cause).unwrap(),
+            Value::String(cause.wire_name().to_string()),
+            "{cause:?}"
+        );
+    }
+}
+
+/// A conversation that outran its deadline is written by the driver and read
+/// back by ingest, so the run-record schema has to accept the same shape
+/// `conversation.schema.json` does — including a round-1 timeout, whose only
+/// event is the seeded prompt.
+#[test]
+fn a_timed_out_conversation_satisfies_the_run_record_schema() {
+    use crate::validation::{SchemaName, validate_against_schema};
+
+    let conversation = json!({
+        "status": "timed_out",
+        "delivered_followups": 0,
+        "timed_out_in_round": 1,
+        "events": [
+            { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." }
+        ]
+    });
+    let _: ConversationRecord =
+        validate_against_schema(SchemaName::Conversation, &conversation, "conversation.json")
+            .unwrap();
+
+    let record = json!({
+        "eval_id": "add-caching",
+        "condition": "with_skill",
+        "skill_path": null,
+        "prompt": "Add caching.",
+        "files": [],
+        "final_message": "",
+        "tool_invocations": [],
+        "total_tokens": null,
+        "duration_ms": null,
+        "conversation": conversation
+    });
+
+    let record: RunRecord =
+        validate_against_schema(SchemaName::RunRecord, &record, "run.json").unwrap();
+    assert_eq!(
+        record.conversation.unwrap().status,
+        ConversationStatus::TimedOut
     );
 }

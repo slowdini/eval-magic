@@ -1,11 +1,29 @@
-# Isolating dispatches from live skill sources
+# Dispatch isolation and sandbox boundaries
 
-> **Audience:** operators whose run printed a skill-shadow warning or whose
-> `plugin-shadow.json` or `benchmark.json` reports a live copy of an eval skill.
+> **Audience:** operators preparing eval dispatches, troubleshooting sandbox failures, or
+> resolving live skill-source warnings.
 
-Use this guide after eval-magic reports a discoverable live skill. It explains how to exclude that
-source from eval-agent dispatches and how to verify the result. Normal task-repository isolation and
-the write guard are separate concerns documented by `eval-magic run --help`.
+Several boundaries shape an eval dispatch. Use this guide to distinguish inherited
+operator restrictions from task protections and skill-source isolation, then follow the relevant
+harness section for troubleshooting or live-source remedies.
+
+## Understand the boundaries
+
+- **Operator sandbox**: the environment around the process launching `eval-magic dispatch`.
+  An operator Codex session can restrict the runner and the harness commands it spawns.
+- **Harness task sandbox**: the harness's own operating-system restrictions on the eval agent.
+  The generated Codex task command uses `--sandbox workspace-write`. This inner sandbox cannot
+  grant access denied by the operator's outer sandbox.
+- **Eval guard**: eval-magic's tool and command checks enforce task containment for recognized
+  operations and apply the eval-authored command policy. These checks complement the harness
+  sandbox; see `eval-magic docs guard` for their scope and limits.
+- **Skill-source isolation**: excluding competing live skill copies from what an eval agent can
+  discover or load, so the treatment comparison measures the intended skills. A task sandbox or
+  eval guard does not by itself exclude these sources.
+
+Every task also has a private Git repository prepared by eval-magic; see `eval-magic run --help`
+and `eval-magic docs codebase`. That repository boundary is independent of the permissions the
+operator and harness sandboxes enforce.
 
 ## Why a live copy matters
 
@@ -20,9 +38,14 @@ Sibling collisions have two outcomes:
 - A sibling visible in only one arm is comparison-invalid because its effect cannot be separated
   from the skill under test.
 
-The preflight reports what the environment makes discoverable. Transcript evidence can later show
-what a dispatch loaded. Eval-magic does not parse shell templates to infer that a flag or environment
-variable isolates the process.
+The preflight reports two source classes in schema-v3 `plugin-shadow.json`:
+
+- `operator-environment` — global skills, enabled plugins, and other sources inherited from the
+  machine running eval-magic.
+- `codebase-sourced` — matching project-local skills preserved from the task codebase.
+
+Transcript evidence can later show what a dispatch loaded. Eval-magic does not parse shell
+templates to infer that a flag or environment variable isolates the process.
 
 Apply the remedy to **every eval-agent command**, including every resumed turn of a scripted eval.
 Isolating only the first round allows the live copy to return on the next round. Judge commands do
@@ -42,6 +65,34 @@ Choose one remedy:
 editing global configuration. Project-local staged skills still load under every remedy.
 
 ## Isolate Codex
+
+### Diagnose nested sandbox failures
+
+If the same generated task command succeeds in an ordinary terminal with
+equivalent inputs and configuration, but fails inside the operator Codex session with
+`Operation not permitted`, the outer sandbox may be preventing the dispatch. The error
+`Operation not permitted` alone does not establish a nested-sandbox problem. Compare the command,
+working directory, inputs, and resolved harness configuration before choosing this remedy.
+
+Commands spawned from an operator Codex session inherit its sandbox boundaries. The inner task
+sandbox cannot grant access denied by that outer process. The outer environment may also block
+operations needed to create the inner sandbox. Adding a writable directory alone does not
+guarantee that nested dispatch will work.
+
+Choose one of these remedies:
+
+1. **Preferred:** run the `eval-magic dispatch` command from the generated `RUNBOOK.md` in that
+   ordinary terminal, using the runbook's working directory and arguments.
+2. **Alternative:** approve or escalate the outer launch of `eval-magic dispatch` where the
+   operator surface and policy support it. Limit the approval to the workspace and process access
+   required to launch the guarded tasks, including creation of their inner sandboxes.
+
+Keep the task command's `--sandbox workspace-write` and eval guard enabled under either remedy.
+Do not replace the generated harness command with an unrestricted command or disable the guard.
+Eval-magic does not detect or bypass the operator's sandbox; the remedy belongs to the outer
+execution environment.
+
+### Exclude live skill sources
 
 Choose the remedy that matches each reported source:
 
@@ -80,9 +131,21 @@ label = "claude-code"
 isolates_live_sources = true
 ```
 
+The declaration covers only `operator-environment` findings. It does not claim that skills sourced
+from the task codebase are isolated. Use `codebase.exclude_skill_sources: true` for that separate
+policy when project skills should not participate; see `eval-magic docs codebase`.
+
 The declaration does not disable detection. `plugin-shadow.json` retains every source and its
-intrinsic severity as provenance. `run` presents the finding as informational, and `aggregate`
-omits the warning only while no transcript evidence contradicts the declaration.
+intrinsic severity as provenance. `run` presents operator-environment findings as informational,
+and `aggregate` omits those warnings only while no transcript evidence contradicts the declaration.
+Codebase-sourced findings remain warnings regardless of this descriptor setting.
+
+The declaration is written from the descriptor resolved at prep time, so the remedy must ride along
+with every follow-up. When the descriptor arrives via `--harness-file`, the generated RUNBOOK.md
+and Next: commands re-emit the flag — follow them verbatim. Dropping it silently reverts to the
+un-overlaid descriptor while the declaration stands, the comparison-invalid state this guide exists
+to prevent. `dispatch` and `ingest` compare the resolved descriptor against the digest `run`
+records in `conditions.json` and warn when the two differ.
 
 Do not set it when:
 
@@ -125,14 +188,93 @@ ID rather than the total list length because staged and bundled skills remain pr
 produce an init record under each `turn-N/`; inspect a resumed turn as well.
 
 Codex and OpenCode captures do not provide the equivalent roster used by eval-magic. Verify those
-harnesses by checking every rendered eval-agent command in `RUNBOOK.md` and
-`dispatch-manifest.md`, then use `isolates_live_sources` to record the operator assertion.
+harnesses by checking the eval-agent command `dispatch-manifest.md` says the runner will spawn,
+then use `isolates_live_sources` to record the operator assertion.
 
 ### `claude plugin list` does not prove isolation
 
 `claude plugin list` reports installed plugins, not what one dispatch loaded. It does not accept the
 dispatch's setting-source selection. A plugin can appear there and remain absent from the dispatch,
 or the reverse. Use the dispatch's init event.
+
+## Treatment skills are copies
+
+`skill_name` in the `evals/evals.json` file accepts either one skill name or an ordered,
+non-empty list:
+
+```json
+{
+  "skill_name": ["review-workflow", "review-verification"],
+  "evals": [
+    {
+      "id": "review-change",
+      "prompt": "Review this change.",
+      "expected_output": "A prioritized review."
+    }
+  ]
+}
+```
+
+With a list, `--skill` selects the eval owner: the member whose `evals/` directory supplies the
+definitions and overlay files, and whose name owns the workspace and promotion destination. The
+owner must appear in the list. `--stage-name` is unavailable because one override cannot name
+several staged skills.
+
+Every treatment member is copied into the eval home before any dispatch runs, and each condition
+stages from those copies. Mode A stages all treatment members in `with_skill` and none in
+`without_skill`. Other siblings from `--skill-dir` remain ambient in both arms. Mode B snapshots
+and stages the complete set in both revisions. A scalar `skill_name` retains the existing
+single-skill paths and artifacts.
+
+Each copy is the working tree as it sits on disk, not a checkout of a commit. Evaluating an
+uncommitted revision is the ordinary case, and in a `--mode revision` run the edit under test is
+uncommitted by definition. What the run measured is recorded rather than inferred in
+`conditions.json`, each `run.json`, `benchmark.json`, and the `BASELINE.md` file written by
+`promote-baseline`:
+
+```sh
+jq '.skill_source' conditions.json
+```
+
+`dirty: true` means the recorded revision alone does not identify what ran. Commit the treatment
+skills before a run whose result you intend to publish.
+
+The copy freezes the treatment, not the assertions. `grade` reads `assertions` and
+`skill_should_trigger` from the live `evals/evals.json` and everything else from the copy, because
+the judging loop authors assertions from the run's own evidence, after the dispatch they grade.
+Each `grading.json` records which file supplied its assertions. See `eval-magic docs judging`.
+
+Ambient skills staged by `--skill-dir` are copied the same way, and the roster is captured once
+when the run resolves. For a multi-skill treatment, `skill_source.eval_owner` names the owner and
+`skill_source.skills` records every treatment member's resolved source and revision. The
+`siblings` field, when present, names ambient skills staged in both arms.
+
+The eval home sits outside the skill's own repository: under `$XDG_DATA_HOME/eval-magic`
+(or `~/.local/share/eval-magic`), in a directory named for the skill directory it serves.
+`run` prints the path it chose, and every command it suggests carries `--workspace-dir`,
+so there is nothing to remember. `EVAL_MAGIC_WORKSPACE_DIR` moves the default;
+`--workspace-dir` overrides both.
+
+Copying does not remove the live directories from the machine, so a dispatch can still read one by
+absolute path. `detect-stray-writes` checks every treatment source and reports that as a live-source
+read. `aggregate` carries it into `validity_warnings` for the same reason a discoverable plugin
+copy is carried there: the arm may not be comparing what it claims to.
+
+The check compares resolved paths, so a symlinked route to a live directory is reported like the
+direct one. Aliases are the ordinary case rather than an evasion: on macOS `$TMPDIR` sits under
+`/var`, itself a link to `/private/var`, so a dispatch that builds an absolute path from its own
+environment spells one directory a different way than the runner recorded it.
+
+## The task repository is a separate boundary
+
+Skill-source isolation is about what a dispatch can *load*. The task repository is about what it can
+*reach*: every dispatch runs in its own private environment, a Git repository with no remotes and
+hooks disabled, marked with `refs/eval-magic/baseline` at the state the agent started from. That
+codebase-backed boundary holds for every eval; task-specific `files` are overlays on the sourced
+tree. See `eval-magic docs codebase`.
+
+The two are independent. An environment can be a faithfully isolated repository while the dispatch
+still loads a live skill source, and a shadowed skill is not made safe by the repository boundary.
 
 ## When a source cannot be isolated
 

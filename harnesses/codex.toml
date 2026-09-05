@@ -34,16 +34,23 @@ unresolved_phrase = "If it does not load as a Codex skill"
 header = "## Skills\n"
 item = "\n- {name}: {description} (file: {path})"
 
-# Codex's JSONL exposes no deterministic skill-tool event, so the
-# `__skill_invoked` meta-check uses the LLM-judge fallback.
+# Codex's JSONL exposes no deterministic skill-tool event. It does preserve a
+# completed command's literal arguments and exit code, so the meta-check uses
+# an exact staged-SKILL.md access signature instead.
 #
 # The JSONL stream is flat (every tool event self-contained), so its summary is
 # declarative. Permission denials are independent: the named reader correlates
 # the sibling stderr capture where Codex reports structural router rejections.
 [transcript]
 events_filename = "codex-events.jsonl"
-surfaces_skill_invocation = false
+surfaces_skill_invocation = true
 permission_denials_parser = "codex-items"
+
+[transcript.skill_access]
+tool = "command_execution"
+command_arg = "command"
+exit_code_arg = "exit_code"
+read_commands = ["cat", "head", "sed", "tail"]
 
 [transcript.extract.tools]
 where = { type = "item.completed" }
@@ -99,53 +106,35 @@ armed_message = '''
 preflight = "codex-skills"
 
 [dispatch]
-capture_prefix = "codex"
 guard_args = " --dangerously-bypass-hook-trust"
 next_steps_template = '''
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
-{exec_command}
-Then run `ingest{target_args} --iteration {iteration} --harness codex`.'''
+Next: eval-magic dispatch{target_args} --iteration {iteration} --harness codex
+Then run `eval-magic ingest{target_args} --iteration {iteration} --harness codex`.'''
 # Stdin is detached so a surrounding `xargs`/pipe cannot be treated as extra
 # prompt context.
 exec_template = '''
 codex --ask-for-approval never exec --cd <eval-root> --sandbox workspace-write{guard_args}{model_arg} --json \
-  --output-last-message <outputs_dir>/final-message.md \
-  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to <outputs_dir>/final-message.md." \
+  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/codex-events.jsonl \
   2> <outputs_dir>/codex-stderr.log'''
-parallel_command_template = '''
-    codex --ask-for-approval never exec --cd "$eval_root" --sandbox workspace-write{guard_args}{model_arg} --json \
-      --output-last-message "$outputs_dir/final-message.md" \
-      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response exactly the same text you wrote to $outputs_dir/final-message.md." \
-      </dev/null \
-      > "$outputs_dir/codex-events.jsonl" \
-      2> "$outputs_dir/codex-stderr.log"'''
-judge_command_template = '    codex --ask-for-approval never exec --cd "{cwd}" --sandbox workspace-write{guard_args} $model_arg --json \'
 manifest_template = '''
-After all dispatches (Codex):
+Harness dispatch (Codex):
 
-Run one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/codex-events.jsonl` and stderr as `outputs/codex-stderr.log`.
+`eval-magic dispatch` runs one fresh `codex --ask-for-approval never exec --json` per task. Detach stdin with `</dev/null` so piped task data cannot become extra prompt context; capture stdout as `outputs/turn-<n>/codex-events.jsonl` and stderr as `outputs/turn-<n>/codex-stderr.log`.
 
 ```bash
 {exec_command}
 ```
 
-Parallel dispatch from this iteration directory:
-
-```bash
-{parallel_recipe}
-```
-
-Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/codex-events.jsonl`.
+Then run `eval-magic ingest --harness codex`; Codex transcript ingest reads each task's `outputs/turn-<n>/codex-events.jsonl`.
 '''
 
 [conversation]
 token_usage_aggregation = "last"
 resume_exec_template = '''
 cd <eval-root> && codex --ask-for-approval never exec resume{guard_args}{model_arg} --json \
-  --output-last-message <outputs_dir>/final-message.md \
   {session_arg} {prompt_arg} \
   </dev/null \
   > <outputs_dir>/codex-events.jsonl \

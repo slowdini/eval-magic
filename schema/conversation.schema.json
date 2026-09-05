@@ -1,15 +1,15 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://slow-powers.dev/schemas/conversation.schema.json",
-  "title": "Scripted Conversation Completion",
-  "description": "Runner-owned completion artifact for one scripted multi-turn eval task.",
+  "title": "Task Conversation Completion",
+  "description": "Runner-owned completion artifact for one dispatched eval task. Canonical artifacts record the delivered user turns; assistant and tool events remain accepted for compatibility with historical artifacts.",
   "type": "object",
   "required": ["status", "delivered_followups", "events"],
   "additionalProperties": false,
   "properties": {
     "status": {
       "type": "string",
-      "enum": ["completed", "stopped"]
+      "enum": ["completed", "stopped", "timed_out"]
     },
     "delivered_followups": {
       "type": "integer",
@@ -17,15 +17,26 @@
     },
     "stop_reason": {
       "type": "string",
-      "enum": ["agent_did_not_ask", "agent_response_mismatch"]
+      "enum": ["agent_did_not_ask", "agent_response_mismatch", "responder_cannot_answer", "max_turns_reached", "plan_not_presented"]
     },
     "stopped_before_followup": {
       "type": "integer",
       "minimum": 1
     },
+    "timed_out_in_round": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The round the dispatch was killed in, when it outran its per-task deadline."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Monotonic wall time in milliseconds spent inside eval-agent harness subprocesses, summed across the initial dispatch and every resumed round. Excludes responder consultations, judge dispatches, queue time, and runner bookkeeping."
+    },
     "events": {
       "type": "array",
-      "minItems": 2,
+      "minItems": 1,
+      "description": "Delivered conversation turns. Canonical runner output contains user_message events only; historical artifacts may also contain assistant_message and tool_invocation events.",
       "items": {
         "oneOf": [
           { "$ref": "#/definitions/userMessage" },
@@ -33,7 +44,9 @@
           { "$ref": "#/definitions/conversationTool" }
         ]
       }
-    }
+    },
+    "responder_outcome": { "$ref": "#/definitions/responderOutcome" },
+    "plan": { "$ref": "#/definitions/planRecord" }
   },
   "allOf": [
     {
@@ -42,7 +55,8 @@
         "required": ["status"]
       },
       "then": {
-        "required": ["stop_reason", "stopped_before_followup"]
+        "required": ["stop_reason", "stopped_before_followup"],
+        "not": { "required": ["timed_out_in_round"] }
       }
     },
     {
@@ -54,6 +68,22 @@
         "not": {
           "anyOf": [
             { "required": ["stop_reason"] },
+            { "required": ["stopped_before_followup"] },
+            { "required": ["timed_out_in_round"] }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": { "status": { "const": "timed_out" } },
+        "required": ["status"]
+      },
+      "then": {
+        "required": ["timed_out_in_round"],
+        "not": {
+          "anyOf": [
+            { "required": ["stop_reason"] },
             { "required": ["stopped_before_followup"] }
           ]
         }
@@ -61,6 +91,55 @@
     }
   ],
   "definitions": {
+    "responderOutcome": {
+      "type": "object",
+      "required": ["ending"],
+      "additionalProperties": false,
+      "description": "How the responder ended the conversation, when it was the responder that ended it. Absent for a scripted or one-shot task, for a timeout, and for max_turns_reached, which is the runner's bound rather than a verdict.",
+      "properties": {
+        "ending": {
+          "type": "string",
+          "enum": ["done", "cannot_answer"],
+          "description": "Whether the responder judged the agent finished, or produced no usable reply."
+        },
+        "cause": {
+          "type": "string",
+          "enum": ["declined", "dispatch_failed", "dispatch_timed_out", "missing_verdict", "malformed_verdict", "empty_reply", "reply_too_long", "reply_contains_code", "reply_repeated"],
+          "description": "Why no usable reply was produced, so an honest refusal is distinguishable from a broken dispatch. Absent when ending is 'done'."
+        },
+        "rationale": {
+          "type": "string",
+          "description": "The responder's own one-line account. Absent when the dispatch never answered."
+        }
+      }
+    },
+    "planRecord": {
+      "type": "object",
+      "required": ["presented_in_round", "approved_in_round", "signal"],
+      "additionalProperties": false,
+      "description": "How a plan-mode session moved from planning to implementation. Absent unless the eval declared plan_mode and a plan was approved.",
+      "properties": {
+        "presented_in_round": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The plan-phase round whose output was taken as the plan."
+        },
+        "approved_in_round": {
+          "type": "integer",
+          "minimum": 2,
+          "description": "The round the runner's fixed approval opened in act mode."
+        },
+        "signal": {
+          "type": "string",
+          "enum": ["plan_file", "responder"],
+          "description": "What marked the plan as presented: the harness wrote its declared plan file (plan_file), or the responder judged the agent finished planning (responder)."
+        },
+        "artifact_path": {
+          "type": "string",
+          "description": "Where the plan text was saved."
+        }
+      }
+    },
     "userMessage": {
       "type": "object",
       "required": ["type", "ordinal", "round", "text"],
@@ -69,7 +148,44 @@
         "type": { "const": "user_message" },
         "ordinal": { "type": "integer", "minimum": 0 },
         "round": { "type": "integer", "minimum": 1 },
-        "text": { "type": "string" }
+        "text": { "type": "string" },
+        "origin": {
+          "type": "object",
+          "description": "Who produced this turn, when the eval did not author it. Absent on the eval's opening prompt and on scripted turns; the responder shape marks a derived turn, the runner shape a fixed turn the runner sends every run the same way.",
+          "oneOf": [
+            {
+              "required": ["responder"],
+              "additionalProperties": false,
+              "properties": {
+                "responder": {
+                  "type": "string",
+                  "enum": ["llm"],
+                  "description": "Which responder produced the turn."
+                },
+                "rationale": {
+                  "type": "string",
+                  "description": "The responder's own one-line account of why it answered this way. Absent when it offered none."
+                }
+              }
+            },
+            {
+              "required": ["runner"],
+              "additionalProperties": false,
+              "properties": {
+                "runner": {
+                  "type": "string",
+                  "enum": ["plan_approval"],
+                  "description": "The fixed turn the runner sent: plan_approval moves a plan-mode session into act mode."
+                }
+              }
+            }
+          ]
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["plan", "act"],
+          "description": "The session mode of the round this message opens. Present on every user message of a plan-mode eval; absent otherwise, since those runs are entirely in act mode."
+        }
       }
     },
     "assistantMessage": {

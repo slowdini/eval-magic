@@ -9,7 +9,8 @@
 
 label = "opencode"
 skills_dir = ".opencode/skills"
-config_dirs = [".opencode"]
+additional_project_skill_dirs = [".claude/skills", ".agents/skills"]
+config_dirs = [".opencode", ".claude", ".agents"]
 
 [run]
 supports_guard = true
@@ -86,50 +87,43 @@ preflight = "opencode-skills"
 # Headless permission asks are auto-rejected unless `--auto` is passed
 # (explicit deny rules are still enforced), and piped stdin is *appended* to
 # the message, so every recipe detaches stdin with </dev/null, same as codex.
-# There is no `--output-last-message`: transcript ingest recovers the final
-# message from the `text` events.
+# Transcript ingest recovers the final response from the `text` events.
 [dispatch]
-capture_prefix = "opencode"
 next_steps_template = '''
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task with:
-{exec_command}
-Then run `ingest{target_args} --iteration {iteration} --harness opencode`.'''
+Next: eval-magic dispatch{target_args} --iteration {iteration} --harness opencode
+Then run `eval-magic ingest{target_args} --iteration {iteration} --harness opencode`.'''
 exec_template = '''
-opencode run --dir <eval-root> --format json --auto{model_arg} \
+opencode run --dir <eval-root> --format json{mode_args}{model_arg} \
   "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
   </dev/null \
   > <outputs_dir>/opencode-events.jsonl \
   2> <outputs_dir>/opencode-stderr.log'''
-parallel_command_template = '''
-    opencode run --dir "$eval_root" --format json --auto{model_arg} \
-      "Read the file at $prompt_path and follow its instructions exactly. When you finish, make your final response your closing summary." \
-      </dev/null \
-      > "$outputs_dir/opencode-events.jsonl" \
-      2> "$outputs_dir/opencode-stderr.log"'''
-judge_command_template = '    opencode run --dir "{cwd}" --format json --auto $model_arg \'
 manifest_template = '''
-After all dispatches (OpenCode):
+Harness dispatch (OpenCode):
 
-Run one fresh `opencode run --format json --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/opencode-events.jsonl` and stderr as `outputs/opencode-stderr.log`.
+`eval-magic dispatch` runs one fresh `opencode run --format json --agent build --auto` per task. Detach stdin with `</dev/null` so piped input is not appended to the message; capture stdout as `outputs/turn-<n>/opencode-events.jsonl` and stderr as `outputs/turn-<n>/opencode-stderr.log`.
 
 ```bash
 {exec_command}
 ```
 
-Parallel dispatch from this iteration directory:
-
-```bash
-{parallel_recipe}
-```
-
-Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/opencode-events.jsonl`.
+Then run `eval-magic ingest --harness opencode`; OpenCode transcript ingest reads each task's `outputs/turn-<n>/opencode-events.jsonl`.
 '''
 
 [conversation]
 resume_exec_template = '''
-opencode run --dir <eval-root> --session {session_arg} --format json --auto{model_arg} \
+opencode run --dir <eval-root> --session {session_arg} --format json{mode_args}{model_arg} \
   {prompt_arg} \
   </dev/null \
   > <outputs_dir>/opencode-events.jsonl \
   2> <outputs_dir>/opencode-stderr.log'''
+
+# Native plan mode. The built-in `plan` agent refuses edits by permission rule,
+# so the planning phase needs no `--auto` — it belongs to act_args, where the
+# `build` agent is named explicitly so a resumed session does not inherit the
+# plan agent. OpenCode writes no plan file; the responder decides when the plan
+# is ready (verified in docs/opencode-notes.md → "Plan mode").
+[plan_mode]
+plan_args = " --agent plan"
+act_args = " --agent build --auto"

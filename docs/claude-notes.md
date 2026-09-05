@@ -31,15 +31,17 @@ hook-entry and `hookSpecificOutput` verdict templates) is rendered by the generi
   `result` event rather than a file.
 - `</dev/null` detaches stdin so a permission prompt can't block on a TTY and piped task data
   can't become extra prompt context.
-- Dispatches use **`--permission-mode bypassPermissions`**, not `acceptEdits`. See below.
+- Act-mode dispatches use **`--permission-mode bypassPermissions`**, not `acceptEdits`; the
+  planning phase of a `plan_mode` eval uses `--permission-mode plan`. See below.
 - Scripted follow-ups use `claude -p --resume <SESSION_ID>` from the same env; the initial
   `system.session_id` supplies the id. Verified against `claude --help` on 2026-07-24.
 
 ## Permission mode
 
-Every dispatch and judge recipe carries `--permission-mode bypassPermissions`. The obvious
-alternative, `acceptEdits`, is wrong here: it auto-approves *file edits* but **not Bash**, and
-because the recipe detaches stdin (`</dev/null`) there is nobody to approve, so anything not
+Every act-mode dispatch — eval agent and judge alike — carries `--permission-mode
+bypassPermissions` through the descriptor's `[plan_mode].act_args`. The
+obvious alternative, `acceptEdits`, is wrong here: it auto-approves *file edits* but **not Bash**,
+and because the command detaches stdin (`</dev/null`) there is nobody to approve, so anything not
 trivially safe is auto-denied. Measured on a real dispatch, `ls`/`grep`/`find` ran while
 `bun run repro.ts`, `node -e '…'` and even `bun --version` came back "This command requires
 approval".
@@ -58,9 +60,38 @@ permissions". With `--no-guard` there is no enforcement boundary at all — that
 flag makes.
 
 `bypassPermissions` is refused in some environments (running as root, or when managed settings
-disable it). Override the mode for those hosts with a `--harness-file` descriptor that retunes the
-four `[dispatch]`/`[conversation]` templates; field-level merge means nothing else has to be
-restated.
+disable it). Override the mode for those hosts with a `--harness-file` descriptor that sets
+`[plan_mode].act_args` (and `plan_args`); the templates keep their `{mode_args}` slot, and
+field-level merge means nothing else has to be restated. An overlay that retunes a template itself
+must keep the slot, or validation rejects it.
+
+## Plan mode
+
+Verified against `claude` **2.1.259** on 2026-09-02, headless (`-p`, stdin detached), against a
+scratch repository with one bug:
+
+- `--permission-mode plan` starts the session read-only; the `system`/`init` event reports
+  `permissionMode: plan`.
+- **`ExitPlanMode` is disabled headless**, so it cannot be the signal. It is absent from the `init`
+  tool list, `ToolSearch` does not find it, and an agent that called it anyway got
+  `Error: No such tool available: ExitPlanMode. ExitPlanMode is disabled for this session, in
+  subagents as well as here.` `AskUserQuestion` is absent the same way, so questions arrive as
+  text — which is what the responder answers.
+- The agent presents its plan the way plan mode instructs it to: it writes the plan file (`Write`
+  to `~/.claude/plans/<slug>.md`, which plan mode permits) and closes the turn with the plan in its
+  final message. That write is the `[plan_mode.plan_file]` signal (`root = "~/.claude/plans"`,
+  `content_field = "content"`), and its `content` is the plan artifact.
+- An agent that tries to edit while planning is refused with `Cannot write to <path> while in plan
+  mode.`, and the refusal reaches the terminal `result` event's `permission_denials` like any
+  other. That is the mode working, so `record-runs` attributes a write refused in a planning round
+  to plan mode and leaves it out of the count `aggregate` warns on (see "Permission denials").
+- Resuming with `claude -p --resume <id> --permission-mode bypassPermissions` reports
+  `permissionMode: bypassPermissions` in `init`, keeps the same `session_id`, and edits succeed:
+  the session leaves plan mode. The Claude Code documentation states the converse — a `-p --resume`
+  stays in plan mode only when `--permission-prompt-tool` is passed and no `--permission-mode` is.
+- The plan file lands in the operator's `~/.claude/plans`, as in any session. The write guard and
+  the stray-write audit allow that root; eval-magic keeps the copy the judge reads as
+  `outputs/plan.md`.
 
 Relaxing the default closes the common case, not the class — a deny rule, a managed setting, or an
 operator-overridden mode still refuses calls — so refusals are detected and reported rather than
@@ -88,10 +119,12 @@ affected task; see [progressive-enhancements.md](progressive-enhancements.md).
 
 `outputs/claude-events.jsonl` is the `-p` stream-json stream. `assistant`/`user` events wrap full
 Anthropic Messages objects (tool-call extraction matches `tool_result` blocks back to their
-`tool_use` by id); a terminal `result` event carries the authoritative final text, wall-clock
-duration, and token usage — there are no per-line timestamps. `system`, `rate_limit_event`, and
-other non-message events are skipped. The transcript exposes Skill-tool invocations, so the
-`__skill_invoked` meta-check is deterministic here.
+`tool_use` by id); a terminal `result` event carries the authoritative final text, native duration,
+and token usage — there are no per-line timestamps. Runner-driven eval duration comes from the
+runner's monotonic subprocess measurement; this native duration remains the fallback for historical
+completion artifacts. `system`, `rate_limit_event`, and other non-message events are skipped. The
+transcript exposes Skill-tool invocations, so the `__skill_invoked` meta-check is deterministic
+here.
 
 The built-in descriptor uses the named parser for this cross-event summary, selects its denial
 reader explicitly, and maps the session roster through the generic
@@ -128,8 +161,9 @@ Each `claude -p` dispatch loads the user/global plugins and skills from its Clau
 staging slug prevents an on-disk collision but not runtime discovery — an installed plugin exposing
 a same-named skill is discoverable in *both* arms, so the control arm is not truly skill-absent.
 `plugin_shadow.rs` detects this in every comparison environment. The shared shadow policy records
-one finding per logical skill in schema-v2 `plugin-shadow.json`, including every affected cell,
-canonical/discovery paths, source-specific remediation, and the runtime identifier the agent sees.
+one finding per logical skill and source class in schema-v3 `plugin-shadow.json`, including every
+affected cell, canonical/discovery paths, source-specific remediation, and the runtime identifier
+the agent sees.
 Claude plugin skills use their namespaced `<plugin>:<skill>` runtime ID, direct live skills retain
 the logical name, and staged subjects use their staging-directory slug. Direct live duplicates
 record user-before-project precedence; a staged subject with its distinct slug remains selected.
@@ -145,7 +179,7 @@ topic ([isolation guide](guides/isolation.md)). The per-source strings the banne
 
 `--setting-sources project,local` drops **all** user-scope discovery, not just `enabledPlugins`:
 skills under `<config_dir>/skills` are unloaded too. Verified 2026-08-06 by A/B within one campaign —
-the judge recipe carries no `--setting-sources` and its capture lists both `~/.claude/skills`
+the judge dispatch carries no `--setting-sources` and its capture lists both `~/.claude/skills`
 entries and every `<plugin>:<skill>` id, while all 48 isolated eval dispatches list neither.
 
 Project-local staged skills are independent of installed plugins, so they still load and the
@@ -169,3 +203,6 @@ only write boundary a dispatch has, since the session itself runs under `bypassP
 invokes the hidden `guard` subcommand (**stable on-disk contract — never rename**), which denies
 via Claude Code's `hookSpecificOutput` JSON shape and stays silent to allow. Both layers fail open.
 A deny aborts the offending dispatch; `detect-stray-writes` remains the after-the-fact backstop.
+The shared cwd-aware policy allows ordinary installs, builds, tests, and in-place edits inside the
+task env, while explicit outside destinations, output escapes, repository-routing escapes, and
+remote Git mutations remain blocked.

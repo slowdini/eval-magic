@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 use crate::core::fs::artifact_path;
 
 mod artifact;
+#[cfg(test)]
+mod codebase_tests;
+mod grouping;
 mod resolution;
 pub(crate) mod verification;
 
@@ -30,7 +33,16 @@ pub use verification::{
     VerificationStatus,
 };
 
-pub const PLUGIN_SHADOW_SCHEMA_VERSION: u8 = 2;
+pub const PLUGIN_SHADOW_SCHEMA_VERSION: u8 = 3;
+
+/// Which environment contributed the non-staged side of a finding.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ShadowFindingClass {
+    #[default]
+    OperatorEnvironment,
+    CodebaseSourced,
+}
 
 /// How a logical skill participates in the comparison.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,9 +300,8 @@ impl ShadowSource {
     }
 }
 
-/// The resolved real path, rendered as wire format. `canonicalize` returns a
-/// verbatim (`\\?\`) path on Windows, which `artifact_path` strips — an OS
-/// escape hatch has no business in a report an agent and a reviewer both read.
+/// The resolved real path, rendered in the artifact wire format shared by
+/// agents and reviewers.
 fn canonical_path(path: &Path) -> Option<String> {
     path.canonicalize().ok().map(|path| artifact_path(&path))
 }
@@ -334,6 +345,8 @@ pub(crate) fn severity_for(
 /// Every concrete source associated with one logical eval skill.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ShadowFinding {
+    #[serde(default)]
+    pub class: ShadowFindingClass,
     pub skill_name: String,
     pub role: ShadowSkillRole,
     /// What the collision would mean if the live copy loaded. Set at detection
@@ -354,123 +367,6 @@ pub struct ShadowFinding {
 pub struct PluginShadowReport {
     pub config_dir: String,
     pub findings: Vec<ShadowFinding>,
-}
-
-impl PluginShadowReport {
-    pub(crate) fn from_sources(config_dir: impl Into<String>, sources: Vec<ShadowSource>) -> Self {
-        let mut grouped: BTreeMap<String, Vec<ShadowSource>> = BTreeMap::new();
-        for source in sources {
-            grouped
-                .entry(source.skill_name.clone())
-                .or_default()
-                .push(source);
-        }
-        let findings = grouped
-            .into_iter()
-            .map(|(skill_name, mut sources)| {
-                sources.sort_by(|a, b| {
-                    (
-                        &a.runtime_id,
-                        &a.discovery_path,
-                        a.origin == ShadowSourceOrigin::Staged,
-                    )
-                        .cmp(&(
-                            &b.runtime_id,
-                            &b.discovery_path,
-                            b.origin == ShadowSourceOrigin::Staged,
-                        ))
-                });
-                ShadowFinding {
-                    skill_name,
-                    role: ShadowSkillRole::Subject,
-                    severity: ShadowSeverity::ComparisonInvalid,
-                    sources,
-                    resolved_severity: None,
-                }
-            })
-            .collect();
-        Self {
-            config_dir: config_dir.into(),
-            findings,
-        }
-    }
-
-    pub(crate) fn from_observed_sources(
-        config_dir: impl Into<String>,
-        sources: Vec<ShadowSource>,
-        subject_skill_name: &str,
-        expected_cells: &[(String, String)],
-    ) -> Self {
-        let mut merged = Vec::<ShadowSource>::new();
-        for mut source in sources {
-            if let Some(existing) = merged
-                .iter_mut()
-                .find(|existing| existing.same_identity(&source))
-            {
-                for appearance in source.appearances.drain(..) {
-                    existing.add_appearance(appearance);
-                }
-            } else {
-                merged.push(source);
-            }
-        }
-
-        let mut report = Self::from_sources(config_dir, merged);
-        let mut expected_by_group = BTreeMap::<&str, BTreeSet<&str>>::new();
-        for (group, condition) in expected_cells {
-            expected_by_group
-                .entry(group)
-                .or_default()
-                .insert(condition);
-        }
-        for finding in &mut report.findings {
-            finding.role = if finding.skill_name == subject_skill_name {
-                ShadowSkillRole::Subject
-            } else {
-                ShadowSkillRole::Sibling
-            };
-            let live_cells = finding
-                .sources
-                .iter()
-                .filter(|source| source.origin == ShadowSourceOrigin::Live)
-                .flat_map(|source| &source.appearances)
-                .map(|appearance| (appearance.group.as_str(), appearance.condition.as_str()))
-                .collect::<BTreeSet<_>>();
-            finding.severity = severity_for(finding.role, &live_cells, &expected_by_group);
-        }
-        report
-    }
-
-    pub(crate) fn is_empty(&self) -> bool {
-        self.findings.is_empty()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn source_count(&self) -> usize {
-        self.findings
-            .iter()
-            .map(|finding| finding.sources.len())
-            .sum()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sources(&self) -> impl Iterator<Item = &ShadowSource> {
-        self.findings.iter().flat_map(|finding| &finding.sources)
-    }
-
-    pub(crate) fn into_sources(self) -> Vec<ShadowSource> {
-        self.findings
-            .into_iter()
-            .flat_map(|finding| finding.sources)
-            .collect()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn source(&self, index: usize) -> &ShadowSource {
-        self.sources()
-            .nth(index)
-            .expect("shadow source index should exist")
-    }
 }
 
 #[cfg(test)]
@@ -531,7 +427,7 @@ mod tests {
                 .unwrap()
                 .get("shadowed")
                 .is_none(),
-            "legacy input is normalized to v2 when reserialized"
+            "legacy input is normalized to v3 when reserialized"
         );
     }
 
@@ -539,7 +435,8 @@ mod tests {
     fn declared_isolation_is_serialized_with_the_shadow_report() {
         let artifact = PluginShadowArtifact::new(sample_report(), true);
         let value = serde_json::to_value(&artifact).unwrap();
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
+        assert_eq!(value["findings"][0]["class"], "operator-environment");
         assert_eq!(value["isolates_live_sources"], true);
         assert_eq!(
             value["findings"][0]["skill_name"],
@@ -646,11 +543,12 @@ mod tests {
     }
 
     #[test]
-    fn v2_artifact_groups_sources_under_one_logical_finding() {
+    fn v3_artifact_groups_sources_under_one_logical_finding() {
         let artifact = PluginShadowArtifact::new(
             PluginShadowReport {
                 config_dir: "/home/u/.config/opencode".into(),
                 findings: vec![ShadowFinding {
+                    class: ShadowFindingClass::OperatorEnvironment,
                     skill_name: "mr-review".into(),
                     role: ShadowSkillRole::Subject,
                     severity: ShadowSeverity::ComparisonInvalid,
@@ -688,7 +586,7 @@ mod tests {
         );
 
         let value = serde_json::to_value(artifact).unwrap();
-        assert_eq!(value["schema_version"], 2);
+        assert_eq!(value["schema_version"], 3);
         assert_eq!(value["findings"][0]["skill_name"], "mr-review");
         assert_eq!(
             value["findings"][0]["sources"][0]["root"]["relation"],

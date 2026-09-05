@@ -7,7 +7,7 @@ use std::fs;
 use tempfile::TempDir;
 
 /// A minimal valid `evals.json` body.
-const VALID_EVALS: &str = r#"{ "skill_name": "demo", "evals": [
+const VALID_EVALS: &str = r#"{ "skill_name": "demo", "codebase": { "path": "." }, "evals": [
     { "id": "e1", "prompt": "p", "expected_output": "o" } ] }"#;
 
 /// Build `<root>/<skill>/evals/evals.json` with the given contents.
@@ -66,6 +66,7 @@ fn help_lists_subcommands() {
         .success()
         .stdout(contains("init"))
         .stdout(contains("record-runs"))
+        .stdout(contains("compare"))
         .stdout(contains("grade"))
         .stdout(contains("validate"))
         .stdout(contains("aggregate"));
@@ -86,14 +87,14 @@ fn help_uses_published_binary_name() {
 fn every_visible_command_and_harness_subcommand_renders_help() {
     for args in [
         "run --help",
-        "dispatch-task --help",
+        "dispatch --help",
         "snapshot --help",
         "teardown --help",
         "teardown-guard --help",
         "ingest --help",
+        "compare --help",
         "finalize --help",
         "record-runs --help",
-        "fill-transcripts --help",
         "detect-stray-writes --help",
         "grade --help",
         "aggregate --help",
@@ -116,6 +117,15 @@ fn every_visible_command_and_harness_subcommand_renders_help() {
 }
 
 #[test]
+fn retired_fill_transcripts_command_is_not_exposed() {
+    skill_eval()
+        .args(["fill-transcripts", "--help"])
+        .assert()
+        .failure()
+        .stderr(contains("unrecognized subcommand 'fill-transcripts'"));
+}
+
+#[test]
 fn init_help_documents_extended_eval_authoring() {
     skill_eval()
         .args(["init", "--help"])
@@ -123,6 +133,7 @@ fn init_help_documents_extended_eval_authoring() {
         .success()
         .stdout(contains("turns"))
         .stdout(contains("files_root"))
+        .stdout(contains("overlay sources"))
         .stdout(contains("per-eval `runs`"))
         .stdout(contains("eval-magic validate"));
 }
@@ -146,20 +157,57 @@ fn top_level_examples_stop_after_orientation_and_handoffs() {
         .success()
         .stdout(contains("eval-magic init"))
         .stdout(contains("eval-magic run"))
+        .stdout(contains("eval-magic compare"))
         .stdout(contains("RUNBOOK.md"))
         .stdout(contains("--agent-env TZ=America/Los_Angeles").not())
         .stdout(contains("harness show claude-code").not());
 }
 
 #[test]
-fn dispatch_task_help_documents_conversation_verification() {
+fn dispatch_help_documents_conversation_verification() {
     skill_eval()
-        .args(["dispatch-task", "--help"])
+        .args(["dispatch", "--help"])
         .assert()
         .success()
         .stdout(contains("delivered_followups"))
         .stdout(contains("same native session ID"))
-        .stdout(contains("interrupted"));
+        .stdout(contains("duration_ms"))
+        .stdout(contains("responder consultations, judges, queueing"))
+        .stdout(contains("timed_out"))
+        .stdout(contains("plan_not_presented"));
+}
+
+#[test]
+fn dispatch_help_documents_nested_codex_sandbox_remedies() {
+    skill_eval()
+        .args(["dispatch", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("same generated task command"))
+        .stdout(contains("equivalent inputs and configuration"))
+        .stdout(contains("fails inside the operator Codex session"))
+        .stdout(contains("Operation not permitted"))
+        .stdout(contains("alone does not establish"))
+        .stdout(contains("Prefer running"))
+        .stdout(contains("ordinary terminal"))
+        .stdout(contains("outer launch of `eval-magic dispatch`"))
+        .stdout(contains("surface and policy support"))
+        .stdout(contains("--sandbox workspace-write"))
+        .stdout(contains("eval guard enabled"))
+        .stdout(contains("eval-magic docs isolation"));
+}
+
+/// Plan mode is a per-eval declaration that starts the harness's native mode;
+/// the run-level flag that injected a simulated one is gone.
+#[test]
+fn run_help_describes_plan_mode_evals_and_offers_no_simulated_flag() {
+    skill_eval()
+        .args(["run", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("plan_mode"))
+        .stdout(contains("plan-mode"))
+        .stdout(contains("--plan-mode").not());
 }
 
 #[test]
@@ -184,7 +232,35 @@ fn promote_help_documents_baseline_artifacts() {
         .stdout(contains("evals/baseline"))
         .stdout(contains("benchmark.json"))
         .stdout(contains("grading/"))
+        .stdout(contains("evidence/"))
+        .stdout(contains("judge-evidence.md"))
         .stdout(contains("NOTES.md"));
+}
+
+#[test]
+fn grade_help_documents_bounded_judge_evidence() {
+    skill_eval()
+        .args(["grade", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("judge-evidence.md"))
+        .stdout(contains("98,304-byte"))
+        .stdout(contains("131,072-byte"))
+        .stdout(contains("eval-magic docs judging"));
+}
+
+#[test]
+fn compare_help_documents_exploration_and_completeness_boundaries() {
+    skill_eval()
+        .args(["compare", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("no authored assertions"))
+        .stdout(contains("not a grade"))
+        .stdout(contains("multi-run"))
+        .stdout(contains("untrusted"))
+        .stdout(contains("validity"))
+        .stdout(contains("eval-magic docs judging"));
 }
 
 /// `--guard` and `--no-guard` are contradictory and rejected at parse time.
@@ -240,18 +316,20 @@ fn grade_and_ingest_help_document_runner_owned_command_checks() {
             .success()
             .stdout(contains("command_check"))
             .stdout(contains("runner"))
-            .stdout(contains("held-out"))
-            .stdout(contains("environment matrix"));
+            .stdout(contains("held-out").and(contains("environment matrix")))
+            .stdout(contains("run.json").and(contains("run-record digests")));
     }
 }
 
 #[test]
-fn ingest_help_documents_judge_batch_completion() {
+fn dispatch_judges_help_documents_batch_completion() {
+    // `dispatch --judges` owns the batch-completion contract: it is what counts
+    // verdicts and decides the exit status.
     skill_eval()
-        .args(["ingest", "--help"])
+        .args(["dispatch", "--help"])
         .assert()
         .success()
-        .stdout(contains("skips existing nonempty responses"))
+        .stdout(contains("Skips existing nonempty responses"))
         .stdout(contains("verdicts present"))
         .stdout(contains("exits nonzero while any are missing"));
 }
@@ -267,6 +345,19 @@ fn pipeline_help_documents_always_on_diff_scope_metrics() {
             .stdout(contains("diff-scope.json"))
             .stdout(contains("files"))
             .stdout(contains("lines"));
+    }
+}
+
+/// The patch is an artifact an operator has to be able to find, and the two
+/// commands that produce it are the two that must name it.
+#[test]
+fn ingest_and_grade_help_document_the_captured_diff() {
+    for command in ["ingest", "grade"] {
+        skill_eval()
+            .args([command, "--help"])
+            .assert()
+            .success()
+            .stdout(contains("diff.patch"));
     }
 }
 
@@ -291,6 +382,9 @@ fn aggregate_help_documents_declared_shadow_isolation() {
         .success()
         .stdout(contains("plugin-shadow.json"))
         .stdout(contains("isolates_live_sources"))
+        .stdout(contains("schema-v3"))
+        .stdout(contains("codebase-sourced"))
+        .stdout(contains("exclude_skill_sources"))
         .stdout(contains("validity_warnings"))
         .stdout(contains("eval-magic docs isolation"));
 }

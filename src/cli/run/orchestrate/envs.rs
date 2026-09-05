@@ -4,7 +4,7 @@
 //! A canonical run gives every `(eval, condition, run)` dispatch a private
 //! `iteration-N/env-<group>-<condition>[-run-<k>]/`. Each subprocess `cd`s into
 //! its own env, which holds only that condition's skill (or none) and that eval's
-//! fixtures.
+//! overlay files.
 
 use std::path::{Path, PathBuf};
 
@@ -18,7 +18,7 @@ pub(super) struct EnvTarget {
     /// `(condition name, that condition's skill path)` staged into this env —
     /// exactly one per env.
     pub conditions: Vec<(&'static str, Option<String>)>,
-    /// Eval ids whose fixtures populate this env (its group's evals).
+    /// The single eval whose overlay files populate this environment.
     pub eval_ids: Vec<String>,
 }
 
@@ -53,9 +53,10 @@ pub(super) fn task_env_root_for_run(
 }
 
 pub(super) fn task_run_indices(group: &Group) -> Vec<Option<u32>> {
-    match group.task_runs {
-        Some(runs) if runs > 1 => (1..=runs).map(Some).collect(),
-        _ => vec![None],
+    if group.runs > 1 {
+        (1..=group.runs).map(Some).collect()
+    } else {
+        vec![None]
     }
 }
 
@@ -97,14 +98,14 @@ mod tests {
             Group {
                 id: "g1".into(),
                 eval_ids: vec!["e1".into()],
-                rationale: "default".into(),
-                task_runs: None,
+                rationale: "private codebase".into(),
+                runs: 1,
             },
             Group {
                 id: "g2".into(),
                 eval_ids: vec!["e2".into()],
-                rationale: "fixture-conflict: e2 vs e1 at c.json".into(),
-                task_runs: None,
+                rationale: "private codebase".into(),
+                runs: 1,
             },
         ]
     }
@@ -162,8 +163,8 @@ mod tests {
         let groups = vec![Group {
             id: "g1".into(),
             eval_ids: vec!["held-out".into()],
-            rationale: "metric: diff_scope".into(),
-            task_runs: Some(2),
+            rationale: "private codebase".into(),
+            runs: 2,
         }];
         let targets = env_targets(&EnvLayoutInput {
             iteration_dir: iter,

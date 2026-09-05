@@ -1,0 +1,28 @@
+id = "framework/nextjs"
+package_json_dependencies = ["next"]
+allow_commands = [
+  "npm run dev",
+  "npm run build",
+  "npm run start",
+  "pnpm run dev",
+  "pnpm run build",
+  "pnpm run start",
+  "yarn run dev",
+  "yarn run build",
+  "yarn run start",
+  "bun run dev",
+  "bun run build",
+  "bun run start",
+  "npx next dev",
+  "npx next build",
+  "npx next start",
+  "pnpm exec next dev",
+  "pnpm exec next build",
+  "pnpm exec next start",
+  "yarn next dev",
+  "yarn next build",
+  "yarn next start",
+  "bunx next dev",
+  "bunx next build",
+  "bunx next start",
+]

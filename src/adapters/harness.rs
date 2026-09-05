@@ -1,20 +1,15 @@
 //! The harness adapter API — the single seam between generic dispatch code and
 //! harness-specific behavior.
 //!
-//! The trait is tiered into a **baseline** every harness must implement and
-//! **enhancements** that raise fidelity when a harness has the native support:
+//! The trait is tiered into a **runner requirement** every selected harness must
+//! satisfy and **enhancements** that raise fidelity when native support exists:
 //!
-//! - **Baseline (required):** [`label`](HarnessAdapter::label) and
-//!   [`skills_dir`](HarnessAdapter::skills_dir). A new harness compiles with
-//!   just these two methods; dispatched through its one-shot CLI (with
-//!   `--no-stage` inlining the skill when native staging isn't wired), it
-//!   already supports `llm_judge` grading and the `detect-stray-writes`
-//!   post-pass.
-//! - **Enhancements (defaulted):** every other method has a default — either a
-//!   working generic fallback (e.g. the plain available-skills block) or an
-//!   `Unsupported` error naming the enhancement it belongs to (e.g. transcript
-//!   ingest, the write guard). Override the methods of an enhancement to wire
-//!   it for a harness.
+//! - **Runner requirement:** the adapter identifies itself and exposes a
+//!   dispatch command plus a transcript event filename/reader. `run` rejects a
+//!   selected harness missing either execution or transcript recovery.
+//! - **Enhancements (defaulted):** native staging, guards, model flags,
+//!   conversations, shadow scans, and richer transcript signals may fall back
+//!   or reject only the evals/options that require them.
 //!
 //! Generic code resolves an adapter with [`adapter_for`](super::registry::adapter_for)
 //! and then calls the trait — so the [`registry`](super::registry) is the one
@@ -27,11 +22,56 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use crate::core::{AvailableSkill, HarnessRunCapabilities, ToolInvocation};
+use crate::core::{AvailableSkill, HarnessRunCapabilities, SessionMode, ToolInvocation};
 use crate::sandbox::GuardMarker;
 
+use super::descriptor::PlanFileSection;
 use super::skill_shadow::{PluginShadowReport, ShadowSource};
 use super::{PermissionDenial, SessionSurface, TranscriptSummary};
+
+/// Deterministic transcript evidence for the `__skill_invoked` meta-check.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkillEvidenceSignature {
+    /// A native skill tool whose argument equals the staged slug.
+    Invocation { tool: String, arg: String },
+    /// A successful command carrying the exact staged `SKILL.md` path as a
+    /// literal argument.
+    StagedPathAccess {
+        tool: String,
+        command_arg: String,
+        exit_code_arg: String,
+        read_commands: Vec<String>,
+    },
+}
+
+/// The role a tool name plays in a harness's vocabulary. A descriptor's roles
+/// are validated disjoint (`descriptor::validation::check_tool_roles_disjoint`),
+/// so one native name maps to at most one role.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolRole {
+    Write,
+    Patch,
+    Shell,
+    Read,
+}
+
+impl ToolRole {
+    /// Every role, in `[tools]` key order — the order role lookup and any
+    /// message listing several roles walk them, so both read the same way
+    /// every run.
+    pub const ALL: [Self; 4] = [Self::Write, Self::Patch, Self::Shell, Self::Read];
+
+    /// The role's descriptor spelling — the `[tools]` key, and how grading
+    /// evidence names it.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Write => "write",
+            Self::Patch => "patch",
+            Self::Shell => "shell",
+            Self::Read => "read",
+        }
+    }
+}
 
 /// One harness's tool-name vocabulary: every name its guard hook payloads or
 /// transcript parser can produce, grouped by role. Consumers match against the
@@ -46,6 +86,36 @@ pub struct ToolVocabulary {
     pub shell_tools: Vec<String>,
     /// Read-only tools carrying a target path argument.
     pub read_tools: Vec<String>,
+}
+
+/// A vocabulary declaring nothing: every name is roleless, so a consumer
+/// holding it classifies and aliases nothing. Borrowable for `'static`, unlike
+/// a `ToolVocabulary::default()` temporary.
+pub static EMPTY_TOOL_VOCABULARY: ToolVocabulary = ToolVocabulary {
+    write_tools: Vec::new(),
+    patch_tools: Vec::new(),
+    shell_tools: Vec::new(),
+    read_tools: Vec::new(),
+};
+
+impl ToolVocabulary {
+    /// The role this vocabulary declares for `name`, or `None` when it declares
+    /// none — an undeclared name is never given an invented role.
+    pub fn role_of(&self, name: &str) -> Option<ToolRole> {
+        ToolRole::ALL
+            .into_iter()
+            .find(|role| self.names_in(*role).iter().any(|tool| tool == name))
+    }
+
+    /// Every name this vocabulary declares in `role`, in declaration order.
+    pub fn names_in(&self, role: ToolRole) -> &[String] {
+        match role {
+            ToolRole::Write => &self.write_tools,
+            ToolRole::Patch => &self.patch_tools,
+            ToolRole::Shell => &self.shell_tools,
+            ToolRole::Read => &self.read_tools,
+        }
+    }
 }
 
 /// How per-turn token totals combine for a native resumed conversation.
@@ -77,6 +147,29 @@ pub trait HarnessAdapter {
     /// `--no-stage` (each SKILL.md is inlined into its dispatch prompt).
     fn skills_dir(&self, repo_root: &Path) -> Option<PathBuf>;
 
+    /// Every project-local skill root this harness may discover. The native
+    /// staging root comes first, followed by any cross-harness compatibility
+    /// roots declared by the descriptor. This surface is used for codebase
+    /// shadow detection and opt-in source exclusion; staging still writes only
+    /// to [`skills_dir`](Self::skills_dir).
+    fn project_skill_dirs(&self, repo_root: &Path) -> Vec<PathBuf> {
+        self.skills_dir(repo_root).into_iter().collect()
+    }
+
+    /// Env-relative paths the framework owns in every task environment, as
+    /// gitignore-style patterns.
+    ///
+    /// Staged skills sit *inside* the task repository, so a codebase whose lint
+    /// or format step globs the whole tree reports the framework's artifacts as
+    /// project failures — and only in the arm that stages a skill. `run` writes
+    /// these patterns into the project's own ignore files
+    /// ([`crate::workspace::tool_ignore`]) to keep that from happening. The
+    /// baseline is [`crate::sandbox::framework_owned_entries`], which every
+    /// harness contributes; what a harness adds on top is what it stages.
+    fn framework_ignore_paths(&self) -> Vec<String> {
+        crate::sandbox::framework_owned_entries().to_vec()
+    }
+
     // ── Run-option capabilities (defaulted) ──────────────────────────────────
 
     /// The run options the generic `run` preflight may accept for this
@@ -95,13 +188,10 @@ pub trait HarnessAdapter {
     /// The project-local config dir names this harness reads or the adapter
     /// writes (e.g. `.claude`). Staging excludes every harness's config dirs
     /// when copying a skill's sibling assets, so a stray checked-in config dir
-    /// never rides into a staged env. Via
-    /// [`all_config_dir_names`](super::registry::all_config_dir_names) this list
-    /// also feeds the guard's Bash tamper rule and detect-stray-writes'
-    /// staging-dir lookbehind, so adding a dir here automatically grows the
-    /// write-guard's deny surface. List the parent of
-    /// [`skills_dir`](Self::skills_dir) plus any hook/config dirs the adapter
-    /// writes.
+    /// never rides into a staged env. The task-repository baseline also force-adds
+    /// existing config dirs when a sourced codebase's `.gitignore` covers them.
+    /// List the parent of [`skills_dir`](Self::skills_dir) plus any hook/config
+    /// dirs the adapter writes.
     fn config_dir_names(&self) -> Vec<String> {
         Vec::new()
     }
@@ -191,16 +281,13 @@ pub trait HarnessAdapter {
         "If the staged skill cannot be resolved".to_string()
     }
 
-    // ── Enhancement: transcript ingest (defaulted) ───────────────────────────
-    // Fallback without it: `transcript_check` assertions grade as
-    // unverifiable, `llm_judge` carries the grading, token/cost/duration go
-    // unrecorded, and run records are assembled by hand (or from
-    // `outputs/final-message.md`) instead of auto-ingested.
+    // ── Runner requirement: transcript ingest (defaulted) ───────────────────
+    // Run preflight rejects a harness without this capability. The default
+    // remains unwired so a partial descriptor can still be linted and shown.
 
-    /// **Enhancement: transcript ingest.** The filename (under a task's
-    /// `outputs/` dir) this harness's one-shot CLI writes the captured
-    /// transcript to. `None` when no transcript ingest is wired — the ingest
-    /// pipeline then never calls the readers below.
+    /// **Runner requirement: transcript ingest.** The filename (under a task's
+    /// `outputs/turn-N/` dir) this harness's CLI writes the captured transcript
+    /// to. `None` means the descriptor is not runner-ready.
     fn cli_events_filename(&self) -> Option<String> {
         None
     }
@@ -231,13 +318,20 @@ pub trait HarnessAdapter {
         ))
     }
 
-    /// **Enhancement: transcript ingest.** The deterministic skill-invocation
-    /// signature the `__skill_invoked` meta-check matches: `(tool name, arg
-    /// carrying the staged slug)` — Claude Code's `Skill`/`skill`, OpenCode's
-    /// `skill`/`name`. `None` for Codex (its JSONL has no skill-tool event),
-    /// which routes the meta-check to the LLM-judge fallback.
+    /// **Enhancement: transcript ingest.** The native skill-invocation part of
+    /// the `__skill_invoked` contract: `(tool name, arg carrying the staged
+    /// slug)` — Claude Code's `Skill`/`skill`, OpenCode's `skill`/`name`.
+    /// Harnesses using exact staged-path access return `None` here and expose
+    /// that alternative through [`Self::transcript_skill_evidence`].
     fn transcript_skill_invocation(&self) -> Option<(String, String)> {
         Some(("Skill".to_string(), "skill".to_string()))
+    }
+
+    /// Deterministic invocation/access evidence exposed by this harness. The
+    /// default preserves the historical native skill-tool contract.
+    fn transcript_skill_evidence(&self) -> Option<SkillEvidenceSignature> {
+        self.transcript_skill_invocation()
+            .map(|(tool, arg)| SkillEvidenceSignature::Invocation { tool, arg })
     }
 
     /// **Enhancement: transcript denial reader.** Whether this harness's
@@ -296,12 +390,14 @@ pub trait HarnessAdapter {
     /// native pre-tool hook surface, returning the staged marker path. The
     /// guard's allowed roots are derived from `stage_root` (the isolated env /
     /// agent cwd), so it bounds the agent to the same env boundary that
-    /// isolates its reads.
+    /// isolates its reads — plus the plan-file root a `[plan_mode.plan_file]`
+    /// declares, since that write is the harness presenting its plan.
     fn install_guard(
         &self,
         _stage_root: &Path,
         _guard_exe: &Path,
         _ttl: Option<Duration>,
+        _guard_policy: &crate::core::GuardPolicyConfig,
     ) -> io::Result<PathBuf> {
         Err(io::Error::new(
             io::ErrorKind::Unsupported,
@@ -385,29 +481,14 @@ pub trait HarnessAdapter {
         super::skill_shadow::shadow_validity_warnings(report)
     }
 
-    // ── Enhancement: plan-mode context (defaulted) ───────────────────────────
+    // ── Runner requirement: dispatch commands (defaulted) ────────────────────
+    // There is no fallback: without an exec template the runner has nothing to
+    // spawn, so `run` rejects that harness during preflight.
 
-    /// **Enhancement: plan-mode context.** Wrap a plan-mode profile as an
-    /// operating-context layer. The shared `<system-reminder>` default
-    /// usually suffices; a harness with a real native plan mode could inject
-    /// it differently.
-    fn render_plan_mode_context(&self, profile_text: &str) -> String {
-        let trimmed = profile_text.trim();
-        if trimmed.is_empty() {
-            return String::new();
-        }
-        format!("<system-reminder>\n{trimmed}\n</system-reminder>")
-    }
-
-    // ── Enhancement: dispatch recipes (defaulted) ────────────────────────────
-    // Fallback without them: `run` prints the generic handoff and the runbook
-    // carries no copy-pasteable per-task command.
-
-    /// **Enhancement: dispatch recipes.** Whether a copy-pasteable per-task
-    /// exec command is wired (the descriptor's `[dispatch] exec_template`).
-    /// `false` means `RUNBOOK.md` / `dispatch-manifest.md` carry handoff
-    /// guidance without a per-task command recipe, and the `run` preflight
-    /// warns naming that limitation.
+    /// **Runner requirement: dispatch commands.** Whether a per-task exec command is
+    /// wired (the descriptor's `[dispatch] exec_template`). `false` means
+    /// `eval-magic dispatch` has nothing to run for this harness, and the `run`
+    /// preflight rejects it.
     fn has_dispatch_recipes(&self) -> bool {
         false
     }
@@ -421,6 +502,34 @@ pub trait HarnessAdapter {
         _agent_env: &BTreeMap<String, String>,
     ) -> Option<String> {
         None
+    }
+
+    /// **Enhancement: native plan mode.** Whether the descriptor declares
+    /// `[plan_mode]`, so a `plan_mode` eval can start its session in the
+    /// harness's read-only planning mode and continue in act mode once the
+    /// plan is approved.
+    fn has_plan_mode(&self) -> bool {
+        false
+    }
+
+    /// The plan file the harness writes in plan mode, when it declares one.
+    fn plan_file(&self) -> Option<PlanFileSection> {
+        None
+    }
+
+    /// [`Self::cli_exec_command`] for one session mode. Act mode is the plain
+    /// command; plan mode is `None` for a harness without `[plan_mode]`.
+    fn cli_exec_command_in_mode(
+        &self,
+        mode: SessionMode,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        match mode {
+            SessionMode::Act => self.cli_exec_command(guard, agent_model, agent_env),
+            SessionMode::Plan => None,
+        }
     }
 
     /// **Enhancement: native conversation resume.** Whether the harness can
@@ -446,25 +555,33 @@ pub trait HarnessAdapter {
         None
     }
 
-    /// **Enhancement: dispatch recipes.** The `Next:` guidance printed after
-    /// `run`: how to dispatch each task through this harness's one-shot CLI
-    /// and then ingest. Empty when no dispatch recipe is wired.
+    /// [`Self::cli_resume_command`] for one session mode. Act mode is the
+    /// plain command; plan mode is `None` for a harness without `[plan_mode]`.
+    fn cli_resume_command_in_mode(
+        &self,
+        mode: SessionMode,
+        guard: bool,
+        agent_model: Option<&str>,
+        agent_env: &BTreeMap<String, String>,
+    ) -> Option<String> {
+        match mode {
+            SessionMode::Act => self.cli_resume_command(guard, agent_model, agent_env),
+            SessionMode::Plan => None,
+        }
+    }
+
+    /// **Enhancement: dispatch commands.** The `Next:` guidance printed after
+    /// `run`: the dispatch and ingest commands for this harness. Empty when the
+    /// descriptor wires no `next_steps_template`.
     fn cli_next_steps(&self, _ctx: CliDispatchContext<'_>) -> String {
         String::new()
     }
 
-    /// **Enhancement: dispatch recipes.** Extra `dispatch-manifest.md` lines
-    /// describing this harness's dispatch recipe (command template, parallel
-    /// recipe, ingest note). `None` when the harness contributes no manifest
-    /// section.
+    /// **Enhancement: dispatch commands.** Extra `dispatch-manifest.md` lines
+    /// describing what the runner will spawn for this harness (the command
+    /// template and any ingest note). `None` when the harness contributes no
+    /// manifest section.
     fn cli_manifest_section(&self, _ctx: CliManifestContext<'_>) -> Option<Vec<String>> {
-        None
-    }
-
-    /// **Enhancement: dispatch recipes.** The post-`grade` / post-`ingest`
-    /// judge dispatch guidance for this harness. `None` leaves the generic
-    /// judge handoff in place.
-    fn cli_judge_next_steps(&self, _ctx: CliJudgeContext<'_>) -> Option<String> {
         None
     }
 }
@@ -489,15 +606,6 @@ pub struct CliManifestContext<'a> {
     pub guard: bool,
     pub agent_model: Option<&'a str>,
     pub agent_env: &'a BTreeMap<String, String>,
-    /// Exclude scripted tasks from a mixed suite's one-shot recipe.
-    pub one_shot_only: bool,
-}
-
-/// Context for rendering a harness's one-shot CLI judge-dispatch guidance.
-#[derive(Debug, Clone, Copy)]
-pub struct CliJudgeContext<'a> {
-    pub guard: bool,
-    pub iteration_dir: &'a Path,
 }
 
 #[cfg(test)]
@@ -552,6 +660,69 @@ mod tests {
     }
 
     #[test]
+    fn project_skill_dirs_include_cross_harness_roots_declared_by_the_descriptor() {
+        let root = Path::new("/repo");
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).project_skill_dirs(root),
+            vec![root.join(".claude/skills")]
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).project_skill_dirs(root),
+            vec![
+                root.join(".opencode/skills"),
+                root.join(".claude/skills"),
+                root.join(".agents/skills"),
+            ]
+        );
+    }
+
+    #[test]
+    fn framework_ignore_paths_cover_the_staged_skills_the_guard_file_and_what_the_framework_owns() {
+        assert_eq!(
+            adapter_for(Harness::resolve("claude-code").unwrap()).framework_ignore_paths(),
+            vec![
+                "/.eval-magic-outputs/".to_string(),
+                "/tmp/".to_string(),
+                "/.claude/skills/".to_string(),
+                "/.claude/settings.local.json".to_string(),
+            ]
+        );
+        // A plugin-engine harness contributes its plugin file, not a hooks file.
+        assert_eq!(
+            adapter_for(Harness::resolve("opencode").unwrap()).framework_ignore_paths(),
+            vec![
+                "/.eval-magic-outputs/".to_string(),
+                "/tmp/".to_string(),
+                "/.opencode/skills/".to_string(),
+                "/.opencode/plugins/slow-powers-eval-guard.js".to_string(),
+            ]
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).framework_ignore_paths(),
+            vec![
+                "/.eval-magic-outputs/".to_string(),
+                "/tmp/".to_string(),
+                "/.agents/skills/".to_string(),
+                "/.codex/hooks.json".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn framework_ignore_paths_omit_what_a_bare_descriptor_never_stages() {
+        let descriptor =
+            crate::adapters::descriptor::load_descriptor("label = \"bare\"\n", "test.toml")
+                .unwrap();
+        let adapter =
+            crate::adapters::descriptor_adapter::DescriptorAdapter::from_descriptor(descriptor);
+
+        assert_eq!(
+            adapter.framework_ignore_paths(),
+            vec!["/.eval-magic-outputs/".to_string(), "/tmp/".to_string()]
+        );
+    }
+
+    #[test]
     fn only_codex_and_opencode_rewrite_frontmatter() {
         assert!(!adapter_for(Harness::resolve("claude-code").unwrap()).rewrites_frontmatter_name());
         assert!(adapter_for(Harness::resolve("codex").unwrap()).rewrites_frontmatter_name());
@@ -569,6 +740,15 @@ mod tests {
         assert_eq!(
             adapter_for(Harness::resolve("codex").unwrap()).transcript_skill_invocation(),
             None
+        );
+        assert_eq!(
+            adapter_for(Harness::resolve("codex").unwrap()).transcript_skill_evidence(),
+            Some(SkillEvidenceSignature::StagedPathAccess {
+                tool: "command_execution".to_string(),
+                command_arg: "command".to_string(),
+                exit_code_arg: "exit_code".to_string(),
+                read_commands: ["cat", "head", "sed", "tail"].map(str::to_string).to_vec(),
+            })
         );
         assert_eq!(
             adapter_for(Harness::resolve("opencode").unwrap()).transcript_skill_invocation(),
@@ -654,19 +834,6 @@ mod tests {
     }
 
     #[test]
-    fn plan_mode_context_wraps_in_system_reminder_for_every_harness() {
-        for h in Harness::known() {
-            let out = adapter_for(h).render_plan_mode_context("BODY");
-            assert_eq!(out, "<system-reminder>\nBODY\n</system-reminder>");
-            assert_eq!(adapter_for(h).render_plan_mode_context("   "), "");
-            assert_eq!(
-                adapter_for(h).render_plan_mode_context("\n\n  BODY  \n\n"),
-                "<system-reminder>\nBODY\n</system-reminder>"
-            );
-        }
-    }
-
-    #[test]
     fn run_capabilities_capture_run_option_support_by_harness() {
         let claude = adapter_for(Harness::resolve("claude-code").unwrap()).run_capabilities();
         assert!(claude.supports_guard);
@@ -734,5 +901,51 @@ mod tests {
             ),
             "slow-powers-eval-2-with-skill-my-skill"
         );
+    }
+
+    fn vocabulary() -> ToolVocabulary {
+        ToolVocabulary {
+            write_tools: vec!["Edit".into(), "Write".into(), "file_change".into()],
+            patch_tools: vec!["apply_patch".into()],
+            shell_tools: vec!["Bash".into(), "command_execution".into()],
+            read_tools: vec![],
+        }
+    }
+
+    #[test]
+    fn role_of_finds_the_role_declaring_each_name() {
+        let vocabulary = vocabulary();
+        assert_eq!(vocabulary.role_of("file_change"), Some(ToolRole::Write));
+        assert_eq!(vocabulary.role_of("apply_patch"), Some(ToolRole::Patch));
+        assert_eq!(
+            vocabulary.role_of("command_execution"),
+            Some(ToolRole::Shell)
+        );
+    }
+
+    #[test]
+    fn role_of_is_none_for_a_name_the_vocabulary_does_not_declare() {
+        // Codex declares no read tools, so a read-role name is unknown to it —
+        // and an undeclared name must not be given an invented role.
+        assert_eq!(vocabulary().role_of("Read"), None);
+        assert_eq!(vocabulary().role_of("WebFetch"), None);
+    }
+
+    #[test]
+    fn names_in_lists_every_name_declared_for_the_role() {
+        let vocabulary = vocabulary();
+        assert_eq!(
+            vocabulary.names_in(ToolRole::Shell),
+            ["Bash", "command_execution"]
+        );
+        assert!(vocabulary.names_in(ToolRole::Read).is_empty());
+    }
+
+    #[test]
+    fn tool_role_renders_its_descriptor_spelling() {
+        assert_eq!(ToolRole::Write.as_str(), "write");
+        assert_eq!(ToolRole::Patch.as_str(), "patch");
+        assert_eq!(ToolRole::Shell.as_str(), "shell");
+        assert_eq!(ToolRole::Read.as_str(), "read");
     }
 }

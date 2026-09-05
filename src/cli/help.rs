@@ -8,20 +8,21 @@
 /// Worked examples shown at the end of `eval-magic --help`.
 pub(super) const AFTER_HELP: &str = "\
 REQUIREMENTS:
-  Git, plus a POSIX shell with jq, xargs, tr, and wc. The dispatch and judge
-  recipes in the generated RUNBOOK.md are POSIX command lines, and the shell
-  that runs them has to resolve the same paths the workspace was prepared
-  with. On Windows that is Git Bash (Git for Windows), with jq installed
-  separately. WSL resolves a different filesystem namespace, so run
-  eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH
-  to select a specific sh.
+  eval-magic supports Linux and macOS. On Windows, install and run eval-magic
+  inside WSL; native Windows is unsupported. Keep the repository, workspace,
+  and harness commands inside the same WSL environment. Git and a POSIX shell
+  are required. Set EVAL_MAGIC_SH to select a specific sh.
 
 EXAMPLES:
   # Scaffold a first eval and prepare its isolated comparison environments
   eval-magic init
   eval-magic run
-  # run prepares the workspace but does not dispatch. Read the generated
-  # RUNBOOK.md end to end and follow it through ingest, judges, finalize, and teardown.
+  # run prepares the workspace but does not dispatch; eval-magic dispatch does.
+  # Read the generated RUNBOOK.md end to end and follow it through dispatch,
+  # ingest, judges, finalize, and teardown.
+  # Artifacts land outside the skill's own repository; run prints the path, and
+  # every command it suggests carries --workspace-dir. Set EVAL_MAGIC_WORKSPACE_DIR
+  # to move the default. See: eval-magic docs isolation
 
   # Evaluate a revision: edit first, snapshot committed content, then compare
   eval-magic snapshot --ref HEAD
@@ -29,6 +30,15 @@ EXAMPLES:
 
   # Reduce cost while iterating on the suite
   eval-magic run --only case-a,case-b
+
+  # Scaffold against the current project instead of the default example project;
+  # init records the selected source in evals.json
+  eval-magic init --codebase-cwd
+  # Source selection, project scale, pinning, and recorded provenance
+  eval-magic docs codebase
+
+  # Pair both conditions for exploratory review before writing assertions
+  eval-magic compare --iteration 1 --eval implement-feature
 
   # Select a built-in harness; `run --help` documents models and environment options
   eval-magic run --harness codex

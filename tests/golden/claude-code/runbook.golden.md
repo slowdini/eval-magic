@@ -4,7 +4,7 @@ This runbook is for a human driving the run from a terminal. Work from this iter
 and copy-paste each step. The workspace is self-contained — you should not need the surrounding
 repo.
 
-> **Requires:** eval-magic's dispatch and judge recipes are POSIX command lines built on `jq`, `xargs`, `tr`, and `wc`. Run them in a POSIX shell with `jq` installed that resolves the same paths this workspace was prepared with — on Windows, Git Bash (Git for Windows). WSL resolves a different filesystem namespace, so run eval-magic inside WSL rather than dispatching into it. Set EVAL_MAGIC_SH to select a specific `sh`.
+> **Requires:** `eval-magic` supports Linux and macOS. On Windows, run `eval-magic` inside WSL; native Windows is unsupported. Git and a POSIX shell are required. Set EVAL_MAGIC_SH to select a specific `sh`.
 
 - **Skill under test:** widget-skill
 - **Mode:** revision — comparing `old_skill` vs `new_skill`
@@ -12,58 +12,58 @@ repo.
 
 ## 1. Dispatch the eval agents, then ingest
 
-Next: iterate the tasks[] array in dispatch.json and dispatch each task (from the env dir — `claude` has no --cd flag) with:
-unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_CEILING_DIRECTORIES
-cd <eval-root> && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions --model model-x \
-  "Read the file at <dispatch_prompt_path> and follow its instructions exactly. When you finish, make your final response your closing summary." \
-  </dev/null \
-  > <outputs_dir>/claude-events.jsonl \
-  2> <outputs_dir>/claude-stderr.log
-Then run `ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code`.
+```
+eval-magic dispatch --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code
+```
+
+`dispatch` runs every task in its own private environment, `--jobs` of them at a time, and writes
+each task's `conversation.json`. A task that already has one is skipped, so rerunning the same
+command retries only what did not finish. A task that exceeds `--timeout` is recorded as timed out
+rather than left to stall the campaign, and a task that fails is recorded and named while the rest
+of the batch continues. A conversation that stops at a scripted gate is valid eval data, not a
+failure. A conversation the responder stopped — because it produced no usable reply, or because it
+hit `max_turns` — is recorded too, but it ended with the task unfinished; `dispatch` warns about
+each one by name and cause, and `aggregate` counts them per condition in `benchmark.json`'s
+`validity_warnings`. Those runs are weaker evidence than a completed one.
+
+```
+eval-magic ingest --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code
+```
 
 `ingest` records each run, backfills transcripts, scans for stray writes, collects guarded-task
 blocks into `guard-denials.json`, and grades every mechanical assertion. Inspect any denial
 warning before trusting the affected task. It then prints any `llm_judge` tasks it could not
-grade itself.
+grade itself. Each run's bounded `judge-evidence.md` combines the task, final message, diff,
+conversation, tool summary, and source paths; those exact bytes are the primary input shared by
+that run's judge tasks. Read `eval-magic docs judging` for its caps, truncation markers, and
+retention contract.
 
-## 2. Dispatch the judge agents, then finalize
-Dispatch each judge task from judge-tasks.json with:
-Existing nonempty response files are skipped; delete one to dispatch that judge again.
-The final `N/M verdicts present` summary exits nonzero until every task has one.
+## 2. Optional: explore paired evidence before grading
 
-```bash
-JOBS=${JOBS:-4}
-jq -r '.tasks[] | .dispatch_prompt_path, .response_path, ("model=" + (.model // ""))' judge-tasks.json \
-  | tr -d '\r' \
-  | tr '\n' '\0' \
-  | xargs -0 -P "$JOBS" -n 3 sh -c '
-    prompt_path="$1"
-    response_path="$2"
-    model="${3#model=}"
-    if [ -s "$response_path" ]; then exit 0; fi
-    response_base="${response_path%.json}"
-    mkdir -p "$(dirname "$response_path")"
-    model_arg=""; [ -n "$model" ] && model_arg="--model $model"
-    cd "/work/.eval-magic/widget-skill/iteration-2" && claude -p --output-format stream-json --verbose --permission-mode bypassPermissions $model_arg \
-      "Read the file at $prompt_path and follow it exactly. You are a judge worker only: write the JSON verdict to $response_path, then reply with one sentence. Do not run eval-magic. Do not dispatch other judge tasks. Do not wait for other workers." \
-      </dev/null \
-      > "$response_base.claude-events.jsonl" \
-      2> "$response_base.claude-stderr.log"
-  ' sh
-judge_dispatch_status=$?
-judge_total=$(jq '.tasks | length' judge-tasks.json | tr -d '\r')
-judge_present=$(
-  jq -r '.tasks[].response_path' judge-tasks.json \
-    | tr -d '\r' \
-    | while IFS= read -r response_path; do
-        if [ -s "$response_path" ]; then printf '%s\n' "$response_path"; fi
-      done \
-    | wc -l \
-    | tr -d '[:space:]'
-)
-printf '%s/%s verdicts present\n' "$judge_present" "$judge_total"
-[ "$judge_dispatch_status" -eq 0 ] && [ "$judge_present" -eq "$judge_total" ]
+`compare` puts both conditions' evidence for one eval in a single Markdown report and prints its
+path. Read that report with the driving agent to identify concrete candidate assertions. A single
+comparison is exploratory evidence, not a grade or a statistically reliable result.
+
 ```
+eval-magic compare --skill-dir /tmp/skills --skill widget-skill --iteration 2 --eval implement-widget
+```
+
+The commands cover every eval selected for this iteration. They require no authored assertions,
+judge dispatches, or finalized benchmark.
+
+Turn what you find into assertions in the skill's own `evals/evals.json` — the live file, not the
+copy this iteration froze — then re-run the `ingest` command above to grade them. `grade` reads
+assertions from that file and prints the path it read them from; everything the run was defined by
+still comes from the copy. See `eval-magic docs judging`.
+
+## 3. Dispatch the judge agents, then finalize
+
+```
+eval-magic dispatch --judges --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code
+```
+
+Verdicts that are already present are skipped; the summary prints `N/M verdicts present` and exits
+nonzero until every task has one, so rerun the same command to fill the gaps.
 
 Then merge the verdicts and aggregate:
 
@@ -71,7 +71,7 @@ Then merge the verdicts and aggregate:
 eval-magic finalize --skill-dir /tmp/skills --skill widget-skill --iteration 2 --harness claude-code
 ```
 
-## 3. Read the result
+## 4. Read the result
 
 `finalize` writes the cross-condition benchmark to:
 
@@ -81,7 +81,7 @@ eval-magic finalize --skill-dir /tmp/skills --skill widget-skill --iteration 2 -
 
 Read it for the per-condition pass rates and the `old_skill` − `new_skill` deltas.
 
-## 4. Tear down
+## 5. Tear down
 
 ```
 eval-magic teardown --skill-dir /tmp/skills --skill widget-skill --harness claude-code

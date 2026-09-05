@@ -3,10 +3,9 @@
 //!
 //! Tests that exercise `command_check` grading need a program that exits with a
 //! chosen status, emits chosen bytes, or writes a chosen file. Reaching for
-//! `sh`, `true`, or `printf` ties those tests to POSIX, and the `cmd.exe`
-//! equivalents are not equivalent — `echo x>>f` appends CRLF, and
-//! `echo|set /p=` cannot round-trip a value. One fixture invoked the same way
-//! under both shells removes the dialect problem entirely.
+//! external utilities such as `true`, `printf`, or `sleep` would make their
+//! platform-specific output and availability part of the test. The fixture
+//! keeps those effects predictable.
 
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
@@ -36,6 +35,11 @@ fn execute_fixture(
     out: &mut impl Write,
     err: &mut impl Write,
 ) -> anyhow::Result<i32> {
+    // Ahead of every effect, so a caller waiting on this process overruns its
+    // deadline before any output or file write suggests progress.
+    if let Some(millis) = args.sleep_ms {
+        std::thread::sleep(std::time::Duration::from_millis(millis));
+    }
     let satisfied = requirements_met(args)?;
     let emitted = emitted_output(args);
 
@@ -152,6 +156,25 @@ mod tests {
             String::from_utf8(out).unwrap(),
             String::from_utf8(err).unwrap(),
         )
+    }
+
+    /// `--sleep-ms` delays the fixture before it does anything else, which is
+    /// what lets a dispatch-timeout test overrun a deadline without depending
+    /// on an external `sleep` binary.
+    #[test]
+    fn sleep_ms_delays_the_fixture_before_it_emits() {
+        let started = std::time::Instant::now();
+        let (code, out, _) = run(&FixtureArgs {
+            sleep_ms: Some(120),
+            text: vec!["done".into()],
+            ..args()
+        });
+        assert_eq!((code, out.as_str()), (0, "done"));
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(120),
+            "expected the fixture to sleep at least 120ms, took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

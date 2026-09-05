@@ -3,7 +3,7 @@
 //! Split into focused sub-orchestrators:
 //!
 //! - [`staging`] — staged-skill lifecycle (install/cleanup + sibling manifest).
-//! - [`dispatch`] — dispatch-task and prompt assembly (`dispatch.json`).
+//! - [`dispatch`] — dispatch task and prompt assembly (`dispatch.json`).
 //! - [`steps`] — the `ingest` / `finalize` fixed-order chains.
 //! - [`orchestrate`] — `command_run`, the top-level orchestrator.
 //!
@@ -12,11 +12,12 @@
 
 pub mod conversation;
 pub mod dispatch;
-pub mod fixtures;
+pub mod drive;
 #[cfg(test)]
 mod golden_tests;
 pub mod grouping;
 pub mod orchestrate;
+pub mod overlays;
 pub mod runbook;
 mod scratch;
 pub mod staging;

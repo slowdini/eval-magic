@@ -8,8 +8,24 @@
   "additionalProperties": false,
   "properties": {
     "skill_name": {
-      "type": "string",
-      "description": "Name of the skill being evaluated. Should match the skill directory name."
+      "description": "Name of the skill being evaluated, or an ordered non-empty set of coordinated skills. The CLI-selected eval owner must be a member of a set.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      ]
+    },
+    "codebase": {
+      "$ref": "#/definitions/codebase",
+      "description": "Default codebase every eval's task environment is built from. A per-eval codebase overrides it."
+    },
+    "guard": {
+      "$ref": "#/definitions/guardPolicy",
+      "description": "Default shell-command policy for guarded runs. A per-eval guard block replaces it. When neither is present, eval-magic detects packaged profiles from the task tree."
     },
     "evals": {
       "type": "array",
@@ -17,7 +33,72 @@
       "items": { "$ref": "#/definitions/eval" }
     }
   },
+  "anyOf": [
+    { "required": ["codebase"] },
+    {
+      "properties": {
+        "evals": {
+          "items": { "required": ["codebase"] }
+        }
+      }
+    }
+  ],
   "definitions": {
+    "codebase": {
+      "oneOf": [
+        { "$ref": "#/definitions/gitCodebase" },
+        { "$ref": "#/definitions/pathCodebase" }
+      ]
+    },
+    "pathCodebase": {
+      "type": "object",
+      "required": ["path"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Directory on this host to build the task environment from, resolved relative to this evals.json when relative. Unlike files_root it may be absolute or escape the skill tree, because it deliberately points outside it. A path source is host-local: another machine has the directory elsewhere or not at all, so a run recorded against one is not reproducible from this config alone. When the directory is a Git repository, the runner also records its origin URL and resolved SHA so another machine can resolve the same tree."
+        },
+        "exclude_skill_sources": {
+          "type": "boolean",
+          "default": false,
+          "description": "Move project-local skill roots discoverable by the selected harness out of every comparison environment before staging. Root instruction files and other harness configuration remain visible."
+        },
+        "ignore_files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Ignore files, relative to the task environment root, that run writes its framework-file block into, so the project's own linters and formatters never report eval-magic's staged skills, guard files, or outputs. Omit it to detect the project's tooling automatically (Prettier, ESLint, Stylelint, markdownlint, Docker); an empty array opts out entirely. Paths may not be absolute or escape the environment."
+        }
+      }
+    },
+    "gitCodebase": {
+      "type": "object",
+      "required": ["url", "ref"],
+      "additionalProperties": false,
+      "properties": {
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Git repository to clone the task environment from."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Branch, tag, or full commit SHA to check out. Required: the runner records the resolved SHA, so an eval tracking a moving branch could not be re-run against what it measured."
+        },
+        "exclude_skill_sources": {
+          "type": "boolean",
+          "default": false,
+          "description": "Move project-local skill roots discoverable by the selected harness out of every comparison environment before staging. Root instruction files and other harness configuration remain visible."
+        },
+        "ignore_files": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Ignore files, relative to the task environment root, that run writes its framework-file block into, so the project's own linters and formatters never report eval-magic's staged skills, guard files, or outputs. Omit it to detect the project's tooling automatically (Prettier, ESLint, Stylelint, markdownlint, Docker); an empty array opts out entirely. Paths may not be absolute or escape the environment."
+        }
+      }
+    },
     "eval": {
       "type": "object",
       "required": ["id", "prompt", "expected_output"],
@@ -39,6 +120,15 @@
           "items": { "$ref": "#/definitions/scriptedTurn" },
           "description": "Ordered scripted user follow-ups. Each delivered turn resumes the same agent session; absence preserves one-shot dispatch."
         },
+        "responder": {
+          "$ref": "#/definitions/responder",
+          "description": "Derives each follow-up turn from what the agent just said, instead of scripting them. Mutually exclusive with turns; declaring neither preserves one-shot dispatch. Requires a harness with native conversation resume, exactly as turns does."
+        },
+        "plan_mode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Start the session in the harness's native plan mode. The agent explores read-only and presents a plan; eval-magic approves it in the same session with one fixed message and continues in act mode, where turns or a responder proceed as usual. Requires a harness whose descriptor declares [plan_mode] (`eval-magic harness list` shows plan-mode). A harness without a [plan_mode.plan_file] also requires a responder, which decides when the plan is ready. See `eval-magic docs conversations`."
+        },
         "expected_output": {
           "type": "string",
           "minLength": 1,
@@ -47,23 +137,25 @@
         "files": {
           "type": "array",
           "items": { "type": "string" },
-          "description": "Fixture destination paths relative to the task repository. Sources use the same paths beneath the skill's evals/ directory, or beneath files_root when set. Copied before dispatch. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
+          "description": "Codebase overlay destination paths relative to the task repository. Sources use the same paths beneath the skill's evals/ directory, or beneath files_root when set. Applied after the codebase and condition skills are staged. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
         },
         "files_root": {
           "type": "string",
           "minLength": 1,
-          "description": "Optional source directory relative to the skill's evals/ directory. When set, files are resolved beneath this directory but retain their declared paths in the task repository. Must be relative and may not contain a parent-directory component."
+          "description": "Optional source directory for codebase overlay files, relative to the skill's evals/ directory. Files resolve beneath this directory but retain their declared paths in the task repository. Must be relative and may not contain a parent-directory component."
         },
         "runs": {
           "type": "integer",
           "minimum": 1,
           "description": "Runs per condition for this eval, for variance reduction; overrides the --runs flag. Defaults to the flag's value (1 unless raised)."
         },
-        "isolation": {
-          "type": "string",
-          "enum": ["shared", "isolated"],
-          "default": "shared",
-          "description": "Legacy isolation hint retained for config compatibility. Canonical runs already give every (eval, condition, run) dispatch a private environment for diff-scope capture, so 'shared' and 'isolated' currently have the same effective isolation."
+        "codebase": {
+          "$ref": "#/definitions/codebase",
+          "description": "Codebase this eval's task environment is built from, overriding the config-level default."
+        },
+        "guard": {
+          "$ref": "#/definitions/guardPolicy",
+          "description": "Shell-command policy for this eval. Presence replaces the config-level guard policy and disables automatic profile detection."
         },
         "skill_should_trigger": {
           "type": "boolean",
@@ -74,6 +166,52 @@
           "type": "array",
           "items": { "$ref": "#/definitions/assertion" },
           "description": "Pass/fail criteria, added after iteration 1 when you know what outputs look like."
+        }
+      },
+      "allOf": [
+        {
+          "not": { "required": ["turns", "responder"] }
+        }
+      ]
+    },
+    "guardPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "profiles": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Packaged guard profiles to include. Naming profiles is explicit; automatic detection does not add any others."
+        },
+        "allow_tools": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Shell executable basenames allowed with any arguments, after non-overridable containment checks."
+        },
+        "allow_commands": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 },
+          "description": "Literal shell-token prefixes allowed for their claimed executable, with trailing arguments permitted."
+        }
+      }
+    },
+    "responder": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["llm"],
+          "description": "Which responder answers the agent. 'llm' consults a small model through the same harness as the agent under test, once after every round: it answers, judges the task finished, or stops the run rather than guessing. Required rather than defaulted, because the responder decides what the agent hears. Choose the model with 'run --responder-model'."
+        },
+        "max_turns": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum follow-up turns the responder may synthesize; the opening prompt is not one of them. Defaults to 8. Reaching it is recorded as a stopped conversation, not a failure."
         }
       }
     },
@@ -135,7 +273,7 @@
         },
         "pattern": {
           "type": "string",
-          "description": "Rust regex matched against a rendered tool invocation or assistant message."
+          "description": "Rust regex matched against a rendered tool invocation or assistant message. For tool_invocation_matches, a miss on the native tool name is retried against the portable spellings the harness descriptors declare for that tool's role (write/patch/shell/read), so one pattern grades the same on every harness; arguments are preserved and a tool in no declared role matches by its native name only. See `eval-magic docs judging`."
         },
         "must_precede": {
           "type": "string",
@@ -159,6 +297,11 @@
         "model": {
           "type": "string",
           "description": "Optional judge model override. When absent, defaults to the run-level judge model recorded in conditions.json, or the harness default when no run-level model was selected."
+        },
+        "samples": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Independent judge verdicts requested for this assertion. Overrides run --judge-samples and defaults to 1."
         }
       }
     },
@@ -177,7 +320,7 @@
         "command": {
           "type": "string",
           "minLength": 1,
-          "description": "Trusted eval-author command executed by the runner in the task environment after agent dispatch."
+          "description": "Trusted eval-author POSIX shell command executed by the runner with `sh -c` in the task environment after agent dispatch."
         },
         "env": {
           "type": "object",
@@ -235,12 +378,12 @@
         "max_files_touched": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment. Framework files under the task root's .eval-magic-outputs and runner-owned .git are excluded; nested .git metadata remains measurable."
+          "description": "Maximum number of changed, deleted, or newly-created files allowed in the final task environment, as Git reports them against the refs/eval-magic/baseline ref. The codebase's own .gitignore applies, so ignored build output does not count; framework files under .eval-magic-outputs and anything under a .git directory never count; a rename counts as two files."
         },
         "max_lines_changed": {
           "type": "integer",
           "minimum": 0,
-          "description": "Maximum total byte-lines added plus byte-lines removed allowed. Diffing uses Myers operations with zero-context hunks."
+          "description": "Maximum total lines added plus lines removed allowed, as git diff --numstat counts them. A binary file contributes no lines. Hunks are counted at zero context."
         }
       }
     }

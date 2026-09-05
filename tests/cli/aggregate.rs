@@ -6,8 +6,10 @@ use std::fs;
 use std::process::Command as StdCommand;
 
 mod assertions;
+mod guard_provenance;
 mod shadow;
 mod shadow_verification;
+mod timing;
 
 /// Create skill-dir/SKILL.md + iteration-1, returning
 /// `(skill_dir, skill_md_path, iteration_dir, cwd)`.
@@ -52,6 +54,22 @@ fn write_grading_in(run_dir: &std::path::Path, pass_rate: f64) {
             "summary": {"passed": 1, "failed": 0, "total": 1, "pass_rate": pass_rate},
         }))
         .unwrap(),
+    )
+    .unwrap();
+}
+
+/// Write `eval-e1/<cond>/conversation.json` (the cond dir must already exist).
+fn write_conversation(
+    iteration_dir: &std::path::Path,
+    cond: &str,
+    conversation: serde_json::Value,
+) {
+    fs::write(
+        iteration_dir
+            .join("eval-e1")
+            .join(cond)
+            .join("conversation.json"),
+        serde_json::to_string(&conversation).unwrap(),
     )
     .unwrap();
 }
@@ -421,98 +439,154 @@ fn aggregate_surfaces_live_source_reads() {
     }));
 }
 
-/// `aggregate`: warns when timing sources are mixed across the compared runs.
+/// A run the responder could not carry to completion measured an interrupted
+/// task, so counting it beside a completed one biases the delta. The count is
+/// per condition on purpose: one arm being truncated more than the other is
+/// exactly the threat the reader needs to see.
 #[test]
-fn aggregate_warns_on_mixed_timing_sources() {
-    use serde_json::json;
-    let (_tmp, root) = canonical_root();
-    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
-    new_skill_conditions(&iteration_dir, &skill_md);
-    write_grading(&iteration_dir, "with_skill", 1.0);
-    write_timing(
-        &iteration_dir,
-        "with_skill",
-        json!({"total_tokens": 5000, "duration_ms": 1000}),
-    );
-    write_grading(&iteration_dir, "without_skill", 1.0);
-    write_timing(
-        &iteration_dir,
-        "without_skill",
-        json!({"total_tokens": 90000, "duration_ms": 1200, "source": "transcript"}),
-    );
-
-    agg_cmd(&cwd, &skill_dir).assert().success();
-
-    let b = read_benchmark(&iteration_dir);
-    let warns = b["validity_warnings"].as_array().unwrap();
-    assert!(warns.iter().any(|w| {
-        let s = w.as_str().unwrap();
-        s.contains("timing source") && s.contains("transcript")
-    }));
-}
-
-/// `aggregate`: no timing-source warning when all runs share one source.
-#[test]
-fn aggregate_no_warning_when_timing_sources_match() {
+fn aggregate_warns_when_the_responder_ended_runs_early() {
     use serde_json::json;
     let (_tmp, root) = canonical_root();
     let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
     new_skill_conditions(&iteration_dir, &skill_md);
     for cond in ["with_skill", "without_skill"] {
         write_grading(&iteration_dir, cond, 1.0);
-        write_timing(
+    }
+    write_conversation(
+        &iteration_dir,
+        "with_skill",
+        json!({
+            "status": "stopped",
+            "delivered_followups": 1,
+            "stop_reason": "responder_cannot_answer",
+            "stopped_before_followup": 2,
+            "responder_outcome": { "ending": "cannot_answer", "cause": "declined" },
+            "events": [
+                { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+                { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Which credential?" }
+            ]
+        }),
+    );
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    let warning = warns
+        .iter()
+        .find_map(|w| {
+            let s = w.as_str().unwrap();
+            s.contains("responder").then_some(s)
+        })
+        .unwrap_or_else(|| panic!("expected a responder warning in {warns:?}"));
+    assert!(warning.contains("with_skill"), "{warning}");
+    assert!(warning.contains("declined"), "{warning}");
+    assert!(
+        !warns
+            .iter()
+            .any(|w| w.as_str().unwrap().contains("without_skill")
+                && w.as_str().unwrap().contains("responder")),
+        "the untruncated arm is not warned about: {warns:?}"
+    );
+}
+
+/// A conversation the responder carried to completion is not a threat to the
+/// comparison, so it must not add noise to every responder-driven campaign.
+/// A plan-mode run whose session never left the planning phase measures a
+/// task that was never attempted, whatever stopped it; counting it beside a
+/// completed run biases the delta, so it is warned about per condition.
+#[test]
+fn aggregate_warns_when_a_plan_mode_run_never_reached_implementation() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+    }
+    write_conversation(
+        &iteration_dir,
+        "with_skill",
+        json!({
+            "status": "stopped",
+            "delivered_followups": 0,
+            "stop_reason": "plan_not_presented",
+            "stopped_before_followup": 1,
+            "events": [
+                { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan" }
+            ]
+        }),
+    );
+    write_conversation(
+        &iteration_dir,
+        "without_skill",
+        json!({
+            "status": "completed",
+            "delivered_followups": 1,
+            "events": [
+                { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching.", "mode": "plan" },
+                { "type": "user_message", "ordinal": 1, "round": 2,
+                  "text": "The plan is approved. Implement it now.",
+                  "origin": { "runner": "plan_approval" }, "mode": "act" }
+            ],
+            "plan": { "presented_in_round": 1, "approved_in_round": 2, "signal": "plan_file" }
+        }),
+    );
+
+    agg_cmd(&cwd, &skill_dir).assert().success();
+
+    let b = read_benchmark(&iteration_dir);
+    let warns = b["validity_warnings"].as_array().unwrap();
+    let warning = warns
+        .iter()
+        .find_map(|w| {
+            let s = w.as_str().unwrap();
+            s.contains("never reached implementation").then_some(s)
+        })
+        .unwrap_or_else(|| panic!("expected a plan-mode warning in {warns:?}"));
+    assert!(warning.contains("with_skill"), "{warning}");
+    assert!(
+        !warns.iter().any(|w| {
+            let s = w.as_str().unwrap();
+            s.contains("without_skill") && s.contains("never reached implementation")
+        }),
+        "the arm whose plan was approved is not warned about: {warns:?}"
+    );
+}
+
+#[test]
+fn aggregate_is_silent_when_the_responder_completed_every_run() {
+    use serde_json::json;
+    let (_tmp, root) = canonical_root();
+    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
+    new_skill_conditions(&iteration_dir, &skill_md);
+    for cond in ["with_skill", "without_skill"] {
+        write_grading(&iteration_dir, cond, 1.0);
+        write_conversation(
             &iteration_dir,
             cond,
-            json!({"total_tokens": 100, "duration_ms": 1, "source": "transcript"}),
+            json!({
+                "status": "completed",
+                "delivered_followups": 1,
+                "responder_outcome": { "ending": "done" },
+                "events": [
+                    { "type": "user_message", "ordinal": 0, "round": 1, "text": "Add caching." },
+                    { "type": "assistant_message", "ordinal": 1, "round": 1, "text": "Done." }
+                ]
+            }),
         );
     }
 
     agg_cmd(&cwd, &skill_dir).assert().success();
 
     let b = read_benchmark(&iteration_dir);
-    let warns = b["validity_warnings"].as_array().unwrap();
     assert!(
-        !warns
+        !b["validity_warnings"]
+            .as_array()
+            .unwrap()
             .iter()
-            .any(|w| w.as_str().unwrap().contains("timing source"))
+            .any(|w| w.as_str().unwrap().contains("responder")),
+        "{}",
+        b["validity_warnings"]
     );
-}
-
-/// `aggregate`: incomplete timing samples are explicit, especially `n: 0`,
-/// whose numeric zero mean is retained only for schema compatibility.
-#[test]
-fn aggregate_warns_when_token_or_duration_samples_are_missing() {
-    use serde_json::json;
-    let (_tmp, root) = canonical_root();
-    let (skill_dir, skill_md, iteration_dir, cwd) = setup_agg(&root);
-    new_skill_conditions(&iteration_dir, &skill_md);
-    write_grading(&iteration_dir, "with_skill", 1.0);
-    write_timing(
-        &iteration_dir,
-        "with_skill",
-        json!({"total_tokens": 100, "duration_ms": null, "source": "transcript"}),
-    );
-    write_grading(&iteration_dir, "without_skill", 1.0);
-
-    agg_cmd(&cwd, &skill_dir).assert().success();
-
-    let b = read_benchmark(&iteration_dir);
-    assert_eq!(b["run_summary"]["with_skill"]["total_tokens"]["n"], 1);
-    assert_eq!(b["run_summary"]["with_skill"]["duration_ms"]["n"], 0);
-    assert_eq!(b["run_summary"]["without_skill"]["total_tokens"]["n"], 0);
-    assert_eq!(b["run_summary"]["without_skill"]["duration_ms"]["n"], 0);
-    let warnings = b["validity_warnings"].as_array().unwrap();
-    assert!(warnings.iter().any(|warning| {
-        let warning = warning.as_str().unwrap();
-        warning.contains("condition 'with_skill'")
-            && warning.contains("total_tokens: 1/1")
-            && warning.contains("duration_ms: 0/1")
-            && warning.contains("n: 0 is unavailable, not a measured zero")
-    }));
-    assert!(warnings.iter().any(|warning| {
-        let warning = warning.as_str().unwrap();
-        warning.contains("condition 'without_skill'")
-            && warning.contains("total_tokens: 0/1")
-            && warning.contains("duration_ms: 0/1")
-    }));
 }

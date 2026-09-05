@@ -2,8 +2,8 @@
 //! [`DispatchTask`] the orchestrator records in `dispatch.json`, plus the
 //! human-readable `dispatch-manifest.md`.
 //!
-//! The prompt mirrors a real session: optional bootstrap and plan-mode context,
-//! the harness-native available-skills block, then the eval task framing.
+//! The prompt mirrors a real session: optional bootstrap context, the
+//! harness-native available-skills block, then the eval task framing.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -14,9 +14,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
-use crate::core::{AvailableSkill, Eval, Harness, POSIX_TOOLING_REQUIREMENT, ScriptedTurn};
+use crate::core::{
+    AvailableSkill, CodebaseRecord, ConditionSkill, Eval, GuardPolicyConfig, Harness,
+    POSIX_TOOLING_REQUIREMENT, ResponderPolicy, ScriptedTurn, SkillSource,
+};
 
 use super::RunError;
+
+mod prompt_components;
+
+use prompt_components::{effective_bootstrap, render_overlay_files_block, render_skill_block};
 
 /// One dispatchable task: the metadata the orchestrator persists per
 /// `(eval, condition)`. `dispatch_prompt` is held in memory (for manifest
@@ -31,15 +38,22 @@ pub struct DispatchTask {
     pub run_index: Option<u32>,
     pub skill_path: Option<String>,
     pub staged_skill_slug: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged_skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<ConditionSkill>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_skills: Option<Vec<AvailableSkill>>,
     pub user_prompt: String,
-    pub fixtures: Vec<String>,
+    #[serde(alias = "fixtures")]
+    pub files: Vec<String>,
     pub outputs_dir: String,
     pub run_record_path: String,
     pub timing_path: String,
     /// Ordered scripted follow-ups; absent for one-shot tasks.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turns: Option<Vec<ScriptedTurn>>,
-    /// Runner-owned completion artifact for a scripted conversation.
+    /// Runner-owned completion artifact for every dispatched task.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub conversation_path: Option<String>,
     pub agent_description: String,
@@ -53,6 +67,32 @@ pub struct DispatchTask {
     /// recipe's `<eval-root>` placeholder resolves to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eval_root: Option<String>,
+    /// The codebase this task's environment was built from. Carried here so the
+    /// run record written at ingest names the tree the agent actually worked in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseRecord>,
+    /// The skill under test this task stages, as the run resolved it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
+    /// The policy that derives this task's follow-up turns, when the eval
+    /// declares one instead of scripting them. Recorded here so the plan names
+    /// how the conversation was driven, not just what it produced.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder: Option<ResponderPolicy>,
+    /// Where this task's responder consultations run and are captured. It sits
+    /// in the cell directory, above the env: a consultation must not be able to
+    /// reach the codebase under measurement, nor pick up its `CLAUDE.md` as
+    /// instructions. Absent unless the eval declares a responder, so a task
+    /// without one serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder_dir: Option<String>,
+    /// Fully expanded command policy used by the live guard and post-run audit.
+    #[serde(default)]
+    pub guard_policy: GuardPolicyConfig,
+    /// Whether the session starts in the harness's native plan mode. Absent
+    /// unless the eval declares it, so other tasks serialize as before.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode: bool,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -67,14 +107,20 @@ pub struct DispatchTaskOpts<'a> {
     /// Absolute path to the staged per-condition `SKILL.md`, surfaced as an
     /// explicit fallback for a mid-session discovery miss (issue #6).
     pub staged_skill_path: Option<&'a str>,
+    /// Complete treatment roster for list-authored evals. `Some(empty)` is the
+    /// control arm; `None` preserves the scalar task shape.
+    pub skills: Option<&'a [ConditionSkill]>,
+    /// Full treatment names even in the empty control arm, used to remove every
+    /// treatment reference from optional bootstrap content.
+    pub treatment_names: Option<&'a [String]>,
     pub user_prompt: &'a str,
-    pub fixtures: Vec<String>,
+    pub files: Vec<String>,
     pub turns: Option<&'a [ScriptedTurn]>,
+    /// The eval's `plan_mode` declaration.
+    pub plan_mode: bool,
     pub outputs_dir: &'a str,
     pub cond_dir: &'a str,
     pub bootstrap_content: Option<&'a str>,
-    /// Verbatim plan-mode profile to inject as a `<system-reminder>`, or `None`.
-    pub plan_mode_content: Option<&'a str>,
     pub skill_name: &'a str,
     pub available_skills: Vec<AvailableSkill>,
     pub harness: Harness,
@@ -90,6 +136,12 @@ pub struct DispatchTaskOpts<'a> {
     /// The task's env dir (the agent-under-test's cwd); `None` only for legacy
     /// callers that do not carry an environment manifest.
     pub eval_root: Option<&'a str>,
+    /// The codebase this task's environment was built from, if any.
+    pub codebase: Option<&'a CodebaseRecord>,
+    /// The skill under test this task stages, if any.
+    pub skill_source: Option<&'a SkillSource>,
+    /// The responder policy this eval declares, if any.
+    pub responder: Option<&'a ResponderPolicy>,
 }
 
 fn render_available_skills_block_for_harness(
@@ -97,10 +149,6 @@ fn render_available_skills_block_for_harness(
     skills: &[AvailableSkill],
 ) -> String {
     adapter_for(harness).render_available_skills_block(skills)
-}
-
-fn render_plan_mode_context_for_harness(harness: Harness, profile_text: &str) -> String {
-    adapter_for(harness).render_plan_mode_context(profile_text)
 }
 
 /// Construct one dispatch task and its full prompt.
@@ -117,72 +165,23 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     let mut staged_skills = opts.available_skills.clone();
     staged_skills.sort_by(|a, b| a.name.cmp(&b.name));
 
-    let skill_block = if let Some(slug) = opts.staged_skill_slug {
-        // Neutral slug disambiguation only — surface the staged identifier so a
-        // deliberate invocation hits the staged copy (and the meta-check finds
-        // it), without instructing invocation or implying a global plugin.
-        let adapter = adapter_for(harness);
-        let surface = adapter.skill_surface_phrase();
-        let mut lines = vec![format!(
-            "The `{}` skill is registered under the identifier `{slug}` and is discoverable {surface}. If you invoke it, use that identifier.",
-            opts.skill_name
-        )];
-        if let Some(staged_path) = &staged_skill_path {
-            let cannot_resolve = adapter.skill_unresolved_phrase();
-            lines.push(format!(
-                "{cannot_resolve}, read the skill from `{staged_path}` instead."
-            ));
-        }
-        lines.join("\n")
-    } else if let Some(skill_path) = &skill_path {
-        let content = fs::read_to_string(skill_path)?;
-        let dir_name = Path::new(skill_path)
-            .parent()
-            .and_then(Path::file_name)
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        [
-            "The following skill is loaded into your operating guidelines. Apply it where relevant to the user's request.",
-            "",
-            &format!("<skill name=\"{dir_name}\">"),
-            content.trim(),
-            "</skill>",
-        ]
-        .join("\n")
-    } else if !staged_skills.is_empty() || is_truthy(opts.bootstrap_content) {
-        // Skill-absent arm in a realistic environment: stay silent. The
-        // available-skills block already omits the skill-under-test, so any
-        // commentary here would only announce the eval.
-        String::new()
-    } else {
-        "No skill is loaded. Respond as you naturally would.".to_string()
-    };
+    let skill_block = render_skill_block(
+        opts,
+        skill_path.as_deref(),
+        staged_skill_path.as_deref(),
+        &staged_skills,
+    )?;
 
-    let fixtures_block = if opts.fixtures.is_empty() {
-        "Available fixture files: none".to_string()
-    } else {
-        format!(
-            "Available fixture files:\n{}",
-            opts.fixtures
-                .iter()
-                .map(|f| format!("  - {f}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )
-    };
+    let overlay_files_block = render_overlay_files_block(&opts.files);
 
     // A condition that does not load the skill-under-test must carry zero
     // reference to it: the available-skills block auto-omits it, and a
     // user-supplied bootstrap that names it in prose is redacted here.
-    let skill_absent = skill_path.is_none() && opts.staged_skill_slug.is_none();
-    let effective_bootstrap: Option<String> = match opts.bootstrap_content {
-        Some(b) if !b.is_empty() => Some(if skill_absent {
-            redact_skill_from_bootstrap(b, opts.skill_name)
-        } else {
-            b.to_string()
-        }),
-        _ => None,
-    };
+    let skill_absent = opts.skills.map_or_else(
+        || skill_path.is_none() && opts.staged_skill_slug.is_none(),
+        <[ConditionSkill]>::is_empty,
+    );
+    let effective_bootstrap = effective_bootstrap(opts, skill_absent);
 
     let mut sections: Vec<String> = Vec::new();
     if let Some(boot) = &effective_bootstrap {
@@ -203,15 +202,6 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     if !available_skills_block.is_empty() {
         sections.push(format!("{available_skills_block}\n\n"));
     }
-    // Plan-mode operating context: its own block after the session-start surfaces
-    // and before the task framing. Skill-agnostic, so identical in both arms.
-    let plan_mode_block = match opts.plan_mode_content {
-        Some(p) if !p.is_empty() => render_plan_mode_context_for_harness(harness, p),
-        _ => String::new(),
-    };
-    if !plan_mode_block.is_empty() {
-        sections.push(format!("{plan_mode_block}\n\n"));
-    }
 
     let mut task_lines = vec![
         "You are executing a single test case for a skill evaluation framework.".to_string(),
@@ -222,11 +212,10 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         task_lines.push(skill_block);
     }
     task_lines.push(String::new());
-    task_lines.push(fixtures_block);
+    task_lines.push(overlay_files_block);
     if let Some(eval_root) = &eval_root {
         task_lines.push(super::scratch::context(eval_root));
     }
-    task_lines.push(format!("Framework output directory: {outputs_dir}"));
     task_lines.push(String::new());
     task_lines.push("Instructions:".to_string());
     task_lines.push(
@@ -234,11 +223,6 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
             .to_string(),
     );
     super::scratch::push_instruction(&mut task_lines, eval_root.as_deref());
-    task_lines
-        .push("- Use the framework output directory only for framework artifacts.".to_string());
-    task_lines.push(format!(
-        "- After completing the task, write your final user-facing response to {outputs_dir}/final-message.md."
-    ));
     task_lines.push("- Do not write outside the task environment.".to_string());
     task_lines.push(String::new());
     task_lines.push("User request:".to_string());
@@ -261,19 +245,31 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
         run_index: opts.run_index,
         skill_path,
         staged_skill_slug: opts.staged_skill_slug.map(str::to_string),
+        staged_skill_path,
+        skills: opts.skills.map(<[ConditionSkill]>::to_vec),
+        available_skills: opts.skills.map(|_| staged_skills),
         user_prompt: opts.user_prompt.to_string(),
-        fixtures: opts.fixtures.clone(),
+        files: opts.files.clone(),
         run_record_path: artifact_path(&cond_dir.join("run.json")),
         timing_path: artifact_path(&cond_dir.join("timing.json")),
         turns: opts.turns.map(<[ScriptedTurn]>::to_vec),
-        conversation_path: opts
-            .turns
-            .map(|_| artifact_path(&cond_dir.join("conversation.json"))),
+        // Unconditional: the runner drives every task, so every task ends with
+        // this completion artifact. Its presence is also what lets a rerun skip
+        // finished work, which a one-shot task needs as much as a scripted one.
+        conversation_path: Some(artifact_path(&cond_dir.join("conversation.json"))),
         agent_description,
         dispatch_prompt_path: artifact_path(&Path::new(&outputs_dir).join("dispatch-prompt.txt")),
         outputs_dir,
         group: opts.group.map(str::to_string),
         eval_root,
+        codebase: opts.codebase.cloned(),
+        skill_source: opts.skill_source.cloned(),
+        responder: opts.responder.cloned(),
+        responder_dir: opts
+            .responder
+            .map(|_| artifact_path(&cond_dir.join("responder"))),
+        guard_policy: GuardPolicyConfig::default(),
+        plan_mode: opts.plan_mode,
         dispatch_prompt: sections.join(""),
     })
 }
@@ -375,7 +371,8 @@ pub fn get_skill_description(skill_path: &Path) -> String {
 
 pub use crate::core::Mode;
 
-/// Harness-specific knobs for the human dispatch manifest.
+/// Harness-specific knobs for the human dispatch manifest: what the runner will
+/// spawn per task, and under what conditions.
 #[derive(Debug, Clone, Copy)]
 pub struct ManifestContext<'a> {
     pub harness: Harness,
@@ -394,6 +391,12 @@ pub fn build_manifest(
     tasks: &[DispatchTask],
     context: ManifestContext<'_>,
 ) -> String {
+    let ManifestContext {
+        harness,
+        guard,
+        agent_model,
+        agent_env,
+    } = context;
     let mode_str = match mode {
         Mode::NewSkill => "new-skill",
         Mode::Revision => "revision",
@@ -413,59 +416,43 @@ pub fn build_manifest(
         String::new(),
         "In an agent session, read `dispatch.json` (sibling of this file) instead of this manifest. Each task has a `dispatch_prompt_path` field pointing at the file that holds the full prompt — dispatch the task with a short \"read this file and follow it\" instruction rather than inlining the prompt — plus exact paths for `run.json` and `timing.json`.".to_string(),
         String::new(),
-        // The recipes below are POSIX command lines, so the manifest states the
+        // Dispatch shells out to POSIX command lines, so the manifest states the
         // requirement the same way RUNBOOK.md does (issue #248).
         format!("**Requires:** {POSIX_TOOLING_REQUIREMENT}"),
         String::new(),
     ];
-    let scripted: Vec<usize> = tasks
-        .iter()
-        .enumerate()
-        .filter_map(|(index, task)| task.turns.as_ref().map(|_| index))
-        .collect();
-    if !scripted.is_empty() {
-        header.extend([
-            "## Scripted multi-turn dispatch".to_string(),
-            String::new(),
-            "Run these tasks through eval-magic's conversation driver. It resumes one native \
-             session, enforces each delivery gate, and writes the task's conversation.json. A \
-             gate stop is valid eval data; a task interrupted before conversation.json is \
-             incomplete and ingest skips it."
-                .to_string(),
-            String::new(),
-        ]);
-        for index in &scripted {
-            header.push(format!(
-                "eval-magic dispatch-task --dispatch dispatch.json --task-index {index}"
-            ));
-        }
-        header.push(String::new());
-    }
-    if scripted.len() < tasks.len()
-        && let Some(lines) = adapter_for(context.harness).cli_manifest_section(CliManifestContext {
-            guard: context.guard,
-            agent_model: context.agent_model,
-            agent_env: context.agent_env,
-            one_shot_only: !scripted.is_empty(),
-        })
-    {
-        if !scripted.is_empty() {
-            header.extend([
-                "The harness recipe below applies only to task entries whose `turns` field is \
-                 absent."
-                    .to_string(),
-                String::new(),
-            ]);
-        }
+    header.extend([
+        "## Dispatch".to_string(),
+        String::new(),
+        "Every task is runner-driven — one-shot and scripted alike — so one command runs the \
+         whole plan from this iteration directory:"
+            .to_string(),
+        String::new(),
+        "eval-magic dispatch --iteration <n> --harness <harness>".to_string(),
+        String::new(),
+        "It runs `--jobs` tasks at a time, each in its own private environment, and writes each \
+         task's conversation.json. A task that already has one is skipped, so rerunning retries \
+         only what did not finish. A task exceeding `--timeout` is recorded as timed out, and a \
+         failing task is recorded while the rest of the batch continues. A conversation that \
+         stops at a scripted gate is valid eval data; a task with no conversation.json is \
+         incomplete and ingest skips it."
+            .to_string(),
+        String::new(),
+    ]);
+    // The harness section is what the descriptor still contributes: the command
+    // the runner will spawn, and whatever is peculiar about reading it back.
+    if let Some(lines) = adapter_for(harness).cli_manifest_section(CliManifestContext {
+        guard,
+        agent_model,
+        agent_env,
+    }) {
         header.extend(lines);
     }
     header.extend([
         "After all dispatches:".to_string(),
         String::new(),
-        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json` + the task's own `outputs/final-message.md` + the events file the harness CLI wrote under `outputs/`, and backfills `timing.json` with transcript-derived tokens/duration; never clobbers an existing record), fill-transcripts, detect-stray-writes, and grade. Optional higher-fidelity timing: write `{ \"total_tokens\": <n>, \"duration_ms\": <n>, \"source\": \"completion-event\" }` from the task completion event to `timing.json` right after a dispatch — completion-event numbers always win over the backfill.".to_string(),
-        "2. Dispatch the judge tasks ingest lists, then run `eval-magic finalize` for the benchmark.".to_string(),
-        String::new(),
-        "On a harness without persisted transcripts, instead write each task's `run.json` (matching `skills/evaluating-skills/schema/run-record.schema.json`, enforced at runtime by grade/fill-transcripts/detect-stray-writes) and `timing.json` by hand when its subagent returns: carry over `eval_id`, `condition`, `skill_path` (`null` on the without_skill arm), `prompt`, and `files` from the task; populate `final_message` from the subagent's reply; leave `tool_invocations` as `[]`; capture `total_tokens`/`duration_ms` from the task completion event immediately — they may not be persisted anywhere else.".to_string(),
+        "1. Run `eval-magic ingest --harness <harness>` — a fixed-order chain of record-runs (assembles every task's `run.json` from `dispatch.json`, `conversation.json`, and the harness events under `outputs/turn-<n>/`, and backfills `timing.json`; never clobbers an existing record), detect-stray-writes, and grade.".to_string(),
+        "2. Run `eval-magic dispatch --judges --harness <harness>` to grade the judge tasks ingest listed, then `eval-magic finalize` for the benchmark.".to_string(),
         String::new(),
         "## Dispatches".to_string(),
         String::new(),
@@ -508,6 +495,7 @@ mod tests {
     use super::*;
 
     mod conversation;
+    mod guard_policy;
 
     fn mk_evals(ids: &[&str]) -> Vec<Eval> {
         ids.iter()
@@ -520,8 +508,11 @@ mod tests {
                 assertions: None,
                 skill_should_trigger: None,
                 runs: None,
-                isolation: None,
                 turns: None,
+                codebase: None,
+                responder: None,
+                guard: None,
+                plan_mode: false,
             })
             .collect()
     }
@@ -638,7 +629,7 @@ mod tests {
     // ── build_dispatch_task: bootstrap injection ──────────────────────────
 
     #[test]
-    fn prompt_allows_task_edits_but_reserves_outputs_for_framework_artifacts() {
+    fn prompt_allows_task_edits_without_requesting_agent_authored_framework_artifacts() {
         let task = build_dispatch_task(&DispatchTaskOpts {
             eval_root: Some("/tmp/env"),
             ..base_opts()
@@ -648,8 +639,10 @@ mod tests {
 
         assert!(prompt.contains("Task environment: /tmp/env"));
         assert!(prompt.contains("edit existing files and create new files inside"));
-        assert!(prompt.contains("framework artifacts"));
         assert!(prompt.contains("Do not write outside the task environment."));
+        assert!(!prompt.contains("Framework output directory:"));
+        assert!(!prompt.contains("framework artifacts"));
+        assert!(!prompt.contains("final-message.md"));
         assert!(!prompt.contains("Write any files you produce into the output directory."));
         assert!(!prompt.contains("Do not write outside the output directory."));
     }
@@ -735,6 +728,33 @@ mod tests {
         let out = serde_json::to_value(&without).unwrap();
         assert!(out.get("group").is_none());
         assert!(out.get("eval_root").is_none());
+    }
+
+    /// Every task is runner-driven, so every task has the completion artifact
+    /// the driver writes and `dispatch` reads to decide what a rerun may skip.
+    /// Gating this on `turns` would leave one-shot tasks with no resume marker.
+    #[test]
+    fn every_task_carries_a_conversation_path_whether_or_not_it_is_scripted() {
+        let turns = vec![ScriptedTurn {
+            prompt: "Use US timezones.".into(),
+            deliver_when: crate::core::DeliverWhen::AgentAsks,
+            agent_response_matches: None,
+        }];
+        let scripted = build_dispatch_task(&DispatchTaskOpts {
+            turns: Some(&turns),
+            ..base_opts()
+        })
+        .unwrap();
+        let one_shot = build_dispatch_task(&base_opts()).unwrap();
+        assert_eq!(
+            scripted.conversation_path.as_deref(),
+            Some("/tmp/cond/conversation.json")
+        );
+        assert_eq!(
+            one_shot.conversation_path.as_deref(),
+            Some("/tmp/cond/conversation.json"),
+            "a one-shot task needs the same completion artifact"
+        );
     }
 
     #[test]
@@ -928,80 +948,5 @@ mod tests {
         })
         .unwrap();
         assert!(task.dispatch_prompt.contains("No skill is loaded"));
-    }
-
-    // ── build_dispatch_task: plan-mode injection ──────────────────────────
-
-    fn plan_base_opts<'a>() -> DispatchTaskOpts<'a> {
-        DispatchTaskOpts {
-            user_prompt: "BUILD-THE-TODO-APP",
-            available_skills: vec![skill("foo", "the foo skill")],
-            ..base_opts()
-        }
-    }
-
-    #[test]
-    fn omits_plan_mode_block_when_absent() {
-        let task = build_dispatch_task(&plan_base_opts()).unwrap();
-        assert!(!task.dispatch_prompt.contains("<system-reminder>"));
-        let with_null = build_dispatch_task(&DispatchTaskOpts {
-            plan_mode_content: None,
-            ..plan_base_opts()
-        })
-        .unwrap();
-        assert!(!with_null.dispatch_prompt.contains("<system-reminder>"));
-    }
-
-    #[test]
-    fn injects_plan_mode_block_when_provided() {
-        let task = build_dispatch_task(&DispatchTaskOpts {
-            plan_mode_content: Some("Plan mode is active. PLAN-RAIL-MARKER."),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        assert!(task.dispatch_prompt.contains("<system-reminder>"));
-        assert!(task.dispatch_prompt.contains("PLAN-RAIL-MARKER."));
-        assert!(task.dispatch_prompt.contains("</system-reminder>"));
-    }
-
-    #[test]
-    fn plan_mode_block_after_skills_before_user_request() {
-        let task = build_dispatch_task(&DispatchTaskOpts {
-            plan_mode_content: Some("PLAN-RAIL-MARKER"),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        let prompt = &task.dispatch_prompt;
-        let skills_idx = prompt
-            .find("The following skills are available for use with the Skill tool:")
-            .unwrap();
-        let plan_idx = prompt.find("<system-reminder>").unwrap();
-        let prompt_idx = prompt.find("BUILD-THE-TODO-APP").unwrap();
-        assert!(plan_idx > skills_idx);
-        assert!(prompt_idx > plan_idx);
-    }
-
-    #[test]
-    fn injects_identical_plan_mode_block_in_both_arms() {
-        let plan = "Plan mode is active. PLAN-RAIL-MARKER.";
-        let rendered =
-            "<system-reminder>\nPlan mode is active. PLAN-RAIL-MARKER.\n</system-reminder>";
-        let with_skill = build_dispatch_task(&DispatchTaskOpts {
-            condition: "with_skill",
-            staged_skill_slug: Some("slow-powers-eval-1-with_skill__foo"),
-            plan_mode_content: Some(plan),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        let without_skill = build_dispatch_task(&DispatchTaskOpts {
-            condition: "without_skill",
-            staged_skill_slug: None,
-            available_skills: vec![],
-            plan_mode_content: Some(plan),
-            ..plan_base_opts()
-        })
-        .unwrap();
-        assert!(with_skill.dispatch_prompt.contains(rendered));
-        assert!(without_skill.dispatch_prompt.contains(rendered));
     }
 }

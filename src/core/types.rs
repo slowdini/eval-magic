@@ -9,6 +9,11 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
+
+// Preserve the established `core::types::*` artifact API while focused
+// implementations live in sibling modules.
+pub use super::grading::*;
+pub use super::timing::{TimingRecord, TimingSource};
 use serde_json::Value;
 
 use crate::core::context::Harness;
@@ -44,6 +49,10 @@ pub struct AssertionLlmJudge {
     pub rubric: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Independent judge verdicts requested for this assertion. Absence resolves
+    /// through the run-level default and ultimately to one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub samples: Option<u32>,
 }
 
 /// A runner-owned command assertion evaluated against the final task environment.
@@ -94,7 +103,7 @@ pub struct Eval {
     pub expected_output: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files: Option<Vec<String>>,
-    /// Optional source base under `<skill>/evals/`. Fixture destinations remain
+    /// Optional source base under `<skill>/evals/`. Overlay destinations remain
     /// the task-relative paths declared in [`Self::files`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub files_root: Option<String>,
@@ -108,14 +117,40 @@ pub struct Eval {
     /// to the flag's value (1 unless raised).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub runs: Option<u32>,
-    /// Legacy isolation hint retained for config compatibility. Canonical runs
-    /// already give every dispatch a private environment for diff-scope capture,
-    /// so `shared` and `isolated` currently have the same effective isolation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub isolation: Option<Isolation>,
     /// Ordered scripted user follow-ups. Absence preserves one-shot dispatch.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub turns: Option<Vec<ScriptedTurn>>,
+    /// Codebase this eval's task environment is built from, overriding the
+    /// config-level default. Appended last so an eval that declares none
+    /// serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseSource>,
+    /// Derives each follow-up from what the agent just said, instead of
+    /// scripting them. Mutually exclusive with [`Self::turns`]; absence of both
+    /// preserves one-shot dispatch. Appended last so an eval that declares none
+    /// serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder: Option<ResponderPolicy>,
+    /// Shell-command policy for this eval. When present it replaces the
+    /// config-level policy rather than extending it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardPolicyConfig>,
+    /// Start the session in the harness's native plan mode and continue it in
+    /// act mode once the presented plan is approved. Appended last so an eval
+    /// that declares none serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub plan_mode: bool,
+}
+
+/// Authored shell-command allowances for a guarded eval run.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GuardPolicyConfig {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub profiles: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_tools: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allow_commands: Vec<String>,
 }
 
 /// One scripted user follow-up delivered after an assistant response.
@@ -135,19 +170,243 @@ pub enum DeliverWhen {
     AgentAsks,
 }
 
-/// Legacy per-eval isolation hint. Every new run is task-scoped regardless.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Isolation {
-    Shared,
-    Isolated,
+/// How the runner answers the agent when an eval has no scripted script to
+/// follow: the alternative to [`ScriptedTurn`], not a layer on top of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponderPolicy {
+    #[serde(rename = "type")]
+    pub kind: ResponderKind,
+    /// Maximum follow-up turns the responder may synthesize. The opening prompt
+    /// is not one of them, so this counts exactly what `delivered_followups`
+    /// counts. `None` takes [`DEFAULT_RESPONDER_MAX_TURNS`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
 }
 
-/// The parsed `evals.json` for one skill.
+/// The bound a responder eval gets when it declares none: high enough that a
+/// real clarifying exchange is not cut short, low enough that an agent stuck in
+/// a question loop cannot burn a campaign.
+pub const DEFAULT_RESPONDER_MAX_TURNS: u32 = 8;
+
+impl ResponderPolicy {
+    /// The bound this policy actually runs under.
+    pub fn max_turns(&self) -> u32 {
+        self.max_turns.unwrap_or(DEFAULT_RESPONDER_MAX_TURNS)
+    }
+}
+
+/// Where a task environment's contents come from: a Git repository at an
+/// explicit ref, or a directory on this host.
+///
+/// Untagged because the config spells the two apart by their keys (`url`+`ref`
+/// versus `path`) rather than by a discriminator. `evals.schema.json` rejects
+/// the ambiguous shapes before serde ever sees them, so the poor error messages
+/// untagged enums produce on their own never reach a user.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum CodebaseSource {
+    Git {
+        url: String,
+        /// Required: the runner records the *resolved* SHA, so an eval that
+        /// tracked a moving branch could not be re-run against what it measured.
+        #[serde(rename = "ref")]
+        reference: String,
+        #[serde(default)]
+        exclude_skill_sources: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ignore_files: Option<Vec<String>>,
+    },
+    Path {
+        path: String,
+        #[serde(default)]
+        exclude_skill_sources: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        ignore_files: Option<Vec<String>>,
+    },
+}
+
+impl CodebaseSource {
+    pub fn exclude_skill_sources(&self) -> bool {
+        match self {
+            Self::Git {
+                exclude_skill_sources,
+                ..
+            }
+            | Self::Path {
+                exclude_skill_sources,
+                ..
+            } => *exclude_skill_sources,
+        }
+    }
+
+    /// The ignore files `run` writes its framework block into, as declared.
+    ///
+    /// `None` leaves detection in charge; `Some` replaces it outright, and an
+    /// empty slice is the opt-out. See [`crate::workspace::tool_ignore`].
+    pub fn ignore_files(&self) -> Option<&[String]> {
+        match self {
+            Self::Git { ignore_files, .. } | Self::Path { ignore_files, .. } => {
+                ignore_files.as_deref()
+            }
+        }
+    }
+}
+
+/// Whether a source came from a repository URL or a directory on this host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SourceKind {
+    Git,
+    Path,
+}
+
+/// A resolved source, as every provenance artifact records it. The codebase a
+/// task environment is built from and the skill under test are both recorded
+/// through this one shape, so a reader learns them the same way.
+///
+/// The declared ref is not enough to identify what a run measured — a branch
+/// moves — so [`Self::revision`] is the field a report is read against.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SourceRecord {
+    pub kind: SourceKind,
+    /// The url or path exactly as declared, so a reader can find it in the config.
+    pub source: String,
+    /// Where a path source resolved to on the host that ran it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_path: Option<String>,
+    #[serde(rename = "ref", default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// The commit the run actually ran against. Absent only for a directory
+    /// that carried no history to name one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revision: Option<String>,
+    /// The source repository's `origin`. For a host-local path this is the only
+    /// handle another reader can resolve: `origin_url` + `revision` names the
+    /// same tree anywhere, where `source` names it only here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_url: Option<String>,
+    pub branch: String,
+    /// Set when the source cannot be resolved off the host that ran it, so a
+    /// published claim citing it is not reproducible from the config alone.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub host_local: bool,
+    /// Set when the copy this record describes carries uncommitted work from its
+    /// source, so [`Self::revision`] alone does not name what ran. A codebase is
+    /// checked out at a commit and is never dirty; a skill is copied as it sits
+    /// on disk, which is the point of it, and can be.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub dirty: bool,
+}
+
+/// The resolved skill under test, plus the sibling skills staged alongside it.
+///
+/// The roster is recorded here rather than rescanned per environment: it is a
+/// property of the resolution, and a later scan of the live tree could disagree
+/// with what the run actually staged.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillSource {
+    #[serde(flatten)]
+    pub source: SourceRecord,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub siblings: Vec<String>,
+    /// Eval owner and complete treatment provenance for the multi-skill form.
+    /// Absent for scalar legacy records, whose flattened source remains the
+    /// authoritative single-skill record.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eval_owner: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<SkillSourceEntry>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillSourceEntry {
+    pub name: String,
+    #[serde(flatten)]
+    pub source: SourceRecord,
+}
+
+/// One resolved codebase plus the evals built from it. `conditions.json` and
+/// `benchmark.json` carry a list of these; a `run.json` carries the bare
+/// [`CodebaseRecord`], having exactly one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseRecord {
+    #[serde(flatten)]
+    pub source: SourceRecord,
+    #[serde(default)]
+    pub exclude_skill_sources: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodebaseUse {
+    #[serde(flatten)]
+    pub codebase: CodebaseRecord,
+    pub evals: Vec<String>,
+}
+
+/// One skill name or an ordered set of coordinated skills under test.
+///
+/// The scalar form remains the wire representation for existing evals. The
+/// list form is deliberately ordered: artifacts, prompts, and per-skill grading
+/// use the authored order so readers can join those surfaces without sorting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum SkillNames {
+    One(String),
+    Many(Vec<String>),
+}
+
+impl SkillNames {
+    pub fn as_slice(&self) -> &[String] {
+        match self {
+            Self::One(name) => std::slice::from_ref(name),
+            Self::Many(names) => names,
+        }
+    }
+
+    pub fn is_multi(&self) -> bool {
+        matches!(self, Self::Many(_))
+    }
+}
+
+impl std::fmt::Display for SkillNames {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::One(name) => formatter.write_str(name),
+            Self::Many(names) => formatter.write_str(&names.join(", ")),
+        }
+    }
+}
+
+impl PartialEq<&str> for SkillNames {
+    fn eq(&self, other: &&str) -> bool {
+        matches!(self, Self::One(name) if name == other)
+    }
+}
+
+/// The parsed `evals.json` for one skill or coordinated skill set.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EvalsConfig {
-    pub skill_name: String,
+    pub skill_name: SkillNames,
+    /// Default codebase for every eval in this config; a per-eval `codebase`
+    /// overrides it. Mirrors how `runs` defaults and is overridden.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseSource>,
     pub evals: Vec<Eval>,
+    /// Default shell-command policy for evals that do not replace it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard: Option<GuardPolicyConfig>,
+}
+
+impl EvalsConfig {
+    pub fn skill_names(&self) -> &[String] {
+        self.skill_name.as_slice()
+    }
+
+    /// Return the authored policy effective for `eval`. A per-eval block is a
+    /// complete replacement, including when it is empty.
+    pub fn guard_for<'a>(&'a self, eval: &'a Eval) -> Option<&'a GuardPolicyConfig> {
+        eval.guard.as_ref().or(self.guard.as_ref())
+    }
 }
 
 /// A skill staged and discoverable for an eval — its natural name, on-disk
@@ -157,6 +416,19 @@ pub struct AvailableSkill {
     pub name: String,
     pub path: String,
     pub description: String,
+}
+
+/// One member of the treatment roster in a condition, dispatch task, or run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionSkill {
+    pub name: String,
+    pub skill_path: String,
+    pub staged_skill_slug: Option<String>,
+    /// Exact task-environment path to the staged `SKILL.md`. Absent in
+    /// conditions-level and historical records, where no single task env owns
+    /// the roster yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged_skill_path: Option<String>,
 }
 
 /// One condition in a comparison run.
@@ -171,6 +443,10 @@ pub struct ConditionEntry {
         deserialize_with = "deserialize_present_key"
     )]
     pub staged_skill_slug: Option<Option<String>>,
+    /// Present for list-authored evals, including an empty list in the control
+    /// arm. Absent for scalar artifacts so their established shape is stable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<ConditionSkill>>,
 }
 
 /// Tri-state field deserializer: a present key — even an explicit `null` —
@@ -214,9 +490,43 @@ pub struct ConditionsRecord {
     /// Operator-declared judge model (provenance, like `agent_model`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub judge_model: Option<String>,
+    /// Non-default judge verdict count selected for authored `llm_judge`
+    /// assertions. Absence means one for compatibility with older iterations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub judge_samples: Option<u32>,
+    /// Operator-declared responder model (provenance, like `agent_model`). A
+    /// responder eval puts a third model in the attribution picture, so a
+    /// report that names the agent and the judge has to name this one too.
+    /// Appended last so a record written before it existed still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder_model: Option<String>,
     /// Operator-declared provenance label, surfaced in `BASELINE.md` on promote.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    /// Codebases the iteration's environments were built from. Empty only when
+    /// reading a historical iteration that predates codebase provenance.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codebases: Vec<CodebaseUse>,
+    /// The skill under test, as the run resolved and copied it. Appended last,
+    /// and omitted when absent, so a record written before skills were sourced
+    /// still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
+    /// The `--harness-file` descriptor the iteration was prepared with
+    /// (absolute, wire-format path). With `harness_descriptor_digest`, this
+    /// lets a later stage detect a follow-up invocation that resolves a
+    /// different descriptor than the run was prepared with (#294).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_file: Option<String>,
+    /// FNV-1a hex of the fully-resolved harness descriptor's canonical JSON at
+    /// prep time. Absent in records written before descriptor provenance
+    /// existed, which read as "nothing to compare against".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub harness_descriptor_digest: Option<String>,
+    /// Whether the run preflight resolved the write guard to armed. Absent in
+    /// historical records, where the effective state is unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guard_armed: Option<bool>,
 }
 
 /// Comparison mode for a run.
@@ -247,6 +557,12 @@ pub struct RunRecord {
     pub eval_id: String,
     pub condition: String,
     pub skill_path: Option<String>,
+    /// Exact task-environment path to the staged scalar skill. Absent for
+    /// unstaged/control runs and historical records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staged_skill_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skills: Option<Vec<ConditionSkill>>,
     pub prompt: String,
     pub files: Vec<String>,
     pub final_message: String,
@@ -261,9 +577,30 @@ pub struct RunRecord {
     /// legacy one-shot runs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation: Option<ConversationRecord>,
+    /// The codebase this run's environment was built from. Grading reads
+    /// `run.json` and nothing else, so a result can only be tied to a tree if
+    /// the record names one. Appended last, and omitted when absent, so a
+    /// historical records that predate codebase provenance still deserialize.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codebase: Option<CodebaseRecord>,
+    /// The skill under test this run staged. Grading reads `run.json` and nothing
+    /// else, so a result can only be tied to a skill revision if the record names
+    /// one. Appended last, and omitted when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skill_source: Option<SkillSource>,
 }
 
-/// The completed outcome of one scripted conversation.
+/// Which of a harness's two session modes a round runs in: the read-only
+/// planning mode a `plan_mode` eval starts in, or the act mode every other
+/// round uses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMode {
+    Plan,
+    Act,
+}
+
+/// The completed outcome of one dispatched task's conversation.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConversationRecord {
     pub status: ConversationStatus,
@@ -272,14 +609,59 @@ pub struct ConversationRecord {
     pub stop_reason: Option<ConversationStopReason>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub stopped_before_followup: Option<u32>,
+    /// The round the dispatch was killed in, when it outran its deadline.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timed_out_in_round: Option<u32>,
+    /// Monotonic wall time spent inside the eval-agent harness subprocesses,
+    /// summed across the initial dispatch and every resumed round. Runner
+    /// bookkeeping and responder/judge subprocesses are outside this measure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<i64>,
     pub events: Vec<ConversationEvent>,
+    /// How the responder ended the conversation, when it was the responder that
+    /// ended it. Absent for a scripted or one-shot task, for a timeout, and for
+    /// `max_turns_reached` — the bound is the runner's decision, not a verdict.
+    /// Appended last so a record written before it existed still round-trips.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub responder_outcome: Option<ResponderOutcome>,
+    /// How a plan-mode session moved from planning to implementation. Absent
+    /// unless the eval declared `plan_mode` and a plan was approved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<PlanRecord>,
+}
+
+/// How a plan-mode session moved from planning to implementation.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanRecord {
+    /// The plan-phase round whose output was taken as the plan.
+    pub presented_in_round: u32,
+    /// The round the runner's fixed approval opened in act mode.
+    pub approved_in_round: u32,
+    pub signal: PlanSignal,
+    /// Where the plan text was saved.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artifact_path: Option<String>,
+}
+
+/// What marked a plan as presented.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlanSignal {
+    /// The harness wrote its plan file, as declared by `[plan_mode.plan_file]`.
+    PlanFile,
+    /// The responder judged the agent finished planning.
+    Responder,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ConversationStatus {
     Completed,
+    /// Halted at a scripted gate — a normal, recorded result.
     Stopped,
+    /// Killed at its deadline. Recorded rather than lost, so the campaign shows
+    /// what hung instead of silently missing a cell.
+    TimedOut,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -287,6 +669,19 @@ pub enum ConversationStatus {
 pub enum ConversationStopReason {
     AgentDidNotAsk,
     AgentResponseMismatch,
+    /// The responder did not produce a usable reply — it declined, its dispatch
+    /// failed, or what it wrote failed validation. The specific cause is on the
+    /// record's [`ResponderOutcome`]. One reason covers all of them because the
+    /// outcome is the same: the run ended mid-task rather than being handed a
+    /// reply nobody vouched for.
+    ResponderCannotAnswer,
+    /// The agent was still asking when the responder's `max_turns` bound was
+    /// reached. A bounded conversation, not a failed one.
+    MaxTurnsReached,
+    /// A plan-mode session ended its planning phase without presenting a plan
+    /// the runner could approve: the harness's plan file was never written and
+    /// the eval declared no responder to decide otherwise.
+    PlanNotPresented,
 }
 
 /// One globally ordered event across every delivered conversation round.
@@ -297,6 +692,17 @@ pub enum ConversationEvent {
         ordinal: u32,
         round: u32,
         text: String,
+        /// How a responder derived this turn. Absent on the seeded eval prompt
+        /// and on scripted turns, which are authored rather than derived — the
+        /// absence is what tells the two apart. Appended last so a scripted
+        /// conversation serializes exactly as it did before the field existed.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        origin: Option<TurnOrigin>,
+        /// The session mode of the round this message opens. Present on every
+        /// user message of a plan-mode eval; absent otherwise, since those runs
+        /// are entirely in act mode.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        mode: Option<SessionMode>,
     },
     AssistantMessage {
         ordinal: u32,
@@ -314,86 +720,118 @@ pub enum ConversationEvent {
     },
 }
 
-/// The result of grading one assertion.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AssertionResult {
-    pub id: String,
-    pub passed: bool,
-    pub evidence: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub confidence: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grader: Option<Grader>,
+/// Who produced a user turn the eval did not author, recorded on the turn
+/// itself so a reader can audit whether the run was distorted. Absent on the
+/// seeded eval prompt and on scripted turns. Untagged, so the responder shape
+/// serializes exactly as it did before the runner shape existed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TurnOrigin {
+    /// Derived by a responder from what the agent just said.
+    Responder {
+        responder: ResponderKind,
+        /// One line from the responder on why it answered this way. Absent
+        /// when it offered none; the tag is what marks the turn derived.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<String>,
+    },
+    /// Authored by the runner: a fixed turn every run receives the same way.
+    Runner { runner: RunnerTurn },
 }
 
-/// Which grader produced an assertion result.
+/// The fixed turns the runner itself sends.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Grader {
-    TranscriptCheck,
-    LlmJudge,
-    CommandCheck,
-    DiffScope,
+pub enum RunnerTurn {
+    /// The approval that moves a plan-mode session into act mode.
+    PlanApproval,
 }
 
-/// The full grading output for one run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GradingResult {
-    pub assertion_results: Vec<AssertionResult>,
-    // Substantive results + summary first, then the optional meta block —
-    // grading.json reads as "the verdict, then the validity check on it".
-    pub summary: GradingSummary,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta_results: Option<Vec<AssertionResult>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta_summary: Option<MetaSummary>,
-}
-
-/// Pass/fail tallies for the main assertions.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct GradingSummary {
-    pub passed: u32,
-    pub failed: u32,
-    pub total: u32,
-    pub pass_rate: f64,
-}
-
-/// Tallies for the meta-assertions, plus the skill-invocation determination.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
-pub struct MetaSummary {
-    pub passed: u32,
-    pub failed: u32,
-    pub total: u32,
-    /// `None` (serialized `null`) when invocation could not be determined.
-    pub skill_invoked: Option<bool>,
-}
-
-/// Token/duration provenance for a run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TimingRecord {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_tokens: Option<Option<i64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub duration_ms: Option<Option<i64>>,
-    /// Where the numbers came from. `completion-event` = captured live from the
-    /// harness's task-completion event; `transcript` = derived from the persisted
-    /// transcript using the harness's normalization rules.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub source: Option<TimingSource>,
-}
-
-/// Provenance of a [`TimingRecord`]'s numbers.
+/// Which responder produced a turn. Named in the record even though there is
+/// one of them, because a record outlives the version that wrote it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TimingSource {
-    CompletionEvent,
-    Transcript,
+#[serde(rename_all = "snake_case")]
+pub enum ResponderKind {
+    Llm,
+}
+
+/// How the responder brought a conversation to an end, recorded once on the
+/// conversation rather than on a turn — no turn was delivered.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResponderOutcome {
+    pub ending: ResponderEnding,
+    /// Why no usable reply was produced. Absent for [`ResponderEnding::Done`],
+    /// where nothing went wrong.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cause: Option<ResponderStopCause>,
+    /// The responder's own one-line account, when it produced one. A dispatch
+    /// that never answered has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+}
+
+/// The two ways a responder ends a conversation. Deliberately not the parsed
+/// verdict, which also carries an answer: an answer is recorded on the turn it
+/// became, so it cannot reach here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponderEnding {
+    /// The responder judged the agent finished and waiting on nothing.
+    Done,
+    /// No usable reply, for the reason in [`ResponderOutcome::cause`].
+    CannotAnswer,
+}
+
+/// Why the responder produced no usable reply. Every variant stops the run with
+/// [`ConversationStopReason::ResponderCannotAnswer`]; naming the cause is what
+/// lets an operator tell an honest refusal from a broken dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResponderStopCause {
+    /// The responder said it could not answer without inventing something.
+    Declined,
+    /// The harness command exited nonzero or could not be spawned.
+    DispatchFailed,
+    /// The harness command outran the consultation budget.
+    DispatchTimedOut,
+    /// The dispatch succeeded but wrote no verdict file, or an empty one.
+    MissingVerdict,
+    /// The verdict file did not parse, or named a verdict that does not exist.
+    MalformedVerdict,
+    /// An `answer` verdict whose reply was blank.
+    EmptyReply,
+    /// The reply exceeded the byte cap — a simulated user answers in sentences,
+    /// so a long one means the responder started doing the agent's work.
+    ReplyTooLong,
+    /// The reply carried a fenced code block, for the same reason.
+    ReplyContainsCode,
+    /// The reply repeated the previous one verbatim: the exchange is circling,
+    /// and spending the remaining turns on it would only cost more.
+    ReplyRepeated,
+}
+
+impl ResponderStopCause {
+    /// The cause's serialized name. Warnings print this rather than prose so
+    /// what an operator reads is what they would grep the artifacts for.
+    pub fn wire_name(self) -> &'static str {
+        match self {
+            Self::Declined => "declined",
+            Self::DispatchFailed => "dispatch_failed",
+            Self::DispatchTimedOut => "dispatch_timed_out",
+            Self::MissingVerdict => "missing_verdict",
+            Self::MalformedVerdict => "malformed_verdict",
+            Self::EmptyReply => "empty_reply",
+            Self::ReplyTooLong => "reply_too_long",
+            Self::ReplyContainsCode => "reply_contains_code",
+            Self::ReplyRepeated => "reply_repeated",
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::Harness;
+    use crate::core::{MetaSummary, context::Harness};
     use serde_json::{Value, json};
 
     #[test]
@@ -440,8 +878,11 @@ mod tests {
             assertions: None,
             skill_should_trigger: None,
             runs: None,
-            isolation: None,
             turns: None,
+            codebase: None,
+            responder: None,
+            guard: None,
+            plan_mode: false,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -450,29 +891,110 @@ mod tests {
         assert!(out.get("skill_should_trigger").is_none());
         assert!(out.get("runs").is_none());
         assert!(out.get("isolation").is_none());
+        assert!(
+            out.get("plan_mode").is_none(),
+            "an eval outside plan mode serializes exactly as before the field existed"
+        );
+    }
+
+    /// A turn's provenance is one of two shapes: derived by a responder, or
+    /// authored by the runner (the fixed plan approval). Untagged, so the
+    /// responder shape serializes exactly as it did before the runner shape
+    /// existed.
+    #[test]
+    fn turn_origin_round_trips_both_shapes() {
+        let responder: TurnOrigin = serde_json::from_value(
+            json!({ "responder": "llm", "rationale": "the simplest option" }),
+        )
+        .unwrap();
+        assert_eq!(
+            responder,
+            TurnOrigin::Responder {
+                responder: ResponderKind::Llm,
+                rationale: Some("the simplest option".into()),
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&responder).unwrap(),
+            json!({ "responder": "llm", "rationale": "the simplest option" })
+        );
+
+        let runner: TurnOrigin =
+            serde_json::from_value(json!({ "runner": "plan_approval" })).unwrap();
+        assert_eq!(
+            runner,
+            TurnOrigin::Runner {
+                runner: RunnerTurn::PlanApproval
+            }
+        );
+        assert_eq!(
+            serde_json::to_value(&runner).unwrap(),
+            json!({ "runner": "plan_approval" })
+        );
+    }
+
+    /// The plan-mode fields are appended and optional, so a record written for
+    /// an eval outside plan mode serializes exactly as it did before.
+    #[test]
+    fn conversation_record_omits_plan_fields_outside_plan_mode() {
+        let record = ConversationRecord {
+            status: ConversationStatus::Completed,
+            delivered_followups: 0,
+            stop_reason: None,
+            stopped_before_followup: None,
+            timed_out_in_round: None,
+            duration_ms: None,
+            events: vec![ConversationEvent::UserMessage {
+                ordinal: 0,
+                round: 1,
+                text: "p".into(),
+                origin: None,
+                mode: None,
+            }],
+            responder_outcome: None,
+            plan: None,
+        };
+        let out = serde_json::to_value(&record).unwrap();
+        assert!(out.get("plan").is_none());
+        assert!(out["events"][0].get("mode").is_none());
+
+        let plan = PlanRecord {
+            presented_in_round: 1,
+            approved_in_round: 2,
+            signal: PlanSignal::PlanFile,
+            artifact_path: Some("outputs/plan.md".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&plan).unwrap(),
+            json!({
+                "presented_in_round": 1,
+                "approved_in_round": 2,
+                "signal": "plan_file",
+                "artifact_path": "outputs/plan.md"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(ConversationStopReason::PlanNotPresented).unwrap(),
+            json!("plan_not_presented")
+        );
+        assert_eq!(
+            serde_json::to_value(SessionMode::Plan).unwrap(),
+            json!("plan")
+        );
     }
 
     #[test]
-    fn isolation_round_trips_snake_case() {
-        let eval = Eval {
-            id: "e1".into(),
-            prompt: "p".into(),
-            expected_output: "o".into(),
-            files: None,
-            files_root: None,
-            assertions: None,
-            skill_should_trigger: None,
-            runs: None,
-            isolation: Some(Isolation::Isolated),
-            turns: None,
-        };
+    fn plan_mode_true_round_trips() {
+        let eval: Eval = serde_json::from_value(json!({
+            "id": "e1",
+            "prompt": "p",
+            "expected_output": "o",
+            "plan_mode": true
+        }))
+        .unwrap();
+        assert!(eval.plan_mode);
         let out = serde_json::to_value(&eval).unwrap();
-        assert_eq!(
-            out.get("isolation"),
-            Some(&Value::String("isolated".into()))
-        );
-        let back: Eval = serde_json::from_value(out).unwrap();
-        assert_eq!(back.isolation, Some(Isolation::Isolated));
+        assert_eq!(out["plan_mode"], Value::Bool(true));
     }
 
     #[test]
@@ -481,6 +1003,8 @@ mod tests {
             eval_id: "e".into(),
             condition: "with-skill".into(),
             skill_path: None,
+            staged_skill_path: None,
+            skills: None,
             prompt: "p".into(),
             files: vec![],
             final_message: "done".into(),
@@ -489,6 +1013,8 @@ mod tests {
             duration_ms: None,
             run_index: None,
             conversation: None,
+            codebase: None,
+            skill_source: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         // Required-but-nullable keys are present with a null value.
@@ -518,6 +1044,7 @@ mod tests {
             name: "c".into(),
             skill_path: Some("/p".into()),
             staged_skill_slug: slug,
+            skills: None,
         };
         // Absent → key omitted.
         let absent = serde_json::to_value(base(None)).unwrap();
@@ -556,7 +1083,14 @@ mod tests {
             agent_model: None,
             agent_env: BTreeMap::new(),
             judge_model: None,
+            judge_samples: None,
+            responder_model: None,
             label: None,
+            codebases: Vec::new(),
+            skill_source: None,
+            harness_file: None,
+            harness_descriptor_digest: None,
+            guard_armed: None,
         };
         let out = serde_json::to_value(&rec).unwrap();
         assert_eq!(out.get("mode"), Some(&Value::String("new-skill".into())));
@@ -570,11 +1104,19 @@ mod tests {
     }
 
     #[test]
-    fn timing_source_kebab_roundtrips() {
-        let v = serde_json::to_value(TimingSource::CompletionEvent).unwrap();
-        assert_eq!(v, Value::String("completion-event".into()));
-        let back: TimingSource = serde_json::from_value(v).unwrap();
-        assert_eq!(back, TimingSource::CompletionEvent);
+    fn codebase_use_records_effective_skill_source_exclusion() {
+        let value = serde_json::json!({
+            "kind": "path",
+            "source": "../project",
+            "branch": "work",
+            "exclude_skill_sources": true,
+            "evals": ["e1"]
+        });
+
+        let record: CodebaseUse = serde_json::from_value(value).unwrap();
+        let rendered = serde_json::to_value(record).unwrap();
+
+        assert_eq!(rendered["exclude_skill_sources"], true);
     }
 }
 

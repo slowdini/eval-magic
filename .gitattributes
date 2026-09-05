@@ -1,6 +1,6 @@
 # Check every text file out with LF on all platforms. Generated artifacts embed the bytes of
 # descriptors, profiles, and docs verbatim, and the byte-exact tests compare against LF fixtures, so
-# a CRLF working tree on Windows silently changes program output.
+# line-ending conversion would silently change program output.
 * text=auto eol=lf
 
 # Golden fixtures are byte-exact — never EOL-normalize them.

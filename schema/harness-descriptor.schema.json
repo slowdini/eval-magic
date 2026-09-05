@@ -17,10 +17,16 @@
       "minLength": 1,
       "description": "Project-local staged-skills directory, `/`-separated relative to the repo root (e.g. \".claude/skills\"). Optional: a harness without one cannot stage skills natively, so runs fall back to --no-stage (each SKILL.md inlined into its dispatch prompt) with a preflight warning."
     },
+    "additional_project_skill_dirs": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Additional project-local skill roots the harness discovers for compatibility with other harness conventions. These roots participate in codebase shadow detection and opt-in exclusion but never receive staged skills."
+    },
     "config_dirs": {
       "type": "array",
       "items": { "type": "string", "minLength": 1 },
-      "description": "Harness-owned config directory names (e.g. \".claude\"). Feeds the staging sibling filter, guard tamper rules, and stray-write lookbehind."
+      "description": "Harness-owned config directory names (e.g. \".claude\"). Feeds the staging sibling filter and task-repository baseline inclusion."
     },
     "run": {
       "type": "object",
@@ -238,7 +244,7 @@
         },
         "surfaces_skill_invocation": {
           "type": "boolean",
-          "description": "Whether the transcript deterministically surfaces a skill invocation (false routes the meta-check to the LLM-judge fallback). For extract descriptors, leave false unless the mapping verifiably yields invocations named `Skill` carrying an `args.skill` field."
+          "description": "Whether the transcript deterministically surfaces native skill invocation or exact staged-file access (false routes the meta-check to a behavioral-influence fallback)."
         },
         "skill_tool": {
           "type": "string",
@@ -249,6 +255,24 @@
           "type": "string",
           "minLength": 1,
           "description": "Argument of the skill-invocation tool that carries the staged slug (default \"skill\"; OpenCode declares \"name\")."
+        },
+        "skill_access": {
+          "type": "object",
+          "required": ["tool", "command_arg", "exit_code_arg", "read_commands"],
+          "additionalProperties": false,
+          "description": "Deterministic exact-path access signature for a harness without a native skill tool. The named tool must complete successfully and its command argument must contain the task's exact staged SKILL.md path as a literal shell argument.",
+          "properties": {
+            "tool": { "type": "string", "minLength": 1 },
+            "command_arg": { "type": "string", "minLength": 1 },
+            "exit_code_arg": { "type": "string", "minLength": 1 },
+            "read_commands": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "minLength": 1 },
+              "description": "Literal executable basenames whose successful invocation with the exact staged path counts as a content read."
+            }
+          }
         }
       }
     },
@@ -339,7 +363,7 @@
     "dispatch": {
       "type": "object",
       "additionalProperties": false,
-      "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args} slots) and the prose around them.",
+      "description": "CLI dispatch guidance: command templates ({model_arg}/{guard_args}/{mode_args} slots) and the prose around them.",
       "properties": {
         "env": {
           "type": "object",
@@ -348,11 +372,6 @@
             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
           },
           "additionalProperties": { "type": "string" }
-        },
-        "capture_prefix": {
-          "type": "string",
-          "minLength": 1,
-          "description": "Prefix naming the judge recipe's per-task capture files ($response_base.<prefix>-events.jsonl)."
         },
         "guard_args": {
           "type": "string",
@@ -370,17 +389,9 @@
           "type": "string",
           "description": "Copy/pasteable single-dispatch command; <eval-root>-style angle placeholders are prose for the human."
         },
-        "parallel_command_template": {
-          "type": "string",
-          "description": "Per-task command block spliced into the shared jq/xargs parallel scaffold."
-        },
-        "judge_command_template": {
-          "type": "string",
-          "description": "Judge command line spliced into the shared judge recipe; must reference $model_arg and {cwd} and end with a shell line continuation."
-        },
         "manifest_template": {
           "type": "string",
-          "description": "The dispatch-manifest harness section; {exec_command}/{parallel_recipe} placeholders; ends with exactly one newline."
+          "description": "The dispatch-manifest harness section; {exec_command} placeholder; ends with exactly one newline."
         }
       }
     },
@@ -397,7 +408,41 @@
         "resume_exec_template": {
           "type": "string",
           "minLength": 1,
-          "description": "One follow-up dispatch command. Must reference <eval-root>, <outputs_dir>, {session_arg}, and {prompt_arg}; {model_arg}/{guard_args} are filled like dispatch.exec_template."
+          "description": "One follow-up dispatch command. Must reference <eval-root>, <outputs_dir>, {session_arg}, and {prompt_arg}; {model_arg}/{guard_args}/{mode_args} are filled like dispatch.exec_template."
+        }
+      }
+    },
+    "plan_mode": {
+      "type": "object",
+      "required": ["plan_args", "act_args"],
+      "additionalProperties": false,
+      "description": "The harness's native plan mode, entered for the planning phase of a plan_mode eval. Requires [conversation] and a {mode_args} slot in both dispatch.exec_template and conversation.resume_exec_template.",
+      "properties": {
+        "plan_args": {
+          "type": "string",
+          "description": "Arguments spliced at {mode_args} for every plan-phase round, leading space included (Claude Code: \" --permission-mode plan\")."
+        },
+        "act_args": {
+          "type": "string",
+          "description": "Arguments spliced at {mode_args} for every other dispatch — act-mode rounds, judges, responder consultations, and the lint probe — leading space included (Claude Code: \" --permission-mode bypassPermissions\")."
+        },
+        "plan_file": {
+          "type": "object",
+          "required": ["root", "content_field"],
+          "additionalProperties": false,
+          "description": "The file the harness writes its plan to in plan mode. Writes under root are allowed by the write guard and the stray-write audit; a plan-phase round that wrote one has presented its plan, and that write's content_field is the plan artifact. Omit when the harness writes no plan file; the responder then decides when the plan is ready.",
+          "properties": {
+            "root": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Directory the plan file lands in; a leading ~ means the home directory (Claude Code: \"~/.claude/plans\")."
+            },
+            "content_field": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The write tool's input field carrying the file contents (Claude Code: \"content\")."
+            }
+          }
         }
       }
     }

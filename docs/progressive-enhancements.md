@@ -7,50 +7,53 @@
 > at a harness it doesn't know — user-supplied descriptor files, layering, `harness
 > list`/`show`/`lint` — is the user-facing [BYOH guide](guides/byoh.md).
 
-Harness compatibility is not a parity checklist to audit — it is **a minimal baseline every harness
-satisfies, plus optional enhancements** a harness's adapter opts into. Most missing enhancements
-have a documented lower-fidelity fallback. Native conversation resume is the deliberate exception:
-an eval that declares scripted `turns` is rejected when the harness cannot preserve one session.
+Harness compatibility is not a parity checklist to audit — it is **a runner-ready baseline every
+harness satisfies, plus optional enhancements** a harness's adapter opts into. Dispatch and
+transcript recovery are mandatory because the runner owns execution and run-record assembly.
+Native conversation resume remains optional; an eval that declares scripted `turns` or a
+`responder` is rejected when the harness cannot preserve one session.
 
 ## One dispatch mechanism
 
-One-shot evals and judges dispatch through the harness CLI, one subprocess per task. Scripted evals
-use `eval-magic dispatch-task`, one subprocess per round while resuming one harness-native session
-and one `eval_root`. The **generated artifacts are the runtime source of truth** for how to
-dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` carrying the exact per-task recipe
-for the selected harness — hand-maintained docs never carry command recipes. Eval-agent environment
-defaults are harness-independent: `[dispatch.env]` layers merge by key and repeatable
-`run --agent-env KEY=VALUE` entries override them. The resolved map is exported by one-shot and
-scripted recipes and recorded in `conditions.json` / `dispatch.json`; judges and runner-owned
-`command_check` subprocesses remain separate.
+`eval-magic dispatch` runs every task — one-shot, scripted, and judge alike — through the harness
+CLI, one subprocess per round, `--jobs` tasks at a time. A scripted eval resumes one harness-native
+session across its rounds in one `eval_root`. The **generated artifacts are the runtime source of
+truth** for how to dispatch: `run` writes `RUNBOOK.md` and `dispatch-manifest.md` naming the exact
+command for the selected harness — hand-maintained docs never carry command recipes. Eval-agent
+environment defaults are harness-independent: `[dispatch.env]` layers merge by key and repeatable
+`run --agent-env KEY=VALUE` entries override them. The resolved map is recorded in
+`conditions.json` / `dispatch.json` and applied by the runner when it spawns each task; judges and
+runner-owned `command_check` subprocesses remain separate.
 
 ## The baseline contract
 
-A harness qualifies at baseline with no harness-specific code beyond naming itself:
+A harness qualifies at baseline when its descriptor provides:
 
 1. **A headless exec command** — some way to invoke the harness with a prompt from a chosen cwd and
    let it run to completion.
-2. **A recoverable final message** — the agent writes `outputs/final-message.md` (the dispatch
-   prompt asks for this), or transcript ingest recovers it where it is wired.
+2. **A parseable transcript** — the command captures the harness's event stream under the task's
+   round output directory, and a named or declarative reader normalizes a non-empty final response.
 3. **`--no-stage` when native staging isn't wired** — each `SKILL.md` is inlined into its dispatch
    prompt instead of staged for native discovery.
 
 That baseline already yields a working eval: `llm_judge` assertions grade soft behavior,
 runner-owned `command_check` assertions can inject held-out files and execute deterministically,
-runner-owned final-environment metrics land in `diff-scope.json`, `diff_scope` assertions gate
-files/lines deterministically, and the `detect-stray-writes` post-pass (folded into `ingest`) audits
-writes that leave the private task environment. Run records without transcript ingest are assembled
-from `outputs/final-message.md` or by hand per `schema/run-record.schema.json`.
+runner-owned final-environment metrics land in `diff-scope.json` with the diff itself in
+`diff.patch`, `diff_scope` assertions gate files/lines deterministically, and the
+`detect-stray-writes` post-pass (folded into `ingest`) audits
+writes that leave the private task environment. `dispatch` records monotonic eval-agent subprocess
+duration for every runner-ready harness, and `record-runs` assembles every `run.json` and
+`timing.json` from the runner-owned dispatch metadata, completion artifact, and per-round
+transcripts.
 
-In descriptor terms the baseline is one required field: `label`. Everything else in a harness
-descriptor is optional for one-shot evals — an absent field or table gets a working generic fallback, and the `run`
-preflight *warns* naming that fallback rather than rejecting (a harness without `skills_dir`
-forces `--no-stage`; without a declared guard the run continues unguarded behind the
-`detect-stray-writes` audit; requested models without a model flag are recorded as provenance
-only). Supported enhancements are provided automatically — the write guard auto-arms wherever a
-harness declares one and staging is active (`--no-guard` opts out). Only genuinely contradictory
-flag combinations stay errors. A selected eval with `turns` also requires `[conversation]`; no
-generic fresh-session fallback can preserve the meaning of a canned reply.
+In descriptor terms the baseline is `label`, `[dispatch].exec_template`, `[transcript]` with one
+primary reader, and `[tools]` beside that reader. `run` rejects a harness that cannot dispatch or
+recover transcripts. A harness without `skills_dir` forces `--no-stage`; without a declared guard
+the run continues unguarded behind the `detect-stray-writes` audit; requested models without a
+model flag are recorded as provenance only. Supported enhancements are provided automatically —
+the write guard auto-arms wherever a harness declares one and staging is active (`--no-guard` opts
+out). A selected eval with `turns` or a `responder` also requires `[conversation]`; no generic
+fresh-session fallback can preserve the meaning of a follow-up reply.
 
 ## Where this lives in code
 
@@ -81,44 +84,58 @@ generic fresh-session fallback can preserve the meaning of a canned reply.
 - `run_capabilities()` (descriptor table `[run]`) + `harness_run_preflight()`
   (`src/cli/run/util.rs`) — the `run` preflight: it resolves the guard tri-state (auto-arm when
   the harness declares a guard and staging is active; `--guard`/`--no-guard` make it explicit),
-  and undeclared enhancements warn naming their fallback and adjust the options (guard forced
-  off, missing `skills_dir` forces `--no-stage`, the no-transcript-parser warning scoped to eval
-  configs that actually use `transcript_check`, missing dispatch recipes noted); only
+  rejects descriptors without a dispatch command or transcript reader, and adjusts optional
+  capabilities (guard forced off, missing `skills_dir` forces `--no-stage`); only
   contradictory flag combinations (`--bootstrap`/`--stage-name` where the descriptor declares
   them incompatible with `--no-stage`) and an explicit `--guard` on a user-descriptor-only
   harness reject.
 
 ## Runner-owned environment checks are baseline
 
-Every canonical `(eval, condition, run)` gets a distinct `eval_root`. After fixtures, staging, and
-guard installation, `run` recreates a runner-owned Git repository at that root, commits the task
-state on branch `work`, runs shadow preflight at the resulting repository boundary, and snapshots
-the task environment. Git is therefore a runtime prerequisite; each task starts clean and has no
-remotes. During `ingest`, before any held-out setup is injected, the runner compares that baseline
-with the final environment and writes raw `files_touched`, `lines_added`, `lines_removed`, and
-zero-context Myers `hunks` to `diff-scope.json`. Framework artifacts under the task root's
-`.eval-magic-outputs/` and runner-owned `.git/` are excluded; nested repository metadata and all
-other new files count. `benchmark.json` preserves these metrics per run even without a `diff_scope`
-assertion. An assertion may gate `max_files_touched`, `max_lines_changed` (added plus removed), or
-both.
+Every canonical `(eval, condition, run)` gets a distinct `eval_root` provisioned from its effective
+codebase. After overlays, staging, and guard installation, `run` commits the task state, marks it
+with `refs/eval-magic/baseline`, and runs shadow preflight at the resulting repository boundary.
+Git is therefore a runtime prerequisite; each task starts clean and has no remotes. Nothing writes
+into an environment after the ref is written, so it names exactly what the agent started from.
+
+During `ingest`, before any held-out setup is injected, Git measures the final environment against
+that ref. The runner seeds a scratch index from the baseline, brings it up to the working tree with
+one `git add`, and diffs the two trees — so creations, modifications, and deletions all fall out of
+one pass, and an untracked creation is not missed. Raw `files_touched`, `lines_added`,
+`lines_removed`, and zero-context `hunks` go to `diff-scope.json`, alongside the changed-file list;
+the diff itself goes to `diff.patch` beside it, capped and marked when a diff exceeds the cap.
+`benchmark.json` preserves the metrics per run even without a `diff_scope` assertion. An assertion
+may gate `max_files_touched`, `max_lines_changed` (added plus removed), or both.
+
+**What counts is what Git counts.** The measurement runs under the same rules the baseline commit
+was built under: the codebase's own `.gitignore` holds, so a run that compiles does not report its
+build output as thousands of touched files, and the `.git/info/exclude` entry keeps framework
+artifacts under `.eval-magic-outputs/` out. Paths the runner force-added despite those rules — the
+harness config directories and the declared file overlay — are tracked in the baseline and stay
+measured. Git indexes no path with a `.git` component, so a nested repository's internals are
+invisible, not just the runner-owned root `.git`. Renames are switched off deliberately: a rename is
+two touched files, one created and one deleted, which is what the metric has always meant. A binary
+file counts as one touched file with no countable lines.
 
 This is deliberately a secondary signal: a smaller diff can be focused, but it can also be
-incomplete. Pair a scope gate with a correctness assertion.
+incomplete. Pair a scope gate with a correctness assertion. The patch is the evidence that closes
+that gap — it is what a judge reads to answer whether the work was any good.
 
 `command_check` is intentionally not a harness enhancement. `run` detects the assertion before
 dispatch so it can validate held-out sources before building. After diff-scope capture, `ingest`
-copies the assertion's held-out `setup_files` from the skill's `evals/` directory into that root and
-executes the trusted command through the platform shell. Root `.git` paths are reserved for both
-visible and held-out fixtures, while nested repositories remain valid. The runner clears inherited
-Git routing variables before optional `env` values override the environment; optional `matrix`
-values execute every Cartesian-product cell and persist per-cell results. The files are never staged
-or mentioned to the agent, and therefore never inflate scope metrics.
+grades only tasks with a runner-owned `run.json`, copies the assertion's held-out `setup_files` from
+the skill's `evals/` directory into that root, and executes the trusted command through the platform
+shell. Root `.git` paths are reserved for both
+visible overlays and held-out setup files, while nested repositories remain valid. The runner clears
+inherited Git routing variables before optional `env` values override the environment; optional
+`matrix` values execute every Cartesian-product cell and persist per-cell results. The files are
+never staged or mentioned to the agent, and therefore never inflate scope metrics.
 
-This path needs no transcript parser, tool vocabulary, model flag, or judge recipe, so it behaves
-the same for built-ins and descriptor-only harnesses. It also does not use harness tools: an armed
-agent write guard can remain installed while the runner executes the command. `finalize` converts
-the schema-gated intermediate result into an ordinary grading result, leaving aggregation
-harness-agnostic.
+Beyond the runner-ready dispatch and transcript baseline, this path needs no additional parser
+signals, tool vocabulary, or model flag, so it behaves the same for built-ins and descriptor-only
+harnesses. It also does not use harness tools: an armed agent write guard can remain installed while
+the runner executes the command. `finalize` converts the schema-gated intermediate result into an
+ordinary grading result, leaving aggregation harness-agnostic.
 
 ## The enhancements
 
@@ -137,9 +154,12 @@ stream needing cross-event state — keyed `tool_use`/`tool_result` joins, shape
 coercion — is real per-harness code behind a named capability. If a stream needs more than the
 extract primitives, it's a code capability, not a bigger DSL.
 
-*What it unlocks:* `transcript_check` assertions, token/duration capture, automatic
-`run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
-event — a deterministic `__skill_invoked` meta-check.
+*What it unlocks:* `transcript_check` assertions, token capture, historical duration fallback,
+automatic `run.json`/`timing.json` assembly by `ingest`, and — where the transcript exposes a skill-tool
+event — a deterministic `__skill_invoked` meta-check. Paired with `[tools]`, tool patterns are
+portable: grading identifies a native tool name's role from the run's own descriptor and retries
+the pattern against every spelling `all_tool_vocabulary()` declares for that role, so one authored
+assertion measures the same behavior on every harness (#308).
 
 **Sub-capability: permission-denied tool results.** A refused tool call can be reported in the
 event stream or a paired harness capture while the overall dispatch still exits 0. On its own that
@@ -165,14 +185,17 @@ write guard denies through the same permission mechanism, so its blocks land in 
 they are attributed by the `eval guard: ` reason prefix and excluded from the warning so one denial
 is not reported twice.
 
-*Fallback:* `transcript_check` grades as *unverifiable*, `llm_judge` and runner-owned
-`command_check` carry the grading (bias suites toward those for such a harness), tokens/duration go
-unrecorded, records are assembled from `outputs/final-message.md` or by hand, and the meta-check
-uses the LLM-judge fallback.
+There is no no-transcript fallback for a runner-ready harness. A descriptor without a primary
+transcript reader is rejected before the workspace is built. A valid reader may still omit optional
+token, duration, denial, or skill-invocation evidence; those individual signals remain unavailable
+or use their documented grading fallback.
 
 *Descriptor fields:* the `[transcript]` table — `events_filename` (gate: an absent table means the
 ingest pipeline never reads a transcript), one primary summary reader, and
-`surfaces_skill_invocation`. The primary reader is either `parser` or the summary outputs under
+`surfaces_skill_invocation`. A deterministic native skill event uses `skill_tool` / `skill_arg`;
+a successful exact-path shell read uses the mutually exclusive `skill_access` table with its tool,
+command argument, exit-code argument, and declared read-command basenames. The primary reader is
+either `parser` or the summary outputs under
 `extract`; validation rejects both, neither, and a surface-only extract. The `extract` sub-table is
 the declarative tier: equality `where` filters, final and ordered assistant-text picks, a session-id
 pick, flat tool-item mapping, token sum/subtract reduction, duration rule, and the auxiliary
@@ -191,14 +214,34 @@ combination.
 *Why harness-specific:* each CLI spells same-session continuation differently and exposes its
 session identifier in a different transcript event.
 
-*What it unlocks:* an eval's ordered `turns` array. `dispatch-task` starts the normal one-shot
-command, extracts the native session id, evaluates `agent_asks` (`?`) plus the optional response
-regex, and resumes the same session for each delivered follow-up. It writes raw round transcripts
-under `outputs/turn-N/` and atomically commits `conversation.json` only after a complete or normal
-guardrail-stopped scenario. `ingest` skips an interrupted task with no completion artifact.
+*What it unlocks:* an eval's ordered `turns` array **and** its `responder` policy. `dispatch` starts
+the normal one-shot command, extracts the native session id, asks the eval's turn source what
+follows each round, and resumes the same session for each delivered follow-up. It writes raw round
+transcripts under `outputs/turn-N/` and atomically commits `conversation.json` only after a complete
+or normal guardrail-stopped scenario. `ingest` skips an interrupted task with no completion
+artifact.
 
-*Fallback:* none. `run` rejects selected multi-turn evals when the harness omits this capability;
-silently starting a fresh session would make the canned user response meaningless.
+A scripted turn is gated by `agent_asks` (`?`) plus the optional response regex. A responder instead
+*derives* each turn by consulting a small model, once after every round, and records that origin on
+the turn itself. **The responder needs no descriptor field and no named capability of its own:** it
+reads the round's last assistant message out of `final_text`, which every transcript parser already
+normalizes, and it dispatches its own consultations through the same `[dispatch].exec_template` a
+judge uses. Every harness that resolves a resume template gets it for free, and none can be
+"missing" it.
+
+That portability is not a happy accident, it is forced. A dispatch runs headless with stdin
+detached, so a harness-native question tool has no channel to be answered on; the runner can only
+send free text as the next user turn. Text is therefore the only mechanism that fits, and it is the
+one every transcript parser already normalizes into `final_text`.
+
+A consultation binds the exec template's placeholders the way a judge dispatch does — guard
+arguments off, its own capture directory, its own prompt — with one addition: `<eval-root>` is the
+run's `responder/turn-N/` directory rather than the task env. A consultation must not be able to
+write into the codebase under measurement, nor inherit that codebase's `CLAUDE.md` as instructions
+to itself.
+
+*Fallback:* none. `run` rejects selected multi-turn evals — scripted or responder-driven — when the
+harness omits this capability; silently starting a fresh session would make the answer meaningless.
 
 *Descriptor fields:* `[conversation].resume_exec_template`, with required
 `<eval-root>`, `<outputs_dir>`, `{session_arg}`, and `{prompt_arg}` placeholders, plus optional
@@ -310,16 +353,19 @@ global `.opencode`, `.claude`, and `.agents` skill dirs — including skills ins
 harnesses. A logical eval skill present in any such source can contaminate the with/without
 comparison when dispatches load that source, even when the staged copy uses a unique slug.
 
-*What it unlocks:* a build-time contamination warning (shared banner + schema-v2
+*What it unlocks:* a build-time contamination warning (shared banner + schema-v3
 `plugin-shadow.json` in the iteration dir), which `aggregate` folds into `benchmark.json`
 validity warnings. The runner scans every matrix environment and the shared policy groups scanner
-facts by logical skill, records live/staged sources and affected cells, and assigns role-aware
-severity. Subject and asymmetric sibling collisions invalidate the comparison; symmetric sibling
-collisions warn. Because the scan runs before dispatch it reports *risk*, so the banner states the
-consequence conditionally; the verdict is settled afterwards by the session-surface sub-capability
-below. When the resolved descriptor declares `isolates_live_sources = true`, the scan, intrinsic
-severity, and artifact are retained, but the banner becomes an informational notice and `aggregate`
-omits the findings from validity warnings. Historical unversioned artifacts remain readable.
+facts by logical skill and source class, records live/staged sources and affected cells, and assigns
+role-aware severity. `operator-environment` findings come from inherited global/plugin sources;
+`codebase-sourced` findings come from project roots the harness descriptor declares. Subject and
+asymmetric sibling collisions invalidate the comparison; symmetric sibling collisions warn.
+Because the scan runs before dispatch it reports *risk*, so the banner states the consequence
+conditionally; the verdict is settled afterwards by the session-surface sub-capability below. When
+the resolved descriptor declares `isolates_live_sources = true`, operator-source scan facts,
+intrinsic severity, and artifact are retained, but the banner becomes informational and `aggregate`
+omits those findings. Codebase findings use the eval's separate `exclude_skill_sources` policy and
+remain warnings when preserved. Schema-v2 and historical unversioned artifacts remain readable.
 
 ### Session surface (sub-capability of transcript ingest)
 
@@ -375,37 +421,51 @@ obtained from a best-effort `opencode debug skill` probe only for duplicate runt
 scan does not enumerate bundled system skills (no stable listing exists), and OpenCode's does not
 scan config-declared `skills.paths`/`skills.urls` sources.
 
-### Plan-mode context
+### Native plan mode
 
-*Why harness-specific in principle:* a harness could inject a real native plan mode.
+*Why harness-specific:* the read-only planning mode is the harness's own — a permission mode for
+Claude Code, a built-in agent for OpenCode — and so is the way the agent presents its plan.
 
-*What the default does:* wraps the shared `profiles/shared/plan-mode.md` procedure in a
-`<system-reminder>` block — an approximation that is the same for every harness today, since plan
-modes can't be reproduced exactly in a one-shot dispatch anyway.
+*What it unlocks:* evals that declare `plan_mode: true`. The driver dispatches the opening round
+with the planning arguments, lets the agent present a plan, approves it with one fixed message, and
+resumes the same session with the act arguments; the eval's `turns` or `responder` then proceed as
+usual. The approved plan is saved as `outputs/plan.md` and rendered in the judge evidence bundle.
+`plan_file` is the deterministic signal that the plan was presented; without one the eval's
+responder decides, which is why `run` requires a responder on a harness without a plan file.
 
-*Descriptor fields:* none yet — this is the trait default (`render_plan_mode_context`) with no
-descriptor surface; a harness with a real native plan mode would grow one.
+*Fallback:* none. `run` rejects a plan-mode eval for a harness without `[plan_mode]`, before any
+environment is built, the way it rejects multi-turn evals for a harness without `[conversation]`.
 
-### Dispatch recipes
+*Descriptor fields:* the `[plan_mode]` table — `plan_args` and `act_args` fill the `{mode_args}`
+slot that both `dispatch.exec_template` and `conversation.resume_exec_template` must carry (the act
+arguments also render for judge, responder, and probe dispatches); the optional `[plan_mode.plan_file]`
+table names the file the harness writes its plan to (`root`, `~`-expanded, and the write tool's
+`content_field`). Writes under that root are allowed by the write guard and the stray-write audit.
+Requires `[conversation]`. Validation rejects a table without the slot in both templates, and a
+slot with no table to fill it.
 
-*Why harness-specific:* the copy-pasteable command template is the harness's CLI.
+*Capability:* `plan-mode` in `harness list`. Claude Code and OpenCode declare it; Codex `exec` has
+no plan-mode flag and Cline cannot resume a session, so neither does.
 
-*What it unlocks:* `RUNBOOK.md`, `dispatch-manifest.md`, and the post-`run`/post-`ingest` handoffs
-carry exact per-task commands (including parallel and judge variants).
+### Dispatch commands
 
-*Fallback:* the generic handoff text; the operator constructs dispatch commands themselves. The
-`run` preflight warns naming this limitation when the descriptor declares no `exec_template`
-(`has_dispatch_recipes()`).
+*Why harness-specific:* the command line the runner spawns is the harness's CLI.
 
-*Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `parallel_command_template`,
-`judge_command_template`, `next_steps_template`, `manifest_template`, `capture_prefix`,
-`guard_args`, `model_note`. Templates carry `{model_arg}`/`{guard_args}` slots the renderer fills
-for eval-agent dispatches; judge commands deliberately render empty `guard_args` because they run
-outside the guarded task envs. `env` contains non-secret eval-agent defaults; the shared renderer
-adds sorted, shell-quoted exports to one-shot, parallel, resume, and probe commands. Unset keys
-inherit the host environment and no timezone default is imposed. The shared jq/xargs parallel and
-judge scaffolds stay code (`src/adapters/cli_command.rs`) with the per-harness command block spliced
-in. Validation rejects a template whose placeholder has no backing field.
+*What it unlocks:* `eval-magic dispatch` itself. Without an `exec_template` there is nothing for the
+runner to run, and `dispatch` fails for that harness.
+
+*Fallback:* none. The `run` preflight rejects a descriptor without `exec_template`, so the gap
+surfaces before a workspace is built.
+
+*Descriptor fields:* the `[dispatch]` table — `env`, `exec_template`, `next_steps_template`,
+`manifest_template`, `guard_args`, `model_note`. Templates carry
+`{model_arg}`/`{guard_args}` slots the renderer fills for eval-agent dispatches, plus `{mode_args}`
+when a `[plan_mode]` table backs it; a judge dispatch
+reuses `exec_template` with `guard_args` deliberately empty, because judges run from the iteration
+directory outside every guarded task env. `env` contains non-secret eval-agent defaults, applied
+per task when the runner spawns the command; unset keys inherit the host environment and no
+timezone default is imposed. Validation rejects a template whose placeholder has no backing
+field.
 
 ## Current support
 
@@ -431,7 +491,7 @@ data rather than a hand-maintained support table.
    requires it: the notes file is where the don't-guess guardrail's verification evidence lives.
 4. Confirm `eval-magic harness list` and `harness show <label>` report the built-in and only the
    capabilities its descriptor actually declares.
-5. Wire enhancements in leverage order — dispatch recipes and transcript ingest first (they carry
+5. Wire enhancements in leverage order — the dispatch command and transcript ingest first (they carry
    the most fidelity and are prerequisites for conversation resume), then conversation resume,
    staging, model flag, guard (guard requires built-in status — user
    descriptors may not declare one). Most enhancements are

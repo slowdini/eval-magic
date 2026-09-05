@@ -6,6 +6,8 @@ use predicates::str::contains;
 use std::fs;
 use std::path::Path;
 
+mod skill_access;
+
 #[test]
 fn codex_no_stage_keeps_inline_fallback() {
     let tmp = tempfile::TempDir::new().unwrap();
@@ -31,6 +33,8 @@ fn codex_no_stage_keeps_inline_fallback() {
     let conditions = read_json(&iteration_dir(&cwd).join("conditions.json"));
     assert_eq!(dispatch["harness"], "codex");
     assert_eq!(conditions["harness"], "codex");
+    assert_eq!(conditions["guard_armed"], false);
+    assert_eq!(dispatch["guard"], conditions["guard_armed"]);
     assert!(!cwd.join(".claude/skills").exists());
     assert!(!cwd.join(".agents/skills").exists());
 }
@@ -88,6 +92,12 @@ fn codex_stages_repo_local_skills_under_agents() {
         .iter()
         .find(|t| t["condition"] == "with_skill")
         .unwrap();
+    assert_eq!(
+        task["staged_skill_path"],
+        serde_json::json!(wire_path(&resolved(
+            &codex_skills.join(slug).join("SKILL.md")
+        )))
+    );
     let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
     assert!(prompt.contains("## Skills"));
     assert!(prompt.contains(&format!("- {slug}: review merge requests")));
@@ -123,43 +133,6 @@ fn codex_supports_stage_name_when_staging() {
         read_str(&cli_env_dir(&cwd, "g1", "with_skill").join(".agents/skills/mr-review/SKILL.md"))
             .contains("name: mr-review")
     );
-}
-
-#[test]
-fn codex_plan_mode_injects_profile_and_records_flag() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), DEFAULT_EVALS);
-    skill_eval()
-        .current_dir(&cwd)
-        .args(["run", "--skill-dir"])
-        .arg(&skill_dir)
-        .args([
-            "--skill",
-            "mr-review",
-            "--mode",
-            "new-skill",
-            "--harness",
-            "codex",
-            "--plan-mode",
-            "--dry-run",
-        ])
-        .assert()
-        .success();
-
-    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
-    assert_eq!(dispatch["plan_mode"], true);
-    for task in dispatch["tasks"].as_array().unwrap() {
-        let prompt = read_str(Path::new(task["dispatch_prompt_path"].as_str().unwrap()));
-        if task["condition"] == "with_skill" {
-            assert!(prompt.contains("## Skills"));
-        }
-        assert!(prompt.contains("<system-reminder>"));
-        // Shared, harness-agnostic profile: same text every harness sees, with no
-        // Codex-specific <proposed_plan> block or Claude-specific ExitPlanMode rail.
-        assert!(prompt.contains("Plan mode is active"));
-        assert!(!prompt.contains("<proposed_plan>"));
-        assert!(!prompt.contains("ExitPlanMode"));
-    }
 }
 
 #[test]
@@ -228,13 +201,11 @@ fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
         ])
         .assert()
         .success();
+    // The post-run hand-off names the runner command; the harness CLI it will
+    // spawn is documented in the manifest, not pasted at the operator.
     let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("--dangerously-bypass-hook-trust"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(stdout.contains("codex-events.jsonl"));
-    assert!(stdout.contains("codex-stderr.log"));
+    assert!(stdout.contains("eval-magic dispatch"), "{stdout}");
+    assert!(stdout.contains("--harness codex"), "{stdout}");
 
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
@@ -242,7 +213,8 @@ fn codex_dispatch_guidance_detaches_stdin_and_logs_stderr() {
     assert!(manifest.contains("</dev/null"));
     assert!(manifest.contains("codex-events.jsonl"));
     assert!(manifest.contains("codex-stderr.log"));
-    assert!(manifest.contains("xargs -0 -P"));
+    // Concurrency is the runner's `--jobs`, not a pasted `xargs -P` pipeline.
+    assert!(manifest.contains("eval-magic dispatch"));
 }
 
 #[test]
@@ -265,18 +237,14 @@ fn codex_dispatch_guidance_includes_agent_model_when_provided() {
         ])
         .assert()
         .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("-m gpt-5-mini"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(stdout.contains("codex-events.jsonl"));
-    assert!(stdout.contains("codex-stderr.log"));
-
+    assert.success();
     let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
     assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
     assert!(manifest.contains("-m gpt-5-mini"));
-    assert!(manifest.contains("xargs -0 -P"));
+    assert!(manifest.contains("</dev/null"));
+    assert!(manifest.contains("codex-events.jsonl"));
+    assert!(manifest.contains("codex-stderr.log"));
+    assert!(manifest.contains("eval-magic dispatch"));
 }
 
 #[test]
@@ -299,11 +267,11 @@ fn codex_dispatch_guidance_omits_hook_bypass_when_unguarded() {
         ])
         .assert()
         .success();
-    let stdout = String::from_utf8(assert.get_output().stdout.clone()).unwrap();
-
-    assert!(stdout.contains("codex --ask-for-approval never exec --cd <eval-root>"));
-    assert!(stdout.contains("</dev/null"));
-    assert!(!stdout.contains("--dangerously-bypass-hook-trust"));
+    assert.success();
+    let manifest = read_str(&iteration_dir(&cwd).join("dispatch-manifest.md"));
+    assert!(manifest.contains("codex --ask-for-approval never exec --cd <eval-root>"));
+    assert!(manifest.contains("</dev/null"));
+    assert!(!manifest.contains("--dangerously-bypass-hook-trust"));
 }
 
 #[test]
@@ -357,8 +325,8 @@ fn codex_run_writes_human_followed_runbook() {
         "uses the human-followed template: {runbook}"
     );
     assert!(
-        runbook.contains("codex --ask-for-approval never exec"),
-        "carries the Codex CLI dispatch recipe: {runbook}"
+        runbook.contains("eval-magic dispatch"),
+        "carries the dispatch command: {runbook}"
     );
 }
 
@@ -429,8 +397,7 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
     let tmp = tempfile::TempDir::new().unwrap();
     let evals = r#"{ "skill_name": "mr-review", "evals": [
       { "id": "e1", "prompt": "p1", "expected_output": "o", "files": ["a.txt"] },
-      { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"],
-        "isolation": "isolated" }
+      { "id": "e2", "prompt": "p2", "expected_output": "o", "files": ["b.txt"] }
     ] }"#;
     let (skill_dir, cwd) = setup(tmp.path(), evals);
     fs::write(skill_dir.join("mr-review/evals/a.txt"), "a").unwrap();
@@ -462,7 +429,7 @@ fn codex_warns_when_user_skill_shadows_staged_skill() {
         .stderr(contains("Move or rename"));
 
     let report = read_json(&iteration_dir(&cwd).join("plugin-shadow.json"));
-    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["schema_version"], 3);
     assert_eq!(report["findings"][0]["skill_name"], "mr-review");
     assert_eq!(report["findings"][0]["role"], "subject");
     let sources = report["findings"][0]["sources"].as_array().unwrap();

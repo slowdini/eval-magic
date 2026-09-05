@@ -1,13 +1,16 @@
 //! Workspace lifecycle command handlers: `snapshot`, `promote-baseline`, and the
 //! end-of-run `teardown`.
 
-use std::path::Path;
+use std::collections::HashSet;
+use std::fs;
 
+use crate::adapters::adapter_for;
 use crate::cli::args::{CommonArgs, PromoteBaselineArgs, SnapshotArgs};
-use crate::cli::run;
 use crate::cli::{
     command_target_args, iteration_dir, resolve_iteration, run_context_from, staged_env_roots,
 };
+use crate::core::SkillNames;
+use crate::core::fs::artifact_path;
 use crate::sandbox;
 use crate::workspace;
 
@@ -19,13 +22,52 @@ pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
     let label = args.label.unwrap_or_else(|| "baseline".to_string());
     let reference = args.reference.as_deref();
 
-    let dest = workspace::snapshot(
-        &ctx.workspace_root,
-        &ctx.skill_name,
-        &ctx.skill_subdir,
-        &label,
-        reference,
-    )?;
+    let evals_path = ctx.skill_subdir.join("evals/evals.json");
+    let (skill_names, multi_skill) =
+        if evals_path.exists() {
+            let value: serde_json::Value = serde_json::from_str(&fs::read_to_string(&evals_path)?)?;
+            let authored: SkillNames =
+                serde_json::from_value(value.get("skill_name").cloned().ok_or_else(|| {
+                    anyhow::anyhow!("{}: missing skill_name", evals_path.display())
+                })?)?;
+            match authored {
+                SkillNames::Many(names) => {
+                    let mut unique = HashSet::new();
+                    if names.is_empty() || names.iter().any(|name| !unique.insert(name)) {
+                        anyhow::bail!("skill_name list must be non-empty and contain unique names");
+                    }
+                    if !names.contains(&ctx.skill_name) {
+                        anyhow::bail!(
+                            "eval owner '{}' must be listed in skill_name",
+                            ctx.skill_name
+                        );
+                    }
+                    (names, true)
+                }
+                SkillNames::One(_) => (vec![ctx.skill_name.clone()], false),
+            }
+        } else {
+            (vec![ctx.skill_name.clone()], false)
+        };
+
+    let dest = if multi_skill {
+        workspace::snapshot_set(
+            &ctx.workspace_root,
+            &ctx.skill_name,
+            &ctx.skill_dir,
+            &skill_names,
+            &label,
+            reference,
+        )?
+    } else {
+        workspace::snapshot(
+            &ctx.workspace_root,
+            &ctx.skill_name,
+            &ctx.skill_subdir,
+            &label,
+            reference,
+        )?
+    };
 
     match reference {
         Some(reference) => println!(
@@ -38,8 +80,8 @@ pub(crate) fn run_snapshot(args: SnapshotArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Promote an iteration's `benchmark.json` + per-run gradings into the skill's
-/// committed `evals/baseline/`, dropping a `.promoted.json` marker.
+/// Promote an iteration's benchmark, gradings, and bounded judge evidence into
+/// the skill's committed `evals/baseline/`, dropping a `.promoted.json` marker.
 pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<()> {
     let ctx = run_context_from(&args.common)?;
     let iteration = resolve_iteration(&ctx, args.common.iteration)?;
@@ -53,21 +95,30 @@ pub(crate) fn run_promote_baseline(args: PromoteBaselineArgs) -> anyhow::Result<
         label: args.label.as_deref(),
         agent_model: args.agent_model.as_deref(),
         judge_model: args.judge_model.as_deref(),
-        git_cwd: &ctx.skill_subdir,
+        responder_model: args.responder_model.as_deref(),
     })?;
 
     let n = result.gradings_copied;
+    let evidence = result.evidence_copied;
     println!(
-        "Promoted baseline for {} → {} (benchmark.json + {n} grading file{} + BASELINE.md)",
+        "Promoted baseline for {} → {} (benchmark.json + {n} grading file{} + {evidence} evidence bundle{} + BASELINE.md)",
         ctx.skill_name,
         result.baseline_dir.display(),
-        if n == 1 { "" } else { "s" }
+        if n == 1 { "" } else { "s" },
+        if evidence == 1 { "" } else { "s" }
     );
     if result.missing_gradings > 0 {
         let m = result.missing_gradings;
         eprintln!(
             "⚠ {m} run cell{} missing grading.json — omitted from the baseline. \
              Run grade/aggregate to complete the iteration before promoting.",
+            if m == 1 { "" } else { "s" }
+        );
+    }
+    if result.missing_evidence > 0 {
+        let m = result.missing_evidence;
+        eprintln!(
+            "⚠ {m} run cell{} missing judge-evidence.md — retained gradings have no bounded evidence bundle. Re-grade the iteration to create it before promoting again.",
             if m == 1 { "" } else { "s" }
         );
     }
@@ -98,9 +149,11 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
     if let Ok(dir) = iteration_dir(&ctx, args.iteration) {
         for env in staged_env_roots(&dir) {
             torn |= sandbox::teardown_guard(&env);
+            if adapter_for(ctx.harness).skills_dir(&env).is_some() {
+                crate::cli::run::staging::cleanup_staged_skills(&env, ctx.harness)?;
+            }
         }
     }
-    run::staging::cleanup_staged_skills(&ctx.stage_root, ctx.harness)?;
     let ws = workspace::cleanup_workspace(&ctx.workspace_root, &ctx.skill_name);
 
     println!(
@@ -130,7 +183,7 @@ pub(crate) fn run_teardown(args: CommonArgs) -> anyhow::Result<()> {
         eprintln!(
             "⚠ Kept {} workspace iteration(s) with results not yet committed:\n{lines}\n   Commit them, e.g.:\n     eval-magic promote-baseline{target_args} --iteration <N>\n   or delete {}/ manually to discard.",
             ws.kept_iterations.len(),
-            Path::new(".eval-magic").join(&ctx.skill_name).display()
+            artifact_path(&ctx.workspace_root.join(&ctx.skill_name))
         );
     }
     Ok(())

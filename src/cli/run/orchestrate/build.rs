@@ -1,7 +1,8 @@
 //! Phases 3 & 4 — build every `(eval, condition)` dispatch task and write
 //! `conditions.json` / `dispatch-manifest.md` / per-task prompts / `dispatch.json`
 //! ([`write_dispatch`]), then arm the write guard (auto-armed; `--no-guard`
-//! opts out) and run the harness's shadow preflight ([`post_build`]).
+//! opts out), hide the framework's own staged files from the codebase's tooling
+//! ([`ignore`]), and run the harness's shadow preflight ([`post_build`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -10,14 +11,14 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::adapters::adapter_for;
-use crate::core::{AvailableSkill, ConditionEntry, ConditionsRecord, RunContext};
+use crate::core::{AvailableSkill, ConditionEntry, ConditionSkill, ConditionsRecord, RunContext};
 use crate::pipeline::io::now_iso8601;
 
 use super::super::RunError;
 use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, get_skill_description,
 };
-use super::super::fixtures::fixture_pairs;
+use super::super::overlays::overlay_file_pairs;
 use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
@@ -25,6 +26,11 @@ use super::envs::{EnvLayoutInput, env_targets, task_env_root_for_run, task_run_i
 use super::{Resolved, RunOptions, Staged};
 use crate::cli::command_target_args;
 use crate::core::fs::{artifact_path, write_json};
+
+mod ignore;
+mod roster;
+
+use roster::{condition_roster, staged_skill_path_for, task_roster};
 
 /// Build every `(eval, condition)` dispatch task and write `conditions.json`,
 /// `dispatch-manifest.md`, the per-task prompt files, and `dispatch.json`.
@@ -41,6 +47,15 @@ pub(super) fn write_dispatch(
     let condition_skill_path = |path: &Option<String>| -> Option<String> {
         path.as_deref().map(|p| artifact_path(Path::new(p)))
     };
+    let multi_skill = r.skill.multi;
+    let treatment_names = r
+        .skill
+        .treatments
+        .iter()
+        .map(|skill| skill.name.clone())
+        .collect::<Vec<_>>();
+    let cond_a_roster = condition_roster(&r.skill_paths_a, &staged.cond_a_skills);
+    let cond_b_roster = condition_roster(&r.skill_paths_b, &staged.cond_b_skills);
     let conditions = ConditionsRecord {
         mode: r.mode,
         baseline: r.baseline.clone(),
@@ -49,11 +64,13 @@ pub(super) fn write_dispatch(
                 name: r.cond_a.to_string(),
                 skill_path: condition_skill_path(&r.skill_path_a),
                 staged_skill_slug: Some(staged.cond_a_slug.clone()),
+                skills: multi_skill.then(|| cond_a_roster.clone()),
             },
             ConditionEntry {
                 name: r.cond_b.to_string(),
                 skill_path: condition_skill_path(&r.skill_path_b),
                 staged_skill_slug: Some(staged.cond_b_slug.clone()),
+                skills: multi_skill.then(|| cond_b_roster.clone()),
             },
         ],
         timestamp: now_iso8601(),
@@ -63,25 +80,32 @@ pub(super) fn write_dispatch(
         agent_model: opts.agent_model.map(str::to_owned),
         agent_env: opts.agent_env.clone(),
         judge_model: opts.judge_model.map(str::to_owned),
+        judge_samples: opts.judge_samples,
+        responder_model: opts.responder_model.map(str::to_owned),
         label: opts.label.map(str::to_owned),
+        codebases: r.codebases.iter().map(super::RunCodebase::usage).collect(),
+        skill_source: Some(r.skill.record()),
+        // Prep-time descriptor provenance (#294): the digest lets a later
+        // stage detect that it resolved a different descriptor than this run
+        // was prepared with; the path makes the remedy copy-pasteable.
+        harness_file: ctx.harness_file.as_deref().map(artifact_path),
+        harness_descriptor_digest: Some(crate::adapters::registry::descriptor_digest(ctx.harness)),
+        guard_armed: Some(opts.guard_armed()),
     };
     write_json(&r.iteration_dir.join("conditions.json"), &conditions)?;
-
-    let staged_skill_path_for = |env_root: &Path, cond_slug: Option<&str>| -> Option<String> {
-        cond_slug.map(|slug| {
-            artifact_path(
-                &skills_dir_for_harness(env_root, ctx.harness)
-                    .join(slug)
-                    .join("SKILL.md"),
-            )
-        })
-    };
+    let guard_armed = conditions
+        .guard_armed
+        .expect("run-created conditions record guard state");
+    // One record, cloned into every task: grading reads `run.json` alone, so a
+    // result can only be tied to a skill revision if each record names one.
+    let skill_source_record = r.skill.record();
 
     // availableSkills for a condition in a given env = siblings + the
     // skill-under-test when that condition loads it. Paths are task-env-specific.
     let available_skills_for = |env_root: &Path,
                                 cond_skill_path: Option<&str>,
-                                cond_slug: Option<&str>|
+                                cond_slug: Option<&str>,
+                                roster: &[ConditionSkill]|
      -> Vec<AvailableSkill> {
         if opts.no_stage {
             return Vec::new();
@@ -99,7 +123,25 @@ pub(super) fn write_dispatch(
                 description: description.clone(),
             })
             .collect();
-        if let Some(csp) = cond_skill_path {
+        if multi_skill {
+            for treatment in roster {
+                let name = match treatment.staged_skill_slug.as_deref() {
+                    Some(slug) if adapter_for(ctx.harness).advertises_staged_slug_name() => {
+                        slug.to_string()
+                    }
+                    _ => treatment.name.clone(),
+                };
+                skills.push(AvailableSkill {
+                    name,
+                    path: treatment
+                        .staged_skill_slug
+                        .as_deref()
+                        .and_then(|slug| staged_skill_path_for(env_root, ctx.harness, Some(slug)))
+                        .unwrap_or_else(|| treatment.skill_path.clone()),
+                    description: get_skill_description(Path::new(&treatment.skill_path)),
+                });
+            }
+        } else if let Some(csp) = cond_skill_path {
             let name = match cond_slug {
                 Some(slug) if adapter_for(ctx.harness).advertises_staged_slug_name() => {
                     slug.to_string()
@@ -108,23 +150,23 @@ pub(super) fn write_dispatch(
             };
             skills.push(AvailableSkill {
                 name,
-                path: staged_skill_path_for(env_root, cond_slug).unwrap_or_else(|| csp.to_string()),
+                path: staged_skill_path_for(env_root, ctx.harness, cond_slug)
+                    .unwrap_or_else(|| csp.to_string()),
                 description: get_skill_description(Path::new(csp)),
             });
         }
         skills
     };
 
-    // Each eval's env-relative fixture dests (for the task's `fixtures` field and
-    // the prompt's fixtures block). The copies themselves are made per env by
+    // Each eval's task-relative overlay destinations. The copies are made per env by
     // `stage_conditions`; resolution here is read-only (and re-validated in resolve).
-    let mut fixtures_by_eval: HashMap<&str, Vec<String>> = HashMap::new();
+    let mut overlay_files_by_eval: HashMap<&str, Vec<String>> = HashMap::new();
     for ev in &r.selected_evals {
-        let dests = fixture_pairs(ev, &ctx.skill_subdir)?
+        let dests = overlay_file_pairs(ev, &ctx.skill_subdir)?
             .into_iter()
             .map(|(dest, _source)| dest)
             .collect();
-        fixtures_by_eval.insert(ev.id.as_str(), dests);
+        overlay_files_by_eval.insert(ev.id.as_str(), dests);
     }
 
     // A single group keeps the `group` key off each task (>1 group tags them);
@@ -134,16 +176,18 @@ pub(super) fn write_dispatch(
     let mut tasks = Vec::new();
     // Build tasks CONDITION-outer, GROUP-inner. A single group collapses this to
     // the legacy condition-outer order.
-    for (cond_name, cond_skill_path, cond_slug) in [
+    for (cond_name, cond_skill_path, cond_slug, condition_roster) in [
         (
             r.cond_a,
             r.skill_path_a.as_deref(),
             staged.cond_a_slug.as_deref(),
+            cond_a_roster.as_slice(),
         ),
         (
             r.cond_b,
             r.skill_path_b.as_deref(),
             staged.cond_b_slug.as_deref(),
+            cond_b_roster.as_slice(),
         ),
     ] {
         for group in &r.groups {
@@ -157,6 +201,7 @@ pub(super) fn write_dispatch(
                     .iteration_dir
                     .join(format!("eval-{}", ev.id))
                     .join(cond_name);
+                let codebase_record = Some(r.codebase_for(std::slice::from_ref(&ev.id))?.record());
                 let runs = ev.runs.unwrap_or(opts.runs);
 
                 for run_idx in 1..=runs {
@@ -167,10 +212,7 @@ pub(super) fn write_dispatch(
                     } else {
                         (cond_dir.join(format!("run-{run_idx}")), Some(run_idx))
                     };
-                    let env_run_index = group
-                        .task_runs
-                        .is_some_and(|task_runs| task_runs > 1)
-                        .then_some(run_idx);
+                    let env_run_index = (group.runs > 1).then_some(run_idx);
                     let env_root = task_env_root_for_run(
                         &r.iteration_dir,
                         &group.id,
@@ -178,9 +220,10 @@ pub(super) fn write_dispatch(
                         env_run_index,
                     );
                     let env_root_str = env_root.to_string_lossy().into_owned();
-                    let staged_path = staged_skill_path_for(&env_root, cond_slug);
+                    let staged_path = staged_skill_path_for(&env_root, ctx.harness, cond_slug);
+                    let task_roster = task_roster(condition_roster, &env_root, ctx.harness);
                     let available_skills =
-                        available_skills_for(&env_root, cond_skill_path, cond_slug);
+                        available_skills_for(&env_root, cond_skill_path, cond_slug, &task_roster);
                     // Create the per-run meta dir (run.json / timing.json), which
                     // lives above the env.
                     fs::create_dir_all(&run_dir)?;
@@ -195,26 +238,29 @@ pub(super) fn write_dispatch(
                     let outputs_dir = env_root.join(".eval-magic-outputs").join(outputs_rel);
                     fs::create_dir_all(&outputs_dir)?;
 
-                    let fixtures = fixtures_by_eval
+                    let files = overlay_files_by_eval
                         .get(ev.id.as_str())
                         .cloned()
                         .unwrap_or_default();
                     let outputs_dir_str = outputs_dir.to_string_lossy().into_owned();
                     let run_dir_str = run_dir.to_string_lossy().into_owned();
 
-                    tasks.push(build_dispatch_task(&DispatchTaskOpts {
+                    let mut task = build_dispatch_task(&DispatchTaskOpts {
                         eval_id: &ev.id,
                         condition: cond_name,
                         skill_path: cond_skill_path,
                         staged_skill_slug: cond_slug,
                         staged_skill_path: staged_path.as_deref(),
+                        skills: multi_skill.then_some(task_roster.as_slice()),
+                        treatment_names: multi_skill.then_some(treatment_names.as_slice()),
                         user_prompt: &ev.prompt,
-                        fixtures,
+                        files,
                         turns: ev.turns.as_deref(),
+                        responder: ev.responder.as_ref(),
+                        plan_mode: ev.plan_mode,
                         outputs_dir: &outputs_dir_str,
                         cond_dir: &run_dir_str,
                         bootstrap_content: staged.bootstrap_content.as_deref(),
-                        plan_mode_content: staged.plan_mode_content.as_deref(),
                         skill_name: &ctx.skill_name,
                         available_skills: available_skills.clone(),
                         harness: ctx.harness,
@@ -225,7 +271,15 @@ pub(super) fn write_dispatch(
                         // per-task cwd the CLI recipe `cd`s into.
                         group: multi_group.then_some(group.id.as_str()),
                         eval_root: Some(env_root_str.as_str()),
-                    })?);
+                        codebase: codebase_record.as_ref(),
+                        skill_source: Some(&skill_source_record),
+                    })?;
+                    task.guard_policy = staged
+                        .guard_policies
+                        .get(&env_root)
+                        .cloned()
+                        .expect("every staged task environment has a guard policy");
+                    tasks.push(task);
                 }
             }
         }
@@ -243,7 +297,7 @@ pub(super) fn write_dispatch(
             &tasks,
             ManifestContext {
                 harness: ctx.harness,
-                guard: opts.guard_armed(),
+                guard: guard_armed,
                 agent_model: opts.agent_model,
                 agent_env: &opts.agent_env,
             },
@@ -257,16 +311,20 @@ pub(super) fn write_dispatch(
 
     let dispatch_json_path = r.iteration_dir.join("dispatch.json");
     let mut dispatch_json = json!({
-        "skill_name": ctx.skill_name,
+        "skill_name": if multi_skill {
+            json!(r.skill.treatments.iter().map(|skill| &skill.name).collect::<Vec<_>>())
+        } else {
+            json!(ctx.skill_name)
+        },
         "iteration": r.iteration,
         "run_nonce": r.run_nonce,
         "iteration_dir": artifact_path(&r.iteration_dir),
         "mode": r.mode,
         "baseline": r.baseline,
-        "plan_mode": opts.plan_mode,
         "runs": opts.runs,
         "agent_model": conditions.agent_model,
         "judge_model": conditions.judge_model,
+        "responder_model": conditions.responder_model,
         "label": conditions.label,
         "conditions": conditions.conditions,
         "harness": ctx.harness,
@@ -278,12 +336,21 @@ pub(super) fn write_dispatch(
             .expect("dispatch envelope is an object")
             .insert("agent_env".to_string(), json!(conditions.agent_env));
     }
-    if r.selected_evals.iter().any(|eval| eval.turns.is_some()) {
+    if let Some(samples) = conditions.judge_samples {
+        dispatch_json
+            .as_object_mut()
+            .expect("dispatch envelope is an object")
+            .insert("judge_samples".to_string(), json!(samples));
+    }
+    // Unconditional: `dispatch` drives every task from this envelope, so the
+    // descriptor it freezes and the guard state it dispatches under are needed
+    // whether or not any eval declares scripted turns.
+    {
         let descriptor = crate::adapters::registry::descriptor_value_for(ctx.harness);
         let envelope = dispatch_json
             .as_object_mut()
             .expect("dispatch envelope is an object");
-        envelope.insert("guard".to_string(), Value::Bool(opts.guard_armed()));
+        envelope.insert("guard".to_string(), Value::Bool(guard_armed));
         envelope.insert("harness_descriptor".to_string(), descriptor.clone());
     }
     // The isolation-batch plan the executing session/human follows: which evals
@@ -337,6 +404,11 @@ pub(super) fn write_dispatch(
     // `iteration_dir`, so `RunbookContext` keeps `iteration_dir`, not the env, and
     // the human drives from there. Generated, not version controlled.
     let target_args = command_target_args(ctx);
+    let eval_ids = r
+        .selected_evals
+        .iter()
+        .map(|eval| eval.id.clone())
+        .collect::<Vec<_>>();
     let runbook = build_runbook(&RunbookContext {
         harness: ctx.harness,
         skill_name: &ctx.skill_name,
@@ -346,11 +418,8 @@ pub(super) fn write_dispatch(
         cond_a: r.cond_a,
         cond_b: r.cond_b,
         num_tasks: tasks.len(),
-        multi_turn_tasks: tasks.iter().filter(|task| task.turns.is_some()).count(),
+        eval_ids: &eval_ids,
         target_args: &target_args,
-        guard: opts.guard_armed(),
-        agent_model: opts.agent_model,
-        agent_env: &opts.agent_env,
     });
     fs::write(r.iteration_dir.join("RUNBOOK.md"), runbook)?;
 
@@ -387,7 +456,11 @@ pub(super) fn post_build(
         let adapter = adapter_for(ctx.harness);
         let exe = std::env::current_exe()?;
         for target in &targets {
-            adapter.install_guard(&target.root, &exe, None)?;
+            let policy = staged
+                .guard_policies
+                .get(&target.root)
+                .expect("every staged task environment has a guard policy");
+            adapter.install_guard(&target.root, &exe, None, policy)?;
         }
         if let Some(msg) = adapter.guard_armed_message() {
             println!("{msg}");
@@ -402,14 +475,30 @@ pub(super) fn post_build(
         eprintln!("{notice}");
     }
 
+    // Staged skills, guard files, and framework outputs sit inside the task
+    // repository, so the project's own linters and formatters are taught to
+    // skip them before the baseline commit freezes the environment.
+    let (ignore_files, ignore_warnings) = ignore::hide_framework_files(ctx, r, &targets)?;
+    for warning in &ignore_warnings {
+        eprintln!("⚠ {warning}");
+    }
+    if !ignore_files.is_empty() {
+        println!(
+            "  ignore files: {} — framework files hidden from the project's own tooling",
+            ignore_files.join(", ")
+        );
+    }
+
     // Establish the repository boundary after all task-visible framework files
     // exist, but before project-local skill discovery inspects ancestor state.
     // Recreating `.git` also resets explicit iteration rebuilds to one clean,
     // runner-owned baseline with no inherited history or remotes.
-    super::git::initialize_task_repositories(r)?;
+    //
+    // This is also where the diff baseline is captured: the `eval-magic/baseline`
+    // ref written here marks the state every later measurement is the difference
+    // from. Nothing below writes into an environment, so the ref stays exact.
+    super::git::initialize_task_repositories(ctx, r)?;
 
     super::shadow_preflight::run(ctx, opts, r, staged, &targets)?;
-    crate::pipeline::capture_iteration_baselines(&r.iteration_dir)
-        .map_err(|error| RunError::msg(error.to_string()))?;
     Ok(())
 }

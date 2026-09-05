@@ -39,8 +39,8 @@ mod skills_block;
 pub mod transcript;
 
 pub use harness::{
-    CliDispatchContext, CliJudgeContext, CliManifestContext, HarnessAdapter, RUNBOOK_TEMPLATE,
-    TokenUsageAggregation, ToolVocabulary,
+    CliDispatchContext, CliManifestContext, EMPTY_TOOL_VOCABULARY, HarnessAdapter,
+    RUNBOOK_TEMPLATE, SkillEvidenceSignature, TokenUsageAggregation, ToolRole, ToolVocabulary,
 };
 pub use registry::{
     DEFAULT_HARNESS_NAME, UnknownHarnessError, adapter_for, all_config_dir_names,

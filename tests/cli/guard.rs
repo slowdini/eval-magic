@@ -6,6 +6,8 @@ use predicates::str::contains;
 use std::fs;
 use tempfile::TempDir;
 
+mod development_tests;
+
 /// The internal `guard` hook entry point is hidden from `--help` (its unique
 /// description never appears) yet remains callable.
 #[test]
@@ -26,10 +28,9 @@ fn guard_subcommand_is_hidden_but_callable() {
 /// Write an armed guard marker scoping writes to `<allowed>` under
 /// `<root>/<namespace>/skills`, and return its path.
 ///
-/// Serialized rather than string-interpolated: a Windows path embeds `\U`,
-/// `\A`, `\T` — none of them valid JSON escapes — so a `format!`-built marker
-/// is malformed, the guard reads it as absent, and every assertion below
-/// silently passes through the fail-open path instead of testing anything.
+/// Serialized rather than string-interpolated so path bytes that require JSON
+/// escaping cannot make the marker malformed and send the assertions through
+/// the fail-open path.
 fn write_marker_in(
     root: &std::path::Path,
     namespace: &str,
@@ -133,13 +134,20 @@ fn guard_allows_fd_duplication_and_the_null_device() {
 #[test]
 fn guard_codex_subcommand_blocks_with_codex_verdict_shape() {
     let tmp = TempDir::new().unwrap();
-    let marker = write_codex_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+    let workspace = tmp.path().join(".eval-magic");
+    fs::create_dir_all(&workspace).unwrap();
+    let marker = write_codex_armed_marker(tmp.path(), &workspace);
 
     skill_eval()
         .arg("guard-codex")
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+            serde_json::json!({
+                "tool_name": "Bash",
+                "cwd": workspace,
+                "tool_input": { "command": "npm install --prefix /outside left-pad" },
+            })
+            .to_string(),
         )
         .assert()
         .success()
@@ -190,13 +198,13 @@ fn guard_codex_block_verdict_bytes_are_stable() {
         .arg("guard-codex")
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+            r#"{ "tool_name": "Bash", "cwd": "/work/env", "tool_input": { "command": "npm install --prefix /outside left-pad" } }"#,
         )
         .assert()
         .success()
         .stdout(
             "{\"decision\":\"block\",\"reason\":\"eval guard: blocked Bash \
-             (package install/add) — runs outside the eval sandbox\"}",
+             (package install/add — runs outside the eval sandbox; command not allowed by eval guard policy)\"}",
         );
 }
 
@@ -234,7 +242,12 @@ fn guard_hook_resolves_the_harness_verdict_shape() {
         .args(["guard-hook", "--harness", "codex"])
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "Bash", "tool_input": { "command": "npm install left-pad" } }"#,
+            serde_json::json!({
+                "tool_name": "Bash",
+                "cwd": tmp.path().join(".eval-magic"),
+                "tool_input": { "command": "npm install --prefix /outside left-pad" },
+            })
+            .to_string(),
         )
         .assert()
         .success()
@@ -294,22 +307,31 @@ fn guard_hook_opencode_round_trips_write_verdicts() {
         .stdout("");
 }
 
-/// The plugin file itself is protected: a bash call mutating anything under
-/// `.opencode` trips the config-dir tamper rule.
+/// Harness config directories are ordinary paths inside the isolated env; the
+/// guard does not special-case a Bash command that works there.
 #[test]
-fn guard_hook_opencode_blocks_bash_tampering_with_the_plugin() {
+fn guard_hook_opencode_allows_bash_work_inside_the_environment() {
     let tmp = TempDir::new().unwrap();
-    let marker = write_opencode_armed_marker(tmp.path(), &tmp.path().join(".eval-magic"));
+    let workspace = tmp.path().join(".eval-magic");
+    fs::create_dir_all(&workspace).unwrap();
+    let marker = write_opencode_armed_marker(tmp.path(), &workspace);
 
     skill_eval()
         .args(["guard-hook", "--harness", "opencode"])
         .arg(&marker)
         .write_stdin(
-            r#"{ "tool_name": "bash", "tool_input": { "command": "touch .opencode/plugins/slow-powers-eval-guard.js" } }"#,
+            serde_json::json!({
+                "tool_name": "bash",
+                "cwd": workspace,
+                "tool_input": {
+                    "command": "touch .opencode/plugins/slow-powers-eval-guard.js"
+                },
+            })
+            .to_string(),
         )
         .assert()
         .success()
-        .stdout(contains(r#""decision":"block""#));
+        .stdout("");
 }
 
 /// Byte-pin of the OpenCode block verdict — same compatibility contract as
@@ -456,4 +478,21 @@ fn guard_hook_skips_descriptor_discovery() {
         .success()
         .stdout(contains(r#""permissionDecision":"deny""#))
         .stderr(contains("skipping harness descriptor").not());
+}
+
+/// A `teardown-guard` that cannot resolve a run must not imply it checked the
+/// per-`(group, condition)` env guards. The false all-clear it used to print is
+/// most costly exactly here — mid-run, before hand-editing files (#298).
+#[test]
+fn teardown_guard_says_when_it_could_not_check_the_env_guards() {
+    let tmp = TempDir::new().unwrap();
+
+    skill_eval()
+        .arg("teardown-guard")
+        .current_dir(tmp.path())
+        .assert()
+        .success()
+        .stdout(contains("invocation cwd"))
+        .stderr(contains("Task env guards were not checked"))
+        .stderr(contains("eval-magic teardown"));
 }
