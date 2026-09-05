@@ -172,7 +172,7 @@ fn docs_isolation_keeps_remedies_and_verification() {
         .args(["docs", "isolation"])
         .assert()
         .success()
-        .stdout(contains("# Isolating dispatches from live skill sources"))
+        .stdout(contains("# Dispatch isolation and sandbox boundaries"))
         .stdout(contains("--setting-sources project,local"))
         .stdout(contains("CLAUDE_CONFIG_DIR"))
         .stdout(contains("--disable plugins"))
@@ -185,6 +185,38 @@ fn docs_isolation_keeps_remedies_and_verification() {
         .stdout(contains("claude plugin list"))
         .stdout(contains("`comparison-invalid`"))
         .stdout(contains("\"subtype\":\"init\""));
+}
+
+#[test]
+fn docs_isolation_explains_nested_codex_sandboxes_and_remedies() {
+    skill_eval()
+        .args(["docs", "isolation"])
+        .assert()
+        .success()
+        .stdout(contains("**Operator sandbox**"))
+        .stdout(contains("**Harness task sandbox**"))
+        .stdout(contains("**Eval guard**"))
+        .stdout(contains("**Skill-source isolation**"))
+        .stdout(contains("same generated task command"))
+        .stdout(contains("equivalent inputs and configuration"))
+        .stdout(contains("fails inside the operator Codex session"))
+        .stdout(contains("Operation not permitted"))
+        .stdout(contains("alone does not establish"))
+        .stdout(contains("1. **Preferred:**"))
+        .stdout(contains("ordinary terminal"))
+        .stdout(contains("2. **Alternative:**"))
+        .stdout(contains("outer launch of `eval-magic dispatch`"))
+        .stdout(contains("surface and policy support"))
+        .stdout(contains("Adding a writable directory alone"))
+        .stdout(contains("--sandbox workspace-write"))
+        .stdout(contains("eval guard enabled"));
+
+    skill_eval()
+        .args(["docs", "--help"])
+        .assert()
+        .success()
+        .stdout(contains("sandbox boundaries"))
+        .stdout(contains("live skill sources"));
 }
 
 #[test]

@@ -65,9 +65,16 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         ("POSIX_REQUIREMENT", POSIX_TOOLING_REQUIREMENT),
     ];
 
-    // One command per phase: the runner drives every dispatch, so nothing here
-    // varies by harness beyond the `--harness` selector itself.
     let label = harness_label(ctx.harness);
+    let dispatch_note = if label == "codex" {
+        format!(
+            "{}\n\n",
+            include_str!("../../../profiles/codex/dispatch-note.md").trim_end()
+        )
+    } else {
+        String::new()
+    };
+    // The runner drives each phase; commands vary only by the harness selector.
     let dispatch_cmd = format!(
         "eval-magic dispatch{} --iteration {} --harness {label}",
         ctx.target_args, ctx.iteration
@@ -97,6 +104,7 @@ pub(crate) fn build_runbook(ctx: &RunbookContext) -> String {
         .join("\n");
     let teardown_cmd = format!("eval-magic teardown{} --harness {label}", ctx.target_args);
     vars.push(("HARNESS", &label));
+    vars.push(("HARNESS_DISPATCH_NOTE", &dispatch_note));
     vars.push(("DISPATCH_CMD", &dispatch_cmd));
     vars.push(("INGEST_CMD", &ingest_cmd));
     vars.push(("COMPARE_COMMANDS", &compare_commands));

@@ -12,7 +12,7 @@ repo.
 
 ## 1. Dispatch the eval agents, then ingest
 
-```
+{{HARNESS_DISPATCH_NOTE}}```
 {{DISPATCH_CMD}}
 ```
 
