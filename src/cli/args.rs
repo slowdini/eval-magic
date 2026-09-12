@@ -378,8 +378,10 @@ pub(crate) enum Commands {
     /// agent turn and one small responder dispatch per round, up to its
     /// `max_turns` bound. A `plan_mode` case starts each session in the
     /// harness's native plan mode and adds one runner-authored approval turn
-    /// before implementation; it needs the `plan-mode` capability
-    /// (`eval-magic harness list`). Each `llm_judge` assertion creates its effective sample
+    /// before implementation; `plan_mode: "plan_only"` stops at the plan
+    /// instead, costing one round. Both need the `plan-mode` capability
+    /// (`eval-magic harness list`). A `plan_source` case costs one ordinary
+    /// act-mode round and needs no capability. Each `llm_judge` assertion creates its effective sample
     /// count of judge tasks per condition and repetition. Review the printed run
     /// summary and obtain confirmation before spending model usage.
     ///
@@ -437,12 +439,13 @@ pub(crate) enum Commands {
     /// cause: the run ended mid-task, so read its last assistant message before
     /// trusting it. See `eval-magic docs conversations`.
     ///
-    /// A `plan_mode` task runs its opening round in the harness's plan mode,
-    /// approves the presented plan with one fixed message, and continues the
-    /// same session in act mode; the approved plan is saved as `outputs/plan.md`.
-    /// A planning phase that ends with no plan to approve is recorded as
-    /// `plan_not_presented` and warned about: that run never reached
-    /// implementation.
+    /// A `plan_mode` task runs its opening round in the harness's plan mode
+    /// and saves the presented plan as `outputs/plan.md`. It then approves the
+    /// plan with one fixed message and continues the same session in act mode,
+    /// unless the eval declared `plan_mode: "plan_only"`, which stops there
+    /// with the plan as its output. The plan is read from the harness's own
+    /// plan file, else a responder's verdict, else the planning round's final
+    /// message; `conversation.json` records which.
     ///
     /// Nested Codex sandboxes: if the same generated task command succeeds in
     /// an ordinary terminal with equivalent inputs and configuration, but
@@ -677,8 +680,9 @@ pub(crate) enum Commands {
     ///
     /// Extend the seed in `evals/evals.json`: `turns` scripts same-session
     /// follow-ups and `responder` derives them instead, `plan_mode` starts the
-    /// session in the harness's plan mode (see
-    /// `eval-magic docs conversations`), `files_root` resolves overlay sources
+    /// session in the harness's plan mode and `plan_source` hands it a plan
+    /// written beforehand (see `eval-magic docs conversations`),
+    /// `files_root` resolves overlay sources
     /// applied at the codebase root, and a per-eval `runs` value overrides
     /// `run --runs`. Add
     /// assertions after the first iteration, then check the file with

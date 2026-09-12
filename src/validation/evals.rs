@@ -21,6 +21,7 @@ pub fn validate_evals_config(config: &Value, source: &str) -> Result<EvalsConfig
     validate_codebase_declarations(config, source)?;
     validate_effective_codebases(config, source)?;
     validate_turn_source_declarations(config, source)?;
+    validate_plan_declarations(config, source)?;
     let validated: EvalsConfig = validate_against_schema(SchemaName::Evals, config, source)?;
 
     if let Some(policy) = &validated.guard {
@@ -261,6 +262,62 @@ fn validate_turn_source_declarations(config: &Value, source: &str) -> Result<(),
                  scripted or derived, not both"
             ),
         });
+    }
+    Ok(())
+}
+
+/// Reject the three ways an eval's plan declarations can be self-contradictory:
+/// a `plan_mode` the schema does not recognize, a `plan_source` beside a
+/// `plan_mode` (a run either writes its own plan or is handed one), and a
+/// plan-only eval that also scripts follow-up turns — that session ends the
+/// moment the plan is presented, so every scripted turn would be dropped
+/// without a word. Each is reported by name rather than left to the schema.
+fn validate_plan_declarations(config: &Value, source: &str) -> Result<(), ValidationError> {
+    let evals = config.get("evals").and_then(Value::as_array);
+    for (index, eval) in evals.into_iter().flatten().enumerate() {
+        let id = || {
+            eval.get("id")
+                .and_then(Value::as_str)
+                .map_or_else(|| format!("evals[{index}]"), str::to_string)
+        };
+        let invalid = |message: String| ValidationError::InvalidConfig {
+            path: source.to_string(),
+            message,
+        };
+        let plan_mode = eval.get("plan_mode");
+        // Checked before the schema for the same reason the clash below is:
+        // the schema states the shapes as an `anyOf`, which reports the value
+        // as matching none of them without ever naming what would have.
+        if let Some(Value::String(name)) = plan_mode
+            && !matches!(name.as_str(), "plan_then_act" | "plan_only")
+        {
+            return Err(invalid(format!(
+                "eval '{}': unknown plan_mode {name:?}; expected true, false, \"plan_then_act\", \
+                 or \"plan_only\"",
+                id()
+            )));
+        }
+        let starts_in_plan_mode = match plan_mode {
+            Some(Value::Bool(declared)) => *declared,
+            Some(Value::String(_)) => true,
+            _ => false,
+        };
+        if starts_in_plan_mode && eval.get("plan_source").is_some() {
+            return Err(invalid(format!(
+                "eval '{}': declares both 'plan_mode' and 'plan_source'; a run either writes its \
+                 own plan or is handed one, not both",
+                id()
+            )));
+        }
+        let plan_only = plan_mode.and_then(Value::as_str) == Some("plan_only");
+        if plan_only && eval.get("turns").is_some() {
+            return Err(invalid(format!(
+                "eval '{}': declares both 'plan_mode: plan_only' and 'turns'; a plan-only run \
+                 ends once the plan is presented, so no scripted turn could be delivered. Use \
+                 'plan_mode: true' to implement the plan, or drop the turns",
+                id()
+            )));
+        }
     }
     Ok(())
 }
@@ -600,6 +657,91 @@ mod tests {
 
         assert!(error.contains("responder"), "{error}");
         assert!(error.contains("turns"), "{error}");
+    }
+
+    /// A plan-only eval stops the moment its plan is presented, so scripted
+    /// follow-ups could never be delivered. Saying so beats silently dropping
+    /// turns the author wrote.
+    #[test]
+    fn rejects_plan_only_with_scripted_turns() {
+        let mut config = base();
+        config["evals"][0]["plan_mode"] = json!("plan_only");
+        config["evals"][0]["turns"] = json!([{ "prompt": "go on", "deliver_when": "always" }]);
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("plan_only"), "{error}");
+        assert!(error.contains("turns"), "{error}");
+    }
+
+    /// A responder is still welcome on a plan-only eval: it answers the agent's
+    /// questions during the planning phase, which is the phase that runs.
+    #[test]
+    fn accepts_plan_only_with_a_responder() {
+        let mut config = base();
+        config["evals"][0]["plan_mode"] = json!("plan_only");
+        config["evals"][0]["responder"] = json!({ "type": "llm" });
+
+        validate_evals_config(&config, "evals.json")
+            .expect("a plan-only eval may have a responder");
+    }
+
+    /// Plan-then-act still scripts follow-ups after the approval, so it keeps
+    /// working exactly as it did.
+    #[test]
+    fn accepts_plan_then_act_with_scripted_turns() {
+        let mut config = base();
+        config["evals"][0]["plan_mode"] = json!(true);
+        config["evals"][0]["turns"] = json!([{ "prompt": "go on", "deliver_when": "always" }]);
+
+        validate_evals_config(&config, "evals.json")
+            .expect("a plan-then-act eval scripts turns after its approval");
+    }
+
+    /// A run either writes its own plan or is handed one. Declaring both asks
+    /// the agent to plan from scratch while holding a plan it was already given.
+    #[test]
+    fn rejects_plan_source_together_with_plan_mode() {
+        let mut config = base();
+        config["evals"][0]["plan_mode"] = json!(true);
+        config["evals"][0]["plan_source"] = json!("plans/add-cache.md");
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("plan_source"), "{error}");
+        assert!(error.contains("plan_mode"), "{error}");
+    }
+
+    /// A misspelled `plan_mode` is the schema's error to report, so the
+    /// exclusivity check must not claim the eval declared plan mode and mask it.
+    #[test]
+    fn an_unknown_plan_mode_spelling_is_reported_as_such_beside_a_plan_source() {
+        let mut config = base();
+        config["evals"][0]["plan_mode"] = json!("planning");
+        config["evals"][0]["plan_source"] = json!("plans/add-cache.md");
+
+        let error = validate_evals_config(&config, "evals.json")
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("plan_then_act") || error.contains("plan_only"),
+            "the spelling is the problem to report: {error}"
+        );
+    }
+
+    /// On its own, a plan source is an ordinary act-mode eval.
+    #[test]
+    fn accepts_a_plan_source_without_plan_mode() {
+        let mut config = base();
+        config["evals"][0]["plan_source"] = json!("plans/add-cache.md");
+
+        validate_evals_config(&config, "evals.json")
+            .expect("an eval handed a plan runs in act mode");
     }
 
     /// A bound of zero would dispatch turn 1 and refuse to answer anything,

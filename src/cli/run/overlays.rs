@@ -87,6 +87,30 @@ pub fn overlay_file_pairs(
     Ok(pairs)
 }
 
+/// Read the plan an eval was handed, when it declares one. The path resolves
+/// exactly where an overlay source does — beneath `<skill>/evals/`, under
+/// `files_root` when one is set — and the text goes into the dispatch prompt
+/// rather than into the task environment, so it is context the agent is given
+/// rather than a file it has to be told to find.
+pub fn plan_source_text(eval: &Eval, skill_dir: &Path) -> Result<Option<String>, RunError> {
+    let Some(relative) = eval.plan_source.as_deref() else {
+        return Ok(None);
+    };
+    validate_task_relative_path(relative)?;
+    let mut source_root = skill_dir.join("evals");
+    if let Some(root) = eval.files_root.as_deref() {
+        validate_files_root_rel(root)?;
+        source_root = source_root.join(root);
+    }
+    let source = source_root.join(relative);
+    fs::read_to_string(&source).map(Some).map_err(|error| {
+        RunError::msg(format!(
+            "plan source not found: {} ({error})",
+            source.display()
+        ))
+    })
+}
+
 /// Resolve a command check's held-out setup paths without copying them.
 pub fn setup_file_pairs(
     check: &AssertionCommandCheck,
@@ -132,6 +156,7 @@ pub fn copy_overlay_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::PlanMode;
 
     fn eval_with_files(files: &[&str]) -> Eval {
         Eval {
@@ -147,8 +172,90 @@ mod tests {
             codebase: None,
             responder: None,
             guard: None,
-            plan_mode: false,
+            plan_mode: PlanMode::Off,
+            plan_source: None,
         }
+    }
+
+    /// A `plan_source` resolves beneath the skill's evals directory, exactly
+    /// where an overlay file would, and its text is read verbatim.
+    #[test]
+    fn plan_source_reads_the_named_file_under_evals() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals/plans")).unwrap();
+        fs::write(
+            skill_dir.join("evals/plans/add-cache.md"),
+            "1. Add an LRU\n2. Test it\n",
+        )
+        .unwrap();
+
+        let mut eval = eval_with_files(&[]);
+        eval.plan_source = Some("plans/add-cache.md".to_string());
+
+        assert_eq!(
+            plan_source_text(&eval, &skill_dir).unwrap().as_deref(),
+            Some("1. Add an LRU\n2. Test it\n")
+        );
+    }
+
+    /// `files_root` moves the plan source with the overlay files, so an eval
+    /// that keeps its fixtures in a subdirectory keeps its plan there too.
+    #[test]
+    fn plan_source_honors_files_root() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals/fixtures")).unwrap();
+        fs::write(skill_dir.join("evals/fixtures/plan.md"), "the plan\n").unwrap();
+
+        let mut eval = eval_with_files(&[]);
+        eval.files_root = Some("fixtures".to_string());
+        eval.plan_source = Some("plan.md".to_string());
+
+        assert_eq!(
+            plan_source_text(&eval, &skill_dir).unwrap().as_deref(),
+            Some("the plan\n")
+        );
+    }
+
+    /// An eval that declares no plan source reads nothing, and one that names
+    /// a file that is not there says so by name rather than dispatching a task
+    /// whose prompt is quietly missing its plan.
+    #[test]
+    fn plan_source_is_optional_and_missing_files_are_named() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals")).unwrap();
+
+        assert!(
+            plan_source_text(&eval_with_files(&[]), &skill_dir)
+                .unwrap()
+                .is_none()
+        );
+
+        let mut missing = eval_with_files(&[]);
+        missing.plan_source = Some("nope.md".to_string());
+        let error = plan_source_text(&missing, &skill_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("plan source"), "error was: {error}");
+        assert!(error.contains("nope.md"), "error was: {error}");
+    }
+
+    /// The containment rules that hold for overlay sources hold here: a plan
+    /// source may not climb out of the skill's evals directory.
+    #[test]
+    fn plan_source_may_not_escape_the_evals_directory() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join("skill");
+        fs::create_dir_all(skill_dir.join("evals")).unwrap();
+
+        let mut escaping = eval_with_files(&[]);
+        escaping.plan_source = Some("../outside.md".to_string());
+        let error = plan_source_text(&escaping, &skill_dir)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("relative"), "error was: {error}");
     }
 
     #[test]

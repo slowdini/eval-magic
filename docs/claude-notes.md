@@ -89,9 +89,19 @@ scratch repository with one bug:
   `permissionMode: bypassPermissions` in `init`, keeps the same `session_id`, and edits succeed:
   the session leaves plan mode. The Claude Code documentation states the converse — a `-p --resume`
   stays in plan mode only when `--permission-prompt-tool` is passed and no `--permission-mode` is.
-- The plan file lands in the operator's `~/.claude/plans`, as in any session. The write guard and
-  the stray-write audit allow that root; eval-magic keeps the copy the judge reads as
-  `outputs/plan.md`.
+- The plan file lands in the operator's `~/.claude/plans`, as in any session — one directory
+  shared by every concurrent task, and by the operator's own sessions. That is not a collision:
+  the plan text is read from the write's `content` argument in the round's own transcript, not
+  from the file, so tasks cannot read each other's plans. The write guard and the stray-write
+  audit allow that root; eval-magic keeps the copy the judge reads as `outputs/plan.md`.
+- **Plan mode refuses writes into the task environment**, which is why the plan artifact cannot be
+  a file eval-magic asks the agent to write there. The harness-neutral half of the contract is the
+  agent's final message: `src/cli/run/plan_prompt.rs` asks every planning round to close with its
+  complete plan, and that is the `final_message` signal a harness without a plan file falls back
+  to. On Claude Code the plan file wins, so the fallback is a safety net rather than the path.
+- **`--append-system-prompt` is deliberately not used** to steer where the plan is written. There
+  is no flag that relocates `~/.claude/plans`, and a harness-specific instruction would give
+  Claude Code a contract no other harness could honor.
 
 Relaxing the default closes the common case, not the class — a deny rule, a managed setting, or an
 operator-overridden mode still refuses calls — so refusals are detected and reported rather than

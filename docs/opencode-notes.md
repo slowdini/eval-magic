@@ -77,8 +77,10 @@ bug (free model `opencode/nemotron-3.5-lightning-free`):
   agent makes, so it belongs to `act_args` only.
 - `opencode run --session <id> --agent build --auto` resumed the same session and edited the file.
   `--agent build` is explicit so a resumed session does not inherit the plan agent.
-- OpenCode writes no plan file, so the descriptor declares no `[plan_mode.plan_file]`; a plan-mode
-  eval on OpenCode needs a `responder`, whose `done` verdict in the planning phase approves the plan.
+- OpenCode writes no plan file, so the descriptor declares no `[plan_mode.plan_file]`. The
+  planning round's final message is the plan there — the dispatch prompt asks every planning round
+  to close with it — so a plan-mode eval on OpenCode needs no `responder`. Declaring one still
+  buys a planning phase of more than one round, with its `done` verdict approving the plan.
 
 ## Write guard
 

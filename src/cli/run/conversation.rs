@@ -44,7 +44,10 @@ pub enum TaskOutcome {
     Completed {
         delivered_followups: u32,
         source: TurnSource,
-        /// The round the runner's plan approval opened, for a plan-mode task.
+        /// The round whose output was taken as the plan, for a plan-mode task.
+        plan_presented_in_round: Option<u32>,
+        /// The round the runner's plan approval opened. `None` on a plan-only
+        /// task, which presents its plan and stops without one.
         plan_approved_in_round: Option<u32>,
     },
     Stopped {
@@ -94,6 +97,13 @@ impl TaskOutcome {
                 "completed with {delivered_followups} follow-up turn(s), plan approved in round \
                  {round}"
             ),
+            // A plan-only task delivers nothing and approves nothing, so
+            // without this its whole output would go unmentioned.
+            Self::Completed {
+                plan_presented_in_round: Some(round),
+                plan_approved_in_round: None,
+                ..
+            } => format!("completed — plan presented in round {round}, saved as outputs/plan.md"),
             Self::Completed {
                 delivered_followups: 0,
                 ..
@@ -200,7 +210,8 @@ pub fn run_task(
     // one-shot. Other one-shot tasks never resume, and a harness may support
     // them without declaring `[conversation]` at all (cline does).
     let plan_mode = task.plan_mode;
-    let mut mode = if plan_mode {
+    let starts_planning = plan_mode.starts_in_plan_mode();
+    let mut mode = if starts_planning {
         SessionMode::Plan
     } else {
         SessionMode::Act
@@ -211,13 +222,13 @@ pub fn run_task(
             SessionMode::Plan => anyhow!("harness declares no plan-mode dispatch command"),
             SessionMode::Act => anyhow!("harness declares no initial dispatch command"),
         })?;
-    let needs_resume = plan.delivers_followups() || plan_mode;
+    let needs_resume = plan.delivers_followups() || plan_mode.implements_the_plan();
     let resume_templates = if needs_resume {
         Some(ResumeTemplates {
             act: adapter
                 .cli_resume_command_in_mode(SessionMode::Act, guard, agent_model, agent_env)
                 .ok_or_else(|| anyhow!("harness declares no native conversation resume command"))?,
-            plan: plan_mode
+            plan: starts_planning
                 .then(|| {
                     adapter
                         .cli_resume_command_in_mode(
@@ -234,7 +245,7 @@ pub fn run_task(
         None
     };
     // The plan file only matters while planning; `home` resolves its `~`.
-    let plan_file = plan_mode.then(|| adapter.plan_file()).flatten();
+    let plan_file = starts_planning.then(|| adapter.plan_file()).flatten();
     let home = std::env::home_dir();
     if overwrite && conversation_path.exists() {
         fs::remove_file(&conversation_path).with_context(|| {
@@ -269,7 +280,7 @@ pub fn run_task(
         round: 1,
         text: task.user_prompt.clone(),
         origin: None,
-        mode: plan_mode.then_some(mode),
+        mode: starts_planning.then_some(mode),
     }];
     let first_outputs = base_outputs.join("turn-1");
     let initial_command = render_command(
@@ -374,12 +385,18 @@ pub fn run_task(
                 PlanDecision::Approve(approved) => {
                     let plan_path = base_outputs.join("plan.md");
                     write_atomic(&plan_path, approved.text.clone())?;
+                    let implements = plan_mode.implements_the_plan();
                     plan_record = Some(PlanRecord {
                         presented_in_round: last_round,
-                        approved_in_round: last_round.saturating_add(1),
+                        approved_in_round: implements.then(|| last_round.saturating_add(1)),
                         signal: approved.signal,
                         artifact_path: Some(artifact_path(&plan_path)),
                     });
+                    if !implements {
+                        // A plan-only eval is finished: the plan is the output,
+                        // so there is nothing to approve and no act round.
+                        break;
+                    }
                     (
                         PLAN_APPROVAL_PROMPT.to_string(),
                         Some(TurnOrigin::Runner {
@@ -438,7 +455,7 @@ pub fn run_task(
             round,
             text: prompt.clone(),
             origin,
-            mode: plan_mode.then_some(mode),
+            mode: starts_planning.then_some(mode),
         });
         delivered_followups = delivered_followups.saturating_add(1);
 
@@ -580,10 +597,14 @@ fn write_conversation(
         ConversationStatus::Completed => TaskOutcome::Completed {
             delivered_followups: conversation.delivered_followups,
             source,
+            plan_presented_in_round: conversation
+                .plan
+                .as_ref()
+                .map(|plan| plan.presented_in_round),
             plan_approved_in_round: conversation
                 .plan
                 .as_ref()
-                .map(|plan| plan.approved_in_round),
+                .and_then(|plan| plan.approved_in_round),
         },
         ConversationStatus::Stopped => TaskOutcome::Stopped {
             before_followup: conversation.stopped_before_followup.unwrap_or_default(),
@@ -749,7 +770,7 @@ fn write_atomic(path: &Path, body: String) -> anyhow::Result<()> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use super::{execute_round, final_text_for_round};
+    use super::{TaskOutcome, TurnSource, execute_round, final_text_for_round};
     use crate::adapters::TranscriptSummary;
     use crate::adapters::cli_command::shell_quote_arg;
 
@@ -769,6 +790,36 @@ mod tests {
             std::fs::read_to_string(events).unwrap(),
             "{\"type\":\"done\"}\n"
         );
+    }
+
+    /// A plan-only run completes with no follow-ups and no approval, so a bare
+    /// "completed" would hide the one thing it produced. The summary says the
+    /// plan was presented and where it landed.
+    #[test]
+    fn a_plan_only_outcome_says_the_plan_was_presented() {
+        let outcome = TaskOutcome::Completed {
+            delivered_followups: 0,
+            source: TurnSource::Scripted,
+            plan_presented_in_round: Some(1),
+            plan_approved_in_round: None,
+        };
+        let summary = outcome.summary();
+        assert!(summary.contains("plan presented in round 1"), "{summary}");
+        assert!(summary.contains("outputs/plan.md"), "{summary}");
+        assert!(!summary.contains("approved"), "{summary}");
+    }
+
+    /// A plan-then-act run still reports its approval round, unchanged.
+    #[test]
+    fn a_plan_then_act_outcome_still_names_the_approval_round() {
+        let outcome = TaskOutcome::Completed {
+            delivered_followups: 1,
+            source: TurnSource::Scripted,
+            plan_presented_in_round: Some(1),
+            plan_approved_in_round: Some(2),
+        };
+        let summary = outcome.summary();
+        assert!(summary.contains("plan approved in round 2"), "{summary}");
     }
 
     #[test]
