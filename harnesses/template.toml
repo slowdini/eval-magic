@@ -190,7 +190,9 @@ label = "{label}"
 ## [plan_mode.plan_file] names the file the harness writes its plan to: writes under root are
 ## allowed by the write guard and the stray-write audit, a plan-phase round that wrote one has
 ## presented its plan, and that write's content_field is the plan artifact. Omit plan_file when
-## the harness writes no plan file; the eval's responder then decides when the plan is ready.
+## the harness writes no plan file: the eval's responder then decides when the plan is ready, and
+## without one the planning round's final message is the plan — eval-magic's own prompt asks every
+## planning round to close with it, so a plan artifact is produced either way.
 ## VERIFY: run one headless turn in the planning mode and confirm edits are refused; resume it
 ## with the act arguments and confirm that same session edits. See `eval-magic harness show
 ## claude-code` for a plan_file example and `eval-magic docs conversations` for the eval side.

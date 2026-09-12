@@ -125,9 +125,12 @@
           "description": "Derives each follow-up turn from what the agent just said, instead of scripting them. Mutually exclusive with turns; declaring neither preserves one-shot dispatch. Requires a harness with native conversation resume, exactly as turns does."
         },
         "plan_mode": {
-          "type": "boolean",
+          "anyOf": [
+            { "type": "boolean" },
+            { "enum": ["plan_then_act", "plan_only"] }
+          ],
           "default": false,
-          "description": "Start the session in the harness's native plan mode. The agent explores read-only and presents a plan; eval-magic approves it in the same session with one fixed message and continues in act mode, where turns or a responder proceed as usual. Requires a harness whose descriptor declares [plan_mode] (`eval-magic harness list` shows plan-mode). A harness without a [plan_mode.plan_file] also requires a responder, which decides when the plan is ready. See `eval-magic docs conversations`."
+          "description": "Start the session in the harness's native plan mode. The agent explores read-only and presents a plan; the runner saves it as outputs/plan.md. `true` (or \"plan_then_act\") then approves the plan in the same session with one fixed message and continues in act mode, where turns or a responder proceed as usual; \"plan_only\" stops there, making the plan the run's whole output. The plan is recognized from the harness's own plan file, else a responder's `done` verdict, else the planning round's final message — the dispatch prompt asks every planning round to close with its complete plan. Requires a harness whose descriptor declares [plan_mode] (`eval-magic harness list` shows plan-mode). See `eval-magic docs conversations`."
         },
         "expected_output": {
           "type": "string",
@@ -138,6 +141,11 @@
           "type": "array",
           "items": { "type": "string" },
           "description": "Codebase overlay destination paths relative to the task repository. Sources use the same paths beneath the skill's evals/ directory, or beneath files_root when set. Applied after the codebase and condition skills are staged. The normalized first component may not be .git (case-insensitive) because root Git metadata is runner-owned; nested .git paths are allowed."
+        },
+        "plan_source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A plan written before the run, as a path relative to the skill's evals/ directory (beneath files_root when set). Its text is spliced into the dispatch prompt as an already-approved plan and the session runs in ordinary act mode, so this works on every harness — including one whose descriptor declares no [plan_mode]. Mutually exclusive with plan_mode: a run either writes its own plan or is handed one. To carry a plan-only campaign's output forward, copy its outputs/plan.md into the executing skill's evals/ directory and name it here. See `eval-magic docs conversations`."
         },
         "files_root": {
           "type": "string",

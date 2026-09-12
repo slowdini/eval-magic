@@ -135,11 +135,91 @@ pub struct Eval {
     /// config-level policy rather than extending it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub guard: Option<GuardPolicyConfig>,
-    /// Start the session in the harness's native plan mode and continue it in
-    /// act mode once the presented plan is approved. Appended last so an eval
-    /// that declares none serializes exactly as it did before the field existed.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub plan_mode: bool,
+    /// Whether the session starts in the harness's native plan mode, and what
+    /// happens once the plan is presented. Appended last so an eval that
+    /// declares none serializes exactly as it did before the field existed.
+    #[serde(default, skip_serializing_if = "PlanMode::is_off")]
+    pub plan_mode: PlanMode,
+    /// A plan written before the run, named as a path beneath `<skill>/evals/`
+    /// (under [`Self::files_root`] when one is set). Its text is spliced into
+    /// the dispatch prompt as an already-approved plan and the session runs in
+    /// act mode, so this needs no plan-mode capability from the harness.
+    /// Mutually exclusive with [`Self::plan_mode`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_source: Option<String>,
+}
+
+/// What an eval's `plan_mode` declaration asks for.
+///
+/// Tri-state on the wire, but only one spelling is new. `false` and an absent
+/// key are [`Self::Off`]; `true` is [`Self::PlanThenAct`] and serializes back as
+/// `true`, so every evals.json and dispatch.json written before this existed
+/// round-trips byte-identically. `"plan_only"` is the addition: the plan is the
+/// deliverable and the session ends once it is presented.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PlanMode {
+    /// Not a plan-mode eval: the session opens in act mode.
+    #[default]
+    Off,
+    /// Plan, approve, then implement in the same session.
+    PlanThenAct,
+    /// Plan and stop. `outputs/plan.md` is the run's output.
+    PlanOnly,
+}
+
+impl PlanMode {
+    /// Whether the opening round is dispatched with the harness's plan
+    /// arguments. True for both plan-mode shapes.
+    pub fn starts_in_plan_mode(self) -> bool {
+        !self.is_off()
+    }
+
+    /// Whether the runner approves the presented plan and resumes the session
+    /// in act mode. False for a plan-only eval, which stops at the plan.
+    pub fn implements_the_plan(self) -> bool {
+        matches!(self, Self::PlanThenAct)
+    }
+
+    /// Whether the eval declares no plan mode. The `skip_serializing_if`
+    /// predicate that keeps the key off a non-plan-mode eval.
+    pub fn is_off(&self) -> bool {
+        matches!(self, Self::Off)
+    }
+}
+
+impl Serialize for PlanMode {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            Self::Off => serializer.serialize_bool(false),
+            Self::PlanThenAct => serializer.serialize_bool(true),
+            Self::PlanOnly => serializer.serialize_str("plan_only"),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for PlanMode {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        // Untagged rather than hand-rolled visitor: the accepted shapes are a
+        // bool and two strings, and the error below is clearer than serde's
+        // "data did not match any variant" for a misspelled shape.
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Declared {
+            Shorthand(bool),
+            Named(String),
+        }
+        match Declared::deserialize(deserializer)? {
+            Declared::Shorthand(false) => Ok(Self::Off),
+            Declared::Shorthand(true) => Ok(Self::PlanThenAct),
+            Declared::Named(name) => match name.as_str() {
+                "plan_then_act" => Ok(Self::PlanThenAct),
+                "plan_only" => Ok(Self::PlanOnly),
+                other => Err(serde::de::Error::custom(format!(
+                    "unknown plan_mode {other:?}: expected true, false, \"plan_then_act\", or \"plan_only\""
+                ))),
+            },
+        }
+    }
 }
 
 /// Authored shell-command allowances for a guarded eval run.
@@ -635,15 +715,20 @@ pub struct ConversationRecord {
 pub struct PlanRecord {
     /// The plan-phase round whose output was taken as the plan.
     pub presented_in_round: u32,
-    /// The round the runner's fixed approval opened in act mode.
-    pub approved_in_round: u32,
+    /// The round the runner's fixed approval opened in act mode. Absent on a
+    /// plan-only run, which presents its plan and stops without one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approved_in_round: Option<u32>,
     pub signal: PlanSignal,
     /// Where the plan text was saved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_path: Option<String>,
 }
 
-/// What marked a plan as presented.
+/// What marked a plan as presented. Tried in this order: a native plan file is
+/// the most specific evidence, a responder's judgement the next, and the
+/// planning round's final message the fallback that always exists — the
+/// dispatch prompt tells a planning agent to close its turn with the plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanSignal {
@@ -651,6 +736,9 @@ pub enum PlanSignal {
     PlanFile,
     /// The responder judged the agent finished planning.
     Responder,
+    /// Neither of the above was available, so the planning round's final
+    /// message was taken as the plan.
+    FinalMessage,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -679,8 +767,9 @@ pub enum ConversationStopReason {
     /// reached. A bounded conversation, not a failed one.
     MaxTurnsReached,
     /// A plan-mode session ended its planning phase without presenting a plan
-    /// the runner could approve: the harness's plan file was never written and
-    /// the eval declared no responder to decide otherwise.
+    /// the runner could approve. Retained for reading artifacts written before
+    /// the planning round's final message became the last plan signal: a
+    /// planning phase now always has a plan to record, so nothing produces this.
     PlanNotPresented,
 }
 
@@ -882,7 +971,8 @@ mod tests {
             codebase: None,
             responder: None,
             guard: None,
-            plan_mode: false,
+            plan_mode: PlanMode::Off,
+            plan_source: None,
         };
         let out = serde_json::to_value(&eval).unwrap();
         assert!(out.get("files").is_none());
@@ -960,7 +1050,7 @@ mod tests {
 
         let plan = PlanRecord {
             presented_in_round: 1,
-            approved_in_round: 2,
+            approved_in_round: Some(2),
             signal: PlanSignal::PlanFile,
             artifact_path: Some("outputs/plan.md".into()),
         };
@@ -970,6 +1060,22 @@ mod tests {
                 "presented_in_round": 1,
                 "approved_in_round": 2,
                 "signal": "plan_file",
+                "artifact_path": "outputs/plan.md"
+            })
+        );
+        // A plan-only run has no approval round, so the key is absent rather
+        // than carrying a round that never happened.
+        let plan_only = PlanRecord {
+            presented_in_round: 1,
+            approved_in_round: None,
+            signal: PlanSignal::FinalMessage,
+            artifact_path: Some("outputs/plan.md".into()),
+        };
+        assert_eq!(
+            serde_json::to_value(&plan_only).unwrap(),
+            json!({
+                "presented_in_round": 1,
+                "signal": "final_message",
                 "artifact_path": "outputs/plan.md"
             })
         );
@@ -983,18 +1089,90 @@ mod tests {
         );
     }
 
+    /// `plan_mode` is tri-state on the wire but its two older spellings are
+    /// unchanged: an eval that declares nothing serializes without the key, and
+    /// one that declares `true` serializes back as `true`. Only `"plan_only"`
+    /// is new, so no existing evals.json or dispatch.json shifts a byte.
     #[test]
-    fn plan_mode_true_round_trips() {
+    fn plan_mode_round_trips_every_spelling() {
+        let cases = [
+            (json!(true), PlanMode::PlanThenAct, Some(json!(true))),
+            (
+                json!("plan_then_act"),
+                PlanMode::PlanThenAct,
+                Some(json!(true)),
+            ),
+            (
+                json!("plan_only"),
+                PlanMode::PlanOnly,
+                Some(json!("plan_only")),
+            ),
+            (json!(false), PlanMode::Off, None),
+        ];
+        for (declared, expected, serialized) in cases {
+            let eval: Eval = serde_json::from_value(json!({
+                "id": "e1",
+                "prompt": "p",
+                "expected_output": "o",
+                "plan_mode": declared.clone()
+            }))
+            .unwrap_or_else(|error| panic!("{declared} should parse: {error}"));
+            assert_eq!(eval.plan_mode, expected, "parsed {declared}");
+            let out = serde_json::to_value(&eval).unwrap();
+            assert_eq!(
+                out.get("plan_mode"),
+                serialized.as_ref(),
+                "serialized {declared}"
+            );
+        }
+    }
+
+    /// An eval that declares no plan mode keeps serializing exactly as it did
+    /// before the field was tri-state.
+    #[test]
+    fn plan_mode_absent_stays_absent() {
         let eval: Eval = serde_json::from_value(json!({
             "id": "e1",
             "prompt": "p",
-            "expected_output": "o",
-            "plan_mode": true
+            "expected_output": "o"
         }))
         .unwrap();
-        assert!(eval.plan_mode);
-        let out = serde_json::to_value(&eval).unwrap();
-        assert_eq!(out["plan_mode"], Value::Bool(true));
+        assert_eq!(eval.plan_mode, PlanMode::Off);
+        assert!(
+            serde_json::to_value(&eval)
+                .unwrap()
+                .get("plan_mode")
+                .is_none()
+        );
+    }
+
+    /// A misspelled shape is rejected at parse time, naming both spellings, so
+    /// the author fixes it before a campaign is built rather than after.
+    #[test]
+    fn plan_mode_rejects_an_unknown_spelling() {
+        let error = serde_json::from_value::<Eval>(json!({
+            "id": "e1",
+            "prompt": "p",
+            "expected_output": "o",
+            "plan_mode": "planning"
+        }))
+        .expect_err("an unknown plan_mode spelling is an error")
+        .to_string();
+        assert!(error.contains("plan_then_act"), "{error}");
+        assert!(error.contains("plan_only"), "{error}");
+    }
+
+    /// The two questions the rest of the code asks: does this session open in
+    /// plan mode, and does it go on to implement what it planned?
+    #[test]
+    fn plan_mode_answers_the_two_phase_questions() {
+        assert!(!PlanMode::Off.starts_in_plan_mode());
+        assert!(PlanMode::PlanThenAct.starts_in_plan_mode());
+        assert!(PlanMode::PlanOnly.starts_in_plan_mode());
+
+        assert!(!PlanMode::Off.implements_the_plan());
+        assert!(PlanMode::PlanThenAct.implements_the_plan());
+        assert!(!PlanMode::PlanOnly.implements_the_plan());
     }
 
     #[test]

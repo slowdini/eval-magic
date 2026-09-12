@@ -246,14 +246,14 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
         }
     }
 
-    // Plan mode is a native capability with no fallback, and the approved plan
-    // is implemented by resuming the session, so it is gated here too. A
-    // harness that writes no plan file has no signal of its own for "the plan
-    // is ready", so those evals have to bring a responder to decide it.
+    // Plan mode is a native capability with no fallback, and the plan phase is
+    // driven by resuming the session, so it is gated here too. No responder is
+    // required: a harness that writes no plan file still closes its planning
+    // round with a final message, which the dispatch prompt asks to be the plan.
     let plan_mode_evals: Vec<&str> = resolved
         .selected_evals
         .iter()
-        .filter(|eval| eval.plan_mode)
+        .filter(|eval| eval.plan_mode.starts_in_plan_mode())
         .map(|eval| eval.id.as_str())
         .collect();
     if !plan_mode_evals.is_empty() {
@@ -267,22 +267,6 @@ pub fn command_run(ctx: &RunContext, opts: &RunOptions) -> Result<(), RunError> 
                  capability)",
                 plan_mode_evals.join(", ")
             )));
-        }
-        if adapter.plan_file().is_none() {
-            let without_responder: Vec<&str> = resolved
-                .selected_evals
-                .iter()
-                .filter(|eval| eval.plan_mode && eval.responder.is_none())
-                .map(|eval| eval.id.as_str())
-                .collect();
-            if !without_responder.is_empty() {
-                return Err(RunError::msg(format!(
-                    "--harness {label} needs a responder on plan-mode evals ({}): its descriptor \
-                     declares no [plan_mode.plan_file], so only a responder can tell when the plan \
-                     is ready for approval (`eval-magic docs conversations`)",
-                    without_responder.join(", ")
-                )));
-            }
         }
     }
 
@@ -360,15 +344,31 @@ fn print_run_plan(ctx: &RunContext, opts: &RunOptions, r: &Resolved) {
             source.resolved_path.as_deref().unwrap_or(&source.source)
         );
     }
-    let plan_mode_evals = r
+    // The two shapes are counted apart: "plan mode" alone no longer says
+    // whether the run implements anything, and that is what an operator
+    // reading the plan needs to know.
+    let then_act = r
         .selected_evals
         .iter()
-        .filter(|eval| eval.plan_mode)
+        .filter(|eval| eval.plan_mode.implements_the_plan())
         .count();
-    if plan_mode_evals > 0 {
+    let plan_only = r
+        .selected_evals
+        .iter()
+        .filter(|eval| {
+            eval.plan_mode.starts_in_plan_mode() && !eval.plan_mode.implements_the_plan()
+        })
+        .count();
+    if then_act > 0 {
         println!(
-            "  plan mode: {plan_mode_evals} eval(s) start in the harness's native plan mode and \
-             continue in act mode once the plan is approved"
+            "  plan mode: {then_act} plan-then-act eval(s) start in the harness's native plan \
+             mode and continue in act mode once the plan is approved"
+        );
+    }
+    if plan_only > 0 {
+        println!(
+            "  plan mode: {plan_only} plan-only eval(s) start in the harness's native plan mode \
+             and stop once the plan is presented, with outputs/plan.md as the output"
         );
     }
     if r.selected_evals.len() != r.total_evals {
