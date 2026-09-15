@@ -16,7 +16,7 @@ use crate::adapters::{CliManifestContext, adapter_for};
 use crate::core::fs::artifact_path;
 use crate::core::{
     AvailableSkill, CodebaseRecord, ConditionSkill, Eval, GuardPolicyConfig, Harness,
-    POSIX_TOOLING_REQUIREMENT, ResponderPolicy, ScriptedTurn, SkillSource,
+    POSIX_TOOLING_REQUIREMENT, PlanMode, ResponderPolicy, ScriptedTurn, SkillSource,
 };
 
 use super::RunError;
@@ -89,10 +89,16 @@ pub struct DispatchTask {
     /// Fully expanded command policy used by the live guard and post-run audit.
     #[serde(default)]
     pub guard_policy: GuardPolicyConfig,
-    /// Whether the session starts in the harness's native plan mode. Absent
-    /// unless the eval declares it, so other tasks serialize as before.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub plan_mode: bool,
+    /// Whether the session starts in the harness's native plan mode, and what
+    /// follows the plan. Absent unless the eval declares it, so other tasks
+    /// serialize as before.
+    #[serde(default, skip_serializing_if = "PlanMode::is_off")]
+    pub plan_mode: PlanMode,
+    /// The eval-relative file the supplied plan was read from, when the eval
+    /// declared a `plan_source`. Provenance only: the plan text itself is in
+    /// `dispatch-prompt.txt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_source: Option<String>,
     #[serde(default, skip_serializing)]
     pub dispatch_prompt: String,
 }
@@ -117,7 +123,12 @@ pub struct DispatchTaskOpts<'a> {
     pub files: Vec<String>,
     pub turns: Option<&'a [ScriptedTurn]>,
     /// The eval's `plan_mode` declaration.
-    pub plan_mode: bool,
+    pub plan_mode: PlanMode,
+    /// The already-approved plan this eval was handed, read from its
+    /// `plan_source`. Spliced into the prompt ahead of the user request.
+    pub plan_text: Option<&'a str>,
+    /// Where that plan was read from, recorded on the task for provenance.
+    pub plan_source: Option<&'a str>,
     pub outputs_dir: &'a str,
     pub cond_dir: &'a str,
     pub bootstrap_content: Option<&'a str>,
@@ -218,12 +229,25 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
     }
     task_lines.push(String::new());
     task_lines.push("Instructions:".to_string());
-    task_lines.push(
-        "- Work normally on the task: you may edit existing files and create new files inside the task environment."
-            .to_string(),
-    );
-    super::scratch::push_instruction(&mut task_lines, eval_root.as_deref());
+    // A planning round cannot write, so the act-mode licence and the scratch
+    // guidance would both be false there; the plan-mode block replaces them.
+    if opts.plan_mode.starts_in_plan_mode() {
+        super::plan_prompt::push_instructions(&mut task_lines, opts.plan_mode);
+    } else {
+        task_lines.push(
+            "- Work normally on the task: you may edit existing files and create new files inside the task environment."
+                .to_string(),
+        );
+        super::scratch::push_instruction(&mut task_lines, eval_root.as_deref());
+    }
     task_lines.push("- Do not write outside the task environment.".to_string());
+    if let Some(plan) = opts.plan_text {
+        task_lines.push(String::new());
+        task_lines
+            .push("The following plan was already written and approved. Implement it.".to_string());
+        task_lines.push(String::new());
+        task_lines.push(plan.trim_end().to_string());
+    }
     task_lines.push(String::new());
     task_lines.push("User request:".to_string());
     task_lines.push(opts.user_prompt.to_string());
@@ -270,6 +294,7 @@ pub fn build_dispatch_task(opts: &DispatchTaskOpts) -> Result<DispatchTask, RunE
             .map(|_| artifact_path(&cond_dir.join("responder"))),
         guard_policy: GuardPolicyConfig::default(),
         plan_mode: opts.plan_mode,
+        plan_source: opts.plan_source.map(str::to_string),
         dispatch_prompt: sections.join(""),
     })
 }
@@ -512,7 +537,8 @@ mod tests {
                 codebase: None,
                 responder: None,
                 guard: None,
-                plan_mode: false,
+                plan_mode: PlanMode::Off,
+                plan_source: None,
             })
             .collect()
     }

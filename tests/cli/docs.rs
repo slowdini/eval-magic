@@ -159,8 +159,14 @@ fn docs_conversations_keeps_the_plan_mode_contract() {
         .stdout(contains("\"plan_mode\": true"))
         .stdout(contains("plan-mode"))
         .stdout(contains("The plan is approved. Implement it now."))
+        // All three plan-ready signals, in the order the runner tries them.
         .stdout(contains("plan_file"))
-        .stdout(contains("plan_not_presented"))
+        .stdout(contains("responder"))
+        .stdout(contains("final_message"))
+        // Both plan-mode shapes, and the pre-written-plan alternative.
+        .stdout(contains("plan_only"))
+        .stdout(contains("plan_then_act"))
+        .stdout(contains("plan_source"))
         .stdout(contains("plan_approval"))
         .stdout(contains("plan_mode_attributed"))
         .stdout(contains("plan.md"));

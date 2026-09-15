@@ -110,7 +110,6 @@ dispatch call for different fixes.
 | `completed` | The responder judged the agent finished. The run stops rather than burning its remaining turns. |
 | `stopped`, `responder_cannot_answer` | The responder produced no usable reply. `responder_outcome.cause` says why. |
 | `stopped`, `max_turns_reached` | The agent was still asking at the bound. |
-| `stopped`, `plan_not_presented` | A plan-mode session ended its planning phase with no plan to approve. |
 | `timed_out` | The task outran `dispatch --timeout`. |
 
 A `stopped` conversation is recorded, not failed: `dispatch` exits zero and
@@ -192,16 +191,24 @@ approves it. An eval declares that shape with `plan_mode`:
   "id": "add-request-caching",
   "prompt": "Requests to the pricing API are slow. Can you add caching?",
   "expected_output": "A working cache with the pricing endpoint under 100ms.",
-  "plan_mode": true,
-  "responder": { "type": "llm" }
+  "plan_mode": true
 }
 ```
+
+`plan_mode` takes one of three values:
+
+| Value | Shape |
+| --- | --- |
+| `true`, or `"plan_then_act"` | Plan, approve, implement — the two phases below. |
+| `"plan_only"` | Plan and stop. The plan is the run's whole output. |
+| `false`, or omitted | Not a plan-mode eval. |
 
 The session runs in two phases, in one native session:
 
 1. **Planning.** The opening prompt is dispatched in the harness's native plan
-   mode, so the agent explores read-only. If it asks a question, the responder
-   answers it and the session stays in plan mode.
+   mode, so the agent explores read-only. If it asks a question and the eval
+   declares a `responder`, the responder answers and the session stays in plan
+   mode.
 2. **Implementation.** Once the agent has presented its plan, the runner
    approves it with one fixed message and resumes the same session in act
    mode. The message is always `The plan is approved. Implement it now.` From
@@ -212,19 +219,46 @@ The approval is fixed rather than judged, so the transition is identical in
 every run and both arms: what varies between conditions is the plan and the
 implementation, never how the runner reacted to them.
 
+A `"plan_only"` eval runs the first phase and stops there. Nothing is approved
+and no act round is dispatched, so the working tree stays clean and
+`outputs/plan.md` is what the judge grades. Use it for a skill that only shapes
+how the plan is written — running the implementation would spend tokens on work
+the eval does not measure. Scripted `turns` are rejected on a plan-only eval,
+since the session ends before any of them could be delivered; a `responder` is
+still allowed, and answers the agent's questions while it plans.
+
+### What the agent is told
+
+A planning round's dispatch prompt carries instructions eval-magic writes
+itself, identical in both arms:
+
+- the session starts in planning mode, so read and explore but do not edit;
+- end the turn with the complete plan as the final message — the whole plan
+  text, not a summary of it and not a pointer to where it lives;
+- what follows the plan, which is the one thing the two shapes disagree on.
+
+Harnesses word their own planning modes differently and some say nothing about
+how a plan should be presented. These lines are the part that reads the same
+everywhere, and they are what makes the final message a reliable place to
+recover a plan from.
+
 ### How the runner knows the plan is ready
 
-Two signals, tried in this order:
+Three signals, tried in this order:
 
 | Signal | When it applies |
 | --- | --- |
 | `plan_file` | The harness writes the plan it presents to a file, and its descriptor declares where (`[plan_mode.plan_file]`). A planning round that wrote one has presented its plan, and the file's content is the plan. Claude Code writes to `~/.claude/plans`. |
 | `responder` | The eval declares a `responder`, which is told the agent is planning. Its `done` verdict means the plan is ready, and the agent's last message is the plan. |
+| `final_message` | Neither of the above was available. The planning round's final message is the plan, which is what the dispatch prompt asked the agent to close with. |
 
-A harness that writes no plan file needs the responder to decide, so `run`
-rejects a plan-mode eval there unless it declares one. With a plan file the
-responder is optional; if the agent never writes one and there is no responder
-to ask, the run stops with `plan_not_presented`.
+The last signal always fires, so a plan-mode eval needs no responder on any
+harness and every planning phase produces a `plan.md`. What the responder buys
+is a planning phase that can run for more than one round: without one, the
+agent's first closing message ends the phase, so an agent that spent its turn
+asking a question has that question recorded as its plan. `conversation.json`'s
+`plan.signal` says which signal fired, so a run resting on `final_message` is
+distinguishable from one that wrote a real plan file.
 
 `eval-magic harness list` shows `plan-mode` for every harness that can start a
 session in plan mode. `run` rejects a plan-mode eval on one that cannot, before
@@ -232,17 +266,19 @@ any environment is built.
 
 ### What is recorded
 
-- `outputs/plan.md` holds the approved plan, and the judge evidence bundle
-  renders it in a section of its own.
+- `outputs/plan.md` holds the plan, and the judge evidence bundle renders it in
+  a section of its own.
 - Every user message in `conversation.json` carries `mode` (`plan` or `act`),
   and the approval turn carries `origin.runner: plan_approval`.
-- `conversation.json`'s `plan` names the round the plan was presented in, the
-  round the approval opened, and which signal fired.
+- `conversation.json`'s `plan` names the round the plan was presented in, which
+  signal fired, and the round the approval opened. A plan-only run has no
+  approval round, so it records no `approved_in_round`.
 - A responder's `max_turns` is one budget across both phases: planning-phase
   answers count toward it.
-- A plan-mode run whose session never left the planning phase — whatever
+- A plan-then-act run whose session never left the planning phase — whatever
   stopped it — is counted per condition in `benchmark.json`'s
-  `validity_warnings`, because it never attempted the task.
+  `validity_warnings`, because it never attempted the task. A plan-only run
+  presents a plan, so it is not one of those.
 - An agent that tries to edit while planning is refused by the mode itself.
   That refusal is recorded in `permission-denials.json` as behavioral evidence
   and marked `plan_mode_attributed`, but it raises no validity warning: the
@@ -251,3 +287,47 @@ any environment is built.
 Where the harness writes its plan file, the write guard and the stray-write
 audit allow that root beside the task environment. The plan file lands where
 the harness puts it in any session; `plan.md` is the copy the judge reads.
+
+## Starting from a plan someone already wrote
+
+The mirror of a plan-only eval: `plan_source` hands the agent a finished plan
+and asks it to carry the plan out. The path is relative to the skill's `evals/`
+directory, under `files_root` when the eval sets one:
+
+```json
+{
+  "id": "execute-cache-plan",
+  "prompt": "Implement the approved plan.",
+  "expected_output": "A working cache matching the plan.",
+  "plan_source": "plans/add-request-caching.md"
+}
+```
+
+The file's text is spliced into the dispatch prompt ahead of the request,
+framed as already approved. The session is an ordinary act-mode dispatch, so
+this needs nothing from the harness: it works on every harness, including one
+whose descriptor declares no `[plan_mode]`. `dispatch.json` records the path
+each task's plan came from; the text itself is in `dispatch-prompt.txt`.
+
+`plan_source` and `plan_mode` are mutually exclusive — a run either writes its
+own plan or is handed one.
+
+To carry a plan-only campaign's output into an executing campaign, copy the
+run's `outputs/plan.md` into the executing skill's `evals/` directory and name
+it in `plan_source`. Which plan to carry across is a judgement about the
+comparison you are making, so the copy is deliberate rather than automatic.
+
+The alternative, when the plan should be a file the agent reads rather than
+prompt context, is the `files` overlay:
+
+```json
+{
+  "id": "execute-cache-plan",
+  "files": ["PLAN.md"],
+  "prompt": "Implement the plan in PLAN.md.",
+  "expected_output": "A working cache matching the plan."
+}
+```
+
+That stages `PLAN.md` in the task repository, where it is part of the baseline
+and so does not count against a `diff_scope` assertion.

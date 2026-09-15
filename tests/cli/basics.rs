@@ -174,7 +174,9 @@ fn dispatch_help_documents_conversation_verification() {
         .stdout(contains("duration_ms"))
         .stdout(contains("responder consultations, judges, queueing"))
         .stdout(contains("timed_out"))
-        .stdout(contains("plan_not_presented"));
+        // Both plan-mode shapes and where the plan comes from.
+        .stdout(contains("outputs/plan.md"))
+        .stdout(contains("plan_only"));
 }
 
 #[test]

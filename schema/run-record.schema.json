@@ -232,9 +232,9 @@
     },
     "planRecord": {
       "type": "object",
-      "required": ["presented_in_round", "approved_in_round", "signal"],
+      "required": ["presented_in_round", "signal"],
       "additionalProperties": false,
-      "description": "How a plan-mode session moved from planning to implementation. Absent unless the eval declared plan_mode and a plan was approved.",
+      "description": "How a plan-mode session moved from planning to implementation. Absent unless the eval declared plan_mode and a plan was presented.",
       "properties": {
         "presented_in_round": {
           "type": "integer",
@@ -244,12 +244,12 @@
         "approved_in_round": {
           "type": "integer",
           "minimum": 2,
-          "description": "The round the runner's fixed approval opened in act mode."
+          "description": "The round the runner's fixed approval opened in act mode. Absent on a plan_only run, which presents its plan and stops without one."
         },
         "signal": {
           "type": "string",
-          "enum": ["plan_file", "responder"],
-          "description": "What marked the plan as presented: the harness wrote its declared plan file (plan_file), or the responder judged the agent finished planning (responder)."
+          "enum": ["plan_file", "responder", "final_message"],
+          "description": "What marked the plan as presented, in the order they are tried: the harness wrote its declared plan file (plan_file), the responder judged the agent finished planning (responder), or neither was available and the planning round's final message was taken as the plan (final_message)."
         },
         "artifact_path": {
           "type": "string",

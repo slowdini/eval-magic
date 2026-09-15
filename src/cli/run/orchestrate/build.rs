@@ -18,7 +18,7 @@ use super::super::RunError;
 use super::super::dispatch::{
     DispatchTaskOpts, ManifestContext, build_dispatch_task, build_manifest, get_skill_description,
 };
-use super::super::overlays::overlay_file_pairs;
+use super::super::overlays::{overlay_file_pairs, plan_source_text};
 use super::super::runbook::{RunbookContext, build_runbook};
 use super::super::staging::skills_dir_for_harness;
 use super::super::util::unguarded_notice;
@@ -161,12 +161,18 @@ pub(super) fn write_dispatch(
     // Each eval's task-relative overlay destinations. The copies are made per env by
     // `stage_conditions`; resolution here is read-only (and re-validated in resolve).
     let mut overlay_files_by_eval: HashMap<&str, Vec<String>> = HashMap::new();
+    // An eval handed a written plan carries its text into the dispatch prompt,
+    // so it is read once here rather than per condition and repetition.
+    let mut plan_text_by_eval: HashMap<&str, String> = HashMap::new();
     for ev in &r.selected_evals {
         let dests = overlay_file_pairs(ev, &ctx.skill_subdir)?
             .into_iter()
             .map(|(dest, _source)| dest)
             .collect();
         overlay_files_by_eval.insert(ev.id.as_str(), dests);
+        if let Some(plan) = plan_source_text(ev, &ctx.skill_subdir)? {
+            plan_text_by_eval.insert(ev.id.as_str(), plan);
+        }
     }
 
     // A single group keeps the `group` key off each task (>1 group tags them);
@@ -258,6 +264,8 @@ pub(super) fn write_dispatch(
                         turns: ev.turns.as_deref(),
                         responder: ev.responder.as_ref(),
                         plan_mode: ev.plan_mode,
+                        plan_text: plan_text_by_eval.get(ev.id.as_str()).map(String::as_str),
+                        plan_source: ev.plan_source.as_deref(),
                         outputs_dir: &outputs_dir_str,
                         cond_dir: &run_dir_str,
                         bootstrap_content: staged.bootstrap_content.as_deref(),

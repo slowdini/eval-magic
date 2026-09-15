@@ -426,15 +426,27 @@ scan config-declared `skills.paths`/`skills.urls` sources.
 *Why harness-specific:* the read-only planning mode is the harness's own — a permission mode for
 Claude Code, a built-in agent for OpenCode — and so is the way the agent presents its plan.
 
-*What it unlocks:* evals that declare `plan_mode: true`. The driver dispatches the opening round
-with the planning arguments, lets the agent present a plan, approves it with one fixed message, and
-resumes the same session with the act arguments; the eval's `turns` or `responder` then proceed as
-usual. The approved plan is saved as `outputs/plan.md` and rendered in the judge evidence bundle.
-`plan_file` is the deterministic signal that the plan was presented; without one the eval's
-responder decides, which is why `run` requires a responder on a harness without a plan file.
+*What it unlocks:* evals that declare `plan_mode`. The driver dispatches the opening round with the
+planning arguments, lets the agent present a plan, and saves it as `outputs/plan.md`, rendered in
+the judge evidence bundle. `plan_mode: true` then approves the plan with one fixed message and
+resumes the same session with the act arguments, where the eval's `turns` or `responder` proceed as
+usual; `plan_mode: "plan_only"` stops at the plan, making it the run's whole output.
+
+The descriptor supplies only half the capability. The other half is harness-neutral and lives in
+the dispatch prompt (`src/cli/run/plan_prompt.rs`): a planning round is told it cannot edit and
+that its final message must carry the complete plan. That is what makes the third signal below
+work, and it is the part a new harness inherits without declaring anything.
+
+Three signals mark a plan as presented, tried in order: the `plan_file` write, a responder's `done`
+verdict, and the planning round's final message. The last always fires, so no eval needs a
+responder to reach a plan and every planning phase produces an artifact. `conversation.json`'s
+`plan.signal` records which one did, so a plan resting on the final message stays distinguishable
+from one read out of a native plan file.
 
 *Fallback:* none. `run` rejects a plan-mode eval for a harness without `[plan_mode]`, before any
 environment is built, the way it rejects multi-turn evals for a harness without `[conversation]`.
+The eval-side `plan_source` field is not this capability: it splices a pre-written plan into an
+ordinary act-mode dispatch and needs no descriptor support at all.
 
 *Descriptor fields:* the `[plan_mode]` table — `plan_args` and `act_args` fill the `{mode_args}`
 slot that both `dispatch.exec_template` and `conversation.resume_exec_template` must carry (the act

@@ -64,18 +64,14 @@ fn a_plan_mode_eval_rejects_a_harness_without_native_plan_mode() {
     );
 }
 
-/// OpenCode writes no plan file, so nothing but a responder can tell when the
-/// agent has presented its plan: a plan-mode eval there must declare one.
+/// OpenCode writes no plan file, but the dispatch prompt asks every planning
+/// round to close with its plan, so the final message is the signal and a
+/// responder is optional there as it is on Claude Code.
 #[test]
-fn a_plan_mode_eval_without_a_responder_needs_a_plan_file_signal() {
+fn a_plan_mode_eval_needs_no_responder_on_a_harness_without_a_plan_file() {
     let tmp = tempfile::TempDir::new().unwrap();
     let (skill_dir, cwd) = setup(tmp.path(), PLAN_MODE_EVALS);
-    run_dry(&skill_dir, &cwd, "opencode").failure().stderr(
-        contains("responder")
-            .and(contains("plan-first"))
-            .and(contains("plan_file"))
-            .and(contains("opencode")),
-    );
+    run_dry(&skill_dir, &cwd, "opencode").success();
 
     let with_responder = PLAN_MODE_EVALS.replace(
         "\"plan_mode\": true",
@@ -95,7 +91,7 @@ fn a_plan_mode_eval_is_announced_and_recorded_per_task() {
     let (skill_dir, cwd) = setup(tmp.path(), PLAN_MODE_EVALS);
     run_dry(&skill_dir, &cwd, "claude-code")
         .success()
-        .stdout(contains("plan mode: 1 eval"));
+        .stdout(contains("plan mode: 1 plan-then-act eval"));
 
     let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
     let tasks = dispatch["tasks"].as_array().unwrap();
@@ -107,6 +103,23 @@ fn a_plan_mode_eval_is_announced_and_recorded_per_task() {
             other => panic!("unexpected eval {other}"),
         }
     }
+}
+
+/// The run plan tells the operator which shape each plan-mode eval is, because
+/// "plan mode" alone no longer says whether the run implements anything.
+#[test]
+fn the_run_plan_names_each_plan_mode_shape() {
+    let both_shapes = PLAN_MODE_EVALS.replace(
+        r#"{ "id": "plain", "prompt": "review this MR", "expected_output": "a review" }"#,
+        r#"{ "id": "plan-only", "prompt": "how would you cache this?",
+             "expected_output": "a plan", "plan_mode": "plan_only" }"#,
+    );
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), &both_shapes);
+
+    run_dry(&skill_dir, &cwd, "claude-code")
+        .success()
+        .stdout(contains("1 plan-then-act").and(contains("1 plan-only")));
 }
 
 // ── The plan phase, driven end to end ─────────────────────────────────────────
@@ -289,7 +302,7 @@ fn conversation_of(cwd: &Path) -> (Value, Value) {
     (task, conversation)
 }
 
-const PLAN_ONLY: &str = r#"{
+const ONE_PLAN_EVAL: &str = r#"{
   "skill_name": "mr-review",
   "evals": [{
     "id": "plan-first",
@@ -302,7 +315,7 @@ const PLAN_ONLY: &str = r#"{
 #[test]
 fn a_presented_plan_is_approved_and_the_session_continues_in_act_mode() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd, rounds) = prepare(tmp.path(), PLAN_ONLY, "claude-code", &[]);
+    let (skill_dir, cwd, rounds) = prepare(tmp.path(), ONE_PLAN_EVAL, "claude-code", &[]);
     let plan = "1. Fix add()\n2. Add a regression test\n";
     round(&rounds, "initial", "plan", None, &plan_write_events(plan));
     round(
@@ -348,37 +361,76 @@ fn a_presented_plan_is_approved_and_the_session_continues_in_act_mode() {
     );
 }
 
+/// With no plan file written and no responder to ask, the planning round's
+/// final message is the plan. The run gets an inspectable `plan.md` and
+/// continues into act mode rather than stopping empty-handed.
 #[test]
-fn a_plan_phase_without_a_plan_file_and_no_responder_stops_plan_not_presented() {
+fn a_plan_phase_without_a_plan_file_or_responder_takes_the_final_message() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd, rounds) = prepare(tmp.path(), PLAN_ONLY, "claude-code", &[]);
+    let (skill_dir, cwd, rounds) = prepare(tmp.path(), ONE_PLAN_EVAL, "claude-code", &[]);
+    let plan = "1. Add an LRU in pricing.py\n2. Cover eviction with a test\n";
+    round(&rounds, "initial", "plan", None, &[init(), result(plan)]);
     round(
         &rounds,
-        "initial",
-        "plan",
-        None,
-        &[init(), result("Which module owns the pricing client?")],
+        "resume-2",
+        "bypassPermissions",
+        Some(APPROVAL),
+        &edit_events("Implemented."),
     );
 
-    dispatch(&skill_dir, &cwd, "claude-code", tmp.path())
-        .success()
-        .stderr(contains("without presenting a plan"));
+    dispatch(&skill_dir, &cwd, "claude-code", tmp.path()).success();
 
     let (task, conversation) = conversation_of(&cwd);
-    assert_eq!(conversation["status"], "stopped", "{conversation}");
-    assert_eq!(conversation["stop_reason"], "plan_not_presented");
-    assert_eq!(conversation["stopped_before_followup"], 1);
-    assert!(conversation.get("plan").is_none());
-    assert_eq!(conversation["events"].as_array().unwrap().len(), 1);
+    assert_eq!(conversation["status"], "completed", "{conversation}");
+    assert!(conversation.get("stop_reason").is_none(), "{conversation}");
+    assert_eq!(conversation["plan"]["signal"], "final_message");
+    assert_eq!(conversation["plan"]["presented_in_round"], 1);
+    assert_eq!(conversation["plan"]["approved_in_round"], 2);
     let outputs = Path::new(task["outputs_dir"].as_str().unwrap());
-    assert!(!outputs.join("turn-2").exists());
-    assert!(!outputs.join("plan.md").exists());
+    assert_eq!(fs::read_to_string(outputs.join("plan.md")).unwrap(), plan);
+}
+
+/// A `plan_only` eval stops at the plan: `plan.md` is the whole output, no
+/// approval is sent, and the session never enters act mode.
+#[test]
+fn a_plan_only_eval_stops_once_the_plan_is_presented() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = ONE_PLAN_EVAL.replace("\"plan_mode\": true", "\"plan_mode\": \"plan_only\"");
+    let (skill_dir, cwd, rounds) = prepare(tmp.path(), &evals, "claude-code", &[]);
+    let plan = "1. Fix add()\n2. Add a regression test\n";
+    round(&rounds, "initial", "plan", None, &plan_write_events(plan));
+
+    dispatch(&skill_dir, &cwd, "claude-code", tmp.path()).success();
+
+    let (task, conversation) = conversation_of(&cwd);
+    assert_eq!(conversation["status"], "completed", "{conversation}");
+    assert_eq!(conversation["delivered_followups"], 0);
+    assert_eq!(conversation["plan"]["presented_in_round"], 1);
+    assert!(
+        conversation["plan"].get("approved_in_round").is_none(),
+        "no round approved a plan-only run: {conversation}"
+    );
+    assert_eq!(conversation["plan"]["signal"], "plan_file");
+    let events = conversation["events"].as_array().unwrap();
+    assert_eq!(events.len(), 1, "only the seeded prompt: {conversation}");
+    assert_eq!(events[0]["mode"], "plan");
+
+    let outputs = Path::new(task["outputs_dir"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(outputs.join("plan.md")).unwrap(), plan);
+    assert!(
+        !outputs.join("turn-2").exists(),
+        "a plan-only eval never resumes in act mode"
+    );
+
+    // The prompt the agent read says the plan is the deliverable.
+    let prompt = fs::read_to_string(task["dispatch_prompt_path"].as_str().unwrap()).unwrap();
+    assert!(prompt.contains("nothing to implement"), "{prompt}");
 }
 
 #[test]
 fn the_responder_answers_plan_phase_questions_until_the_plan_is_presented() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let evals = PLAN_ONLY.replace(
+    let evals = ONE_PLAN_EVAL.replace(
         "\"plan_mode\": true",
         "\"plan_mode\": true, \"responder\": { \"type\": \"llm\" }",
     );
@@ -446,7 +498,7 @@ fn the_responder_answers_plan_phase_questions_until_the_plan_is_presented() {
 #[test]
 fn scripted_turns_follow_the_approval() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let evals = PLAN_ONLY.replace(
+    let evals = ONE_PLAN_EVAL.replace(
         "\"plan_mode\": true",
         "\"plan_mode\": true, \"turns\": [{ \"prompt\": \"Also add a metric.\", \"deliver_when\": \"always\" }]",
     );
@@ -501,7 +553,7 @@ fn scripted_turns_follow_the_approval() {
 #[test]
 fn a_signal_less_harness_approves_on_the_responders_done_verdict() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let evals = PLAN_ONLY.replace(
+    let evals = ONE_PLAN_EVAL.replace(
         "\"plan_mode\": true",
         "\"plan_mode\": true, \"responder\": { \"type\": \"llm\" }",
     );
@@ -634,7 +686,7 @@ act_args = " --permission-mode act"
 #[test]
 fn the_write_guard_allows_the_declared_plan_file_root() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let (skill_dir, cwd) = setup(tmp.path(), PLAN_ONLY);
+    let (skill_dir, cwd) = setup(tmp.path(), ONE_PLAN_EVAL);
     skill_eval()
         .current_dir(&cwd)
         .env("HOME", tmp.path())
@@ -667,4 +719,122 @@ fn the_write_guard_allows_the_declared_plan_file_root() {
         tmp.path().join(".claude").join("plans"),
         "{roots:?}"
     );
+}
+
+/// A plan-only eval may still declare a responder, which answers the agent's
+/// questions while it plans. The planning phase then runs for more than one
+/// round — resuming the session in plan mode — and stops at the plan.
+#[test]
+fn a_plan_only_eval_may_plan_across_several_rounds_with_a_responder() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let evals = ONE_PLAN_EVAL.replace(
+        "\"plan_mode\": true",
+        "\"plan_mode\": \"plan_only\", \"responder\": { \"type\": \"llm\" }",
+    );
+    let (skill_dir, cwd, rounds) = prepare(
+        tmp.path(),
+        &evals,
+        "claude-code",
+        &["--responder-model", "test-responder-model"],
+    );
+    round(
+        &rounds,
+        "initial",
+        "plan",
+        None,
+        &[
+            init(),
+            result("Redis (needs a service) or an in-memory LRU (recommended)?"),
+        ],
+    );
+    fs::write(
+        rounds.join("verdict-1.json"),
+        json!({"verdict": "answer", "reply": "The in-memory LRU, please.",
+               "rationale": "took the recommended option"})
+        .to_string(),
+    )
+    .unwrap();
+    let plan = "1. Add an in-memory LRU\n2. Cover eviction\n";
+    round(
+        &rounds,
+        "resume-2",
+        "plan",
+        Some("The in-memory LRU, please."),
+        &plan_write_events(plan),
+    );
+
+    dispatch(&skill_dir, &cwd, "claude-code", tmp.path()).success();
+
+    let (task, conversation) = conversation_of(&cwd);
+    assert_eq!(conversation["status"], "completed", "{conversation}");
+    assert_eq!(conversation["plan"]["presented_in_round"], 2);
+    assert!(
+        conversation["plan"].get("approved_in_round").is_none(),
+        "{conversation}"
+    );
+    let modes: Vec<&str> = conversation["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["mode"].as_str().unwrap())
+        .collect();
+    assert_eq!(modes, ["plan", "plan"], "{conversation}");
+
+    let outputs = Path::new(task["outputs_dir"].as_str().unwrap());
+    assert_eq!(fs::read_to_string(outputs.join("plan.md")).unwrap(), plan);
+    assert!(!outputs.join("turn-3").exists(), "no act round follows");
+}
+
+// ── Handing an eval a plan that was written earlier ───────────────────────────
+
+const SUPPLIED_PLAN: &str = r#"{
+  "skill_name": "mr-review",
+  "evals": [{
+    "id": "execute-plan",
+    "prompt": "Implement the approved plan.",
+    "expected_output": "the plan carried out",
+    "plan_source": "plans/add-cache.md"
+  }]
+}"#;
+
+/// A `plan_source` needs nothing from the harness — the session is ordinary act
+/// mode — so it reaches Codex, whose descriptor declares no `[plan_mode]` at
+/// all. The plan text lands in the prompt the agent reads, ahead of the
+/// request, and the task records where it came from.
+#[test]
+fn a_supplied_plan_reaches_a_harness_without_plan_mode() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), SUPPLIED_PLAN);
+    let plan = "1. Add an LRU to pricing.py\n2. Cover eviction with a test\n";
+    let plans = skill_dir.join("mr-review/evals/plans");
+    fs::create_dir_all(&plans).unwrap();
+    fs::write(plans.join("add-cache.md"), plan).unwrap();
+
+    run_dry(&skill_dir, &cwd, "codex").success();
+
+    let dispatch = read_json(&iteration_dir(&cwd).join("dispatch.json"));
+    let tasks = dispatch["tasks"].as_array().unwrap();
+    assert_eq!(tasks.len(), 2, "one eval × two conditions");
+    for task in tasks {
+        assert_eq!(task["plan_source"], "plans/add-cache.md", "{task}");
+        assert!(
+            task.get("plan_mode").is_none(),
+            "a supplied plan is act mode: {task}"
+        );
+        let prompt = fs::read_to_string(task["dispatch_prompt_path"].as_str().unwrap()).unwrap();
+        assert!(prompt.contains("already written and approved"), "{prompt}");
+        assert!(prompt.contains("1. Add an LRU to pricing.py"), "{prompt}");
+    }
+}
+
+/// A named plan that is not on disk fails the run rather than dispatching a
+/// prompt whose plan is quietly missing.
+#[test]
+fn a_missing_plan_source_fails_the_run() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let (skill_dir, cwd) = setup(tmp.path(), SUPPLIED_PLAN);
+
+    run_dry(&skill_dir, &cwd, "codex")
+        .failure()
+        .stderr(contains("plan source").and(contains("add-cache.md")));
 }

@@ -379,11 +379,14 @@ fn render_plan(run_record: &RunRecord, outputs_dir: &Path) -> Option<Rendered> {
         PLAN_BYTE_LIMIT,
         &artifact_path(&plan_path),
     );
+    let outcome = match plan.approved_in_round {
+        Some(round) => format!("approved in round {round}"),
+        None => "the session ended after planning".to_string(),
+    };
     Some(Rendered {
         content: format!(
-            "Presented in round {}; approved in round {} (signal: `{}`).\n\n{}",
+            "Presented in round {}; {outcome} (signal: `{}`).\n\n{}",
             plan.presented_in_round,
-            plan.approved_in_round,
             serialized_label(&plan.signal),
             body.content
         ),
@@ -706,6 +709,56 @@ mod tests {
         assert!(
             plan_at < transcript_at,
             "the plan precedes the transcript it came from"
+        );
+    }
+
+    /// A plan-only run has no approval round, so the header says the session
+    /// ended after planning rather than naming a round that never happened.
+    /// The judge reads the same plan text either way.
+    #[test]
+    fn a_plan_only_run_renders_its_plan_without_an_approval_round() {
+        let temp = tempfile::TempDir::new().unwrap();
+        let run_dir = temp.path().join("eval-add-cache/with_skill");
+        let outputs_dir = run_dir.join("outputs");
+        fs::create_dir_all(&outputs_dir).unwrap();
+        fs::write(outputs_dir.join("plan.md"), "1. Add an LRU\n").unwrap();
+
+        let mut record = serde_json::to_value(realistic_record()).unwrap();
+        record["conversation"]["plan"] = json!({
+            "presented_in_round": 1,
+            "signal": "final_message",
+            "artifact_path": outputs_dir.join("plan.md").to_string_lossy()
+        });
+        let record: RunRecord = serde_json::from_value(record).unwrap();
+
+        let bundle = build_evidence_bundle(
+            &record,
+            &run_dir.join("run.json"),
+            &outputs_dir,
+            &run_dir.join("judge-evidence.md"),
+        )
+        .unwrap();
+
+        assert!(bundle.content.contains("## Plan"), "{}", bundle.content);
+        assert!(
+            bundle.content.contains("Presented in round 1"),
+            "{}",
+            bundle.content
+        );
+        assert!(
+            bundle.content.contains("the session ended after planning"),
+            "{}",
+            bundle.content
+        );
+        assert!(
+            !bundle.content.contains("approved in round"),
+            "no round approved this plan: {}",
+            bundle.content
+        );
+        assert!(
+            bundle.content.contains("1. Add an LRU"),
+            "{}",
+            bundle.content
         );
     }
 

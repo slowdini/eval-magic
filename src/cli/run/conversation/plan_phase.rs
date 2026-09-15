@@ -90,10 +90,13 @@ pub(super) fn decide(
         return PlanDecision::Approve(presented);
     }
     let Some((policy, runtime)) = responder else {
-        return PlanDecision::Stop {
-            reason: ConversationStopReason::PlanNotPresented,
-            responder: None,
-        };
+        // Nothing else can say the plan is ready, so the round's closing
+        // message is it. The dispatch prompt asked the agent for exactly that,
+        // which is what makes this a signal rather than a guess.
+        return PlanDecision::Approve(PresentedPlan {
+            text: consultation.final_message.to_string(),
+            signal: PlanSignal::FinalMessage,
+        });
     };
     let verdict = runtime.consult(followup, consultation, previous_reply);
     match next_from_verdict(policy, consultation.prior_replies.len() as u32, verdict) {
@@ -122,7 +125,7 @@ mod tests {
     use super::*;
     use crate::adapters::TranscriptSummary;
     use crate::adapters::descriptor::PlanFileSection;
-    use crate::core::{ConversationStopReason, PlanSignal, ToolInvocation};
+    use crate::core::{PlanSignal, ToolInvocation};
 
     fn plan_file() -> PlanFileSection {
         PlanFileSection {
@@ -221,20 +224,23 @@ mod tests {
         assert_eq!(presented.text, "The plan: fix it.");
     }
 
+    /// The last rung of the ladder. With no plan file to read and no responder
+    /// to ask, the planning round's final message *is* the plan — the dispatch
+    /// prompt told the agent to end the turn with it — so the run gets an
+    /// inspectable `plan.md` instead of stopping empty-handed.
     #[test]
-    fn without_a_plan_file_or_responder_the_phase_stops_plan_not_presented() {
+    fn without_a_plan_file_or_responder_the_final_message_is_the_plan() {
         let consultation = Consultation {
             task_prompt: "Add caching.",
             prior_replies: &[],
-            final_message: "Which file?",
+            final_message: "1. Add an LRU.\n2. Test it.\n",
             planning: true,
         };
-        let PlanDecision::Stop { reason, responder } = decide(None, None, 1, &consultation, None)
-        else {
-            panic!("nothing can approve a plan nobody presented");
+        let PlanDecision::Approve(approved) = decide(None, None, 1, &consultation, None) else {
+            panic!("the final message stands in for a plan file the harness never writes");
         };
-        assert_eq!(reason, ConversationStopReason::PlanNotPresented);
-        assert!(responder.is_none());
+        assert_eq!(approved.text, "1. Add an LRU.\n2. Test it.\n");
+        assert_eq!(approved.signal, PlanSignal::FinalMessage);
     }
 
     #[test]

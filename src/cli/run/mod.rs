@@ -18,6 +18,7 @@ mod golden_tests;
 pub mod grouping;
 pub mod orchestrate;
 pub mod overlays;
+mod plan_prompt;
 pub mod runbook;
 mod scratch;
 pub mod staging;
