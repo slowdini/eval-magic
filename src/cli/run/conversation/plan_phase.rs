@@ -12,7 +12,8 @@ use serde_json::Value;
 use crate::adapters::TranscriptSummary;
 use crate::adapters::descriptor::PlanFileSection;
 use crate::core::{
-    ConversationStopReason, PlanSignal, ResponderOutcome, ResponderPolicy, TurnOrigin,
+    ConversationStopReason, PlanSignal, ResponderOutcome, ResponderPolicy, ToolInvocation,
+    TurnOrigin,
 };
 use crate::sandbox::{is_under, is_write_tool, path_arg};
 
@@ -44,9 +45,11 @@ pub(super) enum PlanDecision {
 }
 
 /// The plan file the round wrote, when the harness declares one and a write
-/// tool targeted it. The last such write wins, since an agent may revise its
-/// plan within a round; its `content_field` is the plan, falling back to the
-/// round's final message when the write carried none.
+/// tool targeted it. The last-touched plan file is the plan. An agent may
+/// revise it within a round, often with in-place edits that carry no
+/// `content_field`, so its content is rebuilt by replaying every write to that
+/// path in order. When the replay cannot reproduce the file, the round's final
+/// message stands in and the signal says so rather than claiming the file.
 pub(super) fn plan_file_written(
     summary: &TranscriptSummary,
     plan_file: &PlanFileSection,
@@ -54,25 +57,103 @@ pub(super) fn plan_file_written(
     eval_root: &Path,
 ) -> Option<PresentedPlan> {
     let root = plan_file.expanded_root(home).to_string_lossy().into_owned();
-    let write = summary.tool_invocations.iter().rev().find(|invocation| {
-        is_write_tool(&invocation.name)
-            && invocation
-                .args
-                .as_ref()
-                .and_then(path_arg)
-                .is_some_and(|path| is_under(path, &root, eval_root))
-    })?;
-    let text = write
+    let path = summary
+        .tool_invocations
+        .iter()
+        .rev()
+        .find_map(|invocation| plan_target(invocation, &root, eval_root))?;
+    let writes: Vec<&ToolInvocation> = summary
+        .tool_invocations
+        .iter()
+        .filter(|invocation| plan_target(invocation, &root, eval_root) == Some(path))
+        .collect();
+    match replay(&writes, &plan_file.content_field) {
+        Some(text) => Some(PresentedPlan {
+            text,
+            signal: PlanSignal::PlanFile,
+        }),
+        None => summary.final_text.clone().map(|text| PresentedPlan {
+            text,
+            signal: PlanSignal::FinalMessage,
+        }),
+    }
+}
+
+/// The path a write-tool call targeted, when it lies under the plan root.
+fn plan_target<'a>(
+    invocation: &'a ToolInvocation,
+    root: &str,
+    eval_root: &Path,
+) -> Option<&'a str> {
+    if !is_write_tool(&invocation.name) {
+        return None;
+    }
+    invocation
         .args
         .as_ref()
-        .and_then(|args| args.get(&plan_file.content_field))
+        .and_then(path_arg)
+        .filter(|path| is_under(path, root, eval_root))
+}
+
+/// Rebuild a file from the writes that targeted it: a write carrying
+/// `content_field` replaces the content, and an edit (`old_string` /
+/// `new_string` / `replace_all`, or a list of them under `edits`) applies with
+/// the harness's own matching rules. A write the harness rejected changed
+/// nothing and is skipped. `None` when there is no base content or an edit the
+/// harness accepted cannot be reproduced, so the rebuilt text would be a guess.
+fn replay(writes: &[&ToolInvocation], content_field: &str) -> Option<String> {
+    let mut content: Option<String> = None;
+    for invocation in writes.iter().filter(|invocation| !rejected(invocation)) {
+        let args = invocation.args.as_ref()?;
+        if let Some(text) = args.get(content_field).and_then(Value::as_str) {
+            content = Some(text.to_string());
+            continue;
+        }
+        let current = content.as_mut()?;
+        match args.get("edits").and_then(Value::as_array) {
+            Some(edits) => {
+                for edit in edits {
+                    apply_edit(current, edit)?;
+                }
+            }
+            None => apply_edit(current, args)?,
+        }
+    }
+    content
+}
+
+/// Apply one string replacement in place. As in the harness, the target must
+/// occur exactly once unless `replace_all` is set.
+fn apply_edit(content: &mut String, edit: &Value) -> Option<()> {
+    let old = edit.get("old_string").and_then(Value::as_str)?;
+    let new = edit.get("new_string").and_then(Value::as_str)?;
+    let replace_all = edit
+        .get("replace_all")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let occurrences = if old.is_empty() {
+        0
+    } else {
+        content.matches(old).count()
+    };
+    if occurrences == 0 || (occurrences > 1 && !replace_all) {
+        return None;
+    }
+    *content = if replace_all {
+        content.replace(old, new)
+    } else {
+        content.replacen(old, new, 1)
+    };
+    Some(())
+}
+
+/// Whether the harness reported the tool call as failed, so it changed nothing.
+fn rejected(invocation: &ToolInvocation) -> bool {
+    invocation
+        .result
+        .as_ref()
         .and_then(Value::as_str)
-        .map(str::to_string)
-        .or_else(|| summary.final_text.clone())?;
-    Some(PresentedPlan {
-        text,
-        signal: PlanSignal::PlanFile,
-    })
+        .is_some_and(|result| result.contains("<tool_use_error>"))
 }
 
 /// Decide what follows a plan-mode round. A presented plan is approved without
@@ -145,6 +226,138 @@ mod tests {
             ordinal,
             result: None,
         }
+    }
+
+    fn edit(path: &str, old: &str, new: &str, replace_all: bool, ordinal: u32) -> ToolInvocation {
+        ToolInvocation {
+            name: "Edit".into(),
+            args: Some(json!({
+                "file_path": path,
+                "old_string": old,
+                "new_string": new,
+                "replace_all": replace_all,
+            })),
+            ordinal,
+            result: None,
+        }
+    }
+
+    fn multi_edit(path: &str, edits: &[(&str, &str)], ordinal: u32) -> ToolInvocation {
+        let edits: Vec<Value> = edits
+            .iter()
+            .map(|(old, new)| json!({ "old_string": old, "new_string": new }))
+            .collect();
+        ToolInvocation {
+            name: "MultiEdit".into(),
+            args: Some(json!({ "file_path": path, "edits": edits })),
+            ordinal,
+            result: None,
+        }
+    }
+
+    fn rejected(mut invocation: ToolInvocation) -> ToolInvocation {
+        invocation.result = Some(json!(
+            "<tool_use_error>String to replace not found in file.</tool_use_error>"
+        ));
+        invocation
+    }
+
+    const PLAN: &str = "/Users/someone/.claude/plans/fix.md";
+
+    fn presented(tool_invocations: Vec<ToolInvocation>) -> PresentedPlan {
+        let summary = summary(tool_invocations, "Summary of the plan.");
+        plan_file_written(
+            &summary,
+            &plan_file(),
+            Path::new("/Users/someone"),
+            Path::new("/env"),
+        )
+        .expect("a plan file write presents a plan")
+    }
+
+    #[test]
+    fn an_edit_after_the_write_is_replayed_onto_the_plan() {
+        let plan = presented(vec![
+            write(PLAN, Some("1. Update src/a.ts\n2. Test it\n"), 0),
+            edit(PLAN, "src/a.ts", "src/app/a.ts", false, 1),
+        ]);
+        assert_eq!(plan.text, "1. Update src/app/a.ts\n2. Test it\n");
+        assert_eq!(plan.signal, PlanSignal::PlanFile);
+    }
+
+    #[test]
+    fn a_replace_all_edit_replaces_every_occurrence() {
+        let plan = presented(vec![
+            write(PLAN, Some("toggle-favourite then toggle-favourite\n"), 0),
+            edit(PLAN, "favourite", "favorite", true, 1),
+        ]);
+        assert_eq!(plan.text, "toggle-favorite then toggle-favorite\n");
+        assert_eq!(plan.signal, PlanSignal::PlanFile);
+    }
+
+    #[test]
+    fn a_multi_edit_applies_its_edits_in_sequence() {
+        let plan = presented(vec![
+            write(PLAN, Some("1. TBD\n2. Audit rounding\n"), 0),
+            multi_edit(
+                PLAN,
+                &[("TBD", "Add the badge"), ("2. Audit rounding\n", "")],
+                1,
+            ),
+        ]);
+        assert_eq!(plan.text, "1. Add the badge\n");
+        assert_eq!(plan.signal, PlanSignal::PlanFile);
+    }
+
+    #[test]
+    fn an_edit_the_harness_rejected_leaves_the_plan_unchanged() {
+        let plan = presented(vec![
+            write(PLAN, Some("1. Fix it\n"), 0),
+            rejected(edit(PLAN, "missing", "never applied", false, 1)),
+            edit(PLAN, "Fix it", "Fix it properly", false, 2),
+        ]);
+        assert_eq!(plan.text, "1. Fix it properly\n");
+        assert_eq!(plan.signal, PlanSignal::PlanFile);
+    }
+
+    #[test]
+    fn an_edit_that_cannot_be_replayed_falls_back_to_the_final_message() {
+        let plan = presented(vec![
+            write(PLAN, Some("1. Fix it\n"), 0),
+            edit(PLAN, "text the plan never contained", "new", false, 1),
+        ]);
+        assert_eq!(plan.text, "Summary of the plan.");
+        assert_eq!(plan.signal, PlanSignal::FinalMessage);
+    }
+
+    #[test]
+    fn an_ambiguous_single_edit_cannot_be_replayed() {
+        let plan = presented(vec![
+            write(PLAN, Some("a and a\n"), 0),
+            edit(PLAN, "a", "b", false, 1),
+        ]);
+        assert_eq!(plan.text, "Summary of the plan.");
+        assert_eq!(plan.signal, PlanSignal::FinalMessage);
+    }
+
+    #[test]
+    fn an_edit_without_an_earlier_write_falls_back_to_the_final_message() {
+        let plan = presented(vec![edit(PLAN, "old", "new", false, 0)]);
+        assert_eq!(plan.text, "Summary of the plan.");
+        assert_eq!(plan.signal, PlanSignal::FinalMessage);
+    }
+
+    #[test]
+    fn only_the_last_touched_plan_file_is_replayed() {
+        let other = "/Users/someone/.claude/plans/other.md";
+        let plan = presented(vec![
+            write(PLAN, Some("1. First plan\n"), 0),
+            write(other, Some("1. Second plan\n"), 1),
+            edit(PLAN, "First", "Revised first", false, 2),
+            edit(other, "Second", "Revised second", false, 3),
+        ]);
+        assert_eq!(plan.text, "1. Revised second plan\n");
+        assert_eq!(plan.signal, PlanSignal::PlanFile);
     }
 
     fn summary(tool_invocations: Vec<ToolInvocation>, final_text: &str) -> TranscriptSummary {
@@ -222,6 +435,7 @@ mod tests {
         );
         let presented = plan_file_written(&summary, &plan_file(), home, Path::new("/env")).unwrap();
         assert_eq!(presented.text, "The plan: fix it.");
+        assert_eq!(presented.signal, PlanSignal::FinalMessage);
     }
 
     /// The last rung of the ladder. With no plan file to read and no responder
