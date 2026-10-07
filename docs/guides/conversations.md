@@ -248,7 +248,7 @@ Three signals, tried in this order:
 
 | Signal | When it applies |
 | --- | --- |
-| `plan_file` | The harness writes the plan it presents to a file, and its descriptor declares where (`[plan_mode.plan_file]`). A planning round that wrote one has presented its plan, and the file's content is the plan. Claude Code writes to `~/.claude/plans`. |
+| `plan_file` | The harness writes the plan it presents to a file, and its descriptor declares where (`[plan_mode.plan_file]`). A planning round that wrote one has presented its plan, and the file's content is the plan: the runner rebuilds it by replaying the round's writes and in-place edits to that file. If an edit cannot be reproduced, the final message is used instead and the signal records `final_message`. Claude Code writes to `~/.claude/plans`. |
 | `responder` | The eval declares a `responder`, which is told the agent is planning. Its `done` verdict means the plan is ready, and the agent's last message is the plan. |
 | `final_message` | Neither of the above was available. The planning round's final message is the plan, which is what the dispatch prompt asked the agent to close with. |
 

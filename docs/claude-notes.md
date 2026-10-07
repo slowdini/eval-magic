@@ -80,7 +80,11 @@ scratch repository with one bug:
 - The agent presents its plan the way plan mode instructs it to: it writes the plan file (`Write`
   to `~/.claude/plans/<slug>.md`, which plan mode permits) and closes the turn with the plan in its
   final message. That write is the `[plan_mode.plan_file]` signal (`root = "~/.claude/plans"`,
-  `content_field = "content"`), and its `content` is the plan artifact.
+  `content_field = "content"`), and its `content` is the plan artifact. An agent that revises the
+  plan in place (`Edit`/`MultiEdit` carry no `content`) has its edits replayed onto the last
+  `Write`, with Claude's matching rules (one occurrence unless `replace_all`); an edit the tool
+  rejected (`<tool_use_error>`) is skipped. When the replay cannot reproduce the file, the final
+  message is the plan and `plan.signal` is `final_message`, not `plan_file`.
 - An agent that tries to edit while planning is refused with `Cannot write to <path> while in plan
   mode.`, and the refusal reaches the terminal `result` event's `permission_denials` like any
   other. That is the mode working, so `record-runs` attributes a write refused in a planning round
